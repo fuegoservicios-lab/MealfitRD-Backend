@@ -76,7 +76,9 @@ def test_legacy_bottom_zero_unconditional_not_present(agent_page_src: str):
     input-wrapper. Buscamos su declaración EXACTA en la región del wrapper."""
     # Localizar la región del wrapper renderInputArea (signature → fin estilo)
     m = re.search(
-        r"const\s+renderInputArea\s*=[\s\S]{0,3000}?zIndex\s*:\s*10",
+        # [P1-PLAN-LOTE-306] ventana 3000 -> 4000: iba a 2 997 de 3 000 caracteres y la marca `data-kb-anima` del
+        # wrapper la desbordó. El invariante (ningún `bottom: 0` incondicional) no depende del tamaño de la ventana.
+        r"const\s+renderInputArea\s*=[\s\S]{0,4000}?zIndex\s*:\s*10",
         agent_page_src,
     )
     assert m, "renderInputArea region no parseable."

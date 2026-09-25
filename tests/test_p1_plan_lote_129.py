@@ -56,7 +56,8 @@ def test_las_tres_piezas_comparten_la_duracion_real_del_teclado():
     ap = _front("src/pages/AgentPage.jsx")
     assert ap.count(curva) == 2, "alto del chat + relleno de la caja"
     assert f"transform {curva}" in _front("src/components/dashboard/BottomTabBar.module.css"), "y la barra de pestañas"
-    assert "root.style.removeProperty('--kb-ms');" in ap, "se retira al acabar: plegar la barra no es cosa del teclado"
+    # [P1-PLAN-LOTE-306] ya no en <html> (recalculaba el estilo de todo el chat): en cada pieza `data-kb-anima`
+    assert "piezasQueAnimanAlTeclado().forEach((el) => el.style.removeProperty('--kb-ms'))" in ap, "se retira al acabar: plegar la barra no es cosa del teclado"
 
 
 def test_marcador():
