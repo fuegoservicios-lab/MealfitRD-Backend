@@ -133,6 +133,11 @@ _EXPAND_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
 # (mismo cupo que `_SWAP_LIMITER`, bucket independiente para no compartir
 # cupo con swaps manuales del usuario).
 _FIX_SODIUM_DAY_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
+# [P1-PLAN-LOTE-222 · 2026-09-24] Traducción del plan de un invitado (sin cuenta: el cupo va por IP). 6 cada 10 min
+# cubre el plan recién generado y los cambios de plato de una sesión; un par (max, periodo) propio para no compartir
+# ventana en Redis con otro endpoint (la clave es `rl:<max>:<periodo>:<uid>`).
+_GUEST_DISPLAY_LIMITER = RateLimiter(max_calls=6, period_seconds=600)
+_GUEST_DISPLAY_MAX_BYTES = 400_000
 # [P1-BUDGET-FLOOR-PERSONALIZED · 2026-06-23] Cálculo del piso de presupuesto personalizado
 # (por calorías + hogar + ciclo). Se llama en cambios de input del form/dashboard → cupo generoso.
 # Pure-calc (sin DB, sin LLM); rate-limit por user/IP solo anti-spam.
@@ -6980,6 +6985,40 @@ def _swap_meal_regen_flag_clear(ctx: Optional[dict], verified_user_id) -> None:
         logger.debug(f"[P1-SWAP-REGEN-RESUME] flag clear no-op: {_e}")
 
 
+def _quitar_display_provisional(plan_data: dict) -> None:
+    """[P1-PLAN-LOTE-222 · 2026-09-24] Fuera las entradas `_display[locale]` con `_provisional`: sólo el nombre de
+    un plato recién cambiado, que el cliente pinta mientras llega la traducción completa. No son del plan: si una
+    copia local vuelve entera (`/restore-local`), no se guardan. Muta `days[*].meals[*]._display` en su sitio."""
+    for d in (plan_data.get("days") or []) if isinstance(plan_data, dict) else []:
+        for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+            disp = m.get("_display") if isinstance(m, dict) else None
+            if not isinstance(disp, dict):
+                continue
+            limpio = {k: v for k, v in disp.items() if not (isinstance(v, dict) and v.get("_provisional"))}
+            if len(limpio) != len(disp):
+                if limpio:
+                    m["_display"] = limpio
+                else:
+                    m.pop("_display", None)
+
+
+def _nombres_visibles_del_dia(meals, locale, user_id) -> Optional[list]:
+    """[P1-PLAN-LOTE-222 · 2026-09-24] Los nombres de los platos de un día, en el idioma del usuario y en UNA llamada.
+
+    Para pintar el día recién regenerado mientras llega su `_display` (que el persist borra y re-encola). None en
+    español, sin locale, sin platos o si la traducción falla: el cliente pinta el español, como antes."""
+    try:
+        from traduccion_para_mostrar import LOCALE_BASE, locale_soportado, traducir_para_mostrar_sync
+        loc = locale_soportado(locale)
+        nombres = [str((m or {}).get("name") or "") if isinstance(m, dict) else "" for m in (meals or [])]
+        if loc in (None, LOCALE_BASE) or not any(nombres):
+            return None
+        return traducir_para_mostrar_sync(nombres, loc, user_id=user_id, node="display_i18n_regen_day")
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-222] nombres visibles del día no-op: {e!r}")
+        return None
+
+
 def _persist_swap_server_side(ctx: dict, result: dict, verified_user_id) -> bool:
     """Persistencia server-side del swap. Espejo del merge del CLIENTE
     (AssessmentContext regenerateSingleMeal: conserva el meal previo y superpone
@@ -7246,6 +7285,19 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
         elif _mri_ctx:
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
+        # [P1-PLAN-LOTE-222 · 2026-09-24] El nombre del plato nuevo en el idioma del usuario (`locale` del body), para
+        # el aviso «Cambiado por: …» y la tarjeta mientras llega la traducción completa (`_display`), que el persist
+        # encola y tarda lo que un día entero. DESPUÉS del persist: es para pintar y no se guarda. `name` sigue siendo
+        # el español (identificador del motor). Sin locale, en español o si falla: no se añade.
+        if isinstance(result, dict) and not result.get("swap_failed") and result.get("name"):
+            try:
+                from traduccion_para_mostrar import nombre_de_plato_para_mostrar
+                _dn = nombre_de_plato_para_mostrar(result.get("name"), data.get("locale"),
+                                                   user_id=verified_user_id, node="display_i18n_swap")
+                if _dn:
+                    result["display_name"] = _dn
+            except Exception as _dn_e:
+                logger.debug(f"[P1-PLAN-LOTE-222] display_name del swap no-op: {_dn_e!r}")
         return result
     except HTTPException:
         raise
@@ -8582,11 +8634,20 @@ def api_fix_sodium_day(
             f"{round(day_sodium_mg)}mg → {round(sodio_despues_mg)}mg (techo {round(ceiling_mg)}mg) | "
             f"'{old_meal_name}' → '{merged.get('name')}'"
         )
+        # [P1-PLAN-LOTE-222 · 2026-09-24] El plato nuevo en el idioma del usuario para el aviso (ver /swap-meal).
+        _new_meal_display = None
+        try:
+            from traduccion_para_mostrar import nombre_de_plato_para_mostrar
+            _new_meal_display = nombre_de_plato_para_mostrar(merged.get("name"), (data or {}).get("locale"),
+                                                             user_id=verified_user_id, node="display_i18n_swap")
+        except Exception as _dn_e:
+            logger.debug(f"[P1-PLAN-LOTE-222] display del fix-sodium no-op: {_dn_e!r}")
         return {
             "fixed": True,
             "day": day_index,
             "old_meal": old_meal_name,
             "new_meal": merged.get("name"),
+            "new_meal_display": _new_meal_display,
             "sodio_antes_mg": round(day_sodium_mg),
             "sodio_despues_mg": round(sodio_despues_mg),
             "day_under_ceiling": sodio_despues_mg <= ceiling_mg,
@@ -10010,6 +10071,7 @@ def api_regenerate_day(
         # del clinical-parity si alguno corrió (caso común, ambos knobs default ON) — SELECT
         # dirigido de 1 columna (facade `from db import ...`, P3-DB-IMPORTS-FACADE) SOLO como
         # fallback si ninguno de los dos corrió.
+        _locale_nombres_rd = None  # [P1-PLAN-LOTE-222] el mismo locale, para `meals_display_names` (abajo)
         try:
             _p1i18n_locale_rd = _p1i18n_locale_rd_holder[0]
             if _p1i18n_locale_rd is None:
@@ -10020,6 +10082,7 @@ def api_regenerate_day(
                     fetch_one=True,
                 )
                 _p1i18n_locale_rd = (_p1i18n_row_rd or {}).get("locale")
+            _locale_nombres_rd = _p1i18n_locale_rd
             from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_rd
             if _p1i18n_should_enrich_rd(_p1i18n_locale_rd):
                 from plan_display_i18n import schedule_plan_display_enrichment
@@ -10055,6 +10118,12 @@ def api_regenerate_day(
         # original), así que el umbral no produce falso aviso iatrogénico. Knob MEALFIT_REGEN_DAY_WARN_MULTI_AXIS
         # (default ON) revierte a proteína-only. tooltip-anchor: P2-REGEN-DAY-WARN-MULTI-AXIS
         _day_warning = None
+        # [P1-PLAN-LOTE-222 · 2026-09-24] El MISMO aviso en datos, para que el cliente lo escriba en el idioma del
+        # usuario: la prosa de `_day_warning` es española y lleva cifras dentro, así que no hay clave de catálogo
+        # que la case. `_day_warning` sigue igual (español, clientes viejos); `_day_warning_detail` dice lo mismo
+        # con los números sueltos. tooltip-anchor: P1-PLAN-LOTE-222
+        _day_warning_detail = None
+        _deficit_detail = []
         if _retarget_on and day_target.get("protein_g", 0) > 0:
             _multi_axis = os.environ.get(
                 "MEALFIT_REGEN_DAY_WARN_MULTI_AXIS", "true").strip().lower() in ("1", "true", "yes", "on")
@@ -10062,16 +10131,19 @@ def api_regenerate_day(
             _deficits = []
             if _new_protein < 0.90 * day_target["protein_g"]:
                 _deficits.append(f"~{round(_new_protein)}g de proteína (objetivo ~{round(day_target['protein_g'])}g)")
+                _deficit_detail.append({"axis": "protein", "value": round(_new_protein), "target": round(day_target["protein_g"])})
             if _multi_axis:
                 _goal_lc = str(data.get("goal") or data.get("mainGoal") or "").strip().lower()
                 if day_target.get("kcal", 0) > 0:
                     _new_kcal = sum(float(_m.get("cals") or 0) for _m in new_meals if isinstance(_m, dict))
                     if _new_kcal < 0.85 * day_target["kcal"]:
                         _deficits.append(f"~{round(_new_kcal)} kcal (objetivo ~{round(day_target['kcal'])})")
+                        _deficit_detail.append({"axis": "kcal", "value": round(_new_kcal), "target": round(day_target["kcal"])})
                 if _goal_lc in ("gain_muscle", "bulk") and day_target.get("carbs_g", 0) > 0:
                     _new_carbs = sum(float(_m.get("carbs") or 0) for _m in new_meals if isinstance(_m, dict))
                     if _new_carbs < 0.85 * day_target["carbs_g"]:
                         _deficits.append(f"~{round(_new_carbs)}g de carbohidratos (objetivo ~{round(day_target['carbs_g'])}g)")
+                        _deficit_detail.append({"axis": "carbs", "value": round(_new_carbs), "target": round(day_target["carbs_g"])})
             if _deficits:
                 # [P2-REGEN-DAY-DEFICIT-HONESTY · 2026-06-29] (audit objetivo · P2-2) Mensaje HONESTO según la causa:
                 # si el rebalance/FASE A revirtieron por Nevera, el déficit es por inventario (agrega ítems); si NO
@@ -10083,6 +10155,8 @@ def api_regenerate_day(
                     _tail = ("Ajusta las porciones o renueva el ciclo para acercarte a tu objetivo "
                              "(tu Nevera sí alcanza; es un ajuste fino de cantidades).")
                 _day_warning = "Este día quedó en " + "; ".join(_deficits) + ", por debajo de tu objetivo. " + _tail
+                _day_warning_detail = {"kind": "deficit", "deficits": _deficit_detail,
+                                       "pantry_limited": bool(_pantry_signal)}
                 logger.info(
                     f"⚠️ [P2-REGEN-DAY-WARN-MULTI-AXIS] día bajo objetivo: {_deficits} | "
                     f"pantry_limited={bool(_pantry_signal)}"
@@ -10123,6 +10197,8 @@ def api_regenerate_day(
                              "Ajusta las porciones o renueva el ciclo para acercarte a tu objetivo.")
                     _day_warning = (f"Este día quedó con los macros fuera de tu banda objetivo "
                                     f"(precisión {round(_bmo * 100)}%). " + _tail)
+                    _day_warning_detail = {"kind": "band", "precision_pct": round(_bmo * 100),
+                                           "pantry_limited": bool(_pantry_signal)}
                     logger.info(
                         f"⚠️ [P2-REGEN-DAY-BAND-WARN] día fuera de banda (macros_only={_bmo}) sin déficit → "
                         f"aviso honesto | pantry_limited={bool(_pantry_signal)}"
@@ -10185,6 +10261,9 @@ def api_regenerate_day(
             "band_score": _band_score,
             # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
             "day_quality_warning": _day_warning,
+            # [P1-PLAN-LOTE-222 · 2026-09-24] El aviso en datos (tipo, cifras, causa) para escribirlo en el idioma
+            # del usuario; None exactamente cuando `day_quality_warning` es None.
+            "day_quality_warning_detail": _day_warning_detail if _day_warning else None,
             # [P2-REGEN-DAY-DEFICIT-HONESTY · 2026-06-29] True si el déficit es por Nevera insuficiente (revert
             # pantry o slots no-cambiables); False/None si es un residual alcanzable (ajuste fino de porciones).
             "day_deficit_pantry_limited": bool(_pantry_limited or (slots_kept and len(slots_kept) > 0)) if _day_warning else None,
@@ -10201,6 +10280,9 @@ def api_regenerate_day(
             # planData.days[day_index].meals localmente (sin refetch) y luego
             # invoque /recalculate-shopping-list (mismo patrón que swap).
             "meals": new_meals,
+            # [P1-PLAN-LOTE-222 · 2026-09-24] Los nombres de `meals` en el idioma del usuario, alineados por índice
+            # (None si no aplica): el día regenerado perdió su `_display` y la traducción completa tarda.
+            "meals_display_names": _nombres_visibles_del_dia(new_meals, _locale_nombres_rd, verified_user_id),
         }
     except HTTPException:
         raise
@@ -10497,6 +10579,7 @@ def api_restore_plan_local(
     _now_iso = _dt_p1o1.now(_tz_p1o1.utc).isoformat()
     plan_data_to_write["_plan_modified_at"] = _now_iso
     plan_data_to_write["_restored_from_local_at"] = _now_iso
+    _quitar_display_provisional(plan_data_to_write)
 
     from db_core import connection_pool
     from db_plans import acquire_meal_plan_advisory_lock, set_meal_plan_for_update_timeouts
@@ -13612,6 +13695,35 @@ def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
     return escribio
 
 
+@router.post("/guest-display")
+def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_GUEST_DISPLAY_LIMITER)):
+    """[P1-PLAN-LOTE-222 · 2026-09-24] El plan del INVITADO en su idioma.
+
+    Los invitados no persisten el plan (vive en su navegador), así que ningún disparador de la capa `_display` los
+    alcanza y el plan salía en español con la app en inglés: justo en el embudo del plan gratis, la primera
+    impresión de quien aún no tiene cuenta. El cliente manda su copia y recibe las traducciones para fusionarlas;
+    aquí no se guarda nada. Mismo motor que el de las cuentas (`plan_display_i18n.traducir_plan_en_memoria`), con
+    topes de días/comidas y de tamaño, y un cupo por IP (`_GUEST_DISPLAY_LIMITER`). Cero `api_usage`: el gasto va a
+    `llm_usage_events` (node `plan_display_i18n`), como el de las cuentas.
+
+    tooltip-anchor: P1-PLAN-LOTE-222
+    """
+    plan = data.get("plan_data")
+    if not isinstance(plan, dict):
+        raise HTTPException(status_code=400, detail="plan_data must be a dict")
+    try:
+        if len(_json.dumps(plan)) > _GUEST_DISPLAY_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="plan_data demasiado grande.")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="plan_data no serializable.")
+    from plan_display_i18n import traducir_plan_en_memoria
+    return traducir_plan_en_memoria(
+        {k: plan.get(k) for k in ("days", "name", "insights", "_display")},
+        data.get("locale"),
+        user_id=verified_user_id,
+    )
+
+
 @router.post("/adopt-guest-plan")
 def api_adopt_guest_plan(
     data: dict = Body(...),
@@ -13637,6 +13749,9 @@ def api_adopt_guest_plan(
     plan_data = (data or {}).get("plan_data")
     if not isinstance(plan_data, dict) or not plan_data.get("days"):
         raise HTTPException(status_code=400, detail="plan_data inválido (falta days)")
+    # [P1-PLAN-LOTE-222 · 2026-09-24] Lo provisional del cliente (sólo el nombre de un plato recién cambiado) no se
+    # adopta; las traducciones completas del invitado (`/guest-display`) sí.
+    _quitar_display_provisional(plan_data)
 
     # PRIORIDAD: la cuenta existente gana. Si ya tiene plan, NO adoptamos.
     existing = get_latest_meal_plan_with_id(verified_user_id)

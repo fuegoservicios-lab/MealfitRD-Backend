@@ -1,0 +1,2106 @@
+{
+ "_doc": [
+  "[P1-PLAN-LOTE-222 · 2026-09-24] Nombres de los alimentos del catálogo en los 4 idiomas que no son el base.",
+  "La CLAVE es el nombre canónico español de `master_ingredients.name`: el identificador del motor, que no se toca.",
+  "Estos nombres son para LEER y para ENTENDER lo que el usuario escribe (buscar, alergias, gustos): se resuelven al",
+  "canónico antes de llegar al motor. Nunca entran en `pantry_names_match` ni en los alias del catálogo.",
+  "`en-US` es el `name_en` de la base (instantánea scripts/data/catalogo_nutricion_2026_09_12.json).",
+  "Fila nueva en el catálogo sin fila aquí: se pinta en español (o con su `name_en`) y el test lo avisa."
+ ],
+ "alimentos": {
+  "Aceite de achiote": {
+   "en-US": "Achiote oil",
+   "pt-BR": "Óleo de urucum",
+   "fr-FR": "Huile de roucou",
+   "it-IT": "Olio di annatto"
+  },
+  "Aceite de coco": {
+   "en-US": "Coconut oil",
+   "pt-BR": "Óleo de coco",
+   "fr-FR": "Huile de coco",
+   "it-IT": "Olio di cocco"
+  },
+  "Aceite de oliva": {
+   "en-US": "Olive oil",
+   "pt-BR": "Azeite de oliva",
+   "fr-FR": "Huile d'olive",
+   "it-IT": "Olio d'oliva"
+  },
+  "Aceite de sésamo": {
+   "en-US": "Sesame oil",
+   "pt-BR": "Óleo de gergelim",
+   "fr-FR": "Huile de sésame",
+   "it-IT": "Olio di sesamo"
+  },
+  "Aceite vegetal": {
+   "en-US": "Vegetable oil",
+   "pt-BR": "Óleo vegetal",
+   "fr-FR": "Huile végétale",
+   "it-IT": "Olio vegetale"
+  },
+  "Aceitunas": {
+   "en-US": "Olives",
+   "pt-BR": "Azeitonas",
+   "fr-FR": "Olives",
+   "it-IT": "Olive"
+  },
+  "Aceitunas rellenas": {
+   "en-US": "Stuffed olives",
+   "pt-BR": "Azeitonas recheadas",
+   "fr-FR": "Olives farcies",
+   "it-IT": "Olive ripiene"
+  },
+  "Acelgas": {
+   "en-US": "Swiss chard",
+   "pt-BR": "Acelga",
+   "fr-FR": "Blettes",
+   "it-IT": "Bietole"
+  },
+  "Achiote": {
+   "en-US": "Achiote",
+   "pt-BR": "Urucum",
+   "fr-FR": "Roucou",
+   "it-IT": "Annatto"
+  },
+  "Aderezo ranch": {
+   "en-US": "Ranch dressing",
+   "pt-BR": "Molho ranch",
+   "fr-FR": "Sauce ranch",
+   "it-IT": "Salsa ranch"
+  },
+  "Adobo": {
+   "en-US": "Adobo seasoning",
+   "pt-BR": "Tempero adobo",
+   "fr-FR": "Assaisonnement adobo",
+   "it-IT": "Condimento adobo"
+  },
+  "Aguacate": {
+   "en-US": "Avocado",
+   "pt-BR": "Abacate",
+   "fr-FR": "Avocat",
+   "it-IT": "Avocado"
+  },
+  "Ajo": {
+   "en-US": "Garlic",
+   "pt-BR": "Alho",
+   "fr-FR": "Ail",
+   "it-IT": "Aglio"
+  },
+  "Ajo en polvo": {
+   "en-US": "Garlic powder",
+   "pt-BR": "Alho em pó",
+   "fr-FR": "Ail en poudre",
+   "it-IT": "Aglio in polvere"
+  },
+  "Ajonjolí": {
+   "en-US": "Sesame seeds",
+   "pt-BR": "Gergelim",
+   "fr-FR": "Graines de sésame",
+   "it-IT": "Semi di sesamo"
+  },
+  "Ají cubanela": {
+   "en-US": "Cubanelle pepper",
+   "pt-BR": "Pimentão cubanela",
+   "fr-FR": "Poivron cubanelle",
+   "it-IT": "Peperone cubanelle"
+  },
+  "Ají morrón": {
+   "en-US": "Bell pepper",
+   "pt-BR": "Pimentão",
+   "fr-FR": "Poivron",
+   "it-IT": "Peperone"
+  },
+  "Albahaca seca": {
+   "en-US": "Dried basil",
+   "pt-BR": "Manjericão seco",
+   "fr-FR": "Basilic séché",
+   "it-IT": "Basilico secco"
+  },
+  "Alcachofa": {
+   "en-US": "Artichoke",
+   "pt-BR": "Alcachofra",
+   "fr-FR": "Artichaut",
+   "it-IT": "Carciofo"
+  },
+  "Alcaparrado": {
+   "en-US": "Caper-olive mix",
+   "pt-BR": "Mistura de alcaparras e azeitonas",
+   "fr-FR": "Mélange câpres et olives",
+   "it-IT": "Misto di capperi e olive"
+  },
+  "Alioli": {
+   "en-US": "Garlic aioli",
+   "pt-BR": "Aioli de alho",
+   "fr-FR": "Aïoli",
+   "it-IT": "Aioli"
+  },
+  "Almejas": {
+   "en-US": "Clams",
+   "pt-BR": "Vôngoles",
+   "fr-FR": "Palourdes",
+   "it-IT": "Vongole"
+  },
+  "Almendra marcona": {
+   "en-US": "Marcona almonds",
+   "pt-BR": "Amêndoas marcona",
+   "fr-FR": "Amandes marcona",
+   "it-IT": "Mandorle marcona"
+  },
+  "Almendras fileteadas": {
+   "en-US": "Sliced almonds",
+   "pt-BR": "Amêndoas laminadas",
+   "fr-FR": "Amandes effilées",
+   "it-IT": "Mandorle a lamelle"
+  },
+  "Anchoas": {
+   "en-US": "Anchovies",
+   "pt-BR": "Anchovas",
+   "fr-FR": "Anchois",
+   "it-IT": "Acciughe"
+  },
+  "Apio": {
+   "en-US": "Celery",
+   "pt-BR": "Aipo",
+   "fr-FR": "Céleri",
+   "it-IT": "Sedano"
+  },
+  "Arenque": {
+   "en-US": "Herring",
+   "pt-BR": "Arenque",
+   "fr-FR": "Hareng",
+   "it-IT": "Aringa"
+  },
+  "Arequipe": {
+   "en-US": "Dulce de leche",
+   "pt-BR": "Doce de leite",
+   "fr-FR": "Confiture de lait",
+   "it-IT": "Dulce de leche"
+  },
+  "Arracacha": {
+   "en-US": "Arracacha root",
+   "pt-BR": "Mandioquinha",
+   "fr-FR": "Arracacha",
+   "it-IT": "Arracacha"
+  },
+  "Arroz blanco": {
+   "en-US": "White rice",
+   "pt-BR": "Arroz branco",
+   "fr-FR": "Riz blanc",
+   "it-IT": "Riso bianco"
+  },
+  "Arroz integral": {
+   "en-US": "Brown rice",
+   "pt-BR": "Arroz integral",
+   "fr-FR": "Riz complet",
+   "it-IT": "Riso integrale"
+  },
+  "Arándanos": {
+   "en-US": "Blueberries",
+   "pt-BR": "Mirtilos",
+   "fr-FR": "Myrtilles",
+   "it-IT": "Mirtilli"
+  },
+  "Arándanos rojos": {
+   "en-US": "Cranberries",
+   "pt-BR": "Cranberries",
+   "fr-FR": "Canneberges",
+   "it-IT": "Mirtilli rossi"
+  },
+  "Atún en agua": {
+   "en-US": "Tuna in water",
+   "pt-BR": "Atum em água",
+   "fr-FR": "Thon au naturel",
+   "it-IT": "Tonno al naturale"
+  },
+  "Auyama": {
+   "en-US": "Squash",
+   "pt-BR": "Abóbora",
+   "fr-FR": "Courge",
+   "it-IT": "Zucca"
+  },
+  "Avena": {
+   "en-US": "Oats",
+   "pt-BR": "Aveia",
+   "fr-FR": "Flocons d'avoine",
+   "it-IT": "Fiocchi d'avena"
+  },
+  "Azafrán": {
+   "en-US": "Saffron",
+   "pt-BR": "Açafrão",
+   "fr-FR": "Safran",
+   "it-IT": "Zafferano"
+  },
+  "Azúcar morena": {
+   "en-US": "Brown sugar",
+   "pt-BR": "Açúcar mascavo",
+   "fr-FR": "Sucre roux",
+   "it-IT": "Zucchero di canna"
+  },
+  "Bacalao": {
+   "en-US": "Salt cod",
+   "pt-BR": "Bacalhau",
+   "fr-FR": "Morue salée",
+   "it-IT": "Baccalà"
+  },
+  "Bacalaítos": {
+   "en-US": "Cod fritters",
+   "pt-BR": "Bolinhos de bacalhau",
+   "fr-FR": "Acras de morue",
+   "it-IT": "Frittelle di baccalà"
+  },
+  "Bagels": {
+   "en-US": "Bagels",
+   "pt-BR": "Bagels",
+   "fr-FR": "Bagels",
+   "it-IT": "Bagel"
+  },
+  "Batata": {
+   "en-US": "Sweet potato",
+   "pt-BR": "Batata-doce",
+   "fr-FR": "Patate douce",
+   "it-IT": "Patata dolce"
+  },
+  "Berenjena": {
+   "en-US": "Eggplant",
+   "pt-BR": "Berinjela",
+   "fr-FR": "Aubergine",
+   "it-IT": "Melanzana"
+  },
+  "Berro": {
+   "en-US": "Watercress",
+   "pt-BR": "Agrião",
+   "fr-FR": "Cresson",
+   "it-IT": "Crescione"
+  },
+  "Bok choy": {
+   "en-US": "Bok choy",
+   "pt-BR": "Bok choy",
+   "fr-FR": "Pak-choï",
+   "it-IT": "Pak choi"
+  },
+  "Bolitas de papa": {
+   "en-US": "Potato balls",
+   "pt-BR": "Bolinhas de batata",
+   "fr-FR": "Boulettes de pomme de terre",
+   "it-IT": "Crocchette di patate"
+  },
+  "Boquerones": {
+   "en-US": "White anchovies",
+   "pt-BR": "Anchovas marinadas",
+   "fr-FR": "Anchois marinés",
+   "it-IT": "Alici marinate"
+  },
+  "Borojó": {
+   "en-US": "Borojo fruit",
+   "pt-BR": "Borojó",
+   "fr-FR": "Borojó",
+   "it-IT": "Borojó"
+  },
+  "Brócoli": {
+   "en-US": "Broccoli",
+   "pt-BR": "Brócolis",
+   "fr-FR": "Brocoli",
+   "it-IT": "Broccoli"
+  },
+  "Bulgur": {
+   "en-US": "Bulgur",
+   "pt-BR": "Trigo para quibe",
+   "fr-FR": "Boulgour",
+   "it-IT": "Bulgur"
+  },
+  "Butifarra": {
+   "en-US": "Butifarra sausage",
+   "pt-BR": "Linguiça butifarra",
+   "fr-FR": "Saucisse butifarra",
+   "it-IT": "Salsiccia butifarra"
+  },
+  "Cacao en polvo": {
+   "en-US": "Cocoa powder",
+   "pt-BR": "Cacau em pó",
+   "fr-FR": "Cacao en poudre",
+   "it-IT": "Cacao in polvere"
+  },
+  "Calabacín": {
+   "en-US": "Zucchini",
+   "pt-BR": "Abobrinha",
+   "fr-FR": "Courgette",
+   "it-IT": "Zucchina"
+  },
+  "Calamar": {
+   "en-US": "Squid",
+   "pt-BR": "Lula",
+   "fr-FR": "Calmar",
+   "it-IT": "Calamaro"
+  },
+  "Camarones": {
+   "en-US": "Shrimp",
+   "pt-BR": "Camarão",
+   "fr-FR": "Crevettes",
+   "it-IT": "Gamberi"
+  },
+  "Canela en polvo": {
+   "en-US": "Ground cinnamon",
+   "pt-BR": "Canela em pó",
+   "fr-FR": "Cannelle moulue",
+   "it-IT": "Cannella in polvere"
+  },
+  "Cangrejo": {
+   "en-US": "Crab",
+   "pt-BR": "Caranguejo",
+   "fr-FR": "Crabe",
+   "it-IT": "Granchio"
+  },
+  "Carne de res": {
+   "en-US": "Beef",
+   "pt-BR": "Carne bovina",
+   "fr-FR": "Bœuf",
+   "it-IT": "Manzo"
+  },
+  "Carne de res molida": {
+   "en-US": "Ground beef",
+   "pt-BR": "Carne moída",
+   "fr-FR": "Bœuf haché",
+   "it-IT": "Carne macinata di manzo"
+  },
+  "Carne molida mixta": {
+   "en-US": "Mixed ground meat",
+   "pt-BR": "Carne moída mista",
+   "fr-FR": "Viande hachée mixte",
+   "it-IT": "Carne macinata mista"
+  },
+  "Casabe": {
+   "en-US": "Cassava flatbread",
+   "pt-BR": "Beiju de mandioca",
+   "fr-FR": "Cassave",
+   "it-IT": "Pane di manioca"
+  },
+  "Casabe albahaca": {
+   "en-US": "Basil cassava flatbread",
+   "pt-BR": "Beiju de mandioca com manjericão",
+   "fr-FR": "Cassave au basilic",
+   "it-IT": "Pane di manioca al basilico"
+  },
+  "Cebada": {
+   "en-US": "Barley",
+   "pt-BR": "Cevada",
+   "fr-FR": "Orge",
+   "it-IT": "Orzo"
+  },
+  "Cebolla": {
+   "en-US": "Onion",
+   "pt-BR": "Cebola",
+   "fr-FR": "Oignon",
+   "it-IT": "Cipolla"
+  },
+  "Cebolla en polvo": {
+   "en-US": "Onion powder",
+   "pt-BR": "Cebola em pó",
+   "fr-FR": "Oignon en poudre",
+   "it-IT": "Cipolla in polvere"
+  },
+  "Cebollín": {
+   "en-US": "Chives",
+   "pt-BR": "Cebolinha",
+   "fr-FR": "Ciboulette",
+   "it-IT": "Erba cipollina"
+  },
+  "Cecina": {
+   "en-US": "Dried cured meat",
+   "pt-BR": "Carne-seca",
+   "fr-FR": "Viande séchée",
+   "it-IT": "Carne secca"
+  },
+  "Cerdo": {
+   "en-US": "Pork",
+   "pt-BR": "Carne de porco",
+   "fr-FR": "Porc",
+   "it-IT": "Maiale"
+  },
+  "Cereza maraschino": {
+   "en-US": "Maraschino cherry",
+   "pt-BR": "Cereja marrasquino",
+   "fr-FR": "Cerise au marasquin",
+   "it-IT": "Ciliegia al maraschino"
+  },
+  "Champiñones": {
+   "en-US": "Mushrooms",
+   "pt-BR": "Cogumelos",
+   "fr-FR": "Champignons",
+   "it-IT": "Funghi champignon"
+  },
+  "Champús": {
+   "en-US": "Champus fruit drink",
+   "pt-BR": "Bebida de frutas champús",
+   "fr-FR": "Boisson aux fruits champús",
+   "it-IT": "Bevanda di frutta champús"
+  },
+  "Chicharrón": {
+   "en-US": "Pork cracklings",
+   "pt-BR": "Torresmo",
+   "fr-FR": "Grattons",
+   "it-IT": "Ciccioli"
+  },
+  "Chile ancho": {
+   "en-US": "Ancho chile",
+   "pt-BR": "Pimenta ancho",
+   "fr-FR": "Piment ancho",
+   "it-IT": "Peperoncino ancho"
+  },
+  "Chile chipotle": {
+   "en-US": "Chipotle chile",
+   "pt-BR": "Pimenta chipotle",
+   "fr-FR": "Piment chipotle",
+   "it-IT": "Peperoncino chipotle"
+  },
+  "Chile de árbol": {
+   "en-US": "Tree chile",
+   "pt-BR": "Pimenta de árbol",
+   "fr-FR": "Piment de árbol",
+   "it-IT": "Peperoncino de árbol"
+  },
+  "Chile en polvo": {
+   "en-US": "Chili powder",
+   "pt-BR": "Pimenta em pó",
+   "fr-FR": "Piment en poudre",
+   "it-IT": "Peperoncino in polvere"
+  },
+  "Chile guajillo": {
+   "en-US": "Guajillo chile",
+   "pt-BR": "Pimenta guajillo",
+   "fr-FR": "Piment guajillo",
+   "it-IT": "Peperoncino guajillo"
+  },
+  "Chile habanero": {
+   "en-US": "Habanero chile",
+   "pt-BR": "Pimenta habanero",
+   "fr-FR": "Piment habanero",
+   "it-IT": "Peperoncino habanero"
+  },
+  "Chile jalapeño": {
+   "en-US": "Jalapeño pepper",
+   "pt-BR": "Pimenta jalapeño",
+   "fr-FR": "Piment jalapeño",
+   "it-IT": "Peperoncino jalapeño"
+  },
+  "Chile mulato": {
+   "en-US": "Mulato chile",
+   "pt-BR": "Pimenta mulato",
+   "fr-FR": "Piment mulato",
+   "it-IT": "Peperoncino mulato"
+  },
+  "Chile pasilla": {
+   "en-US": "Pasilla chile",
+   "pt-BR": "Pimenta pasilla",
+   "fr-FR": "Piment pasilla",
+   "it-IT": "Peperoncino pasilla"
+  },
+  "Chile poblano": {
+   "en-US": "Poblano pepper",
+   "pt-BR": "Pimenta poblano",
+   "fr-FR": "Piment poblano",
+   "it-IT": "Peperone poblano"
+  },
+  "Chile serrano": {
+   "en-US": "Serrano pepper",
+   "pt-BR": "Pimenta serrano",
+   "fr-FR": "Piment serrano",
+   "it-IT": "Peperoncino serrano"
+  },
+  "Chili con carne": {
+   "en-US": "Chili con carne",
+   "pt-BR": "Chili com carne",
+   "fr-FR": "Chili con carne",
+   "it-IT": "Chili con carne"
+  },
+  "Chinola": {
+   "en-US": "Passion fruit",
+   "pt-BR": "Maracujá",
+   "fr-FR": "Fruit de la passion",
+   "it-IT": "Frutto della passione"
+  },
+  "Chistorra": {
+   "en-US": "Chistorra sausage",
+   "pt-BR": "Linguiça chistorra",
+   "fr-FR": "Saucisse chistorra",
+   "it-IT": "Salsiccia chistorra"
+  },
+  "Chivo": {
+   "en-US": "Goat meat",
+   "pt-BR": "Carne de cabrito",
+   "fr-FR": "Viande de cabri",
+   "it-IT": "Carne di capra"
+  },
+  "Chocolate de mesa": {
+   "en-US": "Table chocolate",
+   "pt-BR": "Chocolate para bebida",
+   "fr-FR": "Chocolat à boire",
+   "it-IT": "Cioccolato per bevanda"
+  },
+  "Chontaduro": {
+   "en-US": "Peach palm fruit",
+   "pt-BR": "Pupunha",
+   "fr-FR": "Fruit du palmier pêche",
+   "it-IT": "Frutto della palma pesca"
+  },
+  "Chorizo español": {
+   "en-US": "Spanish chorizo",
+   "pt-BR": "Chouriço espanhol",
+   "fr-FR": "Chorizo espagnol",
+   "it-IT": "Chorizo spagnolo"
+  },
+  "Chorizo mexicano": {
+   "en-US": "Mexican chorizo",
+   "pt-BR": "Chouriço mexicano",
+   "fr-FR": "Chorizo mexicain",
+   "it-IT": "Chorizo messicano"
+  },
+  "Chorizo santarrosano": {
+   "en-US": "Santa Rosa chorizo",
+   "pt-BR": "Chouriço santarrosano",
+   "fr-FR": "Chorizo de Santa Rosa",
+   "it-IT": "Chorizo di Santa Rosa"
+  },
+  "Chorizo verde": {
+   "en-US": "Green chorizo",
+   "pt-BR": "Chouriço verde",
+   "fr-FR": "Chorizo vert",
+   "it-IT": "Chorizo verde"
+  },
+  "Chuleta ahumada": {
+   "en-US": "Smoked pork chop",
+   "pt-BR": "Costeleta de porco defumada",
+   "fr-FR": "Côtelette de porc fumée",
+   "it-IT": "Braciola di maiale affumicata"
+  },
+  "Cilantro": {
+   "en-US": "Cilantro",
+   "pt-BR": "Coentro",
+   "fr-FR": "Coriandre",
+   "it-IT": "Coriandolo"
+  },
+  "Ciruela": {
+   "en-US": "Plum",
+   "pt-BR": "Ameixa",
+   "fr-FR": "Prune",
+   "it-IT": "Susina"
+  },
+  "Ciruela pasa": {
+   "en-US": "Prune",
+   "pt-BR": "Ameixa seca",
+   "fr-FR": "Pruneau",
+   "it-IT": "Prugna secca"
+  },
+  "Clara de huevo": {
+   "en-US": "Egg white",
+   "pt-BR": "Clara de ovo",
+   "fr-FR": "Blanc d'œuf",
+   "it-IT": "Albume"
+  },
+  "Coco": {
+   "en-US": "Coconut",
+   "pt-BR": "Coco",
+   "fr-FR": "Noix de coco",
+   "it-IT": "Cocco"
+  },
+  "Coditos": {
+   "en-US": "Elbow macaroni",
+   "pt-BR": "Macarrão cotovelo",
+   "fr-FR": "Coquillettes",
+   "it-IT": "Chifferi"
+  },
+  "Coles de Bruselas": {
+   "en-US": "Brussels sprouts",
+   "pt-BR": "Couve-de-bruxelas",
+   "fr-FR": "Choux de Bruxelles",
+   "it-IT": "Cavoletti di Bruxelles"
+  },
+  "Coliflor": {
+   "en-US": "Cauliflower",
+   "pt-BR": "Couve-flor",
+   "fr-FR": "Chou-fleur",
+   "it-IT": "Cavolfiore"
+  },
+  "Comino": {
+   "en-US": "Cumin",
+   "pt-BR": "Cominho",
+   "fr-FR": "Cumin",
+   "it-IT": "Cumino"
+  },
+  "Conejo": {
+   "en-US": "Rabbit",
+   "pt-BR": "Coelho",
+   "fr-FR": "Lapin",
+   "it-IT": "Coniglio"
+  },
+  "Cordero": {
+   "en-US": "Lamb",
+   "pt-BR": "Cordeiro",
+   "fr-FR": "Agneau",
+   "it-IT": "Agnello"
+  },
+  "Costilla de cerdo": {
+   "en-US": "Pork ribs",
+   "pt-BR": "Costela de porco",
+   "fr-FR": "Travers de porc",
+   "it-IT": "Costine di maiale"
+  },
+  "Crema agria": {
+   "en-US": "Sour cream",
+   "pt-BR": "Creme azedo",
+   "fr-FR": "Crème aigre",
+   "it-IT": "Panna acida"
+  },
+  "Crema mexicana": {
+   "en-US": "Mexican cream",
+   "pt-BR": "Creme mexicano",
+   "fr-FR": "Crème mexicaine",
+   "it-IT": "Panna messicana"
+  },
+  "Crema mitad y mitad": {
+   "en-US": "Half and half",
+   "pt-BR": "Creme leve meio a meio",
+   "fr-FR": "Mélange lait-crème",
+   "it-IT": "Metà latte e metà panna"
+  },
+  "Cuajada": {
+   "en-US": "Curd cheese",
+   "pt-BR": "Coalhada",
+   "fr-FR": "Caillé",
+   "it-IT": "Cagliata"
+  },
+  "Cundeamor": {
+   "en-US": "Bitter melon",
+   "pt-BR": "Melão-de-são-caetano",
+   "fr-FR": "Melon amer",
+   "it-IT": "Melone amaro"
+  },
+  "Curry en polvo": {
+   "en-US": "Curry powder",
+   "pt-BR": "Curry em pó",
+   "fr-FR": "Curry en poudre",
+   "it-IT": "Curry in polvere"
+  },
+  "Curuba": {
+   "en-US": "Banana passionfruit",
+   "pt-BR": "Maracujá-banana",
+   "fr-FR": "Curuba",
+   "it-IT": "Curuba"
+  },
+  "Cúrcuma": {
+   "en-US": "Turmeric",
+   "pt-BR": "Cúrcuma",
+   "fr-FR": "Curcuma",
+   "it-IT": "Curcuma"
+  },
+  "Durazno en almíbar": {
+   "en-US": "Peaches in syrup",
+   "pt-BR": "Pêssego em calda",
+   "fr-FR": "Pêches au sirop",
+   "it-IT": "Pesche sciroppate"
+  },
+  "Duraznos": {
+   "en-US": "Peaches",
+   "pt-BR": "Pêssegos",
+   "fr-FR": "Pêches",
+   "it-IT": "Pesche"
+  },
+  "Dátiles": {
+   "en-US": "Dates",
+   "pt-BR": "Tâmaras",
+   "fr-FR": "Dattes",
+   "it-IT": "Datteri"
+  },
+  "Edamame": {
+   "en-US": "Edamame",
+   "pt-BR": "Edamame",
+   "fr-FR": "Edamame",
+   "it-IT": "Edamame"
+  },
+  "Ensalada de macarrones": {
+   "en-US": "Macaroni salad",
+   "pt-BR": "Salada de macarrão",
+   "fr-FR": "Salade de macaronis",
+   "it-IT": "Insalata di maccheroni"
+  },
+  "Epazote": {
+   "en-US": "Epazote herb",
+   "pt-BR": "Epazote",
+   "fr-FR": "Épazote",
+   "it-IT": "Epazote"
+  },
+  "Espaguetis": {
+   "en-US": "Spaghetti, dry",
+   "pt-BR": "Espaguete",
+   "fr-FR": "Spaghettis",
+   "it-IT": "Spaghetti"
+  },
+  "Especias para arroz con dulce": {
+   "en-US": "Rice pudding spices",
+   "pt-BR": "Especiarias para arroz-doce",
+   "fr-FR": "Épices pour riz au lait",
+   "it-IT": "Spezie per riso al latte"
+  },
+  "Espinacas": {
+   "en-US": "Spinach",
+   "pt-BR": "Espinafre",
+   "fr-FR": "Épinards",
+   "it-IT": "Spinaci"
+  },
+  "Espárragos": {
+   "en-US": "Asparagus",
+   "pt-BR": "Aspargos",
+   "fr-FR": "Asperges",
+   "it-IT": "Asparagi"
+  },
+  "Feijoa": {
+   "en-US": "Feijoa fruit",
+   "pt-BR": "Feijoa",
+   "fr-FR": "Feijoa",
+   "it-IT": "Feijoa"
+  },
+  "Fideos": {
+   "en-US": "Noodles",
+   "pt-BR": "Macarrão fino",
+   "fr-FR": "Vermicelles",
+   "it-IT": "Vermicelli"
+  },
+  "Filete de pescado blanco": {
+   "en-US": "White fish fillet",
+   "pt-BR": "Filé de peixe branco",
+   "fr-FR": "Filet de poisson blanc",
+   "it-IT": "Filetto di pesce bianco"
+  },
+  "Flor de Jamaica": {
+   "en-US": "Hibiscus flowers",
+   "pt-BR": "Flor de hibisco",
+   "fr-FR": "Fleurs d'hibiscus",
+   "it-IT": "Fiori di ibisco"
+  },
+  "Fresas": {
+   "en-US": "Strawberries",
+   "pt-BR": "Morangos",
+   "fr-FR": "Fraises",
+   "it-IT": "Fragole"
+  },
+  "Frijol cargamanto": {
+   "en-US": "Cargamanto beans",
+   "pt-BR": "Feijão cargamanto",
+   "fr-FR": "Haricots cargamanto",
+   "it-IT": "Fagioli cargamanto"
+  },
+  "Frijoles horneados": {
+   "en-US": "Baked beans",
+   "pt-BR": "Feijão assado",
+   "fr-FR": "Haricots blancs à la tomate",
+   "it-IT": "Fagioli al forno"
+  },
+  "Frijoles pintos": {
+   "en-US": "Pinto beans",
+   "pt-BR": "Feijão-carioca",
+   "fr-FR": "Haricots pinto",
+   "it-IT": "Fagioli pinto"
+  },
+  "Frijoles refritos": {
+   "en-US": "Refried beans",
+   "pt-BR": "Feijão refrito",
+   "fr-FR": "Haricots refrits",
+   "it-IT": "Fagioli refritos"
+  },
+  "Galletas Graham": {
+   "en-US": "Graham crackers",
+   "pt-BR": "Biscoitos Graham",
+   "fr-FR": "Biscuits Graham",
+   "it-IT": "Biscotti Graham"
+  },
+  "Galletas de soda": {
+   "en-US": "Soda crackers",
+   "pt-BR": "Biscoitos de água e sal",
+   "fr-FR": "Crackers salés",
+   "it-IT": "Cracker salati"
+  },
+  "Gallina criolla": {
+   "en-US": "Free-range hen",
+   "pt-BR": "Galinha caipira",
+   "fr-FR": "Poule fermière",
+   "it-IT": "Gallina ruspante"
+  },
+  "Gambas": {
+   "en-US": "Prawns",
+   "pt-BR": "Camarões grandes",
+   "fr-FR": "Gambas",
+   "it-IT": "Gamberoni"
+  },
+  "Gandules": {
+   "en-US": "Pigeon peas",
+   "pt-BR": "Feijão-guandu",
+   "fr-FR": "Pois d'Angole",
+   "it-IT": "Piselli d'Angola"
+  },
+  "Garbanzos": {
+   "en-US": "Chickpeas",
+   "pt-BR": "Grão-de-bico",
+   "fr-FR": "Pois chiches",
+   "it-IT": "Ceci"
+  },
+  "Granada": {
+   "en-US": "Pomegranate",
+   "pt-BR": "Romã",
+   "fr-FR": "Grenade",
+   "it-IT": "Melograno"
+  },
+  "Granadilla": {
+   "en-US": "Granadilla fruit",
+   "pt-BR": "Maracujá-doce",
+   "fr-FR": "Grenadille",
+   "it-IT": "Granadiglia"
+  },
+  "Granola": {
+   "en-US": "Granola",
+   "pt-BR": "Granola",
+   "fr-FR": "Granola",
+   "it-IT": "Granola"
+  },
+  "Guanábana": {
+   "en-US": "Soursop",
+   "pt-BR": "Graviola",
+   "fr-FR": "Corossol",
+   "it-IT": "Guanabana"
+  },
+  "Guascas": {
+   "en-US": "Guasca herb",
+   "pt-BR": "Erva guasca",
+   "fr-FR": "Herbe guasca",
+   "it-IT": "Erba guasca"
+  },
+  "Guayaba": {
+   "en-US": "Guava",
+   "pt-BR": "Goiaba",
+   "fr-FR": "Goyave",
+   "it-IT": "Guava"
+  },
+  "Guineo": {
+   "en-US": "Banana",
+   "pt-BR": "Banana",
+   "fr-FR": "Banane",
+   "it-IT": "Banana"
+  },
+  "Guineo verde": {
+   "en-US": "Green banana",
+   "pt-BR": "Banana verde",
+   "fr-FR": "Banane verte",
+   "it-IT": "Banana verde"
+  },
+  "Guisantes secos": {
+   "en-US": "Dried peas",
+   "pt-BR": "Ervilhas secas",
+   "fr-FR": "Pois secs",
+   "it-IT": "Piselli secchi"
+  },
+  "Habas": {
+   "en-US": "Fava beans",
+   "pt-BR": "Favas",
+   "fr-FR": "Fèves",
+   "it-IT": "Fave"
+  },
+  "Habichuelas blancas": {
+   "en-US": "White beans",
+   "pt-BR": "Feijão-branco",
+   "fr-FR": "Haricots blancs",
+   "it-IT": "Fagioli bianchi"
+  },
+  "Habichuelas negras": {
+   "en-US": "Black beans",
+   "pt-BR": "Feijão-preto",
+   "fr-FR": "Haricots noirs",
+   "it-IT": "Fagioli neri"
+  },
+  "Habichuelas rojas": {
+   "en-US": "Red beans",
+   "pt-BR": "Feijão-vermelho",
+   "fr-FR": "Haricots rouges",
+   "it-IT": "Fagioli rossi"
+  },
+  "Harina de Negrito": {
+   "en-US": "Negrito flour mix",
+   "pt-BR": "Mistura de farinha Negrito",
+   "fr-FR": "Farine Negrito",
+   "it-IT": "Farina Negrito"
+  },
+  "Harina de maíz precocida": {
+   "en-US": "Precooked corn flour",
+   "pt-BR": "Farinha de milho pré-cozida",
+   "fr-FR": "Farine de maïs précuite",
+   "it-IT": "Farina di mais precotta"
+  },
+  "Harina de trigo": {
+   "en-US": "Wheat flour",
+   "pt-BR": "Farinha de trigo",
+   "fr-FR": "Farine de blé",
+   "it-IT": "Farina di frumento"
+  },
+  "Harina de yuca": {
+   "en-US": "Cassava flour",
+   "pt-BR": "Farinha de mandioca",
+   "fr-FR": "Farine de manioc",
+   "it-IT": "Farina di manioca"
+  },
+  "Higo": {
+   "en-US": "Fig",
+   "pt-BR": "Figo",
+   "fr-FR": "Figue",
+   "it-IT": "Fico"
+  },
+  "Hoja santa": {
+   "en-US": "Hoja santa leaf",
+   "pt-BR": "Hoja santa",
+   "fr-FR": "Hoja santa",
+   "it-IT": "Hoja santa"
+  },
+  "Huevo": {
+   "en-US": "Egg",
+   "pt-BR": "Ovo",
+   "fr-FR": "Œuf",
+   "it-IT": "Uovo"
+  },
+  "Huevos rellenos": {
+   "en-US": "Stuffed eggs",
+   "pt-BR": "Ovos recheados",
+   "fr-FR": "Œufs mimosa",
+   "it-IT": "Uova ripiene"
+  },
+  "Huitlacoche": {
+   "en-US": "Corn smut",
+   "pt-BR": "Fungo do milho",
+   "fr-FR": "Charbon du maïs",
+   "it-IT": "Carbone del mais"
+  },
+  "Hummus": {
+   "en-US": "Hummus",
+   "pt-BR": "Homus",
+   "fr-FR": "Houmous",
+   "it-IT": "Hummus"
+  },
+  "Hígado de res": {
+   "en-US": "Beef liver",
+   "pt-BR": "Fígado bovino",
+   "fr-FR": "Foie de bœuf",
+   "it-IT": "Fegato di manzo"
+  },
+  "Jamón de cocinar": {
+   "en-US": "Cooking ham",
+   "pt-BR": "Presunto para cozinhar",
+   "fr-FR": "Jambon à cuire",
+   "it-IT": "Prosciutto da cucina"
+  },
+  "Jamón de pavo": {
+   "en-US": "Turkey ham",
+   "pt-BR": "Presunto de peru",
+   "fr-FR": "Jambon de dinde",
+   "it-IT": "Prosciutto di tacchino"
+  },
+  "Jamón de sándwich": {
+   "en-US": "Sandwich ham",
+   "pt-BR": "Presunto fatiado",
+   "fr-FR": "Jambon blanc",
+   "it-IT": "Prosciutto cotto"
+  },
+  "Jamón ibérico": {
+   "en-US": "Iberian ham",
+   "pt-BR": "Presunto ibérico",
+   "fr-FR": "Jambon ibérique",
+   "it-IT": "Prosciutto iberico"
+  },
+  "Jamón serrano": {
+   "en-US": "Serrano ham",
+   "pt-BR": "Presunto serrano",
+   "fr-FR": "Jambon serrano",
+   "it-IT": "Prosciutto serrano"
+  },
+  "Jarabe de arce": {
+   "en-US": "Maple syrup",
+   "pt-BR": "Xarope de bordo",
+   "fr-FR": "Sirop d'érable",
+   "it-IT": "Sciroppo d'acero"
+  },
+  "Jengibre": {
+   "en-US": "Ginger",
+   "pt-BR": "Gengibre",
+   "fr-FR": "Gingembre",
+   "it-IT": "Zenzero"
+  },
+  "Judías blancas": {
+   "en-US": "White beans",
+   "pt-BR": "Feijão-branco",
+   "fr-FR": "Haricots blancs",
+   "it-IT": "Fagioli bianchi"
+  },
+  "Judías pintas": {
+   "en-US": "Pinto beans",
+   "pt-BR": "Feijão-carioca",
+   "fr-FR": "Haricots pinto",
+   "it-IT": "Fagioli pinto"
+  },
+  "Jícama": {
+   "en-US": "Jicama",
+   "pt-BR": "Jícama",
+   "fr-FR": "Jicama",
+   "it-IT": "Jicama"
+  },
+  "Kale": {
+   "en-US": "Kale",
+   "pt-BR": "Couve kale",
+   "fr-FR": "Chou kale",
+   "it-IT": "Cavolo riccio"
+  },
+  "Kiwi": {
+   "en-US": "Kiwi",
+   "pt-BR": "Kiwi",
+   "fr-FR": "Kiwi",
+   "it-IT": "Kiwi"
+  },
+  "Kéfir": {
+   "en-US": "Kefir",
+   "pt-BR": "Kefir",
+   "fr-FR": "Kéfir",
+   "it-IT": "Kefir"
+  },
+  "Kétchup": {
+   "en-US": "Ketchup",
+   "pt-BR": "Ketchup",
+   "fr-FR": "Ketchup",
+   "it-IT": "Ketchup"
+  },
+  "Laurel": {
+   "en-US": "Bay leaves",
+   "pt-BR": "Folhas de louro",
+   "fr-FR": "Feuilles de laurier",
+   "it-IT": "Foglie di alloro"
+  },
+  "Leche": {
+   "en-US": "Milk",
+   "pt-BR": "Leite",
+   "fr-FR": "Lait",
+   "it-IT": "Latte"
+  },
+  "Leche de almendras": {
+   "en-US": "Almond milk",
+   "pt-BR": "Leite de amêndoas",
+   "fr-FR": "Lait d'amande",
+   "it-IT": "Latte di mandorla"
+  },
+  "Leche de avena": {
+   "en-US": "Oat milk",
+   "pt-BR": "Leite de aveia",
+   "fr-FR": "Lait d'avoine",
+   "it-IT": "Latte d'avena"
+  },
+  "Leche de cabra en polvo": {
+   "en-US": "Powdered goat milk",
+   "pt-BR": "Leite de cabra em pó",
+   "fr-FR": "Lait de chèvre en poudre",
+   "it-IT": "Latte di capra in polvere"
+  },
+  "Leche de coco": {
+   "en-US": "Coconut milk",
+   "pt-BR": "Leite de coco",
+   "fr-FR": "Lait de coco",
+   "it-IT": "Latte di cocco"
+  },
+  "Leche de soya": {
+   "en-US": "Soy milk",
+   "pt-BR": "Leite de soja",
+   "fr-FR": "Lait de soja",
+   "it-IT": "Latte di soia"
+  },
+  "Leche descremada": {
+   "en-US": "Skim milk",
+   "pt-BR": "Leite desnatado",
+   "fr-FR": "Lait écrémé",
+   "it-IT": "Latte scremato"
+  },
+  "Leche evaporada": {
+   "en-US": "Evaporated milk",
+   "pt-BR": "Leite evaporado",
+   "fr-FR": "Lait concentré non sucré",
+   "it-IT": "Latte evaporato"
+  },
+  "Lechosa": {
+   "en-US": "Papaya",
+   "pt-BR": "Mamão",
+   "fr-FR": "Papaye",
+   "it-IT": "Papaya"
+  },
+  "Lechuga": {
+   "en-US": "Lettuce",
+   "pt-BR": "Alface",
+   "fr-FR": "Laitue",
+   "it-IT": "Lattuga"
+  },
+  "Lechuga romana": {
+   "en-US": "Romaine lettuce",
+   "pt-BR": "Alface romana",
+   "fr-FR": "Laitue romaine",
+   "it-IT": "Lattuga romana"
+  },
+  "Lentejas": {
+   "en-US": "Lentils",
+   "pt-BR": "Lentilhas",
+   "fr-FR": "Lentilles",
+   "it-IT": "Lenticchie"
+  },
+  "Limón": {
+   "en-US": "Lime",
+   "pt-BR": "Limão",
+   "fr-FR": "Citron vert",
+   "it-IT": "Lime"
+  },
+  "Linaza": {
+   "en-US": "Flaxseed",
+   "pt-BR": "Linhaça",
+   "fr-FR": "Graines de lin",
+   "it-IT": "Semi di lino"
+  },
+  "Lomo embuchado": {
+   "en-US": "Cured pork loin",
+   "pt-BR": "Lombo curado",
+   "fr-FR": "Longe de porc séchée",
+   "it-IT": "Lonza stagionata"
+  },
+  "Longaniza dominicana": {
+   "en-US": "Dominican longaniza sausage",
+   "pt-BR": "Linguiça dominicana",
+   "fr-FR": "Saucisse longaniza dominicaine",
+   "it-IT": "Salsiccia longaniza dominicana"
+  },
+  "Longaniza puertorriqueña": {
+   "en-US": "Puerto Rican longaniza sausage",
+   "pt-BR": "Linguiça porto-riquenha",
+   "fr-FR": "Saucisse longaniza portoricaine",
+   "it-IT": "Salsiccia longaniza portoricana"
+  },
+  "Lulo": {
+   "en-US": "Lulo fruit",
+   "pt-BR": "Lulo",
+   "fr-FR": "Lulo",
+   "it-IT": "Lulo"
+  },
+  "Malvaviscos": {
+   "en-US": "Marshmallows",
+   "pt-BR": "Marshmallows",
+   "fr-FR": "Guimauves",
+   "it-IT": "Marshmallow"
+  },
+  "Mandarina": {
+   "en-US": "Mandarin orange",
+   "pt-BR": "Tangerina",
+   "fr-FR": "Mandarine",
+   "it-IT": "Mandarino"
+  },
+  "Mango": {
+   "en-US": "Mango",
+   "pt-BR": "Manga",
+   "fr-FR": "Mangue",
+   "it-IT": "Mango"
+  },
+  "Mantequilla": {
+   "en-US": "Butter",
+   "pt-BR": "Manteiga",
+   "fr-FR": "Beurre",
+   "it-IT": "Burro"
+  },
+  "Mantequilla de almendras": {
+   "en-US": "Almond butter",
+   "pt-BR": "Pasta de amêndoas",
+   "fr-FR": "Purée d'amandes",
+   "it-IT": "Burro di mandorle"
+  },
+  "Mantequilla de maní": {
+   "en-US": "Peanut butter",
+   "pt-BR": "Pasta de amendoim",
+   "fr-FR": "Beurre de cacahuète",
+   "it-IT": "Burro di arachidi"
+  },
+  "Manzana": {
+   "en-US": "Apple",
+   "pt-BR": "Maçã",
+   "fr-FR": "Pomme",
+   "it-IT": "Mela"
+  },
+  "Maní": {
+   "en-US": "Peanuts",
+   "pt-BR": "Amendoim",
+   "fr-FR": "Cacahuètes",
+   "it-IT": "Arachidi"
+  },
+  "Mapuey": {
+   "en-US": "Mapuey yam",
+   "pt-BR": "Inhame mapuey",
+   "fr-FR": "Igname mapuey",
+   "it-IT": "Igname mapuey"
+  },
+  "Masa para pie": {
+   "en-US": "Pie dough",
+   "pt-BR": "Massa para torta",
+   "fr-FR": "Pâte à tarte",
+   "it-IT": "Pasta brisée"
+  },
+  "Mazapán": {
+   "en-US": "Marzipan",
+   "pt-BR": "Marzipã",
+   "fr-FR": "Massepain",
+   "it-IT": "Marzapane"
+  },
+  "Maíz dulce en granos": {
+   "en-US": "Sweet corn kernels",
+   "pt-BR": "Milho verde em grãos",
+   "fr-FR": "Grains de maïs doux",
+   "it-IT": "Mais dolce in chicchi"
+  },
+  "Mejillones": {
+   "en-US": "Mussels",
+   "pt-BR": "Mexilhões",
+   "fr-FR": "Moules",
+   "it-IT": "Cozze"
+  },
+  "Melón": {
+   "en-US": "Melon",
+   "pt-BR": "Melão",
+   "fr-FR": "Melon",
+   "it-IT": "Melone"
+  },
+  "Membrillo": {
+   "en-US": "Quince",
+   "pt-BR": "Marmelo",
+   "fr-FR": "Coing",
+   "it-IT": "Mela cotogna"
+  },
+  "Membrillo dulce": {
+   "en-US": "Quince paste",
+   "pt-BR": "Marmelada de marmelo",
+   "fr-FR": "Pâte de coing",
+   "it-IT": "Cotognata"
+  },
+  "Merey": {
+   "en-US": "Cashews",
+   "pt-BR": "Castanha de caju",
+   "fr-FR": "Noix de cajou",
+   "it-IT": "Anacardi"
+  },
+  "Mero": {
+   "en-US": "Grouper",
+   "pt-BR": "Garoupa",
+   "fr-FR": "Mérou",
+   "it-IT": "Cernia"
+  },
+  "Mezcla para panqueques": {
+   "en-US": "Pancake mix",
+   "pt-BR": "Mistura para panquecas",
+   "fr-FR": "Préparation pour pancakes",
+   "it-IT": "Preparato per pancake"
+  },
+  "Miel": {
+   "en-US": "Honey",
+   "pt-BR": "Mel",
+   "fr-FR": "Miel",
+   "it-IT": "Miele"
+  },
+  "Molondrones": {
+   "en-US": "Okra",
+   "pt-BR": "Quiabo",
+   "fr-FR": "Gombo",
+   "it-IT": "Okra"
+  },
+  "Mora": {
+   "en-US": "Blackberry",
+   "pt-BR": "Amora",
+   "fr-FR": "Mûre",
+   "it-IT": "Mora"
+  },
+  "Morcilla": {
+   "en-US": "Blood sausage",
+   "pt-BR": "Morcela",
+   "fr-FR": "Boudin noir",
+   "it-IT": "Sanguinaccio"
+  },
+  "Mostaza": {
+   "en-US": "Mustard",
+   "pt-BR": "Mostarda",
+   "fr-FR": "Moutarde",
+   "it-IT": "Senape"
+  },
+  "Muslo de pollo": {
+   "en-US": "Chicken thigh",
+   "pt-BR": "Sobrecoxa de frango",
+   "fr-FR": "Cuisse de poulet",
+   "it-IT": "Coscia di pollo"
+  },
+  "Nabo": {
+   "en-US": "Turnip",
+   "pt-BR": "Nabo",
+   "fr-FR": "Navet",
+   "it-IT": "Rapa"
+  },
+  "Naranja": {
+   "en-US": "Orange",
+   "pt-BR": "Laranja",
+   "fr-FR": "Orange",
+   "it-IT": "Arancia"
+  },
+  "Nata": {
+   "en-US": "Cream",
+   "pt-BR": "Creme de leite",
+   "fr-FR": "Crème liquide",
+   "it-IT": "Panna"
+  },
+  "Natilla": {
+   "en-US": "Custard",
+   "pt-BR": "Creme de baunilha",
+   "fr-FR": "Crème dessert",
+   "it-IT": "Crema pasticcera"
+  },
+  "Nopal": {
+   "en-US": "Cactus pad",
+   "pt-BR": "Nopal",
+   "fr-FR": "Raquette de nopal",
+   "it-IT": "Pala di fico d'India"
+  },
+  "Nori": {
+   "en-US": "Nori seaweed",
+   "pt-BR": "Alga nori",
+   "fr-FR": "Algue nori",
+   "it-IT": "Alga nori"
+  },
+  "Nueces mixtas": {
+   "en-US": "Mixed nuts",
+   "pt-BR": "Mix de castanhas",
+   "fr-FR": "Mélange de noix",
+   "it-IT": "Frutta secca mista"
+  },
+  "Nueces pecanas": {
+   "en-US": "Pecans",
+   "pt-BR": "Nozes-pecã",
+   "fr-FR": "Noix de pécan",
+   "it-IT": "Noci pecan"
+  },
+  "Nuez de Castilla": {
+   "en-US": "Walnuts",
+   "pt-BR": "Nozes",
+   "fr-FR": "Cerneaux de noix",
+   "it-IT": "Noci"
+  },
+  "Níspero": {
+   "en-US": "Loquat",
+   "pt-BR": "Nêspera",
+   "fr-FR": "Nèfle du Japon",
+   "it-IT": "Nespola"
+  },
+  "Orégano dominicano": {
+   "en-US": "Dominican oregano",
+   "pt-BR": "Orégano dominicano",
+   "fr-FR": "Origan dominicain",
+   "it-IT": "Origano dominicano"
+  },
+  "Palmito": {
+   "en-US": "Hearts of palm",
+   "pt-BR": "Palmito",
+   "fr-FR": "Cœurs de palmier",
+   "it-IT": "Cuori di palma"
+  },
+  "Pan blanco familiar": {
+   "en-US": "Family white bread",
+   "pt-BR": "Pão de forma branco",
+   "fr-FR": "Pain de mie blanc",
+   "it-IT": "Pancarré bianco"
+  },
+  "Pan de agua": {
+   "en-US": "Water bread",
+   "pt-BR": "Pão de água",
+   "fr-FR": "Petit pain",
+   "it-IT": "Pane all'acqua"
+  },
+  "Pan de maíz": {
+   "en-US": "Cornbread",
+   "pt-BR": "Pão de milho",
+   "fr-FR": "Pain de maïs",
+   "it-IT": "Pane di mais"
+  },
+  "Pan integral familiar": {
+   "en-US": "Family whole wheat bread",
+   "pt-BR": "Pão de forma integral",
+   "fr-FR": "Pain de mie complet",
+   "it-IT": "Pancarré integrale"
+  },
+  "Pan integral personal": {
+   "en-US": "Individual whole wheat bread",
+   "pt-BR": "Pãozinho integral",
+   "fr-FR": "Petit pain complet",
+   "it-IT": "Panino integrale"
+  },
+  "Pan rallado": {
+   "en-US": "Breadcrumbs",
+   "pt-BR": "Farinha de rosca",
+   "fr-FR": "Chapelure",
+   "it-IT": "Pangrattato"
+  },
+  "Pan sobao": {
+   "en-US": "Sobao bread",
+   "pt-BR": "Pão sobao",
+   "fr-FR": "Pain sobao",
+   "it-IT": "Pane sobao"
+  },
+  "Panapén": {
+   "en-US": "Breadfruit",
+   "pt-BR": "Fruta-pão",
+   "fr-FR": "Fruit à pain",
+   "it-IT": "Frutto dell'albero del pane"
+  },
+  "Panceta ibérica": {
+   "en-US": "Iberian pork belly",
+   "pt-BR": "Panceta ibérica",
+   "fr-FR": "Poitrine de porc ibérique",
+   "it-IT": "Pancetta iberica"
+  },
+  "Panecillos de mantequilla": {
+   "en-US": "Butter rolls",
+   "pt-BR": "Pãezinhos de manteiga",
+   "fr-FR": "Petits pains au beurre",
+   "it-IT": "Panini al burro"
+  },
+  "Panecillos ingleses": {
+   "en-US": "English muffins",
+   "pt-BR": "Muffins ingleses",
+   "fr-FR": "Muffins anglais",
+   "it-IT": "Muffin inglesi"
+  },
+  "Panela": {
+   "en-US": "Panela sugar",
+   "pt-BR": "Rapadura",
+   "fr-FR": "Sucre de canne complet",
+   "it-IT": "Zucchero panela"
+  },
+  "Papa": {
+   "en-US": "Potato",
+   "pt-BR": "Batata",
+   "fr-FR": "Pomme de terre",
+   "it-IT": "Patata"
+  },
+  "Papas ralladas": {
+   "en-US": "Shredded potatoes",
+   "pt-BR": "Batata ralada",
+   "fr-FR": "Pommes de terre râpées",
+   "it-IT": "Patate grattugiate"
+  },
+  "Pasas": {
+   "en-US": "Raisins",
+   "pt-BR": "Uvas-passas",
+   "fr-FR": "Raisins secs",
+   "it-IT": "Uvetta"
+  },
+  "Pasta integral": {
+   "en-US": "Whole wheat pasta",
+   "pt-BR": "Macarrão integral",
+   "fr-FR": "Pâtes complètes",
+   "it-IT": "Pasta integrale"
+  },
+  "Pavo molido": {
+   "en-US": "Ground turkey",
+   "pt-BR": "Peru moído",
+   "fr-FR": "Dinde hachée",
+   "it-IT": "Tacchino macinato"
+  },
+  "Pavochón": {
+   "en-US": "Roast turkey",
+   "pt-BR": "Peru assado",
+   "fr-FR": "Dinde rôtie",
+   "it-IT": "Tacchino arrosto"
+  },
+  "Pechuga de pavo": {
+   "en-US": "Turkey breast",
+   "pt-BR": "Peito de peru",
+   "fr-FR": "Blanc de dinde",
+   "it-IT": "Petto di tacchino"
+  },
+  "Pechuga de pollo": {
+   "en-US": "Chicken breast",
+   "pt-BR": "Peito de frango",
+   "fr-FR": "Blanc de poulet",
+   "it-IT": "Petto di pollo"
+  },
+  "Pepino": {
+   "en-US": "Cucumber",
+   "pt-BR": "Pepino",
+   "fr-FR": "Concombre",
+   "it-IT": "Cetriolo"
+  },
+  "Pepperoni": {
+   "en-US": "Pepperoni",
+   "pt-BR": "Pepperoni",
+   "fr-FR": "Pepperoni",
+   "it-IT": "Salamino piccante"
+  },
+  "Pera": {
+   "en-US": "Pear",
+   "pt-BR": "Pera",
+   "fr-FR": "Poire",
+   "it-IT": "Pera"
+  },
+  "Percebes": {
+   "en-US": "Goose barnacles",
+   "pt-BR": "Percebes",
+   "fr-FR": "Pouces-pieds",
+   "it-IT": "Percebes"
+  },
+  "Perejil": {
+   "en-US": "Parsley",
+   "pt-BR": "Salsinha",
+   "fr-FR": "Persil",
+   "it-IT": "Prezzemolo"
+  },
+  "Pernil": {
+   "en-US": "Roast pork shoulder",
+   "pt-BR": "Pernil assado",
+   "fr-FR": "Épaule de porc rôtie",
+   "it-IT": "Spalla di maiale arrosto"
+  },
+  "Pimentón": {
+   "en-US": "Paprika",
+   "pt-BR": "Páprica",
+   "fr-FR": "Paprika",
+   "it-IT": "Paprika"
+  },
+  "Pimienta negra": {
+   "en-US": "Black pepper",
+   "pt-BR": "Pimenta-do-reino",
+   "fr-FR": "Poivre noir",
+   "it-IT": "Pepe nero"
+  },
+  "Pique": {
+   "en-US": "Hot pepper sauce",
+   "pt-BR": "Molho de pimenta",
+   "fr-FR": "Sauce piquante",
+   "it-IT": "Salsa piccante"
+  },
+  "Pistachos": {
+   "en-US": "Pistachios",
+   "pt-BR": "Pistaches",
+   "fr-FR": "Pistaches",
+   "it-IT": "Pistacchi"
+  },
+  "Piña": {
+   "en-US": "Pineapple",
+   "pt-BR": "Abacaxi",
+   "fr-FR": "Ananas",
+   "it-IT": "Ananas"
+  },
+  "Piñones": {
+   "en-US": "Pine nuts",
+   "pt-BR": "Pinoli",
+   "fr-FR": "Pignons de pin",
+   "it-IT": "Pinoli"
+  },
+  "Plátano maduro": {
+   "en-US": "Ripe plantain",
+   "pt-BR": "Banana-da-terra madura",
+   "fr-FR": "Banane plantain mûre",
+   "it-IT": "Banana platano matura"
+  },
+  "Plátano verde": {
+   "en-US": "Green plantain",
+   "pt-BR": "Banana-da-terra verde",
+   "fr-FR": "Banane plantain verte",
+   "it-IT": "Banana platano verde"
+  },
+  "Polvo de hornear": {
+   "en-US": "Baking powder",
+   "pt-BR": "Fermento químico em pó",
+   "fr-FR": "Levure chimique",
+   "it-IT": "Lievito in polvere"
+  },
+  "Pretzels": {
+   "en-US": "Pretzels",
+   "pt-BR": "Pretzels",
+   "fr-FR": "Bretzels",
+   "it-IT": "Pretzel"
+  },
+  "Puerro": {
+   "en-US": "Leek",
+   "pt-BR": "Alho-poró",
+   "fr-FR": "Poireau",
+   "it-IT": "Porro"
+  },
+  "Pulpo": {
+   "en-US": "Octopus",
+   "pt-BR": "Polvo",
+   "fr-FR": "Poulpe",
+   "it-IT": "Polpo"
+  },
+  "Queso blanco": {
+   "en-US": "White cheese",
+   "pt-BR": "Queijo branco",
+   "fr-FR": "Fromage blanc à griller",
+   "it-IT": "Formaggio bianco da cuocere"
+  },
+  "Queso cheddar": {
+   "en-US": "Cheddar cheese",
+   "pt-BR": "Queijo cheddar",
+   "fr-FR": "Cheddar",
+   "it-IT": "Formaggio cheddar"
+  },
+  "Queso cottage": {
+   "en-US": "Cottage cheese",
+   "pt-BR": "Queijo cottage",
+   "fr-FR": "Cottage cheese",
+   "it-IT": "Fiocchi di latte"
+  },
+  "Queso crema": {
+   "en-US": "Cream cheese",
+   "pt-BR": "Cream cheese",
+   "fr-FR": "Fromage à tartiner",
+   "it-IT": "Formaggio spalmabile"
+  },
+  "Queso de hoja": {
+   "en-US": "Leaf cheese",
+   "pt-BR": "Queijo de folha",
+   "fr-FR": "Fromage en feuilles",
+   "it-IT": "Formaggio a sfoglia"
+  },
+  "Queso de papa": {
+   "en-US": "Potato cheese",
+   "pt-BR": "Queijo processado",
+   "fr-FR": "Fromage fondu",
+   "it-IT": "Formaggio fuso"
+  },
+  "Queso en hebras": {
+   "en-US": "Shredded cheese",
+   "pt-BR": "Queijo desfiado",
+   "fr-FR": "Fromage en filaments",
+   "it-IT": "Formaggio filante"
+  },
+  "Queso gouda": {
+   "en-US": "Gouda cheese",
+   "pt-BR": "Queijo gouda",
+   "fr-FR": "Gouda",
+   "it-IT": "Formaggio gouda"
+  },
+  "Queso mozzarella": {
+   "en-US": "Mozzarella cheese",
+   "pt-BR": "Muçarela",
+   "fr-FR": "Mozzarella",
+   "it-IT": "Mozzarella"
+  },
+  "Queso parmesano": {
+   "en-US": "Parmesan cheese",
+   "pt-BR": "Queijo parmesão",
+   "fr-FR": "Parmesan",
+   "it-IT": "Parmigiano"
+  },
+  "Queso provolone": {
+   "en-US": "Provolone cheese",
+   "pt-BR": "Queijo provolone",
+   "fr-FR": "Provolone",
+   "it-IT": "Provolone"
+  },
+  "Queso ricotta": {
+   "en-US": "Ricotta cheese",
+   "pt-BR": "Ricota",
+   "fr-FR": "Ricotta",
+   "it-IT": "Ricotta"
+  },
+  "Quinoa": {
+   "en-US": "Quinoa",
+   "pt-BR": "Quinoa",
+   "fr-FR": "Quinoa",
+   "it-IT": "Quinoa"
+  },
+  "Recao": {
+   "en-US": "Culantro",
+   "pt-BR": "Coentro-bravo",
+   "fr-FR": "Coriandre longue",
+   "it-IT": "Coriandolo messicano"
+  },
+  "Remolacha": {
+   "en-US": "Beet",
+   "pt-BR": "Beterraba",
+   "fr-FR": "Betterave",
+   "it-IT": "Barbabietola"
+  },
+  "Repollo": {
+   "en-US": "Cabbage",
+   "pt-BR": "Repolho",
+   "fr-FR": "Chou blanc",
+   "it-IT": "Cavolo cappuccio"
+  },
+  "Repollo morado": {
+   "en-US": "Purple cabbage",
+   "pt-BR": "Repolho roxo",
+   "fr-FR": "Chou rouge",
+   "it-IT": "Cavolo rosso"
+  },
+  "Requesón": {
+   "en-US": "Ricotta",
+   "pt-BR": "Ricota",
+   "fr-FR": "Ricotta",
+   "it-IT": "Ricotta"
+  },
+  "Ron de cocina": {
+   "en-US": "Cooking rum",
+   "pt-BR": "Rum culinário",
+   "fr-FR": "Rhum de cuisine",
+   "it-IT": "Rum da cucina"
+  },
+  "Rábano": {
+   "en-US": "Radish",
+   "pt-BR": "Rabanete",
+   "fr-FR": "Radis",
+   "it-IT": "Ravanello"
+  },
+  "Rúcula": {
+   "en-US": "Arugula",
+   "pt-BR": "Rúcula",
+   "fr-FR": "Roquette",
+   "it-IT": "Rucola"
+  },
+  "Sal": {
+   "en-US": "Salt",
+   "pt-BR": "Sal",
+   "fr-FR": "Sel",
+   "it-IT": "Sale"
+  },
+  "Salami": {
+   "en-US": "Salami",
+   "pt-BR": "Salame",
+   "fr-FR": "Salami",
+   "it-IT": "Salame"
+  },
+  "Salchicha italiana": {
+   "en-US": "Italian sausage",
+   "pt-BR": "Linguiça italiana",
+   "fr-FR": "Saucisse italienne",
+   "it-IT": "Salsiccia italiana"
+  },
+  "Salchichas": {
+   "en-US": "Sausages",
+   "pt-BR": "Salsichas",
+   "fr-FR": "Saucisses",
+   "it-IT": "Würstel"
+  },
+  "Salmón": {
+   "en-US": "Salmon",
+   "pt-BR": "Salmão",
+   "fr-FR": "Saumon",
+   "it-IT": "Salmone"
+  },
+  "Salsa barbacoa": {
+   "en-US": "Barbecue sauce",
+   "pt-BR": "Molho barbecue",
+   "fr-FR": "Sauce barbecue",
+   "it-IT": "Salsa barbecue"
+  },
+  "Salsa de salchicha": {
+   "en-US": "Sausage gravy",
+   "pt-BR": "Molho de linguiça",
+   "fr-FR": "Sauce à la saucisse",
+   "it-IT": "Sugo di salsiccia"
+  },
+  "Salsa de soya": {
+   "en-US": "Soy sauce",
+   "pt-BR": "Molho de soja",
+   "fr-FR": "Sauce soja",
+   "it-IT": "Salsa di soia"
+  },
+  "Salsa de tomate": {
+   "en-US": "Tomato sauce",
+   "pt-BR": "Molho de tomate",
+   "fr-FR": "Sauce tomate",
+   "it-IT": "Salsa di pomodoro"
+  },
+  "Salsa inglesa": {
+   "en-US": "Worcestershire sauce",
+   "pt-BR": "Molho inglês",
+   "fr-FR": "Sauce Worcestershire",
+   "it-IT": "Salsa Worcestershire"
+  },
+  "Sandía": {
+   "en-US": "Watermelon",
+   "pt-BR": "Melancia",
+   "fr-FR": "Pastèque",
+   "it-IT": "Anguria"
+  },
+  "Sardinas en lata": {
+   "en-US": "Canned sardines",
+   "pt-BR": "Sardinhas em lata",
+   "fr-FR": "Sardines en boîte",
+   "it-IT": "Sardine in scatola"
+  },
+  "Sazonador para tacos": {
+   "en-US": "Taco seasoning",
+   "pt-BR": "Tempero para tacos",
+   "fr-FR": "Assaisonnement pour tacos",
+   "it-IT": "Condimento per taco"
+  },
+  "Sazón con culantro y achiote": {
+   "en-US": "Culantro-achiote seasoning",
+   "pt-BR": "Tempero de coentro-bravo e urucum",
+   "fr-FR": "Assaisonnement coriandre longue et roucou",
+   "it-IT": "Condimento di coriandolo messicano e annatto"
+  },
+  "Semillas de calabaza": {
+   "en-US": "Pumpkin seeds",
+   "pt-BR": "Sementes de abóbora",
+   "fr-FR": "Graines de courge",
+   "it-IT": "Semi di zucca"
+  },
+  "Semillas de chía": {
+   "en-US": "Chia seeds",
+   "pt-BR": "Sementes de chia",
+   "fr-FR": "Graines de chia",
+   "it-IT": "Semi di chia"
+  },
+  "Semillas de girasol": {
+   "en-US": "Sunflower seeds",
+   "pt-BR": "Sementes de girassol",
+   "fr-FR": "Graines de tournesol",
+   "it-IT": "Semi di girasole"
+  },
+  "Sobrasada": {
+   "en-US": "Sobrasada spreadable sausage",
+   "pt-BR": "Sobrasada",
+   "fr-FR": "Sobrasada",
+   "it-IT": "Sobrasada"
+  },
+  "Sofrito": {
+   "en-US": "Sofrito sauce base",
+   "pt-BR": "Base de refogado (sofrito)",
+   "fr-FR": "Base de sofrito",
+   "it-IT": "Soffritto"
+  },
+  "Soya texturizada": {
+   "en-US": "Textured soy protein",
+   "pt-BR": "Proteína de soja texturizada",
+   "fr-FR": "Protéines de soja texturées",
+   "it-IT": "Proteine di soia testurizzate"
+  },
+  "Suero costeño": {
+   "en-US": "Coastal sour cream",
+   "pt-BR": "Creme azedo costeño",
+   "fr-FR": "Crème aigre costeño",
+   "it-IT": "Panna acida costeña"
+  },
+  "Suero de mantequilla": {
+   "en-US": "Buttermilk",
+   "pt-BR": "Leitelho",
+   "fr-FR": "Babeurre",
+   "it-IT": "Latticello"
+  },
+  "Sémola de maíz": {
+   "en-US": "Cornmeal",
+   "pt-BR": "Fubá",
+   "fr-FR": "Semoule de maïs",
+   "it-IT": "Semola di mais"
+  },
+  "Tamarindo": {
+   "en-US": "Tamarind",
+   "pt-BR": "Tamarindo",
+   "fr-FR": "Tamarin",
+   "it-IT": "Tamarindo"
+  },
+  "Tayota": {
+   "en-US": "Chayote",
+   "pt-BR": "Chuchu",
+   "fr-FR": "Christophine",
+   "it-IT": "Chayote"
+  },
+  "Tilapia": {
+   "en-US": "Tilapia",
+   "pt-BR": "Tilápia",
+   "fr-FR": "Tilapia",
+   "it-IT": "Tilapia"
+  },
+  "Tocineta": {
+   "en-US": "Bacon",
+   "pt-BR": "Bacon",
+   "fr-FR": "Bacon",
+   "it-IT": "Pancetta affumicata"
+  },
+  "Tofu firme": {
+   "en-US": "Firm tofu",
+   "pt-BR": "Tofu firme",
+   "fr-FR": "Tofu ferme",
+   "it-IT": "Tofu compatto"
+  },
+  "Tomate": {
+   "en-US": "Tomato",
+   "pt-BR": "Tomate",
+   "fr-FR": "Tomate",
+   "it-IT": "Pomodoro"
+  },
+  "Tomillo": {
+   "en-US": "Thyme",
+   "pt-BR": "Tomilho",
+   "fr-FR": "Thym",
+   "it-IT": "Timo"
+  },
+  "Toronja": {
+   "en-US": "Grapefruit",
+   "pt-BR": "Toranja",
+   "fr-FR": "Pamplemousse",
+   "it-IT": "Pompelmo"
+  },
+  "Tortilla de maíz": {
+   "en-US": "Corn tortilla",
+   "pt-BR": "Tortilha de milho",
+   "fr-FR": "Tortilla de maïs",
+   "it-IT": "Tortilla di mais"
+  },
+  "Tortilla de trigo": {
+   "en-US": "Flour tortilla",
+   "pt-BR": "Tortilha de trigo",
+   "fr-FR": "Tortilla de blé",
+   "it-IT": "Tortilla di frumento"
+  },
+  "Tortilla integral": {
+   "en-US": "Whole wheat tortilla",
+   "pt-BR": "Tortilha integral",
+   "fr-FR": "Tortilla complète",
+   "it-IT": "Tortilla integrale"
+  },
+  "Trucha": {
+   "en-US": "Trout",
+   "pt-BR": "Truta",
+   "fr-FR": "Truite",
+   "it-IT": "Trota"
+  },
+  "Tuna de nopal": {
+   "en-US": "Cactus fruit",
+   "pt-BR": "Figo-da-índia",
+   "fr-FR": "Figue de Barbarie",
+   "it-IT": "Fico d'India"
+  },
+  "Turrón": {
+   "en-US": "Nougat bar",
+   "pt-BR": "Torrone",
+   "fr-FR": "Nougat",
+   "it-IT": "Torrone"
+  },
+  "Uchuva": {
+   "en-US": "Golden berry",
+   "pt-BR": "Physalis",
+   "fr-FR": "Physalis",
+   "it-IT": "Alchechengi"
+  },
+  "Uva": {
+   "en-US": "Grape",
+   "pt-BR": "Uva",
+   "fr-FR": "Raisin",
+   "it-IT": "Uva"
+  },
+  "Vainilla": {
+   "en-US": "Vanilla",
+   "pt-BR": "Baunilha",
+   "fr-FR": "Vanille",
+   "it-IT": "Vaniglia"
+  },
+  "Vainitas": {
+   "en-US": "Green beans",
+   "pt-BR": "Vagem",
+   "fr-FR": "Haricots verts",
+   "it-IT": "Fagiolini"
+  },
+  "Vieira": {
+   "en-US": "Scallop",
+   "pt-BR": "Vieira",
+   "fr-FR": "Coquille Saint-Jacques",
+   "it-IT": "Capasanta"
+  },
+  "Vinagre balsámico": {
+   "en-US": "Balsamic vinegar",
+   "pt-BR": "Vinagre balsâmico",
+   "fr-FR": "Vinaigre balsamique",
+   "it-IT": "Aceto balsamico"
+  },
+  "Vinagre blanco": {
+   "en-US": "White vinegar",
+   "pt-BR": "Vinagre branco",
+   "fr-FR": "Vinaigre blanc",
+   "it-IT": "Aceto bianco"
+  },
+  "Vinagre de manzana": {
+   "en-US": "Apple cider vinegar",
+   "pt-BR": "Vinagre de maçã",
+   "fr-FR": "Vinaigre de cidre",
+   "it-IT": "Aceto di mele"
+  },
+  "Wafles": {
+   "en-US": "Waffles",
+   "pt-BR": "Waffles",
+   "fr-FR": "Gaufres",
+   "it-IT": "Waffle"
+  },
+  "Xoconostle": {
+   "en-US": "Sour cactus fruit",
+   "pt-BR": "Xoconostle",
+   "fr-FR": "Xoconostle",
+   "it-IT": "Xoconostle"
+  },
+  "Yautía": {
+   "en-US": "Taro root",
+   "pt-BR": "Taioba",
+   "fr-FR": "Malanga",
+   "it-IT": "Taro"
+  },
+  "Yema de huevo": {
+   "en-US": "Egg yolk",
+   "pt-BR": "Gema de ovo",
+   "fr-FR": "Jaune d'œuf",
+   "it-IT": "Tuorlo d'uovo"
+  },
+  "Yogur de coco": {
+   "en-US": "Coconut yogurt",
+   "pt-BR": "Iogurte de coco",
+   "fr-FR": "Yaourt au coco",
+   "it-IT": "Yogurt al cocco"
+  },
+  "Yogurt": {
+   "en-US": "Yogurt",
+   "pt-BR": "Iogurte",
+   "fr-FR": "Yaourt",
+   "it-IT": "Yogurt"
+  },
+  "Yogurt de cabra": {
+   "en-US": "Goat milk yogurt",
+   "pt-BR": "Iogurte de cabra",
+   "fr-FR": "Yaourt de chèvre",
+   "it-IT": "Yogurt di capra"
+  },
+  "Yogurt griego entero": {
+   "en-US": "Whole milk Greek yogurt",
+   "pt-BR": "Iogurte grego integral",
+   "fr-FR": "Yaourt grec entier",
+   "it-IT": "Yogurt greco intero"
+  },
+  "Yogurt griego sin azúcar": {
+   "en-US": "Unsweetened Greek yogurt",
+   "pt-BR": "Iogurte grego sem açúcar",
+   "fr-FR": "Yaourt grec sans sucre",
+   "it-IT": "Yogurt greco senza zucchero"
+  },
+  "Yuca": {
+   "en-US": "Cassava",
+   "pt-BR": "Mandioca",
+   "fr-FR": "Manioc",
+   "it-IT": "Manioca"
+  },
+  "Zanahoria": {
+   "en-US": "Carrot",
+   "pt-BR": "Cenoura",
+   "fr-FR": "Carotte",
+   "it-IT": "Carota"
+  },
+  "Ñame": {
+   "en-US": "Yam",
+   "pt-BR": "Inhame",
+   "fr-FR": "Igname",
+   "it-IT": "Igname"
+  }
+ }
+}

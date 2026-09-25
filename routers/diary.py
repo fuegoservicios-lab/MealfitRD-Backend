@@ -96,6 +96,10 @@ class EstimateMacrosRequest(BaseModel):
     `custom` de `/consumed/manual` (misma clamp, misma fila, sin resta de Nevera)."""
     text: str = Field(..., min_length=3, max_length=200)
     meal_type: Optional[str] = Field(default=None, max_length=32)
+    # [P1-PLAN-LOTE-222 · 2026-09-24] El idioma de la pantalla: el nombre y la porción vuelven en él. Antes el modelo
+    # adivinaba el idioma por lo escrito («en el idioma del usuario») y la nota de porción salía siempre en español
+    # dentro de una frase traducida.
+    locale: Optional[str] = Field(default=None, max_length=16)
 
 
 class MacroEstimateModel(BaseModel):
@@ -114,7 +118,7 @@ _ESTIMATE_SYSTEM_PROMPT = (
     "Usa referencias de comida dominicana y latina (mangú, moro, locrio, sancocho, tostones, "
     "yaniqueque, chimi, pica pollo) y estándar internacional para el resto. "
     "Devuelve SOLO un JSON con estas claves exactas: "
-    '{"name": "nombre corto del plato (≤60 caracteres, en el idioma del usuario)", '
+    '{"name": "nombre corto del plato (≤60 caracteres, en el idioma que se indica abajo)", '
     '"calories": kcal (número), "protein": gramos (número), "carbs": gramos (número), '
     '"healthy_fats": gramos (número), '
     '"portion_note": "porción asumida en una frase corta, p. ej. \"1 plato hondo (~350 g)\""}. '
@@ -392,6 +396,9 @@ async def api_diary_upload(
     session_id: str = Form(None),
     purpose: str = Form("diary"),
     tz_offset_mins: int = Form(0),
+    # [P1-PLAN-LOTE-222 · 2026-09-24] El idioma que la pantalla está mostrando (`getLocale()`): el nombre del plato y el
+    # de sus ingredientes se devuelven en él PARA LEER. Ausente (cliente anterior) ⇒ el del perfil; sin perfil ⇒ español.
+    locale: Optional[str] = Form(None),
     # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28 →
     # P1-VISION-NO-LOCAL · 2026-07-28] Quota-exempt PERMANENTE (doctrina
     # P1-NEVERA-QUOTA-EXEMPT): `verify_api_quota` devolvería 402 al cap
@@ -738,6 +745,16 @@ async def api_diary_upload(
         else:
             logger.info("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
 
+        # [P1-PLAN-LOTE-222 · 2026-09-24] Un tester con la app en inglés leía «Un tazón de avena cocida con leche» en
+        # «What is it?». Todo el análisis sigue en español —el backstop del nombre sólo entiende español y el nombre de
+        # cada ingrediente es el identificador con que se descuenta la Nevera— y SÓLO al final se traduce lo que se
+        # PINTA: `meal_name` (que el usuario puede editar y es lo que se guarda en su diario) y `items[].display_name`
+        # (el `name` no se toca). Sólo en el escáner del diario: en el chat el coach ya contesta en su idioma.
+        meal_name_es = meal_name
+        items_out = vision_result.get("items") or []
+        if is_food and purpose == "diary" and meal_name:
+            meal_name, items_out = await _nombres_para_mostrar(meal_name, items_out, locale, verified_user_id)
+
         return {
             "success": True,
             "is_food": is_food,
@@ -755,7 +772,7 @@ async def api_diary_upload(
             # 'plato' (macros → diario), 'items' (compra → Nevera vía chat-
             # agent/modify_pantry_inventory), 'otro'. `items` sanitizados.
             "photo_kind": vision_result.get("photo_kind") or ("plato" if is_food else "otro"),
-            "items": vision_result.get("items") or [],
+            "items": items_out,
             "description": description,
             "image_url": image_url,
             "attachment_id": attachment_id,
@@ -763,6 +780,8 @@ async def api_diary_upload(
             # para el modal de registro del Dashboard. Cero costo extra (ya se
             # computaron en process_image_with_vision).
             "meal_name": meal_name,
+            # [P1-PLAN-LOTE-222] El nombre que decidió el motor, en español (igual a `meal_name` si no se tradujo).
+            "meal_name_es": meal_name_es,
             "macros": {
                 "calories": calories,
                 "protein": protein,
@@ -782,6 +801,44 @@ async def api_diary_upload(
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/upload: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+async def _locale_del_escaner(locale_form, verified_user_id) -> str:
+    """[P1-PLAN-LOTE-222] El idioma que manda la pantalla; si no llega (cliente anterior), el del perfil; si no, el base."""
+    from traduccion_para_mostrar import locale_soportado, LOCALE_BASE
+    loc = locale_soportado(locale_form)
+    if loc:
+        return loc
+    if verified_user_id:
+        try:
+            prof = await asyncio.to_thread(get_user_profile, verified_user_id)
+            loc = locale_soportado((prof or {}).get("locale"))
+        except Exception:
+            loc = None
+    return loc or LOCALE_BASE
+
+
+async def _nombres_para_mostrar(meal_name: str, items: list, locale_form, verified_user_id):
+    """[P1-PLAN-LOTE-222 · 2026-09-24] (`meal_name` traducido, `items` con `display_name`) para el idioma de la pantalla.
+
+    Una sola llamada al modelo flash traduce el plato y sus ingredientes; si falla, el ingrediente que sea del catálogo
+    toma su nombre del léxico (`food_names_i18n`) y el resto queda en español. Nunca se toca `items[].name`."""
+    loc = await _locale_del_escaner(locale_form, verified_user_id)
+    if loc == "es-DO":
+        return meal_name, items
+    from traduccion_para_mostrar import traducir_para_mostrar
+    from food_names_i18n import nombre_para
+    nombres = [str((it or {}).get("name") or "") for it in (items or [])]
+    trad = await traducir_para_mostrar([meal_name, *nombres], loc, user_id=verified_user_id,
+                                       node="vision_scan_display_i18n")
+    out = []
+    for i, it in enumerate(items or []):
+        it2 = dict(it or {})
+        propio = (trad[i + 1] if trad else "") or nombre_para(it2.get("name") or "", loc) or ""
+        if propio and propio != it2.get("name"):
+            it2["display_name"] = propio
+        out.append(it2)
+    return ((trad[0] if trad and trad[0] else meal_name), out)
+
 
 def _save_visual_entry_background(user_id: str, image_url: str, description: str):
     """Background task: genera embedding y guarda en la tabla visual_diary."""
@@ -971,6 +1028,19 @@ async def api_estimate_macros(
     model = _plan_flash_model_name()
     slot = str(payload.meal_type or "").strip().lower()[:32]
     human = f"Comida: {text}" + (f"\nMomento del día: {slot}" if slot else "")
+    # [P1-PLAN-LOTE-222] `name` y `portion_note` en el idioma de la pantalla (o del perfil); el resto del JSON no cambia.
+    try:
+        from traduccion_para_mostrar import locale_soportado
+        from prompts.chat_agent import _COACH_LANGUAGE_NAMES
+        _loc = locale_soportado(payload.locale)
+        if not _loc:
+            _prof = await asyncio.to_thread(get_user_profile, verified_user_id)
+            _loc = locale_soportado((_prof or {}).get("locale"))
+        _idioma = _COACH_LANGUAGE_NAMES.get(_loc or "")
+    except Exception:
+        _idioma = None
+    human += (f"\nEscribe 'name' y 'portion_note' en {_idioma}." if _idioma
+              else "\nEscribe 'name' y 'portion_note' en español.")
     llm = ChatGLM(model=model, temperature=0.1, max_retries=1, timeout=25).with_structured_output(
         MacroEstimateModel, method="json_mode"
     )

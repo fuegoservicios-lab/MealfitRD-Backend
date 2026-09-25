@@ -50,6 +50,15 @@ def _load_frontend_sibling_sources(frontend_repo_path):
 
 
 
+def _ancla_day_name() -> str:
+    """[P1-PLAN-LOTE-222 · 2026-09-24] El backend escribe `day_name` en español («Lunes»): el tab lo sigue leyendo, pero
+    lo pinta con `t()` —las mismas claves del cálculo de respaldo—. Hasta que el lote 222 llegue al `main` del
+    frontend (el que clona el CI del backend), vale la forma anterior."""
+    if (_BACKEND_ROOT.parent / "frontend" / "src" / "__tests__" / "lote222.test.jsx").exists():
+        return "if (day?.day_name) return t(day.day_name)"
+    return "if (day?.day_name) return day.day_name"
+
+
 def test_marker_present():
     assert "P3-DAY-LABEL-FROM-PLAN" in _DASHBOARD, (
         "Marker P3-DAY-LABEL-FROM-PLAN ausente — un refactor podría borrar "
@@ -63,7 +72,7 @@ def test_day_name_read_from_plan_day():
     # El render relevante es el INTERIOR del button de los tabs (NO el
     # skeleton placeholder de días no generados que está más abajo).
     # Anchor: el bloque del primer map con weekDays.
-    idx = _DASHBOARD.find("if (day?.day_name) return day.day_name")
+    idx = _DASHBOARD.find(_ancla_day_name())
     assert idx > 0, (
         "Frontend NO está leyendo `day.day_name` para el label del tab. "
         "Esto revierte P3-DAY-LABEL-FROM-PLAN — labels divergerán del dot "
@@ -74,7 +83,7 @@ def test_day_name_read_from_plan_day():
 def test_fallback_to_old_compute_preserved():
     """Para planes legacy en localStorage sin `day_name` (pre-P3-DAY-LABEL-FROM-PLAN
     deployment), el fallback al cálculo viejo debe preservarse."""
-    idx = _DASHBOARD.find("if (day?.day_name) return day.day_name")
+    idx = _DASHBOARD.find(_ancla_day_name())
     assert idx > 0
     # Próximo bloque debe ser el fallback con diasSemana[d.getDay()]
     block = _DASHBOARD[idx:idx + 1500]

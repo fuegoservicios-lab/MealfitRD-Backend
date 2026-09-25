@@ -1074,6 +1074,11 @@ def _display_ya_usable(meal: dict, locale: Optional[str]) -> bool:
     entrada = disp.get(locale)
     if not isinstance(entrada, dict):
         return False
+    # [P1-PLAN-LOTE-222 · 2026-09-24] Una entrada `_provisional` (sólo el nombre de un plato recién cambiado, puesta
+    # por el cliente) es un anticipo, no la traducción: sin esto, un plato sin receta ni ingredientes la daría por
+    # buena y se quedaría con el nombre traducido y la descripción en español.
+    if entrada.get("_provisional"):
+        return False
     if not isinstance(entrada.get("name"), str) or not entrada["name"].strip():
         return False
     for campo in ("recipe", "ingredients"):
@@ -2282,6 +2287,108 @@ def enrich_plan_display(
             "error": f"{type(e).__name__}: {str(e)[:160]}",
         })
         return {"enriched_meals": 0, "skipped": "exception"}
+
+
+# [P1-PLAN-LOTE-222 · 2026-09-24] Topes del plan de un INVITADO que se traduce en memoria (sin BD). Es la única
+# llamada al LLM sin cuenta detrás aparte de la generación misma: el tope de comidas acota lo que cuesta un abuso.
+_INVITADO_MAX_DIAS = 14
+_INVITADO_MAX_COMIDAS = 60
+
+
+def traducir_plan_en_memoria(plan_data: dict, locale: str, *, user_id: Optional[str] = None) -> dict:
+    """[P1-PLAN-LOTE-222 · 2026-09-24] La traducción de un plan que NO está en la base de datos: el del invitado.
+
+    El invitado (el embudo del plan gratis) genera su plan pero no lo persiste —vive en su navegador—, así que
+    ningún disparador de `enrich_plan_display` lo alcanza: con la app en inglés, el plato, la descripción y la receta
+    salían en español. Es el mismo motor —mismos targets, mismo prompt, mismo validador por comida, mismo split de
+    lotes que no parsean— con dos diferencias: lee el plan del argumento y DEVUELVE las traducciones en vez de
+    escribirlas (el cliente las fusiona en su copia). Sin TOCTOU: nadie más escribe ese plan.
+
+    Returns: {"meals": [{"day": d, "meal": m, "display": {...}}], "plan_name": str|None, "insights": list|None,
+              "skipped": str|None}. JAMÁS lanza.
+    """
+    vacio = {"meals": [], "plan_name": None, "insights": None}
+    try:
+        if not _plan_display_i18n_enabled():
+            return {**vacio, "skipped": "knob_off"}
+        if not isinstance(locale, str) or locale not in _COACH_LANGUAGE_NAMES:
+            return {**vacio, "skipped": "locale"}
+        days = plan_data.get("days") if isinstance(plan_data, dict) else None
+        if not isinstance(days, list) or not days:
+            return {**vacio, "skipped": "no_days"}
+        indices = list(range(min(len(days), _INVITADO_MAX_DIAS)))
+        targets = _collect_targets(days, indices, locale=locale)[:_INVITADO_MAX_COMIDAS]
+
+        nombre = plan_data.get("name")
+        nombre_pendiente = (nombre if isinstance(nombre, str) and nombre.strip()
+                            and not _plan_name_already_translated(plan_data, locale, original=nombre) else None)
+        insights = plan_data.get("insights")
+        insights_pendientes = (insights if isinstance(insights, list) and insights
+                               and all(isinstance(x, str) and x.strip() for x in insights)
+                               and not _insights_already_translated(plan_data, locale) else None)
+        if not targets and nombre_pendiente is None and insights_pendientes is None:
+            return {**vacio, "skipped": "already_enriched"}
+
+        model_name = _plan_display_i18n_model_name()
+        if not _circuit_breaker_can_proceed(model_name):
+            return {**vacio, "skipped": "circuit_breaker_open"}
+        max_tokens = _plan_display_i18n_max_output_tokens()
+        timeout_s = _plan_display_i18n_timeout_s()
+        lotes = _particionar_targets(
+            targets, max_output_tokens=max_tokens,
+            tope_comidas=_plan_display_i18n_batch_days() * _comidas_por_dia_del_plan(days, indices),
+        )
+        pendientes = list(reversed(lotes)) or [[]]
+        presupuesto = _max_invocaciones_por_ciclo(len(lotes))
+        out_meals, out_nombre, out_insights = [], None, None
+        razon = None
+        while pendientes and presupuesto > 0:
+            lote = pendientes.pop()
+            if not lote and nombre_pendiente is None and insights_pendientes is None:
+                continue
+            presupuesto -= 1
+            prompt = _build_prompt(lote, locale, plan_name=nombre_pendiente, insights=insights_pendientes)
+            try:
+                llm = build_chat_llm(model_name, temperature=0.2, timeout=timeout_s, max_output_tokens=max_tokens)
+                response = llm.invoke(_build_messages(prompt))
+            except Exception as e:
+                logger.warning(f"[P1-PLAN-LOTE-222] traducción del plan invitado falló ({locale}): {e!r}")
+                razon = "llm_exception"
+                if presupuesto > 0:
+                    pendientes.append(lote)
+                continue
+            _emit_usage_telemetry(None, user_id, model_name, response)
+            parsed = _parse_json_response(getattr(response, "content", "") or "")
+            if parsed is None or not isinstance(parsed.get("meals"), list):
+                izq, der = _dividir_lote(lote)
+                if izq:
+                    pendientes.append(der)
+                    pendientes.append(izq)
+                razon = "json_parse_error"
+                continue
+            for item in parsed["meals"]:
+                if not isinstance(item, dict):
+                    continue
+                i = item.get("i")
+                if not isinstance(i, int) or isinstance(i, bool) or i < 0 or i >= len(lote):
+                    continue
+                display = _validate_and_build_display(lote[i], item)
+                if display is not None:
+                    # `name`: el plato que se tradujo. El cliente sólo fusiona si su plato en esa posición sigue
+                    # siendo ése (el invitado pudo cambiarlo mientras la traducción volvía).
+                    out_meals.append({"day": lote[i]["day_idx"], "meal": lote[i]["meal_idx"],
+                                      "name": lote[i]["name"], "display": display})
+            if nombre_pendiente is not None:
+                out_nombre = _validate_plan_name(parsed.get("plan_name"), original=nombre_pendiente)
+                nombre_pendiente = None
+            if insights_pendientes is not None:
+                out_insights = _validate_insights(parsed.get("insights"), insights_pendientes)
+                insights_pendientes = None
+        return {"meals": out_meals, "plan_name": out_nombre, "insights": out_insights,
+                "skipped": None if (out_meals or out_nombre or out_insights) else (razon or "no_valid_meals")}
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-222] traducir_plan_en_memoria excepción (fail-open) {locale}: {e!r}")
+        return {**vacio, "skipped": "exception"}
 
 
 def active_plan_missing_locale(user_id: str, locale: str):

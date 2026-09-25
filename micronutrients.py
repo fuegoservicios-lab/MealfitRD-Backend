@@ -188,6 +188,10 @@ _FIBER_RENAL_NOTE = ("Aumenta la fibra con vegetales y frutas bajos en potasio (
 # TECHO en apariencia 'ok' se reporta 'estimado_alto' (incierto). Mismo 0.6 que el 'estimado_bajo' de los
 # pisos, para simetría. Caveat honesto para el panel/PDF.
 _CEILING_COVERAGE_FLOOR = 0.6
+# [P1-PLAN-LOTE-222 · 2026-09-24] La coletilla del piso INCIERTO, con nombre: el frontend la reconoce y la traduce
+# (`microsCopy.js`) y el test de paridad la importa. Era un literal en línea que ningún espejo podía seguir.
+_FLOOR_ESTIMADO_SUFIJO = ("(Dato estimado: algunos ingredientes de tu plan no tienen este nutriente medido en el "
+                          "catálogo — el valor real puede ser mayor.)")
 _CEILING_ESTIMADO_NOTE = ("Estimado: algunos ingredientes no tienen dato de este nutriente en el catálogo, "
                           "por lo que el total mostrado puede estar SUBESTIMADO y el valor real superar el "
                           "techo. Verifícalo con tu nutricionista, especialmente si tienes una condición "
@@ -534,9 +538,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                 # no un déficit real). Caveat simétrico anexado, sin reemplazar el consejo (sigue siendo
                 # accionable si el déficit es real).
                 if status == "estimado_bajo" and entry.get("nota"):
-                    entry["nota"] = (str(entry["nota"]).rstrip() +
-                                     " (Dato estimado: algunos ingredientes de tu plan no tienen este "
-                                     "nutriente medido en el catálogo — el valor real puede ser mayor.)")
+                    entry["nota"] = str(entry["nota"]).rstrip() + " " + _FLOOR_ESTIMADO_SUFIJO
                 gaps.append(entry)
         panel.append(entry)
     # [P1-MICRO-PERDAY-FLOOR · 2026-07-02] Resumen worst-day: el panel de arriba evalúa el

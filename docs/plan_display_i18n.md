@@ -499,3 +499,23 @@ existe **para explicar**, no en la que hace el trabajo. Y esta alerta se pudo le
 porque el arreglo del refresco ya estaba dentro: nombraba el plan **vivo**, no uno borrado.
 
 Test: [`test_p1_i18n_budget_dice_la_causa.py`](../tests/test_p1_i18n_budget_dice_la_causa.py).
+
+## `P1-PLAN-LOTE-222` — el plan del invitado y el plato recién cambiado (2026-09-24)
+
+**El invitado nunca recibía traducción.** El embudo del plan gratis genera el plan pero no lo persiste (vive en el
+navegador), y los cinco disparadores de este motor leen y escriben `meal_plans`: con la app en inglés, platos,
+descripciones y recetas salían en español justo en la primera impresión. `traducir_plan_en_memoria(plan, locale)` es
+el mismo ciclo —`_collect_targets`, `_particionar_targets`, `_build_prompt`, `_validate_and_build_display`, split de
+los lotes que no parsean, techo de invocaciones— con dos diferencias: lee el plan del argumento y DEVUELVE las
+traducciones (`{meals: [{day, meal, name, display}], plan_name, insights, skipped}`) en vez de persistirlas. Sin TOCTOU
+en el servidor (nadie más escribe ese plan); el cliente sólo fusiona una traducción si su plato en esa posición sigue
+llamándose `name`. Topes: 14 días y 60 comidas por llamada. Endpoint `POST /api/plans/guest-display`, cupo por IP
+(`RateLimiter(6, 600)`) y 400 KB; el gasto va a `llm_usage_events` como el de las cuentas.
+
+**El plato recién cambiado.** El persist borra el `_display` del plato (DELETE-on-write) y encola la traducción del
+día, que tarda lo que tarda. Mientras tanto el cliente pinta el nombre que el swap/regenerate-day ya devuelven
+traducido (`display_name`, `meals_display_names`, vía `traduccion_para_mostrar`) como entrada `_display[locale]` con
+`_provisional: true`, y re-hidrata hasta que llega la completa. Esa entrada nunca se guarda: `/swap-meal/persist` ya
+popeaba `_display`, y `/restore-local` y `/adopt-guest-plan` la quitan (`_quitar_display_provisional`). Ojo si se toca
+`_display_ya_usable`: una entrada provisional sólo tiene `name`, así que para un plato con receta o ingredientes NO es
+usable y se retraduce — que es lo que se quiere.

@@ -124,10 +124,28 @@ def test_el_campo_embebido_sigue_ganando():
     # catálogo AUNQUE el embebido inglés exista. La precedencia que este guard protege
     # no cambió y ahora se ancla en su expresión: el valor del catálogo solo entra a
     # `_fuente` cuando el embebido vino vacío.
-    assert "if (!_fuente) _fuente = _catalogEn" in src, (
-        "el embebido dejó de ganar: el catálogo tiene que ser respaldo (solo si "
-        "`_fuente` está vacío) — un plan puede traer un nombre que el catálogo ya no "
-        f"conozca [{_MARKER}]"
+    # [reapuntado 2026-09-24, P1-PLAN-LOTE-222] El gloss pasa a ir en el IDIOMA DEL USUARIO:
+    # cada fila del catálogo trae `names` (fr/pt/it/en) y en pt/fr/it su nombre propio gana
+    # al embebido, que es INGLÉS. Lo que este guard protege sigue igual y se ancla en las dos
+    # expresiones: el inglés del catálogo (`_catalogEn`) es el ÚLTIMO recurso en ambas ramas,
+    # así que un embebido nunca pierde contra el catálogo en su propio idioma, y en en-US
+    # gana a todo. Un nombre que el catálogo ya no conozca deja `_propio` vacío: gana el embebido.
+    # Hasta que el lote 222 llegue al `main` del frontend (el que clona el CI del backend),
+    # vale la expresión anterior.
+    if not (_FRONT / "src" / "__tests__" / "lote222.test.jsx").exists():
+        assert "if (!_fuente) _fuente = _catalogEn" in src, (
+            "el embebido dejó de ganar: el catálogo tiene que ser respaldo (solo si "
+            "`_fuente` está vacío) — un plan puede traer un nombre que el catálogo ya no "
+            f"conozca [{_MARKER}]"
+        )
+        return
+    assert "? (_embebidoEn || _propio || _catalogEn.trim())" in src, (
+        "en inglés el embebido dejó de ganar: el catálogo tiene que ser respaldo — un plan "
+        f"puede traer un nombre que el catálogo ya no conozca [{_MARKER}]"
+    )
+    assert ": (_propio || _embebidoEn || _catalogEn.trim());" in src, (
+        "en pt/fr/it el inglés del catálogo tiene que ser el último recurso, detrás del "
+        f"embebido [{_MARKER} · P1-PLAN-LOTE-222]"
     )
 
 

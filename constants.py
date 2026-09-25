@@ -4330,6 +4330,14 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
         filtered_fruits = DOMINICAN_FRUITS.copy()
 
     restrictions = list(allergies) + list(dislikes)
+    # [P1-PLAN-LOTE-222 · 2026-09-24] Una alergia o un disgusto escrito en otro idioma («Strawberry», «Céleri») no casaba
+    # con ningún nombre del catálogo, que está en español, y el alimento seguía en los pools. Se añade su nombre canónico
+    # (`food_names_i18n`, el mismo léxico que usa el backstop de alergias); lo escrito se queda, por si nombra otra cosa.
+    try:
+        from food_names_i18n import canonicos_para_texto as _canonicos_i18n
+        restrictions = restrictions + [c for r in restrictions for c in _canonicos_i18n(str(r))]
+    except Exception:
+        pass
 
     # [P1-DIET-CANON-SSOT · 2026-07-31] Antes esto era `if diet in ["vegano", "vegan"]` — una lista
     # literal de variantes que se olvidó de los femeninos legacy. tooltip-anchor: P1-DIET-CANON-SSOT

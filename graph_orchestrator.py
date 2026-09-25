@@ -14263,7 +14263,10 @@ def _declaracion_casa(a_low: str, termino: str) -> bool:
     if not t:
         return False
     if len(t) >= 6:
-        return t in a_low or a_low in t
+        # [P1-PLAN-LOTE-222 · 2026-09-24] El alias largo DENTRO de la declaración sigue siendo subcadena
+        # («allergie aux arachides» ⊃ «arachide»). La declaración DENTRO del alias exige palabra completa:
+        # como subcadena, «ajo» casaba dentro de «ajonjoli» y la alergia al AJO se resolvía como sésamo.
+        return t in a_low or _re.search(_patron_termino_alergeno(a_low), t) is not None
     return _re.search(_patron_termino_alergeno(t), a_low) is not None
 
 
@@ -14284,6 +14287,29 @@ def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
         return _re.search(_patron_termino_alergeno(needle), haystack) is not None
 
     return _termino_completo(t, a_low) or _termino_completo(a_low, t)
+
+
+def _nombres_canonicos_de_alimento(a_low: str) -> list:
+    """[P1-PLAN-LOTE-222 · 2026-09-24] Los nombres canónicos del catálogo que la declaración nombra en cualquiera de
+    los 5 idiomas («strawberry», «fraise», «fragola», «morango» → «fresas»), normalizados como el resto de términos.
+
+    Las clases de arriba cubren los 14 alérgenos del Reglamento UE; esto cubre el resto del catálogo, que es donde
+    una alergia en otro idioma caía literal y no casaba con nada. Sin léxico (archivo ausente o roto) devuelve [] y
+    la conducta es la de antes. tooltip-anchor: _nombres_canonicos_de_alimento (test_p1_plan_lote_222.py)"""
+    try:
+        from food_names_i18n import canonicos_para_texto
+        from constants import strip_accents
+        out = []
+        for c in canonicos_para_texto(a_low):
+            canon = strip_accents(str(c).lower())
+            # El canónico que el literal ya alcanza («fresa» → «fresas»: el escáner tolera el plural) no suma nada.
+            # El criterio es el PATRÓN del escáner, no una raíz: «tomato» y «tomate» comparten raíz y el patrón de
+            # «tomato» no encuentra «Tomate».
+            if _re.search(_patron_termino_alergeno(a_low), canon) is None:
+                out.append(canon)
+        return out
+    except Exception:
+        return []
 
 
 def _expand_allergy_declarations(allergies) -> set:
@@ -14327,13 +14353,23 @@ def _expand_allergy_declarations(allergies) -> set:
             # vocabulario declarativo: cómo se llama la CLASE y cómo se llama el ALIMENTO.
             _decl = list(_ALLERGEN_DECLARATION_ALIASES.get(cat, ())) \
                 + list(_ALLERGEN_FOOD_ALIASES.get(cat, ()))
-            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
+            # [P1-PLAN-LOTE-222] El nombre de la clase, igual: la declaración dentro de él solo como palabra
+            # completa («te» ⊂ «lacteos», «mar» ⊂ «mariscos» no son declaraciones de esas clases).
+            if a_low == cat_n or cat_n in a_low or \
+               _re.search(_patron_termino_alergeno(a_low), cat_n) is not None or \
                any(_sinonimo_alimento_casa(a_low, s) for s in syns) or \
                any(_declaracion_casa(a_low, s) for s in _decl):
                 out.update(strip_accents(s) for s in syns)
                 matched = True
+        # [P1-PLAN-LOTE-222 · 2026-09-24] Sin clase, la palabra escrita se busca tal cual. Una coincidencia de clase
+        # la reemplaza, y por eso una coincidencia EQUIVOCADA la perdía: con «ajo» ⊂ «ajonjoli» el ajo se resolvía
+        # como sésamo y no se buscaba nunca. Lo cierran las fronteras de palabra de arriba y de `_declaracion_casa`.
         if not matched:
             out.add(a_low)  # alergia free-text → match literal
+        # [P1-PLAN-LOTE-222] …y el nombre canónico del alimento cuando está escrito en otro idioma: «Strawberry»,
+        # «Fraise», «Fragola» y «Morango» son las «Fresas» del catálogo, y el plato sólo se escribe en español.
+        for canon in _nombres_canonicos_de_alimento(a_low):
+            out.add(canon)
     return out
 
 

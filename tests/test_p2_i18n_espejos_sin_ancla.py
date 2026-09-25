@@ -318,6 +318,22 @@ def test_el_glosario_tiene_el_termino_en_cada_idioma() -> None:
     )
 
 
+def test_el_lexico_de_alimentos_cubre_el_ssot() -> None:
+    """[P1-PLAN-LOTE-222 · 2026-09-24] Espejo #19: los nombres de alimento en cada idioma traducido."""
+    src = _leer(_BACKEND / "food_names_i18n.py")
+    m = re.search(r"^LOCALES\s*=\s*\(([^)]+)\)", src, re.M)
+    assert m, f"no encontré `LOCALES = (...)` en food_names_i18n.py [{_MARKER}]"
+    faltan = _traducidos() - _codigos_en(m.group(1))
+    datos = json.loads(_leer(_BACKEND / "data" / "food_names_i18n.json"))
+    alimentos = datos.get("alimentos") or {}
+    sin_columna = sorted({loc for loc in _traducidos() for fila in alimentos.values() if not fila.get(loc)})
+    assert not faltan and not sin_columna, (
+        f"el léxico de alimentos no cubre {sorted(faltan) or sin_columna}. LO QUE SE VE: una alergia escrita en ese "
+        f"idioma no llega al nombre canónico (el backstop no la ve), el buscador no encuentra lo que el usuario "
+        f"escribe y la Nevera, el escáner y la lista pintan el alimento en español. [{_MARKER}]"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Control
 # ---------------------------------------------------------------------------

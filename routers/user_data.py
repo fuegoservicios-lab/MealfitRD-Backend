@@ -665,7 +665,9 @@ async def api_inventory_photo_scan(
 # [P1-ARQ27-F2-IDENTIDAD · 2026-09-06] `diet` viaja TAMBIÉN al invitado: el paso 15 del wizard es
 # público y ahí es donde un vegano elige sus básicos. Mandarle `category` a secas le da «Lácteos»
 # para la leche de coco y nada con que corregirlo.
-_CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "category", "aliases", "default_unit",
+# [P1-PLAN-LOTE-222] `name_en` y `names` son NOMBRES, como `name` (el docstring de /catalog ya lo decía de `name_en`, pero
+# no estaba en la tupla): sin ellos, el paso 15 del wizard —público— no encontraba «chicken» ni «poulet».
+_CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "name_en", "names", "category", "aliases", "default_unit",
                             "staple_gate_label", "diet")
 
 # Anti-abuso del camino sin sesión: el catálogo es ~20KB y el cliente lo cachea 24h, así
@@ -691,6 +693,38 @@ _TARGETS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 # en su idioma y cada cambio le quemaría crédito de PLANES, porque
 # `get_monthly_api_usage` cuenta toda fila de `api_usage` sin filtrar endpoint).
 _PROFILE_PATCH_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+# [P1-PLAN-LOTE-222 · 2026-09-24] Traducir AL LEER el texto libre que no vive en `_display`: lo que el coach recuerda
+# del usuario (`user_facts.fact`) y los suplementos del día (`days[i].supplements`: nombre, dosis, momento, motivo).
+# Lo escribe el modelo en español y la app lo pintaba así en los cinco idiomas. El cliente pide sólo lo que su caché
+# no tiene; aquí se traduce en UNA llamada al modelo flash y no se guarda nada. Cupo propio (un par (max, periodo)
+# único: la ventana de Redis es `rl:<max>:<periodo>:<uid>`) y topes de cantidad y tamaño; el gasto va a
+# `llm_usage_events` (node `display_i18n_textos`), nunca a `api_usage`: leer lo propio no puede costar créditos.
+# El nombre va sin dígitos: `test_p2_ratelimit_coverage` reconoce el cupo por `_[A-Z_]+_LIMITER` y con «I18N» el
+# endpoint salía como desprotegido.
+_TEXTOS_TRADUCIDOS_LIMITER = RateLimiter(max_calls=8, period_seconds=120)
+_TEXTOS_I18N_MAX = 40
+_TEXTOS_I18N_MAX_CHARS = 400
+
+
+@router.post("/i18n/textos")
+def api_traducir_textos(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_TEXTOS_TRADUCIDOS_LIMITER)):
+    """`{locale, textos: [str]}` → `{textos: [str] | null}`, alineado por índice (null: no se pudo; el cliente pinta
+    el original). tooltip-anchor: P1-PLAN-LOTE-222"""
+    textos = data.get("textos")
+    if not isinstance(textos, list) or not textos or len(textos) > _TEXTOS_I18N_MAX:
+        raise HTTPException(status_code=400, detail=f"textos: lista de 1 a {_TEXTOS_I18N_MAX} cadenas")
+    if not all(isinstance(x, str) and len(x) <= _TEXTOS_I18N_MAX_CHARS for x in textos):
+        raise HTTPException(status_code=400, detail=f"textos: cadenas de hasta {_TEXTOS_I18N_MAX_CHARS} caracteres")
+    from traduccion_para_mostrar import LOCALE_BASE, locale_soportado, traducir_para_mostrar_sync
+    locale = locale_soportado(data.get("locale"))
+    if locale in (None, LOCALE_BASE):
+        return {"textos": None}
+    out = traducir_para_mostrar_sync(
+        textos, locale, user_id=verified_user_id, node="display_i18n_textos",
+        timeout_s=10.0, tipo="textos", max_chars=_TEXTOS_I18N_MAX_CHARS,
+    )
+    return {"textos": out}
 
 
 @router.get("/catalog")
@@ -816,6 +850,22 @@ async def api_get_catalog(
         for _x in _p:
             _x["default"] = (_x["unit"] == _def)
         _it["portions"] = _p
+
+    # [P1-PLAN-LOTE-222 · 2026-09-24] El alimento en los 4 idiomas que no son el base, para PINTARLO y para BUSCARLO:
+    # `names = {"en-US": …, "pt-BR": …, "fr-FR": …, "it-IT": …}` desde `food_names_i18n`, el mismo léxico con que el
+    # backstop de alergias entiende lo que se escribe en otro idioma. Lo que se selecciona y se guarda sigue siendo
+    # `name`. Un alimento sin fila en el léxico (alta posterior) lleva sólo `en-US` (su `name_en`) y el resto cae al
+    # español en el cliente.
+    try:
+        from food_names_i18n import nombres as _nombres_i18n
+        _lexico = _nombres_i18n()
+        for _it in items:
+            _n = dict(_lexico.get(str(_it.get("name") or "")) or {})
+            if not _n.get("en-US") and _it.get("name_en"):
+                _n["en-US"] = _it["name_en"]
+            _it["names"] = _n
+    except Exception:
+        logger.warning("[P1-PLAN-LOTE-222] catálogo sin `names`", exc_info=True)
 
     # [P1-GUEST-CATALOG · 2026-08-11] La poda va DESPUÉS de anotar el rótulo del gate: ese
     # campo lo calcula el backend a propósito (ver la nota de P1-STAPLE-SEARCH-RANK justo

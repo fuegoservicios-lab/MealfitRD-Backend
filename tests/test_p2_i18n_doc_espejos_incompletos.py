@@ -110,18 +110,18 @@ def test_la_doc_no_vuelve_a_prometer_un_test_por_fila() -> None:
     )
 
 
-def test_la_fila_de_la_lista_no_promete_un_gloss_por_idioma() -> None:
-    """El gloss es SIEMPRE inglés, y sólo existe en el PDF."""
+def test_la_fila_de_la_lista_dice_de_donde_sale_el_gloss() -> None:
+    """Hasta el lote 222 el gloss era SIEMPRE inglés y la fila tenía que decirlo (antes prometía «el idioma del
+    usuario» sin serlo). [P1-PLAN-LOTE-222 · 2026-09-24] Ahora SÍ va en el idioma del usuario —`names` por fila del
+    catálogo— con el inglés de RESPALDO; la fila tiene que decir las dos cosas y seguir nombrando el identificador."""
     src = _doc()
     fila = next((l for l in src.split("\n") if l.startswith("| Lista de compras")), "")
     assert fila, f"desapareció la fila de la lista de compras [{_MARKER}]"
-    assert "el gloss en el idioma del usuario Y el nombre" not in fila, (
-        f"la fila vuelve a prometer «el gloss en el idioma del usuario». Es siempre INGLÉS: "
-        f"`glossShoppingItemName` compone `name_en` + el nombre español para cualquier "
-        f"locale que no sea es-DO. [{_MARKER}]"
+    assert "idioma del usuario" in fila and "respaldo" in fila, (
+        f"la fila debe decir que el gloss va en el idioma del usuario y que el inglés es el respaldo. [{_MARKER}]"
     )
-    assert "INGLÉS" in fila or "inglés" in fila, (
-        f"la fila dejó de decir que el gloss es inglés. [{_MARKER}]"
+    assert "inglés" in fila.lower() and "P1-PLAN-LOTE-222" in fila, (
+        f"la fila dejó de contar de dónde sale el gloss (y desde cuándo). [{_MARKER}]"
     )
 
 

@@ -476,7 +476,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # borrar (el 0 volvía y quedaba «010», tester de Android); ahora «− campo +», varios platos por registro (hasta 4
 # fotos, como el chat), el análisis trae lo que aporta cada ingrediente (desmarcar mueve las calorías) y
 # `/consumed` acepta `deduct_pantry` (la Nevera es un interruptor propio, no la casilla del ingrediente).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-221 · 2026-09-24"
+# [P1-PLAN-LOTE-222 · 2026-09-25] (backend + frontend) el sistema de idiomas al 100 %: los alimentos en los 5 idiomas
+# (una alergia escrita en inglés/francés/italiano/portugués ya bloquea; 32 de 60 no lo hacían), el escáner y la
+# estimación en el idioma del usuario, los avisos del servidor en datos o con espejo traducido (calidad del día,
+# ahorro, «Acción requerida», bloqueos, micronutrientes), el plato nuevo ya traducido al cambiarlo, el plan del
+# invitado (`/guest-display`) y el texto libre fuera del plan (`/api/i18n/textos`: recuerdos y suplementos).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-222 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
