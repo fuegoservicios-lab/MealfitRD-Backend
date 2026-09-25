@@ -65,9 +65,11 @@ def upsert_pending_pipeline(user_id: str, status: str = "generating",
             "error": error,
         }
         # Para status != 'generating', preservar `started_at` del row previo si existe.
+        _estado_previo = None
         if status != "generating":
             try:
                 prev = get_pending_pipeline(user_id)
+                _estado_previo = (prev or {}).get("status")
                 if prev and prev.get("started_at"):
                     payload["started_at"] = prev["started_at"]
             except Exception:
@@ -87,6 +89,11 @@ def upsert_pending_pipeline(user_id: str, status: str = "generating",
             """,
             (key, _json.dumps(payload)),
         )
+        # [P1-PLAN-LOTE-228 · 2026-09-25] «Tu plan está listo» con la app cerrada: aquí pasan las DOS vías de
+        # generación; avisa solo en la transición (ver `aviso_plan_listo.aviso_para`). Best-effort, nunca lanza.
+        if status in ("complete", "failed"):
+            from aviso_plan_listo import avisar_fin_de_generacion
+            avisar_fin_de_generacion(user_id, status, _estado_previo)
         return True
     except Exception as e:
         # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning para

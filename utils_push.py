@@ -17,7 +17,8 @@ _PUSH_HTTP_TIMEOUT_S = _env_float(
     "MEALFIT_PUSH_HTTP_TIMEOUT_S", 10.0, validator=lambda v: 0 < v <= 120
 )
 
-def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None) -> bool:
+def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard", tag: str = None,
+                           solo_si_no_mira: bool = False) -> bool:
     """
     Sends a web push notification to all subscribed devices for a given user.
     Returns True if at least one notification was attempted successfully.
@@ -98,6 +99,10 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
         # en vez de apilarse (cuatro recordatorios de comida = cuatro notificaciones pegajosas que cerrar a mano).
         if tag:
             _payload["tag"] = str(tag)[:64]
+        # [P1-PLAN-LOTE-228 · 2026-09-25] El service worker no la muestra si hay una ventana de la app VISIBLE (el
+        # usuario ya lo está viendo en pantalla). Solo para avisos que la app también da dentro (el plan listo).
+        if solo_si_no_mira:
+            _payload["solo_si_no_mira"] = True
         push_payload = json.dumps(_payload)
 
         success_count = 0

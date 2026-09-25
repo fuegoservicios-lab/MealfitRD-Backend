@@ -64,6 +64,19 @@ _LOCALES = ("es-DO", "en-US", "pt-BR", "fr-FR", "it-IT")
 
 # ── TÍTULOS ────────────────────────────────────────────────────────────────────
 _TITULOS = {
+    # [P1-PLAN-LOTE-228 · 2026-09-25] El fin de la generación con la app cerrada (`aviso_plan_listo.py`).
+    "Tu plan está listo 🎉": {
+        "en-US": "Your plan is ready 🎉",
+        "pt-BR": "Seu plano está pronto 🎉",
+        "fr-FR": "Votre plan est prêt 🎉",
+        "it-IT": "Il tuo piano è pronto 🎉",
+    },
+    "No pudimos terminar tu plan": {
+        "en-US": "We couldn't finish your plan",
+        "pt-BR": "Não conseguimos terminar seu plano",
+        "fr-FR": "Nous n’avons pas pu terminer votre plan",
+        "it-IT": "Non siamo riusciti a completare il tuo piano",
+    },
     # [P1-I18N-PUSH-GUARD-CIEGO-AL-THREAD · 2026-08-23] Los que escapaban al guard por ir
     # envueltos en `threading.Thread(target=…, kwargs={"title": …})`: el nodo `Call` se
     # llama `Thread`, así que el extractor por AST no los veía y el guard reportaba CERO
@@ -234,6 +247,19 @@ _TITULOS = {
 
 # ── CUERPOS ────────────────────────────────────────────────────────────────────
 _CUERPOS = {
+    # [P1-PLAN-LOTE-228 · 2026-09-25] Ver `_TITULOS`.
+    "Toca para verlo.": {
+        "en-US": "Tap to see it.",
+        "pt-BR": "Toque para ver.",
+        "fr-FR": "Touchez pour le voir.",
+        "it-IT": "Tocca per vederlo.",
+    },
+    "Toca para intentarlo de nuevo.": {
+        "en-US": "Tap to try again.",
+        "pt-BR": "Toque para tentar de novo.",
+        "fr-FR": "Touchez pour réessayer.",
+        "it-IT": "Tocca per riprovare.",
+    },
     # [P1-I18N-PUSH-GUARD-CIEGO-AL-THREAD · 2026-08-23] Ver la nota en `_TITULOS`.
     "Actualiza tu nevera para renovar tu plan.": {
         "en-US": "Update your fridge to renew your plan.",

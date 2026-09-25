@@ -493,7 +493,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-226 · 2026-09-25] (backend + frontend) el coach aconsejó «cómete las yemas» con 52 de 57 g de grasa:
 # ahora recibe el MARGEN que queda de cada macro, ya restado (bloque del día y nota tras registrar), y la regla R2 de
 # comprobar que lo que recomienda cabe. Y desde un chat de otro día se vuelve al de hoy («Volver al chat de hoy»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-226 · 2026-09-25"
+# [P1-PLAN-LOTE-228 · 2026-09-25] (backend + frontend) «Tu plan está listo» con la app cerrada: Web Push al pasar la
+# generación a `complete`/`failed` (desde `upsert_pending_pipeline`, solo en la transición; el service worker no la
+# muestra con la app a la vista) y, en la app nativa sin FCM, notificación LOCAL: respaldo al p90 y aviso al momento
+# en cuanto el vigía en segundo plano ve el plan terminado.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-228 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
