@@ -3916,7 +3916,7 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
             # altos (>=9 con el default 10%) es vacuo y PERMITE un déficit que el criterio viejo
             # no permitía. Exigir ambas condiciones garantiza que el resultado es subconjunto del
             # criterio viejo — nunca peor, sólo más estricto.
-            if frac <= anti_waste_pct or (under_buy <= g_total * SKU_FLOOR_MAX_UNDER_PCT and under_buy < over_buy):
+            if frac <= anti_waste_pct or (under_buy <= g_total * _tope_de_menos() and under_buy < over_buy):  # [P1-PLAN-LOTE-321]
                 count = floor_count
                 total_g = count * size
                 waste = max(0, g_total - total_g)
@@ -4033,7 +4033,7 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
                 # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] `and under < over`: el bound puro solo
                 # (sin este AND) es vacuo para floor_c>=9 y permitiría un déficit NUEVO que el
                 # criterio viejo no permitía — ver knob doc arriba.
-                count_c = floor_c if (frac <= anti_waste_pct or (under <= g_total * SKU_FLOOR_MAX_UNDER_PCT and under < over)) else floor_c + 1
+                count_c = floor_c if (frac <= anti_waste_pct or (under <= g_total * _tope_de_menos() and under < over)) else floor_c + 1  # [P1-PLAN-LOTE-321]
             else:
                 count_c = 1
             cost_c = count_c * pr
@@ -4610,6 +4610,18 @@ _SINGLE_TRIP_CTX = {"on": False}
 
 def _single_trip_notes_on() -> bool:
     return bool(_SINGLE_TRIP_CTX.get("on"))
+
+
+def _tope_de_menos() -> float:
+    """[P1-PLAN-LOTE-321 · 2026-09-25] Cuánto puede quedarse CORTA la compra al redondear un envase hacia abajo.
+
+    Fuera de la compra única, `SKU_FLOOR_MAX_UNDER_PCT` (10 %): comprar 7 cartones cuando hacen falta 7,45 ahorra un envase
+    y la nota «alcanza ~N de M días — recompra» avisa. En la compra ÚNICA no hay «después»: batería de cierre del 25-sep,
+    perfil del dueño (30 días de una vez, sin congelador), «Garbanzos: 7 cartones · alcanza ~28 de 30 días — consúmelo en
+    esos primeros días»; igual sardinas (6 latas, 28 de 30), casabe (4 paquetes, 28 de 30) y mozzarella (27 de 30). Con
+    compra única el piso solo se admite por el colchón anti-desperdicio (`frac <= anti_waste_pct`: lo que falta es una
+    fracción mínima de UN envase), nunca por el 10 % del total. tooltip-anchor: P1-PLAN-LOTE-321"""
+    return 0.0 if _single_trip_notes_on() else SKU_FLOOR_MAX_UNDER_PCT
 
 
 def set_single_trip_notes(on: bool) -> None:
@@ -5600,7 +5612,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                     # floor_units>=9 (default 10%) — permitiría un déficit NUEVO que el criterio
                     # viejo no permitía (medido: Sazón 137g/sobre 14g). El AND garantiza que el
                     # resultado es subconjunto estricto del criterio viejo: nunca peor.
-                    if frac <= ANTI_WASTE_THRESHOLD or (under_buy_g <= g_total * SKU_FLOOR_MAX_UNDER_PCT and under_buy_g < over_buy_g):
+                    if frac <= ANTI_WASTE_THRESHOLD or (under_buy_g <= g_total * _tope_de_menos() and under_buy_g < over_buy_g):  # [P1-PLAN-LOTE-321]
                         units_needed = floor_units
                     else:
                         units_needed = floor_units + 1

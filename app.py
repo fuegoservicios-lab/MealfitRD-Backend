@@ -639,7 +639,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-320 · 2026-09-25] (frontend) la Nevera abre al instante al venir del Agente: páginas del menú
 # precargadas en reposo (promesa con status/value: sin pantalla de carga) y copia vieja del inventario pintada mientras
 # se refresca; cerrar sesión la borra del todo. Solo frontend.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-320 · 2026-09-25"
+# [P1-PLAN-LOTE-321 · 2026-09-25] (backend) en la compra ÚNICA un envase no se redondea hacia abajo: «Garbanzos: 7
+# cartones · alcanza ~28 de 30 días» (perfil del dueño) — sin segunda compra, el mes entero sale cubierto.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-321 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
