@@ -636,7 +636,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # y cocina 2-3 minutos… hasta que espese»): con 60 caracteres de ventana salía con 5 ml de leche.
 # [P1-PLAN-LOTE-319 · 2026-09-25] (backend) una traza no es un ingrediente: «0.95 ml de leche» sale de la lista y
 # de los pasos (V5 del contrato), nunca especias, sal, aceite ni ácidos.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-319 · 2026-09-25"
+# [P1-PLAN-LOTE-320 · 2026-09-25] (frontend) la Nevera abre al instante al venir del Agente: páginas del menú
+# precargadas en reposo (promesa con status/value: sin pantalla de carga) y copia vieja del inventario pintada mientras
+# se refresca; cerrar sesión la borra del todo. Solo frontend.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-320 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
