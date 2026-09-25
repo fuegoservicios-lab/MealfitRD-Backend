@@ -18070,6 +18070,8 @@ def _mention_cooked_complement_in_montaje(steps: list, faltantes: list) -> bool:
                 return False          # ya lo nombra: duplicarlo lee peor
             if _tok not in _otros:
                 return False          # nadie lo preparó → no se emplata
+            if __import__("pasos_cantidades").ya_va_dentro(_otros, _tok):  # [P1-PLAN-LOTE-315]
+                continue              # ya va DENTRO (licuadora, masa, sartén): no se sirve también al lado
             _a_mencionar.append(str(_f).strip())
         if not _a_mencionar:
             return False
@@ -26790,9 +26792,9 @@ _STEP_QTY_UNITS = (r"g|gr|gramos?|kg|ml|l|taza(?:s)?|cda(?:s)?|cdta(?:s)?|cuchar
 _STEP_QTY_MENTION_RE = _re.compile(
     # [P2-QTYSYNC-CADA-TOTAL · 2026-07-05] + números MIXTOS "2½ cdas" (antes el lookbehind
     # bloqueaba la fracción pegada al dígito y la mención entera era invisible al sync).
-    r"(?<![\d/])(?P<qty>\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")"
+    r"(?<![\d/])(?<![-–])(?<!\d\sa\s)(?P<qty>\d+\s+[½¼¾⅓⅔]|\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")"  # [P1-PLAN-LOTE-303] «1 ½» · [P1-PLAN-LOTE-314] rangos
     r"(?:/(?:" + _STEP_QTY_UNITS + r"))?\.?\s+de\s+"
-    r"(?P<food>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*(?:\s+[\wáéíóúñü]+){0,2})")
+    r"(?P<food>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*(?:\s+[A-Za-zÁÉÍÓÚÑÜáéíóúñü]+){0,2})")  # [P1-PLAN-LOTE-302] sin dígitos
 _ING_LEAD_QTY_RE = _re.compile(
     r"^\s*(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s*(?:de\s+|del\s+)?"
     r"(?P<food>.+)$", _re.I)
@@ -27068,6 +27070,8 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
             for _mt, _mens in _mention_count.items():
                 if len(_mens) < 2:
                     continue
+                if __import__("pasos_cantidades").misma_porcion([_s for _s in recipe_work if isinstance(_s, str) and not _is_recipe_safety_note_step(_s)], _mt, _mens, food_total_f.get(_mt), _STEP_QTY_MENTION_RE):  # [P1-PLAN-LOTE-304]
+                    continue  # la misma porción nombrada otra vez: cada mención sigue a la lista
                 food_qty.pop(_mt, None)  # multi-mención → sync directo prohibido (duplicaría)
                 _tot = food_total_f.get(_mt)
                 if not _tot or not all(_qv is not None and abs(_qv - _tot[0]) < 1e-6
@@ -27126,6 +27130,8 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                 for _ft in _ftoks[:2]:
                     if _ft in food_qty:
                         _q, _u = food_qty[_ft]
+                        if __import__("pasos_cantidades").otra_base(step, mm.start(), mm.end(), ings, _ft):  # [P1-PLAN-LOTE-309]
+                            break  # «25 g de quinoa cocida» no son «30 g de quinoa» (seca) de la lista
                         _cur_q = str(mm.group("qty")).replace(",", ".")
                         _cur_u = str(mm.group("unit")).lower()
                         if _cur_q != _q or _cur_u.rstrip("s") != _u.rstrip("s"):

@@ -613,7 +613,24 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # alimento ambiguo, grasa invisible) y el coach anota lo obvio de una vez y pregunta solo eso; corrige ESE registro.
 # [P1-PLAN-LOTE-306 · 2026-09-25] (frontend) fluidez del teclado del chat: `--kb-ms`/`--kb-inset` no heredables
 # (recalculaban el estilo de toda la conversación) y la foto se prepara en un Web Worker. Solo frontend.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-306 · 2026-09-25"
+# [P1-PLAN-LOTE-302 · 2026-09-25] (backend) los PASOS contra la lista: el nombre del alimento de una mención ya no se
+# traga la cantidad siguiente («mide 45 g de avena y 200 ml de leche» seguía así con 60 ml en la lista).
+# [P1-PLAN-LOTE-303 · 2026-09-25] (backend) «1 ½ cdtas» es un número mixto (la reescritura dejaba «1 2 cdtas»).
+# [P1-PLAN-LOTE-304 · 2026-09-25] (backend) la misma porción nombrada dos veces («mide 12 g de queso… desmenuza los
+# 12 g») no es un reparto: sigue a la lista (`pasos_cantidades.misma_porcion`).
+# [P1-PLAN-LOTE-307 · 2026-09-25] (backend) el huevo tiene su detector numérico: ya no sale «bate 4 3 huevos».
+# [P1-PLAN-LOTE-308 · 2026-09-25] (backend) el sincronizador exacto corre también en el contrato final (±25 % antes).
+# [P1-PLAN-LOTE-309 · 2026-09-25] (backend) lo COCIDO de un paso no copia los gramos secos/crudos de la lista.
+# [P1-PLAN-LOTE-310 · 2026-09-25] (backend) el peso entre paréntesis de una pieza del paso sigue al de su línea.
+# [P1-PLAN-LOTE-311 · 2026-09-25] (backend) la avena cocida lleva líquido: lo que el motor quitó de leche va en agua.
+# [P1-PLAN-LOTE-312 · 2026-09-25] (backend) los decimales de máquina, como en la cocina: «2.22 cdas» → «2¼ cdas», y
+# el número concuerda con la unidad («2 taza» → «2 tazas»).
+# [P1-PLAN-LOTE-313 · 2026-09-25] (backend) «hasta que el cuchillo entre» también dice hasta cuándo: la auyama del
+# microondas ya no recibe «hiérvelos 8-10 minutos».
+# [P1-PLAN-LOTE-314 · 2026-09-25] (backend) el tope de un rango («3-4 cdas») no es una cantidad (salía «3-3 cdas»).
+# [P1-PLAN-LOTE-315 · 2026-09-25] (backend) lo que un paso ya mete en la licuadora no se sirve también «al lado».
+# [P1-PLAN-LOTE-316 · 2026-09-25] (backend) la misma frase dos veces seguidas en un paso se deja una vez.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-316 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

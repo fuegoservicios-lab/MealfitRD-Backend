@@ -89,6 +89,11 @@ _INVENTARIO = {
     "recipe_contract.py": {
         "canonicalize_egg_form_lines":             (1, "resuelto por texto (igualdad exacta de la línea)"),
     },
+    # [P1-PLAN-LOTE-311 · 2026-09-25] La avena cocida lleva líquido: si el plato ya tiene su línea de agua y crece, la
+    # línea de `raw` se localiza por IGUALDAD DE TEXTO con la vieja (0 o >1 coincidencias ⇒ raw no se toca), como el huevo.
+    "avena_liquido.py": {
+        "completar":                               (1, "resuelto por texto (igualdad exacta de la línea)"),
+    },
 }
 
 _NOMBRES = {"raw", "_raw"}

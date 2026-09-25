@@ -615,8 +615,18 @@ _EGG_NOUN_AFTER_NUM_RE = re.compile(r"\s+huevos?(?:\s+enteros?)?\b", re.IGNORECA
 _EGG_DEFINITE_RE = re.compile(
     r"\b(el|los)\s+huevos?\b(?!\s+(?:duros?|fritos?|revueltos?|cocidos?|hervidos?|estrellados?|escalfados?|pasados?|batidos?)\b)",
     re.IGNORECASE)
-_EGG_BARE_NOUN_RE = re.compile(r"(?<!\bde )(?:\b(?:el|los|un|unos)\s+)?\bhuevos?\b(?!\s+(?:duros?|fritos?|revueltos?|cocidos?|hervidos?)\b)",
+_EGG_BARE_NOUN_RE = re.compile(r"(?<!\bde )(?<![\d½¼¾⅓⅔]\s)(?:\b(?:el|los|un|unos)\s+)?\bhuevos?\b(?!\s+(?:duros?|fritos?|revueltos?|cocidos?|hervidos?)\b)",
                                re.IGNORECASE)
+# [P1-PLAN-LOTE-307 · 2026-09-25] El huevo tiene su propio detector numérico. «bate 4 huevos con el comino» con la lista
+# «3 huevos + 1 clara» salía «bate 4 3 huevos y 1 clara de huevo»: `_menciones_paso` no veía el «4 huevos» (la cola
+# «huevos con el comino» nombra DOS alimentos del catálogo y V7 la descarta por ambigua) y el respaldo sustituía sólo la
+# palabra «huevos», dejando el 4 delante. Además: si el paso ya nombra las claras, sólo cambia el conteo de enteros (antes
+# «bate 3 huevos y 1 clara de huevo y 1 clara»), y con la lista sólo de claras «bate 1 huevo con ajo» pasa a «bate 1 clara
+# de huevo con ajo» (quedaba el huevo entero que la lista no compra). El respaldo ya no casa justo detrás de un número.
+# tooltip-anchor: P1-PLAN-LOTE-307-HUEVO-NUMERICO
+_EGG_NUM_RE = re.compile(
+    r"(?<![\w.,/])(?:(?:los|las|unos)\s+)?(\d+(?:[.,]\d+)?|[½¼¾⅓⅔])\s+huevos?(?:\s+enteros?)?\b(?!\s+de\s+codorniz)",
+    re.IGNORECASE)
 _EGG_SAFETY_WHOLE_TXT = "yema y clara firmes, sin partes líquidas"
 _EGG_SAFETY_WHITES_TXT = "la clara firme, sin partes líquidas"
 
@@ -633,7 +643,14 @@ def _plural_huevo(n: float, forma: str) -> str:
 def egg_forms_in_list(ings: list, index: dict) -> dict:
     """{"Huevo": a, "Clara de huevo": b, "Yema de huevo": c} en PIEZAS, leído con el mismo parser que V7."""
     lista = _cantidades_lista([str(x) for x in (ings or []) if str(x).strip()], index)
-    return {f: float(lista.get((f, "pieza"), 0.0)) for f in (HUEVO, CLARA, YEMA)}
+    formas = {f: float(lista.get((f, "pieza"), 0.0)) for f in (HUEVO, CLARA, YEMA)}
+    # [P1-PLAN-LOTE-307] la forma que la lista da SÓLO en gramos («60 g de huevo») también cuenta, a 50/33/17 g la pieza:
+    # sin esto «60 g de huevo» + «6 claras» se leía «sólo claras» y «añade el huevo» pasaba a «añade las claras»
+    for f, g_pieza in ((HUEVO, 50.0), (CLARA, 33.0), (YEMA, 17.0)):
+        g = float(lista.get((f, "g"), 0.0))
+        if formas[f] <= 0 and g > 0:
+            formas[f] = float(max(1, round(g / g_pieza)))
+    return formas
 
 
 def canonicalize_egg_form_lines(meal: dict) -> int:
@@ -702,16 +719,28 @@ def egg_forms_step_sync(meal: dict, index: dict) -> dict:
                 if a <= 0 and c <= 0 and _EGG_SAFETY_WHOLE_TXT in paso:
                     paso = paso.replace(_EGG_SAFETY_WHOLE_TXT, _EGG_SAFETY_WHITES_TXT)
             else:
-                menciones = [m for m in _menciones_paso(paso, index) if m["food"] == HUEVO and m["familia"] == "pieza"]
-                for m in sorted(menciones, key=lambda x: x["ini"], reverse=True):
-                    coincide = a > 0 and _tolera("n", m["valor"], a)
+                # [P1-PLAN-LOTE-307] menciones numéricas del huevo con su propio detector (ver `_EGG_NUM_RE`)
+                otra_forma = bool(re.search(r"\b(?:claras?|yemas?)\b", strip_accents(paso.lower())))
+                cambios_paso = []
+                for mm in _EGG_NUM_RE.finditer(paso):
+                    val = _v6_valor(mm.group(1))
+                    if val is None:
+                        continue
+                    coincide = a > 0 and _tolera("n", val, a)
                     if coincide and not primera_pendiente:
                         continue
-                    mn = _EGG_NOUN_AFTER_NUM_RE.match(paso, m["fin"])
-                    if not mn:
-                        continue
-                    paso = paso[:m["ini"]] + frase + paso[mn.end():]
+                    if a <= 0:
+                        if otra_forma:
+                            continue                      # «2 huevos y 2 claras» con sólo claras en la lista: no se adivina
+                        nuevo = _plural_huevo(b if b > 0 else c, CLARA if b > 0 else YEMA)
+                    elif otra_forma:
+                        nuevo = _plural_huevo(a, HUEVO)   # el paso ya nombra las claras: sólo el conteo de enteros
+                    else:
+                        nuevo = frase
+                    cambios_paso.append((mm.start(), mm.end(), nuevo))
                     primera_pendiente = False
+                for ini_c, fin_c, nuevo in reversed(cambios_paso):
+                    paso = paso[:ini_c] + nuevo + paso[fin_c:]
                 if a <= 0:
                     forma_def = CLARA if b > 0 else YEMA
                     n_def = b if b > 0 else c
@@ -885,6 +914,11 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         r = reconcile_meal(sombra, index)
     else:
         r = reconcile_meal(meal, index)
+        __import__("pasos_cantidades").sincronizar_exacto(meal)   # [P1-PLAN-LOTE-308] el contrato tolera ±25 %
+        __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»
+        __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
+        __import__("pasos_cantidades").decimales_de_cocina(meal)  # [P1-PLAN-LOTE-312] «2.22 cdas» → «2¼ cdas»
+        __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-316] «Acompaña con X. Acompaña con X.»
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):
