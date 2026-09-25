@@ -923,8 +923,16 @@ def run_proactive_checks():
         # [P1-PLAN-LOTE-72] Las comidas cuyo aviso toca en este tick, la más reciente primero.
         candidatas = []
         # [P1-PLAN-LOTE-223] El perfil se lee UNA vez por usuario y tick: la rama de las comidas lo necesita antes
-        # (interruptor y hora de cada comida) y las puertas de más abajo reutilizan esa misma lectura.
+        # (interruptor y hora de cada comida) y las puertas de más abajo reutilizan esa misma lectura. Una sola
+        # llamada a `get_user_profile` en la función (test_p1_country_system_f2 la cuenta): la lee quien llegue primero.
         _perfil = None
+        _perfil_leido = []
+
+        def _perfil_una_vez():
+            if not _perfil_leido:
+                profile = get_user_profile(user_id)
+                _perfil_leido.append(profile)
+            return _perfil_leido[0]
 
         # Resumen del día siempre a las 11 PM
         if now_ast.hour == HORA_DEL_RESUMEN:
@@ -955,7 +963,7 @@ def run_proactive_checks():
             _ahora_min = current_hour_float * 60.0
             _avisadas = _comidas_avisadas_hoy(user_id)
             try:
-                _perfil = get_user_profile(user_id)
+                _perfil = _perfil_una_vez()
             except Exception as e:
                 logger.warning(f"[P1-PLAN-LOTE-223] perfil de {user_id} ilegible ({e}); avisos a las horas normales.")
             _health = ((_perfil or {}).get("health_profile") or {}) if isinstance(_perfil, dict) else {}
@@ -1043,7 +1051,7 @@ def run_proactive_checks():
             
             # Vemos perfil para checar scheduleType (turno nocturno)
             # [P1-PLAN-LOTE-223] el que ya leyó la rama de las comidas; el Resumen del día lo lee aquí
-            profile = _perfil if _perfil is not None else get_user_profile(user_id)
+            profile = _perfil if _perfil is not None else _perfil_una_vez()
             if not profile:
                 logger.info(f"🚫 [CRON] Usuario {user_id}: sin perfil. Saltando.")
                 continue

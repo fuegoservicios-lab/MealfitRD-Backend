@@ -212,7 +212,10 @@ def test_el_buscador_empareja_por_el_gloss_pero_selecciona_el_canonico():
     siendo el nombre español canónico con el que resuelve el motor."""
     src = _leer(_FRONT / "src" / "components" / "assessment" / "questions" / "QStapleFoods.jsx")
     codigo = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("//"))
-    assert "norm(m.name_en || '').includes(q)" in codigo, (
+    # [P1-PLAN-LOTE-225 · 2026-09-24] El buscador mira las formas de `formasDeBuscar` (nombre, los 5 idiomas, el
+    # gloss inglés y los alias); el gloss sigue entre ellas.
+    formas = _leer(_FRONT / "src" / "utils" / "nombresDeAlimentos.js")
+    assert "formasDeBuscar(m).some((f) => norm(f).includes(q))" in codigo and "add(fila?.name_en);" in formas, (
         f"el buscador dejó de mirar el gloss inglés [{_MARKER}]"
     )
     assert "selectedLower.has(norm(m.name))" in codigo, (

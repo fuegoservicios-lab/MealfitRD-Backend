@@ -120,3 +120,24 @@ def canonicos_para_texto(texto: str) -> tuple:
     if dentro:
         return tuple(dentro)
     return tuple(sorted({c for c, r in _indice() if raices <= r}))
+
+
+def canonicos_que_el_literal_no_alcanza(a_low: str, patron_de) -> list:
+    """[P1-PLAN-LOTE-225 · 2026-09-24] Los nombres canónicos del catálogo que la declaración de alergia nombra en
+    cualquiera de los 5 idiomas («strawberry», «fraise», «fragola», «morango» → «fresas»), normalizados como el resto de
+    términos del escáner. `patron_de(termino)` es el patrón del escáner (`graph_orchestrator._patron_termino_alergeno`,
+    se pasa para no importar el grafo aquí). Sin léxico (archivo ausente o roto) devuelve [] y la conducta es la de
+    antes. Extraído del grafo (tope de líneas, roadmap 2.5 §11)."""
+    try:
+        from constants import strip_accents
+        out = []
+        for c in canonicos_para_texto(a_low):
+            canon = strip_accents(str(c).lower())
+            # El canónico que el literal ya alcanza («fresa» → «fresas»: el escáner tolera el plural) no suma nada.
+            # El criterio es el PATRÓN del escáner, no una raíz: «tomato» y «tomate» comparten raíz y el patrón de
+            # «tomato» no encuentra «Tomate».
+            if re.search(patron_de(a_low), canon) is None:
+                out.append(canon)
+        return out
+    except Exception:
+        return []

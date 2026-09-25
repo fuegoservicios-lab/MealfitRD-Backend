@@ -14355,26 +14355,10 @@ def _sinonimo_alimento_casa(a_low: str, termino: str) -> bool:
 
 
 def _nombres_canonicos_de_alimento(a_low: str) -> list:
-    """[P1-PLAN-LOTE-225 · 2026-09-24] Los nombres canónicos del catálogo que la declaración nombra en cualquiera de
-    los 5 idiomas («strawberry», «fraise», «fragola», «morango» → «fresas»), normalizados como el resto de términos.
-
-    Las clases de arriba cubren los 14 alérgenos del Reglamento UE; esto cubre el resto del catálogo, que es donde
-    una alergia en otro idioma caía literal y no casaba con nada. Sin léxico (archivo ausente o roto) devuelve [] y
-    la conducta es la de antes. tooltip-anchor: _nombres_canonicos_de_alimento (test_p1_plan_lote_225.py)"""
-    try:
-        from food_names_i18n import canonicos_para_texto
-        from constants import strip_accents
-        out = []
-        for c in canonicos_para_texto(a_low):
-            canon = strip_accents(str(c).lower())
-            # El canónico que el literal ya alcanza («fresa» → «fresas»: el escáner tolera el plural) no suma nada.
-            # El criterio es el PATRÓN del escáner, no una raíz: «tomato» y «tomate» comparten raíz y el patrón de
-            # «tomato» no encuentra «Tomate».
-            if _re.search(_patron_termino_alergeno(a_low), canon) is None:
-                out.append(canon)
-        return out
-    except Exception:
-        return []
+    """[P1-PLAN-LOTE-225 · 2026-09-24] La declaración escrita en otro idioma → nombres canónicos del catálogo; el cuerpo
+    vive en `food_names_i18n.canonicos_que_el_literal_no_alcanza`. tooltip-anchor: _nombres_canonicos_de_alimento"""
+    from food_names_i18n import canonicos_que_el_literal_no_alcanza
+    return canonicos_que_el_literal_no_alcanza(a_low, _patron_termino_alergeno)
 
 
 def _expand_allergy_declarations(allergies) -> set:

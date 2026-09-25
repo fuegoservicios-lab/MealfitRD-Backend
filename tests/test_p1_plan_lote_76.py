@@ -147,7 +147,8 @@ def test_el_boton_nuevo_chat_va_bloqueado_mientras_el_chat_es_el_de_hoy():
     regla = _front("src/utils/chatSessionDay.js")
     assert "export const nuevoChatBloqueado = (sessionId, hoy = hoyLocal()) => diaAnotadoDe(sessionId) === hoy;" in regla
     barra = _front("src/components/agent/SidebarRecientes.jsx")
-    assert "const bloqueado = nuevoChatBloqueado(currentSessionId);" in barra
+    # [P1-PLAN-LOTE-226] con un chat de otro día abierto, el botón vuelve al de hoy y nunca va bloqueado
+    assert "const bloqueado = !volverAHoy && nuevoChatBloqueado(currentSessionId);" in barra
     assert "disabled={bloqueado}" in barra and "aria-disabled={bloqueado}" in barra
     assert "padding: '0.75rem 1rem 0.5rem'" in barra           # la cabecera conserva sus 84 px
     agente = _front("src/pages/AgentPage.jsx")

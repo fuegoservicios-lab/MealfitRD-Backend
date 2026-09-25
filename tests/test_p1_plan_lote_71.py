@@ -90,7 +90,8 @@ def test_el_agente_consulta_la_regla_con_la_primera_lista_del_servidor():
     assert "sesionDelDiaAAdoptar({ sesiones: sesionesDelServidor, actual: currentSessionIdRef.current })" in adoptar
     assert "setCurrentSessionId(deHoy);" in adoptar
     # Por el envoltorio, que marca la actividad y quita la marca automática.
-    assert re.search(r"const setCurrentSessionId = \(id\) => \{\s*//[^\n]*\n\s*//[^\n]*\n\s*marcarActividad\(id\);", agente)
+    # [P1-PLAN-LOTE-226] un chat de otro día elegido en Recientes conserva SU día (`dia`); el resto, hoy.
+    assert re.search(r"const setCurrentSessionId = \(id, dia\) => \{(?:\s*//[^\n]*\n)+\s*marcarActividad\(id, dia \|\| undefined\);", agente)
 
 
 def test_el_logout_sigue_borrando_la_sesion_guardada():
