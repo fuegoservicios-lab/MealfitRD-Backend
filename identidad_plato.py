@@ -289,7 +289,15 @@ def objetivos_de(plan_data) -> Optional[dict]:
     if not isinstance(plan_data, dict):
         return None
     kcal, grasa = _num(plan_data.get("calories")), _num((plan_data.get("macros") or {}).get("fats"))
-    return {"kcal": kcal, "grasa": grasa} if kcal > 0 and grasa > 0 else None
+    if not (kcal > 0 and grasa > 0):
+        return None
+    out = {"kcal": kcal, "grasa": grasa}
+    # [P1-PLAN-LOTE-257 · 2026-09-25] Con techo renal, el día tampoco puede pasarse de PROTEÍNA: esta cola subía «35→90 g
+    # de pechuga» sobre un plan ya recortado a 60 g. tooltip-anchor: P1-PLAN-LOTE-257-IDENTIDAD-RENAL
+    techo = __import__("recorte_renal").techo_renal(plan_data)
+    if techo > 0:
+        out["proteina_techo"] = techo
+    return out
 
 
 def _margen_del_dia(meals, objetivos) -> Optional[dict]:
@@ -299,7 +307,10 @@ def _margen_del_dia(meals, objetivos) -> Optional[dict]:
     kcal = sum(_num(m.get("cals") or m.get("calories")) for m in meals if isinstance(m, dict))
     grasa = sum(_num(m.get("fats")) for m in meals if isinstance(m, dict))
     t_k, t_g = _techos()
-    return {"kcal": float(objetivos["kcal"]) * t_k - kcal, "grasa": float(objetivos["grasa"]) * t_g - grasa}
+    techo_p = float(objetivos.get("proteina_techo") or 0)
+    prot = sum(_num(m.get("protein")) for m in meals if isinstance(m, dict))
+    return {"kcal": float(objetivos["kcal"]) * t_k - kcal, "grasa": float(objetivos["grasa"]) * t_g - grasa,
+            "proteina": (techo_p - prot) if techo_p > 0 else float("inf")}   # [P1-PLAN-LOTE-257]
 
 
 def _lineas_de(lineas, canon, index) -> tuple:
@@ -338,20 +349,23 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
         return None                      # sin gramos legibles no se toca; y nunca se baja
     mac = db.macros_from_ingredient_string(f"{piso - g_cur:.0f} g de {canon}") or {}
     dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
+    dp, m_p = float(mac.get("protein") or 0), margen.get("proteina", float("inf"))   # [P1-PLAN-LOTE-257]
     objetivo = piso
-    if dk > 0 and (dk > margen["kcal"] or dg > margen["grasa"]):
+    if dk > 0 and (dk > margen["kcal"] or dg > margen["grasa"] or dp > m_p):
         # [P1-PLAN-LOTE-178] lo que quepa, si con eso el plato sale de las migajas (≥ la mitad del piso): «5 g de aguacate»
         # → 30 g cuando no caben los 60. tooltip-anchor: P1-PLAN-LOTE-178-SUBIDA-PARCIAL
-        frac = min(margen["kcal"] / dk, (margen["grasa"] / dg) if dg > 0 else 1.0)
+        frac = min(margen["kcal"] / dk, (margen["grasa"] / dg) if dg > 0 else 1.0, (m_p / dp) if dp > 0 else 1.0)
         objetivo = int(g_cur + (piso - g_cur) * max(0.0, frac))
         if objetivo >= piso * 0.5 and objetivo > g_cur + 1:
             mac = db.macros_from_ingredient_string(f"{objetivo - g_cur:.0f} g de {canon}") or {}
             dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
+            dp = float(mac.get("protein") or 0)
         else:
             dk = -1.0
-    if dk <= 0 or dk > margen["kcal"] + 0.5 or dg > margen["grasa"] + 0.05:
+    if dk <= 0 or dk > margen["kcal"] + 0.5 or dg > margen["grasa"] + 0.05 or dp > m_p + 0.5:
         logger.info(f"🧩 [P1-PLAN-LOTE-49] «{str(meal.get('name'))[:40]}»: {canon} en {g_cur:.0f} g (piso {piso}) y el día "
-                    f"no tiene sitio (quedan {margen['kcal']:.0f} kcal y {margen['grasa']:.1f} g de grasa)")
+                    f"no tiene sitio (quedan {margen['kcal']:.0f} kcal y {margen['grasa']:.1f} g de grasa"
+                    + (f"; {m_p:.1f} g de proteína bajo el techo renal)" if m_p != float("inf") else ")"))
         return None
     linea = f"{objetivo} g de {canon}"
     # Por ALIMENTO, nunca por índice (la familia `raw[idx]`): se sustituye la línea de `canon` —ya se comprobó que es una.
@@ -368,6 +382,8 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
         raw.append(linea)
     margen["kcal"] -= dk
     margen["grasa"] -= dg
+    if "proteina" in margen:
+        margen["proteina"] -= dp
     return f"↑{g_cur:.0f}→{objetivo} g de {canon}"
 
 
@@ -506,7 +522,8 @@ def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional
     nueva = f"{piso} g de {alimento}"
     mac = db.macros_from_ingredient_string(nueva) or {}
     dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
-    if dk <= 0 or dk > margen["kcal"] or dg > margen["grasa"]:
+    dp = float(mac.get("protein") or 0)
+    if dk <= 0 or dk > margen["kcal"] or dg > margen["grasa"] or dp > margen.get("proteina", float("inf")):
         return None
     for campo in ("ingredients", "ingredients_raw"):
         ls = meal.get(campo)
@@ -515,6 +532,8 @@ def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional
                                      and _sa(_CERO.match(x).group(1)).strip() == _sa(alimento)) else x for x in ls]
     margen["kcal"] -= dk
     margen["grasa"] -= dg
+    if "proteina" in margen:
+        margen["proteina"] -= dp
     return f"↑0→{piso} g de {alimento}"
 
 
@@ -603,6 +622,10 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=N
                 hechos.append(sub)
             continue            # presente: sin margen del día (o sin sitio en él) no se toca
         linea = f"{piso} g de {canon}"
+        if margen is not None and db is not None and margen.get("proteina", float("inf")) != float("inf"):
+            _p257 = float((db.macros_from_ingredient_string(linea) or {}).get("protein") or 0)
+            if _p257 > margen["proteina"] + 0.5:
+                continue        # [P1-PLAN-LOTE-257] con techo renal, lo que falta no vuelve si no cabe
         ings.append(linea)
         raw = meal.get("ingredients_raw")
         if isinstance(raw, list):
@@ -613,6 +636,8 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=N
             mac = db.macros_from_ingredient_string(linea) or {}
             margen["kcal"] -= float(mac.get("kcal") or 0)
             margen["grasa"] -= float(mac.get("fats") or 0)
+            if "proteina" in margen:
+                margen["proteina"] -= float(mac.get("protein") or 0)
     if hechos:
         meal["_identidad_restaurada"] = hechos
         meal.pop("_display", None)        # la capa de traducción espeja `ingredients` por índice: se regenera

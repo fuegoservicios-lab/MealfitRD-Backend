@@ -32,6 +32,16 @@ _SELF_NEGATING_TAIL_RX = re.compile(
 _ISSUE_CONTINUES_RX = re.compile(
     r"sin embargo|no obstante|pero (?:adem[aá]s|se detecta|el plan)|se detecta(?:n)? (?:una|un|que)|aunque (?:el plan|se)",
     re.IGNORECASE)
+# [P1-PLAN-LOTE-255 · 2026-09-25] «Posible reactividad cruzada» con un alimento que el usuario NO declaró no es un
+# defecto: batería rd252 (maní + sésamo + «piña» escrita a mano) — el revisor rechazó como CRÍTICO la linaza «por el
+# sésamo», el edamame «por el maní» y la lechosa y el guineo «por la piña», dos veces, y el usuario recibió el PLAN DE
+# EMERGENCIA. Como el texto dice «alergia», G18 lo contaba como agudo. Lo DECLARADO (y toda su clase) lo sigue parando la
+# guarda determinista de alérgenos, que corre después y conserva la última palabra; esto pasa a aviso para el usuario.
+# tooltip-anchor: P1-PLAN-LOTE-255-REACTIVIDAD-CRUZADA
+_CROSS_REACTIVITY_RX = re.compile(
+    r"reactividad(?:es)? cruzadas?|reacci[oó]n(?:es)? cruzadas?|reactiv[oa]s? cruzad[oa]s?|sensibilizaci[oó]n cruzada|"
+    r"cross[- ]?reactiv",
+    re.IGNORECASE)
 
 
 def _downgrade_reviewer_non_issues(approved, issues, severity):
@@ -50,7 +60,8 @@ def _downgrade_reviewer_non_issues(approved, issues, severity):
             t = str(it)
             _ultima = [s for s in re.split(r"(?<=[.;!?])\s+", t.strip()) if s.strip()][-1:] or [""]
             _niega = ((_SELF_NEGATING_ISSUE_RX.search(t) and not _ISSUE_CONTINUES_RX.search(t))
-                      or bool(_SELF_NEGATING_TAIL_RX.search(_ultima[0])))
+                      or bool(_SELF_NEGATING_TAIL_RX.search(_ultima[0]))
+                      or bool(_CROSS_REACTIVITY_RX.search(t)))   # [P1-PLAN-LOTE-255]
             (avisos if _niega else real).append(it)
         if not avisos:
             return approved, real, severity, []

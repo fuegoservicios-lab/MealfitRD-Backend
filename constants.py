@@ -4403,7 +4403,8 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     # Sesgo a sobre-filtrar. tooltip-anchor: P2-VARIETY-CATALOG-NOT-FILTERED
     if any(r in ["lacteos", "lacteo", "lactosa", "dairy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["leche", "queso", "yogur", "yogurt", "mantequilla", "crema",
-                                        "ricotta", "mozzarella", "parmesano", "requeson", "suero de leche"])
+                                        "ricotta", "mozzarella", "parmesano", "requeson", "suero de leche",
+                                        *__import__("vocabulario_alergenos").EXTRA["lacteos"]])  # [P1-PLAN-LOTE-252]
     # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F13/F29/F14) Estas tres expansiones estaban
     # DRIFTEADAS respecto a `graph_orchestrator._ALLERGEN_SYNONYMS`, que es el vocabulario que usa el
     # escáner de seguridad: el catch-all de gluten listaba 5 términos contra ~24 del canónico, así que
@@ -4415,14 +4416,15 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     if any(r in ["frutos secos", "nueces", "nuts", "tree nuts"] for r in normalized_restrictions):
         normalized_restrictions.extend(["almendra", "almendras", "nuez", "nueces", "maranon",
                                         "pistacho", "pistachos", "avellana", "merey", "anacardo",
-                                        "marzipan", "mazapan", "nutella", "praline", "turron", "pesto"])
+                                        "marzipan", "mazapan", "nutella", "praline", "turron", "pesto",
+                                        *__import__("vocabulario_alergenos").EXTRA["frutos secos"]])
     if any(r in ["mani", "cacahuate", "peanut", "peanuts"] for r in normalized_restrictions):
         normalized_restrictions.extend(["mani", "cacahuate", "peanut", "mantequilla de mani",
                                         "crema de mani", "salsa de mani"])
     if any(r in ["huevo", "huevos", "egg", "eggs"] for r in normalized_restrictions):
         normalized_restrictions.extend(["huevo", "huevos", "clara", "claras", "yema", "yemas",
                                         "mayonesa", "merengue", "aioli", "alioli", "holandesa",
-                                        "ponche", "mousse"])
+                                        "ponche", "mousse", *__import__("vocabulario_alergenos").EXTRA["huevo"]])
     if any(r in ["gluten", "trigo", "wheat"] for r in normalized_restrictions):
         normalized_restrictions.extend(["trigo", "pan", "pasta", "harina de trigo", "galleta",
                                         "galletas", "cebada", "centeno", "gluten",
@@ -4449,12 +4451,15 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
                                         # términos nuevos de las altas PR/US de esta task.
                                         "bagel", "bagels", "pretzel", "pretzels", "panecillo",
                                         "panecillos", "panqueque", "panqueques", "wafle", "wafles",
-                                        "salsa de salchicha", "masa para pie", "bacalaitos"])
+                                        "salsa de salchicha", "masa para pie", "bacalaitos",
+                                        *__import__("vocabulario_alergenos").EXTRA["gluten"],
+                                        *__import__("vocabulario_alergenos").OCULTOS["gluten"]])  # [P1-PLAN-LOTE-252]
     if any(r in ["soya", "soja", "soy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["soya", "soja", "tofu", "salsa de soya", "edamame", "miso",
                                         "tempeh", "salsa teriyaki", "teriyaki", "natto",
                                         "lecitina de soya", "proteina de soya",
-                                        "proteina vegetal texturizada", "tvp"])
+                                        "proteina vegetal texturizada", "tvp",
+                                        *__import__("vocabulario_alergenos").EXTRA["soya"]])
 
     # [OPTIMIZACIÓN O(1)] Compilar un único patrón maestro ultra veloz
     import re

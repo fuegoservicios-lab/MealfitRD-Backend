@@ -561,3 +561,49 @@ def tyramine_violations(plan, form_data) -> list:
         return out
     except Exception:
         return []
+
+
+# [P1-PLAN-LOTE-251 · 2026-09-25] Toronja/pomelo con estatina, calcioantagonista o anticoagulante. Las tres reglas lo
+# piden («EVITA la toronja/pomelo y su jugo») y solo vivía en el prompt, mientras el catálogo tiene «Toronja» y salió en 2
+# comidas de 600 planes reales. Mismo patrón que la tiramina (246) —revisor, superficies de cambio, última palabra del
+# escudo— salvo la severidad: no es agudo, así que el revisor pide REINTENTO («high»), no el plan de emergencia (G18); por
+# eso su texto evita las marcas de `critico_no_agudo` («interacción», «medicamento», «anticoagul»).
+# tooltip-anchor: P1-PLAN-LOTE-251-TORONJA
+_GRAPEFRUIT_MEDS = frozenset({"statin", "calcium_channel_blocker", "anticoagulant"})
+_GRAPEFRUIT_RX = re.compile(r"\b(?:toronja|pomelo|grapefruit)(?:s|es)?\b")
+
+
+def grapefruit_violations(plan, form_data) -> list:
+    """«'<ingrediente>' (toronja/pomelo con tu medicación) en <comida>» por cada línea con toronja, SOLO si el perfil
+    toma una estatina, un calcioantagonista o un anticoagulante. Vacío si no aplica. Nunca lanza."""
+    try:
+        if not any(getattr(r, "id", "") in _GRAPEFRUIT_MEDS for r in detect_active_medications(form_data or {})):
+            return []
+        out = []
+        for day in (plan or {}).get("days") or []:
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                for ing in (meal.get("ingredients") or []) if isinstance(meal, dict) else []:
+                    if _GRAPEFRUIT_RX.search(_strip_accents(str(ing).lower())):
+                        out.append(f"'{ing}' (toronja/pomelo con tu medicación) en {meal.get('name')}")
+        return out
+    except Exception:
+        return []
+
+
+def grapefruit_review_issues(plan, form_data) -> list:
+    """El texto para el revisor (0 o 1 elemento). Pide reintento, no emergencia: por eso NO copia nombres de plato ni
+    líneas del plan («Bowl vegano…», «…sin cocer» son marcas de `critico_no_agudo` y convertirían en agudo a otro
+    crítico que conviva con éste); dice solo DÓNDE. Nunca lanza."""
+    try:
+        if not grapefruit_violations(plan, form_data):
+            return []
+        donde = []
+        for di, day in enumerate((plan or {}).get("days") or [], 1):
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                if isinstance(meal, dict) and any(_GRAPEFRUIT_RX.search(_strip_accents(str(i).lower()))
+                                                  for i in (meal.get("ingredients") or [])):
+                    donde.append(f"{str(meal.get('meal') or 'comida').lower()} del día {day.get('day') or di}")
+        return ["TORONJA/POMELO CON TU MEDICACIÓN (sube el nivel del fármaco en sangre): cámbiala por otra fruta "
+                "(piña, papaya, guayaba, mango). Dónde: " + "; ".join(donde[:6])]
+    except Exception:
+        return []

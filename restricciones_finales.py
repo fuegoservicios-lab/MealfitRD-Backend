@@ -72,6 +72,9 @@ def _motivo(linea, nombre, alergias, dieta, rechazos, go, ctx_farmacos=None):
         if _mr.tyramine_violations(mini, ctx_farmacos):
             m = _mr._TYRAMINE_RX.search(_sa(linea)) if _mr._TYRAMINE_RX else None
             return "farmaco", (m.group(0) if m else "tiramina")
+        if _mr.grapefruit_violations(mini, ctx_farmacos):   # [P1-PLAN-LOTE-251] toronja con estatina / presión
+            m = _mr._GRAPEFRUIT_RX.search(_sa(linea))
+            return "farmaco", (m.group(0) if m else "toronja")
     return None
 
 

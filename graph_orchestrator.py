@@ -2034,6 +2034,7 @@ class PlanState(TypedDict):
     # previos (dedup por prefijo normalizado) → directiva de retry que respeta todos los gates a la vez.
     _cumulative_rejection_reasons: Optional[list[str]]
     _rejection_severity: Optional[str]
+    _soft_reject_retry: Optional[bool]  # [P1-PLAN-LOTE-256] el «high» es un crítico rebajado para reintentar
     
     # Callback de progreso para SSE streaming (opcional)
     progress_callback: Optional[Any]  # Callable o None
@@ -13950,7 +13951,7 @@ _ALLERGEN_SYNONYMS = {
                      # DROP en T1): ningún término de arriba matchea 'pinon'/'pinones' por
                      # substring (distinto de 'almendra'/'nuez'/etc). 'almendra marcona' (otra
                      # alta del mismo lote) SÍ ya matchea vía 'almendra', sin cambios ahí.
-                     "pinon", "pinones"],
+                     "pinon", "pinones", *__import__("vocabulario_alergenos").EXTRA["frutos secos"]],
     "mariscos": ["camaron", "camarones", "langosta", "cangrejo", "langostino", "gambas",
                  "gamba", "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
                  "surimi",
@@ -13967,7 +13968,7 @@ _ALLERGEN_SYNONYMS = {
                  # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Nombre de alimento
                  # peninsular ausente del vocabulario RD; frontera de palabra compartida
                  # por G56 evita casar fragmentos dentro de otros nombres.
-                 "sepia"],
+                 "sepia", *__import__("vocabulario_mar").MARISCOS_EXTRA],  # [P1-PLAN-LOTE-250] vocabulario_mar.py
     "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
                 "dorado", "sardina", "merluza", "carite", "anchoa", "anchoas",
                 "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire",
@@ -13989,7 +13990,7 @@ _ALLERGEN_SYNONYMS = {
                 # (palabra DISTINTA, diverge tras 'bacala-': bacalaítos vs bacalao, ni siquiera
                 # comparten sufijo plural) — sin esto, un alérgico a pescado no quedaba cubierto
                 # para este nombre concreto.
-                "bacalaitos"],
+                "bacalaitos", *__import__("vocabulario_mar").PESCADOS_EXTRA],  # [P1-PLAN-LOTE-250]
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
                 "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
                 "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
@@ -14009,7 +14010,7 @@ _ALLERGEN_SYNONYMS = {
                 # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (cuajada, DROP en
                 # T1): cuajo de leche fresco — lácteo real, sin esto un alérgico quedaba
                 # desprotegido para este nombre concreto (ningún término de arriba lo matchea).
-                "cuajada"],
+                "cuajada", *__import__("vocabulario_alergenos").EXTRA["lacteos"]],  # [P1-PLAN-LOTE-252]
     "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella",
                 "whey", "suero de leche", "helado", "mantecado", "dulce de leche", "queso crema",
                 "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada",
@@ -14078,14 +14079,14 @@ _ALLERGEN_SYNONYMS = {
                # platos de trigo de ES/MX/PR/US. Son nombres de ALIMENTO y por eso viven
                # en este SSOT, no en los alias de declaración multilingüe.
                "bocadillo", "baguette", "coca", "mollete", "torrija", "fideua",
-               "migas", "bolillo", "telera", "concha", "birote", "empanizado"],
+               "migas", "bolillo", "telera", "concha", "birote", "empanizado", *__import__("vocabulario_alergenos").EXTRA["gluten"]],  # [P1-PLAN-LOTE-252]
     "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
-              "aioli", "alioli", "holandesa", "ponche", "mousse"],
+              "aioli", "alioli", "holandesa", "ponche", "mousse", *__import__("vocabulario_alergenos").EXTRA["huevo"]],  # [P1-PLAN-LOTE-252]
     "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
-               "aioli", "alioli", "holandesa", "ponche", "mousse"],
+               "aioli", "alioli", "holandesa", "ponche", "mousse", *__import__("vocabulario_alergenos").EXTRA["huevo"]],
     "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame", "miso", "tempeh",
              "salsa teriyaki", "teriyaki", "natto", "lecitina de soya", "proteina de soya",
-             "proteina vegetal texturizada", "tvp"],
+             "proteina vegetal texturizada", "tvp", *__import__("vocabulario_alergenos").EXTRA["soya"]],  # [P1-PLAN-LOTE-252]
     # [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] Clases 9, 10, 12 y 13 del
     # Reglamento UE 1169/2011. Son nombres de ALIMENTO/vehículo en español
     # canónico; las formas declarativas de los cinco idiomas viven en el dict
@@ -14111,7 +14112,7 @@ _ALLERGEN_SYNONYMS = {
     # que no tiene contraparte en `_DIET_*_TERMS` con la que cruzarse — misma asimetría de
     # CATEGORÍA ya documentada para maní/frutos secos/gluten/soya.
     "sesamo": ["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
-               "semillas de sesamo", "gomasio", "halva"],
+               "semillas de sesamo", "gomasio", "halva", *__import__("vocabulario_alergenos").EXTRA["sesamo"]],  # [P1-PLAN-LOTE-252]
 }
 
 
@@ -14187,7 +14188,7 @@ _ALLERGEN_DECLARATION_ALIASES = {
                  # fr / it / pt — las mismas dos categorías del Reglamento en cada lengua
                  "fruits de mer", "crustaces", "mollusques",
                  "frutti di mare", "crostacei", "molluschi",
-                 "frutos do mar", "crustaceos do mar"],
+                 "frutos do mar", "crustaceos do mar", "frutos de mar", "frutos del mar"],  # [P1-PLAN-LOTE-250]
     "pescado": ["fish", "fish allergy", "seafood",
                 # fr / it / pt
                 "poisson", "poissons", "pesce", "peixe", "peixes"],
@@ -14420,6 +14421,7 @@ def _expand_allergy_declarations(allergies) -> set:
                any(_sinonimo_alimento_casa(a_low, s) for s in syns) or \
                any(_declaracion_casa(a_low, s) for s in _decl):
                 out.update(strip_accents(s) for s in syns)
+                out.update(__import__("vocabulario_alergenos").OCULTOS.get(cat, ()))  # [P1-PLAN-LOTE-252]
                 matched = True
         # [P1-PLAN-LOTE-225 · 2026-09-24] Sin clase, la palabra escrita se busca tal cual. Una coincidencia de clase
         # la reemplaza, y por eso una coincidencia EQUIVOCADA la perdía: con «ajo» ⊂ «ajonjoli» el ajo se resolvía
@@ -14574,7 +14576,8 @@ _GLUTEN_FORWARD_EXCUSE_RX = _re_mod.compile(
     r"\s+(?:sin|libres?\s+de|cero|no\s+contienen?)\s+gluten\b"
 )
 _ALLERGEN_GLUTEN_TERM_SET = frozenset(
-    strip_accents(_s).lower() for _s in _ALLERGEN_SYNONYMS["gluten"]
+    strip_accents(_s).lower() for _s in (*_ALLERGEN_SYNONYMS["gluten"],
+                                        *__import__("vocabulario_alergenos").OCULTOS["gluten"])
 )
 # [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C2] La excusa FORWARD de
 # arriba absolvía CUALQUIER término de `_ALLERGEN_GLUTEN_TERM_SET` seguido de «sin gluten» — sin
@@ -14729,7 +14732,7 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "bacalaitos",
     # [P0-COUNTRY-ALLERGEN-FOOD-VOCAB · 2026-08-23] Sepia es marisco tanto
     # para la alergia como para la restricción vegetariana/vegana.
-    "sepia",
+    "sepia", *__import__("vocabulario_mar").PESCADOS_EXTRA, *__import__("vocabulario_mar").MARISCOS_EXTRA,
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",
@@ -14739,7 +14742,7 @@ _DIET_EGG_TERMS = (
     "mayonesa", "merengue", "mousse", "alioli", "aioli",
     # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['huevo']`: 'holandesa'
     # (salsa holandesa) y 'ponche' (ponche crema) ya vivían del lado alérgeno, ausentes aquí.
-    "holandesa", "ponche",
+    "holandesa", "ponche", *__import__("vocabulario_alergenos").EXTRA["huevo"],  # [P1-PLAN-LOTE-252] paridad con el alérgeno
 )
 _DIET_DAIRY_TERMS = (
     "leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "lacteo", "ricotta", "mozzarella",
@@ -14757,7 +14760,7 @@ _DIET_DAIRY_TERMS = (
     "cuajada",
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con las altas de T6 en
     # `_ALLERGEN_SYNONYMS['lacteos'/'lactosa']` (Arequipe, Suero costeño) — mismo guard.
-    "arequipe", "suero costeno",
+    "arequipe", "suero costeno", *__import__("vocabulario_alergenos").EXTRA["lacteos"],
 )
 
 
@@ -15152,6 +15155,7 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, fo
         if form_data is not None:
             out.extend(_scan_mercury_pregnancy_violations(meal, form_data))
             out.extend(__import__("medication_rules").tyramine_violations(mini, form_data))  # [P1-PLAN-LOTE-246]
+            out.extend(__import__("medication_rules").grapefruit_violations(mini, form_data))  # [P1-PLAN-LOTE-251]
     except Exception as _clin_e:
         return [f"error de re-validación clínica ({type(_clin_e).__name__}: {_clin_e}) — bloqueo conservador"]
     return out
@@ -15258,7 +15262,7 @@ def renal_protein_trim_for_update(meals: list, protein_ceiling_g: float, db=None
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
-        _trimmed = _trim_day_protein_to_ceiling(meals, _ceil, db, ceiling_pct=1.0)
+        _trimmed = _trim_day_protein_to_ceiling(meals, _ceil, db, ceiling_pct=1.0, incluye_huevo_lacteo=True)
         if _trimmed:
             logger.info(
                 f"🫘 [P1-RENAL-UPDATE-ENFORCE] proteína de update trimada al techo renal "
@@ -21565,7 +21569,7 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
 
 
 def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
-                                 *, ceiling_pct: float = 1.12) -> bool:
+                                 *, ceiling_pct: float = 1.12, incluye_huevo_lacteo: bool = False) -> bool:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Techo simétrico al piso: si el día entrega
     > ceiling_pct × target de proteína (el LLM/solver sobre-produjo, o el closer infló),
     escala las porciones e ingredientes PROTEÍNA-dominantes hacia abajo para traer el día
@@ -21588,7 +21592,7 @@ def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
         _resolvable = 0.0
         for _m_r in meals:
             for _s_r in (_m_r.get("ingredients") or []):
-                if _ingredient_is_protein_dominant(str(_s_r), db):
+                if __import__("recorte_renal").recortable(_s_r, db, incluye_huevo_lacteo):  # [P1-PLAN-LOTE-257]
                     _mc_r = db.macros_from_ingredient_string(str(_s_r)) or {}
                     _resolvable += float(_mc_r.get("protein") or 0.0)
         _drop = P - target_protein_day
@@ -21607,7 +21611,7 @@ def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
                 _new_i = []
                 for s in ings:
                     _s = str(s)
-                    if _ingredient_is_protein_dominant(_s, db):
+                    if __import__("recorte_renal").recortable(_s, db, incluye_huevo_lacteo):
                         _mo = db.macros_from_ingredient_string(_s) or {}
                         _ns = _resc(_s, factor)
                         _mn = db.macros_from_ingredient_string(_ns) or {}
@@ -21621,7 +21625,7 @@ def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
             raw = m.get("ingredients_raw")
             if isinstance(raw, list):
                 m["ingredients_raw"] = [
-                    _resc(str(s), factor) if _ingredient_is_protein_dominant(s, db) else str(s)
+                    _resc(str(s), factor) if __import__("recorte_renal").recortable(s, db, incluye_huevo_lacteo) else str(s)
                     for s in raw]
             mp = max(0, round(_meal_macro_num(m.get("protein")) + _dp))
             mc = max(0, round(_meal_macro_num(m.get("carbs")) + _dc))
@@ -24878,7 +24882,7 @@ def _enforce_renal_per_meal(plan: dict, pg: float, daily_cals: float, db) -> Non
         _enf_days = 0
         for _d in plan.get("days", []) or []:
             _rmeals = _d.get("meals", []) or []
-            if _trim_day_protein_to_ceiling(_rmeals, pg, db, ceiling_pct=1.0):
+            if _trim_day_protein_to_ceiling(_rmeals, pg, db, ceiling_pct=1.0, incluye_huevo_lacteo=True):
                 _enf_days += 1
             if daily_cals > 0:
                 _protein_preserving_day_reconcile(_rmeals, daily_cals, db)
@@ -42285,16 +42289,13 @@ def _review_country_feedback(country: str, kind: str, **values) -> str:
         egg = int(values["egg"])
         total = int(values["total"])
         cap = int(values["cap"])
-        if is_do:
-            alternatives = (
-                "otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, "
-                "res molida magra, queso de freír, yogur griego, habichuelas)"
-            )
-        else:
-            alternatives = (
-                "otras proteínas variadas compatibles con el perfil (aves, pescado, "
-                "legumbres y lácteos permitidos)"
-            )
+        _sp = __import__("sugerencias_perfil")  # [P1-PLAN-LOTE-253] sin lo que el perfil prohíbe
+        _alt = _sp.compatibles(("pollo guisado", "pescado", "atún", "sardina", "res molida magra", "queso de freír",
+                                "yogur griego", "habichuelas") if is_do else ("aves", "pescado", "legumbres",
+                                                                              "lácteos permitidos"), values.get("form_data"))
+        alternatives = ((f"otras proteínas dominicanas ({_sp.enumerar(_alt)})" if is_do else
+                         f"otras proteínas variadas compatibles con el perfil ({_sp.enumerar(_alt, 'y')})") if _alt
+                        else "otras proteínas compatibles con tu perfil")
         return (
             f"SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en {egg} de {total} "
             f"comidas (máximo {cap}). Reemplaza el huevo en al menos {egg - cap} comida(s) "
@@ -42304,28 +42305,24 @@ def _review_country_feedback(country: str, kind: str, **values) -> str:
     if kind == "raw_staples":
         count = values.get("count")
         sample = str(values["sample"])
-        if is_do:
-            preparations = (
-                "PREPARACIONES dominicanas reales: guisos, locrios (almuerzo), "
-                "panqueques/arepitas con las harinas, bollitos de yuca, revoltillos, "
-                "ensaladas compuestas"
-            )
-        else:
-            preparations = (
-                "PREPARACIONES culinarias reales: guisos, salteados, panqueques/tortitas "
-                "con las harinas, croquetas u horneados, revoltillos, ensaladas compuestas"
-            )
+        _sp = __import__("sugerencias_perfil")  # [P1-PLAN-LOTE-253]
+        preparations = ("PREPARACIONES dominicanas reales: " if is_do else "PREPARACIONES culinarias reales: ") + \
+            _sp.enumerar(_sp.compatibles(("guisos", "locrios (almuerzo)", "panqueques/arepitas con las harinas",
+                                          "bollitos de yuca", "revoltillos", "ensaladas compuestas") if is_do else
+                                         ("guisos", "salteados", "panqueques/tortitas con las harinas",
+                                          "croquetas u horneados", "revoltillos", "ensaladas compuestas"),
+                                         values.get("form_data")))
         return (
             f"{count} plato(s) son ingredientes crudos/hervidos sin transformación culinaria "
             f"({sample}). Convierte los platos en {preparations} — manteniendo los mismos macros."
         )
     if kind == "transform_minimum":
-        examples = (
-            "panqueques de avena, arepitas, bollitos de yuca, revoltillo, guiso, "
-            "locrio de almuerzo"
-            if is_do
-            else "panqueques de avena, tortitas, croquetas, revoltillo, guiso o salteado"
-        )
+        _sp = __import__("sugerencias_perfil")  # [P1-PLAN-LOTE-253]
+        _ej = _sp.compatibles(("panqueques de avena", "arepitas", "bollitos de yuca", "revoltillo", "guiso",
+                               "locrio de almuerzo") if is_do else ("panqueques de avena", "tortitas", "croquetas",
+                                                                    "revoltillo", "guiso", "salteado"),
+                              values.get("form_data"))
+        examples = _sp.enumerar(_ej) if is_do else _sp.enumerar(_ej, "o")
         return (
             "El plan no incluye NINGUNA preparación transformada: incluye al menos una "
             f"preparación real con los mismos macros ({examples}) en vez de solo staples servidos."
@@ -42860,6 +42857,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
         issues.append("TIRAMINA CON IMAO (interacción medicamentosa peligrosa): quita estos alimentos y usa versiones "
                       "FRESCAS. Violaciones: " + "; ".join(_tyr246[:6]))
         severity = _severity_max(severity, "critical")
+    for _pom251 in __import__("medication_rules").grapefruit_review_issues(plan, form_data):  # [P1-PLAN-LOTE-251]
+        approved, severity = False, _severity_max(severity, "high"); issues.append(_pom251)
     # [P1-PLAN-LOTE-232 · 2026-09-25] Backstop DETERMINISTA de los rechazos («no me gusta»): reintento con directiva
     # («high»), no fallback. tooltip-anchor: P1-PLAN-LOTE-232-RECHAZOS
     if DISLIKE_HARD_GUARD:
@@ -43044,7 +43043,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     issues.append(
                         _review_country_feedback(
                             _rpn_country,
-                            "egg_overuse",
+                            "egg_overuse", form_data=form_data,
                             egg=_egg,
                             total=_tot,
                             cap=_cap,
@@ -43290,7 +43289,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     issues.append(
                         _review_country_feedback(
                             _rpn_country,
-                            "raw_staples",
+                            "raw_staples", form_data=form_data,
                             count=_rsg.get("raw_staple_meals"),
                             sample="proteína plancha + carbo blanco + vegetal suelto",
                         )
@@ -43325,7 +43324,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     issues.append(
                         _review_country_feedback(
                             _rpn_country,
-                            "transform_minimum",
+                            "transform_minimum", form_data=form_data,
                         )
                     )
                     severity = _severity_max(severity, "high")
@@ -44166,6 +44165,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # que NO se tocan), la preocupación glucémica es de CALIDAD: la bajamos a 'high' → `should_retry`
         # da un retry (con la directiva glucémica) y entrega el plan REAL con banner ámbar + el gate
         # profesional, en vez de un plan de contingencia genérico. Knob MEALFIT_DM2_GLYCEMIC_SOFT_REJECT.
+        _soft_retry = False  # [P1-PLAN-LOTE-256] tooltip-anchor: P1-PLAN-LOTE-256-REINTENTO-PROMETIDO
         if (DM2_GLYCEMIC_SOFT_REJECT and CONDITION_RULES_ENABLED and severity == "critical"
                 and not plan.get("_schema_invalid") and not _had_allergen_critical
                 and not _had_renal_critical  # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (G3) ERC comórbida: no degradar el techo renal
@@ -44174,7 +44174,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 and _is_diabetes_condition(form_data)):
             logger.warning("🩸 [P3-CONDITION-RULES] DM2: rechazo glucémico CRÍTICO degradado a 'high' "
                            "→ entrega el plan real (con fibra ADA) + advertencia, no fallback matemático.")
-            severity = "high"
+            severity = "high"; _soft_retry = True  # [P1-PLAN-LOTE-256]
 
         # [P1-BARIATRIC-CRITICAL-RETRY · 2026-06-28] Bariátrico: un crítico de ELECCIÓN DE COMIDA (porción/volumen/grano-
         # crudo/especia/azúcar) lo puede CORREGIR un retry con feedback (el revisor le devuelve las razones vía
@@ -44194,7 +44194,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             logger.warning("🔁 [P1-BARIATRIC-CRITICAL-RETRY] Bariátrico: crítico de elección de comida degradado a 'high' "
                            "→ retry quirúrgico con feedback antes del fallback (el revisor re-gatea cada intento). "
                            f"Razones: {(issues or [])[:2]}")
-            severity = "high"
+            severity = "high"; _soft_retry = True  # [P1-PLAN-LOTE-256]
 
         # [P1-PLAN-LOTE-230 · 2026-09-25] G18 para toda condición: un crítico del revisor SIN peligro agudo reintenta y se
         # entrega con banner, no cae al plan matemático genérico. `elif`: DM2/bariátrico ya degradaron lo suyo.
@@ -44205,13 +44205,14 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 and _critical_is_non_acute(issues)):
             logger.warning("🩺 [P1-PLAN-LOTE-230] crítico del revisor SIN marca aguda degradado a 'high' → reintento con "
                            f"feedback y, si no converge, plan real con banner (G18). Razones: {(issues or [])[:2]}")
-            severity = "high"
+            severity = "high"; _soft_retry = True  # [P1-PLAN-LOTE-256]
 
         result = {
             "review_passed": False,
             "review_feedback": feedback,
             "rejection_reasons": issues,
             "_rejection_severity": severity,
+            "_soft_reject_retry": _soft_retry,
             "_affected_days": list(final_affected_days)
         }
 
@@ -44958,7 +44959,10 @@ def should_retry(state: PlanState) -> str:
     # arreglado.
     if severity == "high":
         _retry_class = _classify_high_severity(state.get("rejection_reasons") or [])
-        if _retry_class == "contextual":
+        # [P1-PLAN-LOTE-256 · 2026-09-25] «hipertensión»/«diabetes»/«alergia» en el texto hacían «contextual» (abortar
+        # sin reintento) justo al «high» que el 230, el DM2 y el bariátrico rebajan PARA reintentar: batería rd252, un
+        # plan degradado en el intento 1 por «½ cucharadita de sal». Ese «high» sí se reintenta.
+        if _retry_class == "contextual" and not state.get("_soft_reject_retry"):
             logger.error(
                 f"🛑 [ORQUESTADOR] Rechazo HIGH (contextual: despensa/alergia/"
                 f"condición — no-recuperable por retry) → Abortando y entregando "
@@ -49245,6 +49249,7 @@ def reconcile_protein_band_post_finalize(plan_data: dict) -> bool:
         kcal_ceiling = kcal_target * 1.10 if kcal_target else None  # techo de banda kcal
         from nutrition_db import IngredientNutritionDB
         db = IngredientNutritionDB()
+        _renal257 = __import__("recorte_renal").techo_renal(plan_data) > 0  # [P1-PLAN-LOTE-257] techo renal: tolerancia del gate (5 %)
         changed = False
         for _d in plan_data.get("days") or []:
             if not isinstance(_d, dict):
@@ -49253,8 +49258,9 @@ def reconcile_protein_band_post_finalize(plan_data: dict) -> bool:
             if not _ms:
                 continue
             P = sum(_meal_macro_num(m.get("protein")) for m in _ms)
-            if P > target * 1.12:
-                if _trim_day_protein_to_ceiling(_ms, target, db, ceiling_pct=1.12):
+            if P > target * (1.05 if _renal257 else 1.12):
+                if _trim_day_protein_to_ceiling(_ms, target, db, ceiling_pct=(1.0 if _renal257 else 1.12),
+                                                incluye_huevo_lacteo=_renal257):
                     changed = True
             elif 0 < P < target * 0.90:
                 if _bump_day_protein_to_floor(_ms, target, db, floor_pct=0.90, aim_pct=0.96,

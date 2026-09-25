@@ -167,11 +167,23 @@ def _solo_mariscos(form_data) -> bool:
     try:
         import graph_orchestrator as go
         exp = go._expand_allergy_declarations(decl)
-        mar = set(go._ALLERGEN_SYNONYMS["mariscos"]) - set(go._ALLERGEN_SYNONYMS["pescado"])
-        pes = set(go._ALLERGEN_SYNONYMS["pescado"]) - set(go._ALLERGEN_SYNONYMS["mariscos"])
     except Exception:                                                          # noqa: BLE001
         return False
-    return bool(exp & mar) and not (exp & pes)
+    return _clase_declarada(exp, "mariscos") and not _clase_declarada(exp, "pescado")
+
+
+def _clase_declarada(expansion: set, clase: str) -> bool:
+    """[P1-PLAN-LOTE-249 · 2026-09-25] ¿La declaración cubre la CLASE entera? Una declaración de la clase (o de uno de
+    sus miembros) se expande a TODOS sus sinónimos; un sinónimo compartido no la declara: «bacalaítos» vive en gluten
+    (la masa) Y en pescado, y el alérgico al gluten recibía «Aclaración del alergia al pescado» y el revisor le
+    rechazaba el pescado. tooltip-anchor: P1-PLAN-LOTE-249-CLASE-DECLARADA"""
+    try:
+        import graph_orchestrator as go
+        from constants import strip_accents
+        miembros = {strip_accents(str(t)).lower() for t in go._ALLERGEN_SYNONYMS[clase]}
+    except Exception:                                                          # noqa: BLE001
+        return False
+    return bool(miembros) and miembros <= set(expansion or ())
 
 
 def _pescado_sin_mariscos(form_data) -> str:
@@ -188,17 +200,15 @@ def _pescado_sin_mariscos(form_data) -> str:
         return out
     try:
         import graph_orchestrator as go
-        mar = set(go._ALLERGEN_SYNONYMS["mariscos"]) - set(go._ALLERGEN_SYNONYMS["pescado"])
-        pes = set(go._ALLERGEN_SYNONYMS["pescado"]) - set(go._ALLERGEN_SYNONYMS["mariscos"])
         alergia = go._expand_allergy_declarations(_decl("allergies", "otherAllergies"))
         rechazo = go._expand_allergy_declarations(_decl("dislikes", "otherDislikes"))
     except Exception:                                                          # noqa: BLE001
         return ""
-    if (alergia | rechazo) & mar:
+    if _clase_declarada(alergia, "mariscos") or _clase_declarada(rechazo, "mariscos"):
         return ""
-    if alergia & pes:
+    if _clase_declarada(alergia, "pescado"):
         return "alergia"
-    if rechazo & pes:
+    if _clase_declarada(rechazo, "pescado"):
         return "rechazo"
     return ""
 

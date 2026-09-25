@@ -527,7 +527,27 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-247 · 2026-09-25] «maní molido hasta obtener una crema» no es un lácteo (dieta y alergia).
 # [P1-PLAN-LOTE-248 · 2026-09-25] si la última palabra retira un alérgeno que un paso aún nombra, lo dice en
 # una nota de omisión (escanear los pasos en el revisor dio 5/5 falsos positivos).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-248 · 2026-09-25"
+# [P1-PLAN-LOTE-249 · 2026-09-25] las notas de pescado/mariscos para el revisor miran la CLASE declarada: con
+# «bacalaitos» en gluten Y en pescado, todo alérgico al gluten recibía «alergia al pescado» (vivo desde el 240).
+# [P1-PLAN-LOTE-250 · 2026-09-25] el escáner (alergia, dieta, rechazo) reconoce corvina, pargo, jaiba, chipirones…
+# y «frutos de/del mar» declara mariscos (vocabulario_mar.py).
+# [P1-PLAN-LOTE-251 · 2026-09-25] toronja/pomelo con estatina, calcioantagonista o anticoagulante: guard
+# determinista (revisor con reintento, superficies de cambio, última palabra del escudo).
+# [P1-PLAN-LOTE-252 · 2026-09-25] las demás clases de alergia: granola y salsa de soya (gluten), natilla y flan
+# (huevo), tamari, tahín, macadamia, lactosuero… (vocabulario_alergenos.py; la salsa de soya como término OCULTO:
+# declarar «Soya» no declara gluten).
+# [P1-PLAN-LOTE-253 · 2026-09-25] las comidas que el revisor SUGIERE al corrector (huevo repetido, crudos, sin
+# transformar) pasan por los escáneres del perfil: ya no pide queso a un alérgico a lácteos (sugerencias_perfil.py).
+# [P1-PLAN-LOTE-254 · 2026-09-25] la política dice los días de fresco reales sin congelador (3, no 7) y la pasta
+# «caracol» deja de ser un marisco.
+# [P1-PLAN-LOTE-255 · 2026-09-25] «posible reactividad cruzada» con un alimento no declarado es un aviso: mandaba
+# al plan de emergencia (linaza «por el sésamo», edamame «por el maní»).
+# [P1-PLAN-LOTE-256 · 2026-09-25] el «high» que viene de rebajar un crítico (230/DM2/bariátrico) reintenta: la
+# lista «contextual» («hipertensión», «diabetes»…) lo abortaba en el intento 1 (plan degradado por ½ cdta de sal).
+# [P1-PLAN-LOTE-257 · 2026-09-25] el techo renal de proteína se cumple en lo ENTREGADO: el recorte baja también
+# huevo y lácteos (recorte_renal.py) y la identidad del plato no re-sube la pechuga por encima del techo (el plan
+# de emergencia renal salía con 96/75/75 g sobre un techo de 60).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-257 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
