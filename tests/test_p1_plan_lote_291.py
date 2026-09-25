@@ -137,3 +137,31 @@ def test_descontar_nunca_negativo(monkeypatch):
                         lambda sql, p, **k: llamadas.append(sql) or {"quantity": 0})
     assert suplementos.descontar("u", 7, 5) == 0
     assert "GREATEST(0, quantity - %s)" in llamadas[0] and "kind = 'supplement'" in llamadas[0]
+
+
+# ── Task 9: el prompt sabe de suplementos y ve la Alacena ───────────────────────────────────────────────────────────
+
+def test_regla_s_ya_no_pregunta_si_esta_en_la_alacena():
+    from prompts import chat_agent
+    r = chat_agent._CHAT_RESOLVE_RULES
+    assert "SI ESTÁ EN SU ALACENA CON ETIQUETA" in r and "suplemento=" in r and "guardar_suplemento" in r
+
+
+def test_bloque_de_conocimiento_y_potes(monkeypatch):
+    import suplementos
+    monkeypatch.setattr(suplementos, "_potes", lambda uid: [{"ingredient_name": "Proteína Whey", "quantity": 12,
+                        "serving_unit": "scoop", "serving_label": WHEY, "label_source": "foto"}])
+    b = suplementos.bloque_para_chat("u")
+    assert "creatina" in b.lower() and "0 kcal" in b and "Proteína Whey" in b and "~12 scoop" in b
+    assert "no recetes dosis" in b.lower()
+
+
+def test_bloque_sin_potes_y_con_fallo_de_lectura(monkeypatch):
+    import suplementos
+    monkeypatch.setattr(suplementos, "_potes", lambda uid: (_ for _ in ()).throw(RuntimeError("db")))
+    assert suplementos.bloque_para_chat("u") == suplementos.BLOQUE_CONOCIMIENTO
+
+
+def test_el_chat_inyecta_el_bloque_en_las_dos_rutas():
+    src = _src("agent.py")
+    assert src.count("bloque_para_chat(") == 2

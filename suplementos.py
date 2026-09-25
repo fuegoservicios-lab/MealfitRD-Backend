@@ -132,3 +132,44 @@ def descontar(user_id: str, fila_id, porciones) -> float:
         (float(porciones or 0), fila_id, user_id), fetch_one=True,
     )
     return float((fila or {}).get("quantity") or 0)
+
+
+# ── [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos y lo que hay en la Alacena del usuario ───────────────────
+
+BLOQUE_CONOCIMIENTO = (
+    "\n\n💊 SUPLEMENTOS (sabes esto; cita la porción de la ETIQUETA y no recetes dosis): creatina 3-5 g al día, 0 kcal, "
+    "la hora da igual; whey ~24 g de proteína y ~120 kcal por scoop de 30 g; proteína vegetal parecida con algo más de "
+    "carbohidrato; un ganador de peso trae 250-600 kcal por porción; un pre-entreno es cafeína (de noche aplica la "
+    "regla T); el colágeno NO cuenta como proteína completa para su meta. Para registrar una toma de algo de su "
+    "Alacena usa log_consumed_meal con suplemento=<nombre> y porciones=<n>: las macros salen de la etiqueta del pote. "
+    "Para guardar un pote nuevo (lo pide, o manda la foto de la etiqueta y dice que es suyo), guardar_suplemento.")
+
+
+def _potes(user_id):
+    from db_core import execute_sql_query
+    return execute_sql_query(
+        # [SUPLEMENTOS-OK: lee justamente los suplementos]
+        "SELECT ingredient_name, brand, quantity::float8 AS quantity, serving_unit, serving_label, label_source "
+        "FROM user_inventory WHERE user_id = %s AND kind = 'supplement' ORDER BY ingredient_name LIMIT 20",
+        (user_id,), fetch_all=True,
+    ) or []
+
+
+def bloque_para_chat(user_id: str) -> str:
+    """El bloque 💊 del system prompt: el conocimiento fijo + SU ALACENA (cada pote con porciones y etiqueta)."""
+    try:
+        potes = _potes(user_id)
+    except Exception:
+        potes = []
+    out = BLOQUE_CONOCIMIENTO
+    if potes:
+        lineas = []
+        for p in potes:
+            e = etiqueta_valida(p.get("serving_label"))
+            u = p.get("serving_unit") or "porción"
+            et = (f"1 {u}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g proteína "
+                  f"({p.get('label_source') or 'estimado'})") if e else "sin etiqueta"
+            marca = f" ({p['brand']})" if p.get("brand") else ""
+            lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}")
+        out += " SU ALACENA: " + "; ".join(lineas) + "."
+    return out
