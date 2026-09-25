@@ -43,7 +43,7 @@ _EXTRAS = {
     "vit_d_mcg": ["bebidas vegetales fortificadas", "yema de huevo"],
 }
 # Directiva del prompt: nombre del nutriente en la viñeta → clave (para las alternativas).
-# [P1-PLAN-LOTE-222 · 2026-09-24] Con nombre para que el frontend la traduzca (`microsCopy.js`) y el test la ate.
+# [P1-PLAN-LOTE-224 · 2026-09-24] Con nombre para que el frontend la traduzca (`microsCopy.js`) y el test la ate.
 SIN_FUENTE_SEGURA = "Pide a tu nutricionista fuentes compatibles con tu alergia; aquí no hay una segura que sugerirte."
 _VINETA_CLAVE = {"calcio": "calcium_mg", "zinc": "zinc_mg", "vitamina e": "vit_e_mg", "omega-3": "omega3_g",
                  "magnesio": "magnesium_mg", "hierro": "iron_mg"}

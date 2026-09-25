@@ -188,7 +188,7 @@ _FIBER_RENAL_NOTE = ("Aumenta la fibra con vegetales y frutas bajos en potasio (
 # TECHO en apariencia 'ok' se reporta 'estimado_alto' (incierto). Mismo 0.6 que el 'estimado_bajo' de los
 # pisos, para simetría. Caveat honesto para el panel/PDF.
 _CEILING_COVERAGE_FLOOR = 0.6
-# [P1-PLAN-LOTE-222 · 2026-09-24] La coletilla del piso INCIERTO, con nombre: el frontend la reconoce y la traduce
+# [P1-PLAN-LOTE-224 · 2026-09-24] La coletilla del piso INCIERTO, con nombre: el frontend la reconoce y la traduce
 # (`microsCopy.js`) y el test de paridad la importa. Era un literal en línea que ningún espejo podía seguir.
 _FLOOR_ESTIMADO_SUFIJO = ("(Dato estimado: algunos ingredientes de tu plan no tienen este nutriente medido en el "
                           "catálogo — el valor real puede ser mayor.)")

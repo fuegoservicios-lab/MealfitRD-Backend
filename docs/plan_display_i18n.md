@@ -500,7 +500,7 @@ porque el arreglo del refresco ya estaba dentro: nombraba el plan **vivo**, no u
 
 Test: [`test_p1_i18n_budget_dice_la_causa.py`](../tests/test_p1_i18n_budget_dice_la_causa.py).
 
-## `P1-PLAN-LOTE-222` — el plan del invitado y el plato recién cambiado (2026-09-24)
+## `P1-PLAN-LOTE-224` — el plan del invitado y el plato recién cambiado (2026-09-24)
 
 **El invitado nunca recibía traducción.** El embudo del plan gratis genera el plan pero no lo persiste (vive en el
 navegador), y los cinco disparadores de este motor leen y escriben `meal_plans`: con la app en inglés, platos,

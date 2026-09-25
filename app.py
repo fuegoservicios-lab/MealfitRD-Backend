@@ -468,20 +468,20 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-219 · 2026-09-24] (solo backend) techos servibles de las bases que el solver infla en los menús sin
 # cocción: maíz dulce ≤ 250 g por comida («365 g», «415 g»), la auyama entra al techo de volumen (470 g), y dos migajas
 # del display («⅔ g de semillas» → 1 pizca, «1.53 g de yogurt» → 1 cdta).
-# [P1-PLAN-LOTE-220 · 2026-09-24] (backend + frontend) a la 1:18 p. m. solo había llegado el aviso del desayuno: la hora
+# [P1-PLAN-LOTE-222 · 2026-09-24] (backend + frontend) a la 1:18 p. m. solo había llegado el aviso del desayuno: la hora
 # de cada recordatorio salía de la hora de REGISTRO (el almuerzo del dueño, hacia las 2:15) y el cron a y media escribía
 # en el chat después de que sonara el teléfono. Ahora cada comida tiene su interruptor y su hora en Configuración
 # (normales: 8:45/12:45/15:45/19:15) y el cron, cada 15 min, escribe en el último tick antes de que suene.
-# [P1-PLAN-LOTE-221 · 2026-09-24] (backend + frontend) el escáner de comida: la cantidad de un ingrediente no se dejaba
+# [P1-PLAN-LOTE-223 · 2026-09-24] (backend + frontend) el escáner de comida: la cantidad de un ingrediente no se dejaba
 # borrar (el 0 volvía y quedaba «010», tester de Android); ahora «− campo +», varios platos por registro (hasta 4
 # fotos, como el chat), el análisis trae lo que aporta cada ingrediente (desmarcar mueve las calorías) y
 # `/consumed` acepta `deduct_pantry` (la Nevera es un interruptor propio, no la casilla del ingrediente).
-# [P1-PLAN-LOTE-222 · 2026-09-25] (backend + frontend) el sistema de idiomas al 100 %: los alimentos en los 5 idiomas
+# [P1-PLAN-LOTE-224 · 2026-09-25] (backend + frontend) el sistema de idiomas al 100 %: los alimentos en los 5 idiomas
 # (una alergia escrita en inglés/francés/italiano/portugués ya bloquea; 32 de 60 no lo hacían), el escáner y la
 # estimación en el idioma del usuario, los avisos del servidor en datos o con espejo traducido (calidad del día,
 # ahorro, «Acción requerida», bloqueos, micronutrientes), el plato nuevo ya traducido al cambiarlo, el plan del
 # invitado (`/guest-display`) y el texto libre fuera del plan (`/api/i18n/textos`: recuerdos y suplementos).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-222 · 2026-09-25"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-224 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1821,7 +1821,7 @@ async def lifespan(app: FastAPI):
         # IntervalTrigger.
         from cron_tasks import _add_job_jittered, register_plan_chunk_scheduler
         # [P1-PLAN-LOTE-133] con `id`: era el único cron sin nombre (no se podía consultar ni re-registrar sin duplicarlo)
-        # [P1-PLAN-LOTE-220] cada 15 min (era a y media): el mensaje del chat sale en el último tick ANTES de que suene
+        # [P1-PLAN-LOTE-222] cada 15 min (era a y media): el mensaje del chat sale en el último tick ANTES de que suene
         # el teléfono, que suena a la hora exacta que la persona eligió (ver `proactive_agent.MINUTOS_ENTRE_TICKS`).
         from proactive_agent import MINUTOS_ENTRE_TICKS
         _add_job_jittered(scheduler, run_proactive_checks, "cron", minute=f"*/{MINUTOS_ENTRE_TICKS}",

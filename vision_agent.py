@@ -181,7 +181,7 @@ _MEAL_VISION_SCHEMA = {
                     "name": {"type": "string"},
                     "quantity": {"type": "number"},
                     "unit": {"type": "string"},
-                    # [P1-PLAN-LOTE-221 · 2026-09-24] Solo en modo 'plato': lo que aporta ESE componente en la cantidad
+                    # [P1-PLAN-LOTE-223 · 2026-09-24] Solo en modo 'plato': lo que aporta ESE componente en la cantidad
                     # servida. Opcionales: sin ellas el plato sigue valiendo (se registra con sus totales).
                     "calories": {"type": "number"},
                     "protein": {"type": "number"},
@@ -237,7 +237,7 @@ _MEAL_VISION_PROMPT = (
     "'salami'), 'quantity' el numero de piezas/porciones visibles (2 huevos, "
     "2 lascas de queso, 1 taza de arroz, 0.5 taza de habichuelas) y 'unit' una de: unidad, lasca, "
     "rodaja, taza, cucharada, g, lb. "
-    # [P1-PLAN-LOTE-221 · 2026-09-24] El escaner deja quitar un componente o cambiar su cantidad, y el total tiene
+    # [P1-PLAN-LOTE-223 · 2026-09-24] El escaner deja quitar un componente o cambiar su cantidad, y el total tiene
     # que moverse con el: por eso cada entrada trae lo que aporta. Son los numeros que el modelo YA calcula para sumar.
     "En cada entrada pon tambien 'calories', 'protein', 'carbs' y "
     "'healthy_fats' de ESE componente en esa cantidad: los mismos numeros que "
@@ -308,7 +308,7 @@ class _MealVisionItem(BaseModel):
     name: str = Field(default="", description="Nombre genérico del alimento en español dominicano, sin marca.")
     quantity: float = Field(default=1.0, description="Número de envases o piezas visibles — NUNCA el peso impreso en el empaque.")
     unit: str = Field(default="unidad", description="unidad, lb, g, paquete, botella, lata, taza o funda.")
-    # [P1-PLAN-LOTE-221 · 2026-09-24] Solo en modo 'plato' (en 'items' quedan en 0 y no se usan).
+    # [P1-PLAN-LOTE-223 · 2026-09-24] Solo en modo 'plato' (en 'items' quedan en 0 y no se usan).
     calories: float = Field(default=0, description="Solo si photo_kind='plato': calorías de ESTE componente en la cantidad servida.")
     protein: float = Field(default=0, description="Solo si photo_kind='plato': gramos de proteína de ESTE componente.")
     carbs: float = Field(default=0, description="Solo si photo_kind='plato': gramos de carbohidratos de ESTE componente.")
@@ -341,7 +341,7 @@ def _sane_item_qty(qty, unit, *, plato: bool = False) -> float:
     P1-PANTRY-SCAN-QTY): envase discreto con qty absurda (>12) casi siempre es
     el peso impreso mal leído → colapsar a 1.
 
-    [P1-PLAN-LOTE-221 · 2026-09-24] `plato=True`: los componentes de un plato SERVIDO. Ahí no hay peso impreso que
+    [P1-PLAN-LOTE-223 · 2026-09-24] `plato=True`: los componentes de un plato SERVIDO. Ahí no hay peso impreso que
     confundir con piezas y la media porción existe (½ taza de habichuelas, medio aguacate): redondear a entero
     convertía ½ taza en 1 y quince lascas en UNA. Se redondea al medio y se acota a 0,5..30. Es el MISMO helper con
     un modo, no una segunda ruta de saneado (P1-PHOTO-DEDUCTS): gramos y libras siguen la regla de siempre."""
@@ -366,7 +366,7 @@ def _sane_item_qty(qty, unit, *, plato: bool = False) -> float:
     return float(max(1, q))
 
 
-# [P1-PLAN-LOTE-221 · 2026-09-24] Lo que aporta cada componente del plato. El escáner deja desmarcar un componente o
+# [P1-PLAN-LOTE-223 · 2026-09-24] Lo que aporta cada componente del plato. El escáner deja desmarcar un componente o
 # cambiar su cantidad, pero sin saber cuánto aporta cada uno las macros del plato no se movían: un tester de Android
 # desmarcó las albóndigas y las calorías siguieron igual. El modelo YA calcula cada componente por separado para
 # sumar el total (el prompt se lo pide desde P1-MEAL-SCAN-DR-DISHES); ahora los devuelve, y aquí se reparten los
@@ -540,12 +540,12 @@ def _coerce_meal_scan(data: dict) -> dict:
     # macros y un párrafo, jamás un ingrediente con cantidad que cotejar.
     # Se sanitizan con las MISMAS reglas que el modo 'items' (mismo helper) —
     # una segunda ruta de sanitización sería justo el tipo de duplicado que
-    # deriva. [P1-PLAN-LOTE-221] Con `plato=True`: el mismo helper admite la
+    # deriva. [P1-PLAN-LOTE-223] Con `plato=True`: el mismo helper admite la
     # media porción de un plato servido. A diferencia del modo 'items', aquí un `items` vacío NO degrada
     # a "otro": un plato con macros sigue siendo un registro válido de diario
     # aunque el modelo no haya sabido desglosarlo.
     plato_items = []
-    crudas = []  # [P1-PLAN-LOTE-221] lo que el modelo dijo que aporta cada componente (se reparte abajo)
+    crudas = []  # [P1-PLAN-LOTE-223] lo que el modelo dijo que aporta cada componente (se reparte abajo)
     for it in (data.get("items") or [])[:30]:
         name = str((it or {}).get("name") or "").strip()[:60]
         if not name:
@@ -591,7 +591,7 @@ def _coerce_meal_scan(data: dict) -> dict:
         result["calories"] = _MEAL_KCAL_PLAUSIBLE_MAX
         result["low_confidence"] = True
         result["description"] += " Parece más de una porción: confirma cuánto comiste."
-    # [P1-PLAN-LOTE-221 · 2026-09-24] Con los totales ya definitivos, cada componente se lleva su parte (`macros`).
+    # [P1-PLAN-LOTE-223 · 2026-09-24] Con los totales ya definitivos, cada componente se lleva su parte (`macros`).
     # Sin desglose usable no se inventa: los componentes van sin `macros` y el modal registra el total.
     _repartidas = _repartir_macros_del_plato(crudas, result)
     if _repartidas:

@@ -63,7 +63,7 @@ Lo que sí estaba mal en mi código: si el plugin fallaba en nativo, el escáner
 
 Tests: `test_p1_plan_lote_107.py`, `lote107.test.jsx`.
 
-## El escáner, reconstruido: la cantidad que no se dejaba borrar y varios platos a la vez (`P1-PLAN-LOTE-221` · 2026-09-24)
+## El escáner, reconstruido: la cantidad que no se dejaba borrar y varios platos a la vez (`P1-PLAN-LOTE-223` · 2026-09-24)
 
 Un tester de Android, con captura de «Revisa y registra»: «no me deja quitar el 0 para agregar otro número… no puedo agregar cantidades por culpa del 0». El dueño, encima: «también debería poder mandarse platos múltiples como en el agente IA chat… si quieres reconstruye esto y hazlo lo mejor y más cómodo posible para el usuario».
 
@@ -77,4 +77,4 @@ Un tester de Android, con captura de «Revisa y registra»: «no me deja quitar 
 
 **Lo que se vio en el camino.** A 360 px el pie no cabía en español: «Volver a escanear» y «Registrar comida» en una fila cortaban el botón verde (también antes de este lote). «Volver a escanear» se mudó a la foto (una píldora sobre ella) y el pie queda con la acción principal sola; con varios platos, encima, el total de lo que se va a registrar y cuántas fotos no se registrarán. La unidad de cada ingrediente se pinta con su número y en plural («2 tazas», «10 unidades»).
 
-Tests: `test_p1_plan_lote_221.py` (reparto de macros, saneado en plato, `deduct_pantry`, anclas del frontend), `lote221.test.jsx` (el 0, los pasos, las macros que siguen a los ingredientes, varios platos, fallos a medias); reanclados `ScanMealModal.photo_deducts.test.jsx`, `lote107.test.jsx`, `lote110.test.jsx`, `lote162.test.jsx`, `lote165.test.jsx` y `test_p1_plan_lote_105.py`.
+Tests: `test_p1_plan_lote_223.py` (reparto de macros, saneado en plato, `deduct_pantry`, anclas del frontend), `lote223.test.jsx` (el 0, los pasos, las macros que siguen a los ingredientes, varios platos, fallos a medias); reanclados `ScanMealModal.photo_deducts.test.jsx`, `lote107.test.jsx`, `lote110.test.jsx`, `lote162.test.jsx`, `lote165.test.jsx` y `test_p1_plan_lote_105.py`.

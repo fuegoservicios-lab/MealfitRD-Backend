@@ -165,7 +165,7 @@ def test_diary_upload_passes_kind_and_items():
     with open(os.path.join(_BACKEND, "routers", "diary.py"), encoding="utf-8") as f:
         diary = f.read()
     assert '"photo_kind": vision_result.get("photo_kind")' in diary
-    # [P1-PLAN-LOTE-222] Los items pasan por `_nombres_para_mostrar` antes de salir: le añade a cada uno su
+    # [P1-PLAN-LOTE-224] Los items pasan por `_nombres_para_mostrar` antes de salir: le añade a cada uno su
     # `display_name` en el idioma de la pantalla y deja `name` (el identificador de la Nevera) intacto.
     assert 'items_out = vision_result.get("items") or []' in diary
     assert '"items": items_out,' in diary

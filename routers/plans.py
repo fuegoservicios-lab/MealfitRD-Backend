@@ -133,7 +133,7 @@ _EXPAND_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
 # (mismo cupo que `_SWAP_LIMITER`, bucket independiente para no compartir
 # cupo con swaps manuales del usuario).
 _FIX_SODIUM_DAY_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
-# [P1-PLAN-LOTE-222 · 2026-09-24] Traducción del plan de un invitado (sin cuenta: el cupo va por IP). 6 cada 10 min
+# [P1-PLAN-LOTE-224 · 2026-09-24] Traducción del plan de un invitado (sin cuenta: el cupo va por IP). 6 cada 10 min
 # cubre el plan recién generado y los cambios de plato de una sesión; un par (max, periodo) propio para no compartir
 # ventana en Redis con otro endpoint (la clave es `rl:<max>:<periodo>:<uid>`).
 _GUEST_DISPLAY_LIMITER = RateLimiter(max_calls=6, period_seconds=600)
@@ -6986,7 +6986,7 @@ def _swap_meal_regen_flag_clear(ctx: Optional[dict], verified_user_id) -> None:
 
 
 def _quitar_display_provisional(plan_data: dict) -> None:
-    """[P1-PLAN-LOTE-222 · 2026-09-24] Fuera las entradas `_display[locale]` con `_provisional`: sólo el nombre de
+    """[P1-PLAN-LOTE-224 · 2026-09-24] Fuera las entradas `_display[locale]` con `_provisional`: sólo el nombre de
     un plato recién cambiado, que el cliente pinta mientras llega la traducción completa. No son del plan: si una
     copia local vuelve entera (`/restore-local`), no se guardan. Muta `days[*].meals[*]._display` en su sitio."""
     for d in (plan_data.get("days") or []) if isinstance(plan_data, dict) else []:
@@ -7003,7 +7003,7 @@ def _quitar_display_provisional(plan_data: dict) -> None:
 
 
 def _nombres_visibles_del_dia(meals, locale, user_id) -> Optional[list]:
-    """[P1-PLAN-LOTE-222 · 2026-09-24] Los nombres de los platos de un día, en el idioma del usuario y en UNA llamada.
+    """[P1-PLAN-LOTE-224 · 2026-09-24] Los nombres de los platos de un día, en el idioma del usuario y en UNA llamada.
 
     Para pintar el día recién regenerado mientras llega su `_display` (que el persist borra y re-encola). None en
     español, sin locale, sin platos o si la traducción falla: el cliente pinta el español, como antes."""
@@ -7015,7 +7015,7 @@ def _nombres_visibles_del_dia(meals, locale, user_id) -> Optional[list]:
             return None
         return traducir_para_mostrar_sync(nombres, loc, user_id=user_id, node="display_i18n_regen_day")
     except Exception as e:
-        logger.debug(f"[P1-PLAN-LOTE-222] nombres visibles del día no-op: {e!r}")
+        logger.debug(f"[P1-PLAN-LOTE-224] nombres visibles del día no-op: {e!r}")
         return None
 
 
@@ -7285,7 +7285,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
         elif _mri_ctx:
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
-        # [P1-PLAN-LOTE-222 · 2026-09-24] El nombre del plato nuevo en el idioma del usuario (`locale` del body), para
+        # [P1-PLAN-LOTE-224 · 2026-09-24] El nombre del plato nuevo en el idioma del usuario (`locale` del body), para
         # el aviso «Cambiado por: …» y la tarjeta mientras llega la traducción completa (`_display`), que el persist
         # encola y tarda lo que un día entero. DESPUÉS del persist: es para pintar y no se guarda. `name` sigue siendo
         # el español (identificador del motor). Sin locale, en español o si falla: no se añade.
@@ -7297,7 +7297,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 if _dn:
                     result["display_name"] = _dn
             except Exception as _dn_e:
-                logger.debug(f"[P1-PLAN-LOTE-222] display_name del swap no-op: {_dn_e!r}")
+                logger.debug(f"[P1-PLAN-LOTE-224] display_name del swap no-op: {_dn_e!r}")
         return result
     except HTTPException:
         raise
@@ -8634,14 +8634,14 @@ def api_fix_sodium_day(
             f"{round(day_sodium_mg)}mg → {round(sodio_despues_mg)}mg (techo {round(ceiling_mg)}mg) | "
             f"'{old_meal_name}' → '{merged.get('name')}'"
         )
-        # [P1-PLAN-LOTE-222 · 2026-09-24] El plato nuevo en el idioma del usuario para el aviso (ver /swap-meal).
+        # [P1-PLAN-LOTE-224 · 2026-09-24] El plato nuevo en el idioma del usuario para el aviso (ver /swap-meal).
         _new_meal_display = None
         try:
             from traduccion_para_mostrar import nombre_de_plato_para_mostrar
             _new_meal_display = nombre_de_plato_para_mostrar(merged.get("name"), (data or {}).get("locale"),
                                                              user_id=verified_user_id, node="display_i18n_swap")
         except Exception as _dn_e:
-            logger.debug(f"[P1-PLAN-LOTE-222] display del fix-sodium no-op: {_dn_e!r}")
+            logger.debug(f"[P1-PLAN-LOTE-224] display del fix-sodium no-op: {_dn_e!r}")
         return {
             "fixed": True,
             "day": day_index,
@@ -10071,7 +10071,7 @@ def api_regenerate_day(
         # del clinical-parity si alguno corrió (caso común, ambos knobs default ON) — SELECT
         # dirigido de 1 columna (facade `from db import ...`, P3-DB-IMPORTS-FACADE) SOLO como
         # fallback si ninguno de los dos corrió.
-        _locale_nombres_rd = None  # [P1-PLAN-LOTE-222] el mismo locale, para `meals_display_names` (abajo)
+        _locale_nombres_rd = None  # [P1-PLAN-LOTE-224] el mismo locale, para `meals_display_names` (abajo)
         try:
             _p1i18n_locale_rd = _p1i18n_locale_rd_holder[0]
             if _p1i18n_locale_rd is None:
@@ -10118,10 +10118,10 @@ def api_regenerate_day(
         # original), así que el umbral no produce falso aviso iatrogénico. Knob MEALFIT_REGEN_DAY_WARN_MULTI_AXIS
         # (default ON) revierte a proteína-only. tooltip-anchor: P2-REGEN-DAY-WARN-MULTI-AXIS
         _day_warning = None
-        # [P1-PLAN-LOTE-222 · 2026-09-24] El MISMO aviso en datos, para que el cliente lo escriba en el idioma del
+        # [P1-PLAN-LOTE-224 · 2026-09-24] El MISMO aviso en datos, para que el cliente lo escriba en el idioma del
         # usuario: la prosa de `_day_warning` es española y lleva cifras dentro, así que no hay clave de catálogo
         # que la case. `_day_warning` sigue igual (español, clientes viejos); `_day_warning_detail` dice lo mismo
-        # con los números sueltos. tooltip-anchor: P1-PLAN-LOTE-222
+        # con los números sueltos. tooltip-anchor: P1-PLAN-LOTE-224
         _day_warning_detail = None
         _deficit_detail = []
         if _retarget_on and day_target.get("protein_g", 0) > 0:
@@ -10261,7 +10261,7 @@ def api_regenerate_day(
             "band_score": _band_score,
             # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
             "day_quality_warning": _day_warning,
-            # [P1-PLAN-LOTE-222 · 2026-09-24] El aviso en datos (tipo, cifras, causa) para escribirlo en el idioma
+            # [P1-PLAN-LOTE-224 · 2026-09-24] El aviso en datos (tipo, cifras, causa) para escribirlo en el idioma
             # del usuario; None exactamente cuando `day_quality_warning` es None.
             "day_quality_warning_detail": _day_warning_detail if _day_warning else None,
             # [P2-REGEN-DAY-DEFICIT-HONESTY · 2026-06-29] True si el déficit es por Nevera insuficiente (revert
@@ -10280,7 +10280,7 @@ def api_regenerate_day(
             # planData.days[day_index].meals localmente (sin refetch) y luego
             # invoque /recalculate-shopping-list (mismo patrón que swap).
             "meals": new_meals,
-            # [P1-PLAN-LOTE-222 · 2026-09-24] Los nombres de `meals` en el idioma del usuario, alineados por índice
+            # [P1-PLAN-LOTE-224 · 2026-09-24] Los nombres de `meals` en el idioma del usuario, alineados por índice
             # (None si no aplica): el día regenerado perdió su `_display` y la traducción completa tarda.
             "meals_display_names": _nombres_visibles_del_dia(new_meals, _locale_nombres_rd, verified_user_id),
         }
@@ -13697,7 +13697,7 @@ def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
 
 @router.post("/guest-display")
 def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_GUEST_DISPLAY_LIMITER)):
-    """[P1-PLAN-LOTE-222 · 2026-09-24] El plan del INVITADO en su idioma.
+    """[P1-PLAN-LOTE-224 · 2026-09-24] El plan del INVITADO en su idioma.
 
     Los invitados no persisten el plan (vive en su navegador), así que ningún disparador de la capa `_display` los
     alcanza y el plan salía en español con la app en inglés: justo en el embudo del plan gratis, la primera
@@ -13706,7 +13706,7 @@ def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = 
     topes de días/comidas y de tamaño, y un cupo por IP (`_GUEST_DISPLAY_LIMITER`). Cero `api_usage`: el gasto va a
     `llm_usage_events` (node `plan_display_i18n`), como el de las cuentas.
 
-    tooltip-anchor: P1-PLAN-LOTE-222
+    tooltip-anchor: P1-PLAN-LOTE-224
     """
     plan = data.get("plan_data")
     if not isinstance(plan, dict):
@@ -13749,7 +13749,7 @@ def api_adopt_guest_plan(
     plan_data = (data or {}).get("plan_data")
     if not isinstance(plan_data, dict) or not plan_data.get("days"):
         raise HTTPException(status_code=400, detail="plan_data inválido (falta days)")
-    # [P1-PLAN-LOTE-222 · 2026-09-24] Lo provisional del cliente (sólo el nombre de un plato recién cambiado) no se
+    # [P1-PLAN-LOTE-224 · 2026-09-24] Lo provisional del cliente (sólo el nombre de un plato recién cambiado) no se
     # adopta; las traducciones completas del invitado (`/guest-display`) sí.
     _quitar_display_provisional(plan_data)
 

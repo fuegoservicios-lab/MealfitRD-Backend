@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-221 · 2026-09-24] El escáner de comida, reconstruido.
+"""[P1-PLAN-LOTE-223 · 2026-09-24] El escáner de comida, reconstruido.
 
 Un tester de Android, con captura de «Revisa y registra»: «no me deja quitar el 0 para agregar otro número». El dueño,
 encima: «también debería poder mandarse platos múltiples como en el agente IA chat… hazlo lo mejor y más cómodo
@@ -14,10 +14,10 @@ posible para el usuario». Lo que toca al backend:
   3. `POST /api/diary/consumed` acepta `deduct_pantry`: la Nevera es un interruptor propio y la casilla del ingrediente
      pasa a decir «lo comí». Solo un `False` explícito apaga la resta; ausente = la conducta de siempre.
 
-Las pruebas funcionales de la pantalla viven en `frontend/src/__tests__/lote221.test.jsx`; aquí, además, las anclas
-que el frontend tiene que conservar (el test las salta mientras el frontend de al lado no traiga el lote 221).
+Las pruebas funcionales de la pantalla viven en `frontend/src/__tests__/lote223.test.jsx`; aquí, además, las anclas
+que el frontend tiene que conservar (el test las salta mientras el frontend de al lado no traiga el lote 223).
 
-Tooltip-anchor: P1-PLAN-LOTE-221
+Tooltip-anchor: P1-PLAN-LOTE-223
 """
 from __future__ import annotations
 
@@ -33,15 +33,15 @@ _FRONT = _BACKEND.parent / "frontend"
 _UID = "11111111-1111-4111-8111-111111111111"
 
 
-# El CI del backend clona el `main` del frontend (su checkout no fija `ref:`). Mientras el lote 221 no llegue allí, ese
+# El CI del backend clona el `main` del frontend (su checkout no fija `ref:`). Mientras el lote 223 no llegue allí, ese
 # árbol trae el escáner ANTERIOR: los archivos existen, pero no son estos. La prueba del lote en el frontend dice qué
 # árbol es; con ella presente, un archivo que falte es deriva y el test falla en vez de saltarse.
-_LOTE_EN_EL_FRONTEND = "src/__tests__/lote221.test.jsx"
+_LOTE_EN_EL_FRONTEND = "src/__tests__/lote223.test.jsx"
 
 
 def _front(rel: str) -> str:
     if not (_FRONT / _LOTE_EN_EL_FRONTEND).exists():
-        pytest.skip("el frontend de este checkout aún no trae el lote 221 (el CI del backend clona su `main`)")
+        pytest.skip("el frontend de este checkout aún no trae el lote 223 (el CI del backend clona su `main`)")
     return (_FRONT / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
@@ -270,5 +270,5 @@ def test_los_textos_nuevos_estan_traducidos(loc):
 def test_el_marcador_esta_al_dia():
     src = (_BACKEND / "app.py").read_text(encoding="utf-8")
     m = re.search(r'^_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · ', src, re.M)
-    assert m and int(m.group(1)) >= 221
-    assert "P1-PLAN-LOTE-221" in (_BACKEND / "docs" / "diario_registrar_comida.md").read_text(encoding="utf-8")
+    assert m and int(m.group(1)) >= 223
+    assert "P1-PLAN-LOTE-223" in (_BACKEND / "docs" / "diario_registrar_comida.md").read_text(encoding="utf-8")

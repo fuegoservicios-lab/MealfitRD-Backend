@@ -4941,7 +4941,7 @@ def build_budget_suggestions(weekly_list, limit: int = 5, user_id=None) -> list:
                         f"{var['brand']} {var['presentation']} "
                         f"(RD${var['price_rd']:.0f})"
                     ),
-                    # [P1-PLAN-LOTE-222 · 2026-09-24] Las piezas de `text`, para que el cliente lo escriba en el
+                    # [P1-PLAN-LOTE-224 · 2026-09-24] Las piezas de `text`, para que el cliente lo escriba en el
                     # idioma del usuario (el alimento por el léxico, el precio con su formato). `text` sigue igual.
                     "brand": var.get("brand"),
                     "presentation": var.get("presentation"),

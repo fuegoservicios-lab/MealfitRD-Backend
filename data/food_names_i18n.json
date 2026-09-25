@@ -1,6 +1,6 @@
 {
  "_doc": [
-  "[P1-PLAN-LOTE-222 · 2026-09-24] Nombres de los alimentos del catálogo en los 4 idiomas que no son el base.",
+  "[P1-PLAN-LOTE-224 · 2026-09-24] Nombres de los alimentos del catálogo en los 4 idiomas que no son el base.",
   "La CLAVE es el nombre canónico español de `master_ingredients.name`: el identificador del motor, que no se toca.",
   "Estos nombres son para LEER y para ENTENDER lo que el usuario escribe (buscar, alergias, gustos): se resuelven al",
   "canónico antes de llegar al motor. Nunca entran en `pantry_names_match` ni en los alias del catálogo.",

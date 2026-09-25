@@ -1,4 +1,4 @@
-"""[P1-PLAN-LOTE-222 · 2026-09-24] Los alimentos del catálogo en los 5 idiomas: para LEER y para ENTENDER lo escrito.
+"""[P1-PLAN-LOTE-224 · 2026-09-24] Los alimentos del catálogo en los 5 idiomas: para LEER y para ENTENDER lo escrito.
 
 El catálogo (`master_ingredients`) tiene UN nombre por alimento, el canónico en español, y es el identificador con
 el que resuelven `pantry_names_match`, el guard de coherencia y el backstop de alergias: eso no se toca. Hasta este
@@ -15,7 +15,7 @@ Este módulo es la mitad que faltaba: `data/food_names_i18n.json` da a cada nomb
 La frontera de P1-I18N-DASHBOARD sigue intacta: el motor sólo ve nombres españoles; lo que cambia es que ahora
 entiende a quien no escribe en español.
 
-tooltip-anchor: P1-PLAN-LOTE-222
+tooltip-anchor: P1-PLAN-LOTE-224
 """
 from __future__ import annotations
 

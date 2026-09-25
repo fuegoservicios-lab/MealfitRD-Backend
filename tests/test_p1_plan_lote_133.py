@@ -49,7 +49,7 @@ def test_la_hora_del_aviso_es_la_habitual_MENOS_la_antelacion(monkeypatch):
     """[P1-PLAN-LOTE-150] Era «+ la espera» (1,5 h, y hasta 2,5 a quien lo ignoraba). El dueño: «solo avisa al rato
     después del horario». Ahora el aviso se ADELANTA 15 min a tu hora habitual, para que puedas hacer algo con él.
 
-    [P1-PLAN-LOTE-220] La hora habitual ya no es el camino por defecto (la eligen en Configuración; si no, la normal):
+    [P1-PLAN-LOTE-222] La hora habitual ya no es el camino por defecto (la eligen en Configuración; si no, la normal):
     vive detrás de `MEALFIT_PROACTIVE_NUDGE_FROM_HISTORY`, y esto sigue midiendo que ESE camino hace su cuenta bien."""
     import db_facts
     import proactive_agent as pa
@@ -80,7 +80,7 @@ def test_el_cron_usa_esa_misma_cuenta_y_no_otra_copia():
     asignaciones = [n for n in ast.walk(arbol) if isinstance(n, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == "nudge_hour" for t in n.targets)]
     assert len(asignaciones) == 1, "UNA asignación a `nudge_hour` (la de `hora_del_aviso`): dos copias acaban avisando a horas distintas"
-    # [P1-PLAN-LOTE-220] el cron y el teléfono piden la hora a la MISMA función, con la configuración de la persona
+    # [P1-PLAN-LOTE-222] el cron y el teléfono piden la hora a la MISMA función, con la configuración de la persona
     assert "_hora_aviso = hora_del_aviso(user_id, meal, def_hour, _health)" in src
     assert "pa.hora_del_aviso(user_id, meal, def_hour, health)" in _src("meal_reminders.py")
     import proactive_agent as pa
@@ -218,7 +218,7 @@ def test_la_etiqueta_viaja_en_el_payload_y_el_service_worker_la_usa():
 
 def test_el_cron_de_avisos_tiene_nombre():
     app = _src("app.py")
-    # [P1-PLAN-LOTE-220] cada `MINUTOS_ENTRE_TICKS` (15) en vez de a y media: el chat sale antes que el teléfono
+    # [P1-PLAN-LOTE-222] cada `MINUTOS_ENTRE_TICKS` (15) en vez de a y media: el chat sale antes que el teléfono
     assert re.search(r'_add_job_jittered\(scheduler, run_proactive_checks, "cron", minute=f"\*/\{MINUTOS_ENTRE_TICKS\}",'
                      r'\s+id="proactive_meal_reminders", replace_existing=True\)', app)
 
