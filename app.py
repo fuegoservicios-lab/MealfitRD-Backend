@@ -607,7 +607,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # resuelve un alimento a su forma procesada (el salmón del dueño salía «4 fundas de hamburguesas»).
 # [P1-PLAN-LOTE-300 · 2026-09-25] (backend + iOS) push nativa en iPhone directo a Apple (APNs HTTP/2 + JWT ES256 con la
 # clave .p8 del dueño, fuera del repo): `fcm_push.enviar_a_dispositivos` reparte android→FCM, ios→`apns_push`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-300 · 2026-09-25"
+# [P1-PLAN-LOTE-305 · 2026-09-25] (backend + frontend) la foto declara sus DUDAS (máx. 2: cantidad no contable,
+# alimento ambiguo, grasa invisible) y el coach anota lo obvio de una vez y pregunta solo eso; corrige ESE registro.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-305 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
