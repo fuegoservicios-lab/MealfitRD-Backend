@@ -528,4 +528,5 @@ def test_el_endpoint_de_textos_no_cuesta_creditos():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_marker_bumpeado():
-    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P1-PLAN-LOTE-225 · \d{4}-\d{2}-\d{2}"', _src("app.py"))
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P1-PLAN-LOTE-(\d+) · \d{4}-\d{2}-\d{2}"', _src("app.py"))
+    assert m and int(m.group(1)) >= 225   # el marker nunca baja; los lotes siguientes lo suben

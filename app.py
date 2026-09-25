@@ -481,7 +481,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # estimación en el idioma del usuario, los avisos del servidor en datos o con espejo traducido (calidad del día,
 # ahorro, «Acción requerida», bloqueos, micronutrientes), el plato nuevo ya traducido al cambiarlo, el plan del
 # invitado (`/guest-display`) y el texto libre fuera del plan (`/api/i18n/textos`: recuerdos y suplementos).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-225 · 2026-09-25"
+# [P1-PLAN-LOTE-226 · 2026-09-25] (backend + frontend) el coach aconsejó «cómete las yemas» con 52 de 57 g de grasa:
+# ahora recibe el MARGEN que queda de cada macro, ya restado (bloque del día y nota tras registrar), y la regla R2 de
+# comprobar que lo que recomienda cabe. Y desde un chat de otro día se vuelve al de hoy («Volver al chat de hoy»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-226 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

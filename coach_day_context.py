@@ -165,6 +165,45 @@ def falta_hoy(metas: dict, consumido: dict) -> dict:
     return out
 
 
+# [P1-PLAN-LOTE-226 · 2026-09-25] El margen que le QUEDA, macro por macro, y la orden de mirarlo antes de aconsejar.
+# Caso del dueño (24-sep, 22:31): cena de claras «sin yemas» y pregunta «¿me recomiendas comérmelas?». El coach contestó
+# «no hay razón para sacarlas» cuando llevaba 52 de 57 g de grasa: las yemas le pasaban la meta. Tenía las cifras (el
+# bloque de lo que falta y el total tras registrar), pero la grasa iba entre paréntesis y la resta la hacía el modelo,
+# y ninguna regla le pedía comprobar si lo que recomienda CABE. Ahora la resta va hecha y la regla va al lado.
+# tooltip-anchor: P1-PLAN-LOTE-226-MARGEN
+_NOMBRES_MARGEN = (("kcal", "kcal", ""), ("protein_g", "proteína", " g"), ("carbs_g", "carbohidratos", " g"),
+                   ("fats_g", "grasas", " g"))
+# Por debajo de esta fracción de la meta, el margen de un macro se da por «casi agotado» y se nombra en la regla.
+FRACCION_MARGEN_JUSTO = 0.15
+
+REGLA_MARGEN = ("Antes de recomendarle AÑADIR, quitar o repetir un alimento (p. ej. «cómete las yemas», «ponle "
+                "aguacate», «otra porción»), suma lo que aporta y comprueba que CABE en el margen de CADA macro, no solo "
+                "en la proteína: si le haría pasarse (sobre todo de grasas o de kcal), díselo con la cifra y propón la "
+                "versión que sí cabe; si cabe, dilo también con la cifra. La salud del alimento no cambia la cuenta.")
+
+
+def margen_del_dia(metas: Optional[dict], consumido: dict) -> str:
+    """«le quedan ~X kcal, ~Y g de proteína… (grasas: casi agotado)» con la resta hecha, o "" sin metas."""
+    if not metas:
+        return ""
+    falta = falta_hoy(metas, consumido)
+    partes, justos = [], []
+    for k, nombre, u in _NOMBRES_MARGEN:
+        v = falta.get(k)
+        if v is None:
+            continue
+        cifra = f"~{int(round(abs(v)))}{u}"
+        partes.append(f"{nombre}: quedan {cifra}" if v > 0 else f"{nombre}: YA SE PASÓ por {cifra}")
+        if k != "protein_g" and (v <= 0 or v < FRACCION_MARGEN_JUSTO * float(metas.get(k) or 0)):
+            justos.append(nombre)
+    if not partes:
+        return ""
+    out = "MARGEN QUE LE QUEDA HOY — " + "; ".join(partes) + "."
+    if justos:
+        out += f" Sin margen (o casi) en: {', '.join(justos)}."
+    return out
+
+
 def momento_del_dia(hora: Optional[float], schedule_type=None) -> str:
     """`manana` | `mediodia` | `tarde` | `noche` | `madrugada`. Con turno nocturno el reloj del usuario va invertido:
     se devuelve `turno_nocturno` y la guía de noche NO aplica (la regla de ritmo circadiano ya lo cubre)."""
@@ -227,6 +266,10 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
         out += "Con lo registrado hasta ahora, " + " y ".join(partes) + "."
         if extras:
             out += " (" + "; ".join(extras) + ".)"
+        # [P1-PLAN-LOTE-226] El margen macro a macro y la regla de comprobar que lo recomendado cabe.
+        _margen = margen_del_dia(metas, cons)
+        if _margen:
+            out += f"\n⚖️ {_margen} {REGLA_MARGEN}"
         if hora_local is not None:
             out += f" Son las {_fmt_hora(hora_local)}."
 

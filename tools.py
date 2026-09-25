@@ -1143,11 +1143,22 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
                  f"~{int(round(_c['carbs_g']))} g de carbohidratos y ~{int(round(_c['fats_g']))} g de grasas "
                  f"({_c['registros']} registro{'s' if _c['registros'] != 1 else ''})")
         if not _dias:
+            # [P1-PLAN-LOTE-226 · 2026-09-25] La resta ya hecha tras el registro: la hacía el modelo y aconsejaba
+            # añadir las yemas con 52 de 57 g de grasa. tooltip-anchor: P1-PLAN-LOTE-226-MARGEN-TRAS-REGISTRO
+            _margen = ""
+            try:
+                import coach_day_context as _cdc
+                _metas = _cdc.metas_del_dia(*_perfil_y_plan_de_hoy(user_id))
+                _m = _cdc.margen_del_dia(_metas, _c)
+                if _m:
+                    _margen = f" {_m} {_cdc.REGLA_MARGEN}"
+            except Exception as _mg_err:
+                logger.warning(f"[P1-PLAN-LOTE-226] margen tras el registro no calculado: {_mg_err!r}")
             return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "
                     f"ve en «Tus macros y micros de hoy». Si hablas del total del día o de lo que le falta, usa ESTA "
                     f"suma: lo que le falta es la meta del bloque «LO QUE LE FALTA HOY» menos esta suma (ese bloque se "
                     f"calculó ANTES de este registro). NUNCA partas de un total dicho en mensajes anteriores de la "
-                    f"conversación: pueden ser de otro día.)")
+                    f"conversación: pueden ser de otro día.{_margen})")
         return (f" (Para el asistente: el diario de {_dia} suma ahora {_suma}. Si hablas del total de ese día, usa "
                 f"ESTA suma, nunca un total de mensajes anteriores.)")
     except Exception as _tot_err:
@@ -5146,22 +5157,30 @@ def _chat_meal_proposal_tool_enabled() -> bool:
     return _mp_env_bool("MEALFIT_CHAT_MEAL_PROPOSAL_TOOL", True)
 
 
-def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
-    """Lo que `proponer_comida` necesita saber del día del usuario: formulario, plan que manda hoy (None en pausa),
-    diario de hoy, hora local, comidas sin registrar y los nombres de su Nevera. Todo lectura; cada pieza falla sola."""
-    ctx = {"hp": {}, "plan": None, "diario": [], "hora": _hora_local_float(user_id), "faltan": [], "nevera": [],
-           "n_comidas": 4}
+def _perfil_y_plan_de_hoy(user_id: str) -> tuple:
+    """(formulario, plan que manda hoy o None en modo contador): lo que `metas_del_dia` necesita. Cada pieza falla sola.
+    [P1-PLAN-LOTE-226] Extraído de `_contexto_del_dia_para_propuesta` para el margen tras registrar una comida."""
+    hp, plan = {}, None
     try:
-        ctx["hp"] = dict((get_user_profile(user_id) or {}).get("health_profile") or {})
+        hp = dict((get_user_profile(user_id) or {}).get("health_profile") or {})
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-132] perfil ilegible: {e!r}")
     try:
         from plan_mode import get_plan_mode
         if str((get_plan_mode(user_id) or {}).get("plan_mode") or "plan") != "tracking":
             _p = get_latest_usable_meal_plan(user_id)
-            ctx["plan"] = _p if isinstance(_p, dict) else None
+            plan = _p if isinstance(_p, dict) else None
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-132] plan ilegible: {e!r}")
+    return hp, plan
+
+
+def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
+    """Lo que `proponer_comida` necesita saber del día del usuario: formulario, plan que manda hoy (None en pausa),
+    diario de hoy, hora local, comidas sin registrar y los nombres de su Nevera. Todo lectura; cada pieza falla sola."""
+    ctx = {"hp": {}, "plan": None, "diario": [], "hora": _hora_local_float(user_id), "faltan": [], "nevera": [],
+           "n_comidas": 4}
+    ctx["hp"], ctx["plan"] = _perfil_y_plan_de_hoy(user_id)
     try:
         from datetime import date as _date_p
         from chat_history_context import comidas_sin_registrar, find_plan_day_for_date
