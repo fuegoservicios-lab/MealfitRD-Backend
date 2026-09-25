@@ -78,7 +78,8 @@ def test_bulgur_y_soya_texturizada():
 
 def test_lo_que_no_es_grano_ni_legumbre_no_cambia():
     db = _db()
-    assert _kcal(db, "150 g de pechuga de pollo cocida") == 180
+    # [P1-PLAN-LOTE-301] la proteína COCIDA tiene su propia base (test_p1_plan_lote_301); aquí, la cruda no cambia
+    assert _kcal(db, "150 g de pechuga de pollo") == 180
 
 
 def test_el_solver_ve_el_mismo_numero():

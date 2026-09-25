@@ -48,6 +48,50 @@ _UNIDAD_VOLUMEN = {"taza", "tazas", "cda", "cdas", "cucharada", "cucharadas", "c
                    "cucharaditas", "ml", "mililitro", "mililitros", "l", "litro", "litros"}
 _UNIDAD_LATA = {"lata", "latas"}
 
+# ── [P1-PLAN-LOTE-301 · 2026-09-25] La proteína COCIDA contra su fila CRUDA ─────────────────────────────────────────────
+# «150 g de pechuga de pollo cocida» contaba 150 g de pechuga CRUDA (161 kcal, 34 g de proteína): cocida, esa pechuga
+# salió de ~200 g crudos (217 kcal, 45 g). Baterías del 25-sep: 98 líneas así, casi todas en perfiles «Nada» («pollo ya
+# cocido», «pavo ya cocido»). La lista de compras ya lo sabía (`shopping_calculator._PROTEIN_COOKED_ADJ_RE` y su 1,35
+# en la lista canónica); los macros no. Mismo criterio y mismo factor: solo filas de carne, ave, pescado o marisco en
+# CRUDO (nunca jamón, salami, chorizo…: esos se venden ya hechos), solo líneas en gramos (una «1 pechuga cocida» sigue
+# siendo una pechuga) y nunca si el paréntesis ya dice «crudo». Knob `MEALFIT_COOKED_PROTEIN_RAW_FACTOR` (1,35; 1,0 =
+# apagado). tooltip-anchor: P1-PLAN-LOTE-301-PROTEINA-COCIDA
+_PROT_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|hervid[oa]s?|asad[oa]s?|hornead[oa]s?|desmenuzad[oa]s?|frit[oa]s?)\b")
+_PROT_FILA_RX = re.compile(r"\b(pollo|pechuga|muslo|pavo|res|carne|cerdo|chivo|conejo|pernil|higado|filete|pescado|mero|"
+                           r"tilapia|salmon|trucha|chillo|camaron\w*|gambas?|cangrejo|mejillon\w*|vieiras?|percebes?)\b")
+_PROT_PROCESADO_RX = re.compile(r"\b(jamon|embuchado|chorizo|salchich\w*|salami|longaniza|tocineta|panceta|chicharron|"
+                                r"pepperoni|sobrasada|morcilla|cecina|ahumad\w*|chistorra|pavochon)\b")
+PROT_KCAL_CRUDA_MAX = 250.0
+
+
+def factor_proteina() -> float:
+    try:
+        from knobs import _env_float
+        v = float(_env_float("MEALFIT_COOKED_PROTEIN_RAW_FACTOR", 1.35))
+    except Exception:
+        v = 1.35
+    return min(1.6, max(1.0, v))
+
+
+def _proteina_cocida(linea, gramos, info, unidad):
+    """Gramos cocidos de carne/pescado → sus gramos CRUDOS (la base de la fila). Sin marca de cocción, sin fila cruda
+    de carne o pescado, fuera de gramos o con un paréntesis que ya dice «crudo»: los gramos tal cual."""
+    try:
+        from nutrition_db import _GRAM_ONLY_HINT_RE
+        fila = _norm(getattr(info, "name", ""))
+        if not _PROT_FILA_RX.search(fila) or _PROT_PROCESADO_RX.search(fila):
+            return gramos
+        if float(getattr(info, "kcal", 0) or 0) >= PROT_KCAL_CRUDA_MAX:
+            return gramos
+        hint = _GRAM_ONLY_HINT_RE.search(str(linea))
+        if hint and _CRUDO_RX.search(_norm(hint.group(0))):
+            return gramos
+        if not (hint or _norm(unidad) in _UNIDAD_MASA):
+            return gramos
+        return round(float(gramos) * factor_proteina(), 2)
+    except Exception:
+        return gramos
+
 
 def activo() -> bool:
     try:
@@ -82,7 +126,8 @@ def en_base_de_la_fila(linea, gramos, db):
         fuera = _PAREN_RX.sub(" ", texto)
         cocido = bool(_COCIDO_RX.search(fuera))
         listo = bool(_LISTO_RX.search(fuera))
-        if not (cocido or listo or re.search(r"\blatas?\b", fuera)):
+        prot = bool(_PROT_COCIDO_RX.search(fuera))                   # [P1-PLAN-LOTE-301]
+        if not (cocido or listo or prot or re.search(r"\blatas?\b", fuera)):
             return gramos
         if _CRUDO_RX.search(fuera):
             return gramos                                   # «secas», «en crudo»: la línea ya habla en la base
@@ -91,7 +136,7 @@ def en_base_de_la_fila(linea, gramos, db):
         info = db.lookup(nombre)
         fam = familia(getattr(info, "name", "")) if info else None
         if not fam:
-            return gramos
+            return _proteina_cocida(linea, gramos, info, unidad) if (prot and info) else gramos   # [P1-PLAN-LOTE-301]
         kcal_cocido, taza_cocida, es_legumbre = fam
         kcal_fila = float(getattr(info, "kcal", 0) or 0)
         if kcal_fila <= 0 or kcal_fila / kcal_cocido < 1.5:

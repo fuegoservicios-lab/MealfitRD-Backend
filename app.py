@@ -607,7 +607,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # resuelve un alimento a su forma procesada (el salmón del dueño salía «4 fundas de hamburguesas»).
 # [P1-PLAN-LOTE-300 · 2026-09-25] (backend + iOS) push nativa en iPhone directo a Apple (APNs HTTP/2 + JWT ES256 con la
 # clave .p8 del dueño, fuera del repo): `fcm_push.enviar_a_dispositivos` reparte android→FCM, ios→`apns_push`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-300 · 2026-09-25"
+# [P1-PLAN-LOTE-301 · 2026-09-25] (backend) los macros de la proteína COCIDA cuentan lo que pesaba cruda: «150 g
+# de pechuga cocida» son ~200 g crudos (factor 1,35, el mismo de la lista); knob `MEALFIT_COOKED_PROTEIN_RAW_FACTOR`.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-301 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
