@@ -44,6 +44,7 @@ from nevera_opcional import nevera_activa
 logger = logging.getLogger(__name__)
 
 import ajuste_de_duda  # [P1-PLAN-LOTE-361] el modelo de la petición se resuelve al importar el router
+import ingrediente_corregido  # [P1-PLAN-LOTE-365] ídem
 router = APIRouter(
     prefix="/api/diary",
     tags=["diary"],
@@ -337,6 +338,8 @@ _ESTIMATE_MACROS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _ESTIMATE_PLATE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # [P1-PLAN-LOTE-361] «Otra…» de una duda de la foto → su ajuste (texto, flash; exento como los estimadores)
 _AJUSTE_DUDA_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-PLAN-LOTE-365] «Cambiar» un ingrediente del escáner (flash, texto); exento de la cuota como el de arriba
+_INGREDIENTE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -1117,6 +1120,21 @@ async def api_ajuste_de_duda(payload: ajuste_de_duda.PeticionAjuste, verified_us
                 "error_message": "No pudimos calcular tu respuesta ahora; elige una opción o corrige las calorías a mano."}
     r = ajuste_de_duda.normalizar(crudo)
     return {"texto": " ".join(payload.respuesta.split())[:40], **r}
+
+
+@router.post("/scan/ingrediente")
+async def api_ingrediente_corregido(payload: ingrediente_corregido.PeticionIngrediente, verified_user_id: Optional[str] = Depends(_INGREDIENTE_LIMITER)):
+    """[P1-PLAN-LOTE-365 · 2026-09-26] «Cambiar» un ingrediente del escáner («Queso» → «Queso mozzarella»): las macros
+    del nuevo y del anterior en la misma cantidad (`ingrediente_corregido.py`). Exento de la cuota; soft-fail 200."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    try:
+        crudo = await ingrediente_corregido.estimar_con_ia(payload, verified_user_id)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-365] ingrediente corregido falló user={verified_user_id[:8]}: {type(e).__name__}: {e}")
+        return {"operation_failed": True, "error_code": "ingredient_unavailable",
+                "error_message": "No pudimos calcular ese ingrediente ahora; inténtalo de nuevo o corrige las calorías a mano."}
+    return {"nombre": " ".join(payload.nuevo.split())[:80], **ingrediente_corregido.normalizar(crudo)}
 
 
 @router.post("/consumed/estimate-plate")
