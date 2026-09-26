@@ -1953,3 +1953,64 @@ def pista_de_taza_del_motor(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-375 · 2026-09-26] Lo que la lista compra SECO y el paso usa cocido trae su cocción previa ─────────────
+# Replay de la cola real (314 planes): 123 comidas con V7c —la legumbre o el grano está SECO (o crudo) en la lista y
+# ningún paso lo remoja ni lo hierve—, 46 de ellas en las baterías recientes y casi todas «mayores»: el paso lo da por
+# cocido («mide 140 g de garbanzos cocidos», «escurre los frijoles pintos») con los secos en la lista. Lentejas (35),
+# arroz blanco (28), garbanzos (25), quinoa, habichuelas, frijoles, gandules, arroz integral, bulgur, cebada. El contrato
+# lo detectaba y no lo reparaba. Aquí, tras el «Mise en place», una nota «💡 Cocción previa:» con el remojo y el hervor
+# de ese alimento en UNA oración (el detector la lee como cocción: queda idempotente) y, en legumbres, la tanda de varios
+# días. Nunca pasta, avena ni soya (su cocción es la del paso) ni un alimento sin plantilla. tooltip-anchor: P1-PLAN-LOTE-375
+_COCCION_PREVIA_375 = (
+    ("lenteja", "enjuaga las {n} secas y hiérvelas 20-25 min (no necesitan remojo) hasta que estén tiernas, y escúrrelas"),
+    ("garbanzo", "remoja los {n} secos 8-12 h y hiérvelos 60-90 min hasta que estén tiernos, y escúrrelos"),
+    ("habichuela", "remoja las {n} secas 8-12 h y hiérvelas 60-90 min (los primeros 10 min a fuego fuerte) hasta que estén "
+                   "tiernas, y escúrrelas"),
+    ("frijol", "remoja los {n} secos 8-12 h y hiérvelos 60-90 min (los primeros 10 min a fuego fuerte) hasta que estén "
+               "tiernos, y escúrrelos"),
+    ("gandul", "hierve los {n} secos 40-60 min hasta que estén tiernos, y escúrrelos"),
+    ("guandul", "hierve los {n} secos 40-60 min hasta que estén tiernos, y escúrrelos"),
+    ("haba", "remoja las {n} secas 8-12 h y hiérvelas 60-90 min hasta que estén tiernas, y escúrrelas"),
+    ("arroz integral", "enjuaga el {n} crudo y cuécelo en agua 35-45 min hasta que esté tierno"),
+    ("arroz", "enjuaga el {n} crudo y cuécelo en agua 15-20 min hasta que esté tierno"),
+    ("quinoa", "enjuaga la {n} cruda y cuécela en agua 12-15 min hasta que esté tierna, y escúrrela"),
+    ("bulgur", "hidrata el {n} en agua caliente 10-15 min (o cuécelo 10-12 min), y escúrrelo"),
+    ("cebada", "cuece la {n} cruda en agua 30-40 min hasta que esté tierna, y escúrrela"),
+)
+_LEGUMBRE_375 = ("lenteja", "garbanzo", "habichuela", "frijol", "gandul", "guandul", "haba")
+
+
+def coccion_previa(meal, index=None) -> int:
+    """Nº de notas añadidas; 0 ante cualquier error o sin índice."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not index or not isinstance(rec, list) or not rec:
+            return 0
+        from culinary_coherence import _v7c_seco_sin_coccion
+        hallazgos = _v7c_seco_sin_coccion({"day": 0}, meal, index) or []
+        notas = []
+        for v in hallazgos:
+            food = str(v.get("food") or "").strip()
+            fn = _sa(food.lower())
+            plantilla = next((t for k, t in _COCCION_PREVIA_375 if re.search(r"\b" + re.escape(k), fn)), None)
+            if not plantilla:
+                continue
+            nombre = re.sub(r"\s+(?:sec[oa]s?|crud[oa]s?)\b", "", food.lower()).strip()
+            texto = "💡 Cocción previa: " + plantilla.format(n=nombre)
+            if any(re.search(r"\b" + re.escape(k), fn) for k in _LEGUMBRE_375):
+                texto += " (puedes cocinar la tanda de varios días y guardarla en la nevera hasta 4 días)"
+            texto += "."
+            if texto not in rec and texto not in notas:
+                notas.append(texto)
+        if not notas:
+            return 0
+        i_mise = next((i for i, s in enumerate(rec) if isinstance(s, str) and s.strip().lower().startswith("mise en place")), None)
+        pos = (i_mise + 1) if i_mise is not None else 0
+        rec[pos:pos] = notas
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return len(notas)
+    except Exception:
+        return 0

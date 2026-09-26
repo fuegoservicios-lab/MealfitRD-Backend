@@ -726,7 +726,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # Sal al gusto y Pimienta») y el participio una vez («maní fileteado fileteado») — pasos_cantidades.pasos_en_minuscula.
 # [P1-PLAN-LOTE-374 · 2026-09-26] (backend) la pista de una taza dice lo que mide el motor: «1¼ tazas de avena (65 g)»
 # con 107 g contados (78 de 313 pistas de taza) — pasos_cantidades.pista_de_taza_del_motor.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-374 · 2026-09-26"
+# [P1-PLAN-LOTE-375 · 2026-09-26] (backend) lo que la lista compra SECO y el paso usa cocido trae su cocción previa
+# («mide 140 g de garbanzos cocidos» con los secos en la lista: 123 comidas con V7c) — pasos_cantidades.coccion_previa.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-375 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
