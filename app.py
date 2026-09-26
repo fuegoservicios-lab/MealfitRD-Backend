@@ -644,7 +644,18 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-322 · 2026-09-25] (backend + frontend) las dudas de la foto traen OPCIONES de un toque con lo que
 # cambia cada una en las macros (la supuesta en 0): el escáner mueve las calorías al instante y el chat las pinta
 # como respuestas rápidas.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-322 · 2026-09-25"
+# [P1-PLAN-LOTE-323 · 2026-09-25] (backend) con «Nada» de tiempo el corrector mira también los PASOS: la IA declara
+# «10 min» y sus pasos suman ~18 de fuego (sella 4-5 min por lado, saltea, dora arepitas) — `tiempo_pasos`.
+# [P1-PLAN-LOTE-324 · 2026-09-25] (backend) «hasta que ablande» también dice hasta cuándo: la auyama del wok ya no
+# recibe «hiérvelos 8-10 minutos» (V7f + reparador del lote 68).
+# [P1-PLAN-LOTE-325 · 2026-09-25] (backend) los pasos siguen a la lista que reescribe el tope de yemas (colesterol):
+# «prepara 1 huevo y 6 claras» con «7 claras» en la lista — el tope corre DESPUÉS del contrato final.
+# [P1-PLAN-LOTE-326 · 2026-09-25] (backend) el adjetivo concuerda con UNO o una fracción sola en los pasos: «½ plátano
+# verdes», «½ hoja grandes», «1 huevo enteros» (28 pasos de las baterías) — `pasos_cantidades.decimales_de_cocina`.
+# [P1-PLAN-LOTE-328..331 · 2026-09-25] (backend) el paso dice lo que dice la lista también en piezas («corta 205 g de
+# pechuga» con «1 pechuga (≈158 g)»), porciones («2 porciones de casabe» con 1), pizcas («½ g de semillas» con «1
+# pizca») y enumeraciones («50 g de aguacate, 30 g de aguacate») — `pasos_cantidades.lo_que_dice_la_lista`.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-331 · 2026-09-25"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

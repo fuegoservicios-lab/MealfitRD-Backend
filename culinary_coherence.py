@@ -1816,13 +1816,15 @@ _V7F_FUEGO_RE = re.compile(r"\b(fuego|sarten|horno|olla|plancha|parrilla|freidor
 # que esté tierna» (la auyama SÍ se coció) y «dora las rodajas de plátano maduro 2 min por lado» (el maduro es blando:
 # 2-3 min por lado lo cuecen; el mínimo de 8 min es de la yuca y el verde). El paso que dice HASTA CUÁNDO («hasta que
 # esté tierna / suave / cocida») cuece, dure lo que dure. tooltip-anchor: P1-PLAN-LOTE-221-V7F-TIERNO
-_V7F_TIERNO_RE = re.compile(r"\bhasta\s+que\s+(?:\S+\s+){0,8}?(?:tiern|suave|blanda|blando|cocid)"
+_V7F_TIERNO_RE = re.compile(r"\bhasta\s+que\s+(?:\S+\s+){0,8}?(?:tiern|suave|blanda|blando|cocid|ablan|blandit|deshag)"
                             r"|\bhasta\s+que\s+(?:el|un)\s+(?:cuchillo|tenedor|palillo)\s+(?:\S+\s+){0,2}?"
                             r"(?:entre|atraviese|pase|penetre|se\s+hunda)", re.IGNORECASE)
 # [P1-PLAN-LOTE-313 · 2026-09-25] La prueba del cuchillo («…durante 5-7 minutos, hasta que el cuchillo entre sin fuerza»)
 # también dice HASTA CUÁNDO: sin ella V7f daba la auyama del microondas por cruda y el reparador del lote 68 le añadía
 # «🍠 Corta Auyama en cubos pequeños y hiérvelos 8-10 minutos» a un plato que ya la cocía — a un perfil con «Nada» de
 # tiempo (batería real del 25-sep). tooltip-anchor: P1-PLAN-LOTE-313-PRUEBA-DEL-CUCHILLO
+# [P1-PLAN-LOTE-324 · 2026-09-25] «tapa y cocina 3 min hasta que ABLANDE» (y «se deshaga», «blandita») también: la
+# batería con el lote 323 volvió a recibir «hiérvelos 8-10 minutos» sobre una auyama que el wok ya cocía, a un «Nada».
 _V7F_MADURO_RE = re.compile(r"\bmadur[oa]s?\b", re.IGNORECASE)
 #: Verbos que MEZCLAN el alimento en una preparación: desde ahí, la cocción de la preparación lo cuece.
 _V7F_MEZCLA_RE = re.compile(r"\b(mezcl|integr|incorpor|combin|bat[ea]\b|bate\w|amas|ensart|licu|maj[ae]\w*\s+(?:\S+\s+){0,3}con\b)",

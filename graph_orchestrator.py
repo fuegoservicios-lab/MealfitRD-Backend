@@ -9281,11 +9281,12 @@ def _detect_prep_time_issues(days: list, form_data: dict) -> list:
                 if not isinstance(m, dict):
                     continue
                 mins = _hz_pt._prep_minutes(m)
-                if mins is None or mins <= presupuesto * 1.25:
+                _fuego = __import__("tiempo_pasos").minutos_de_fuego(m.get("recipe"))  # [P1-PLAN-LOTE-323] declara 10, sus pasos 18
+                if max(mins or 0, _fuego) <= presupuesto * 1.25:
                     continue
                 out.append(
                     f"TIEMPO DE COCINA: Día {dn}, {str(m.get('meal') or '').strip().lower()}: «{m.get('name')}» declara "
-                    f"{mins} min y el usuario NO TIENE TIEMPO para cocinar ({presupuesto} min por comida como máximo). "
+                    f"{__import__('tiempo_pasos').declara(mins, _fuego)} y el usuario NO TIENE TIEMPO para cocinar ({presupuesto} min por comida como máximo). "
                     f"Cámbialo por un plato que se ARME en {presupuesto} min: ensamblar, licuar, tostar o calentar (wrap, "
                     f"ensalada, bowl, casabe o pan con proteína LISTA: huevo duro ya hecho, atún o sardina en lata, queso, "
                     f"pavo en lonjas, legumbres de lata); nada de horno, guisos, asados ni víveres hervidos. Conserva la proteína asignada y "

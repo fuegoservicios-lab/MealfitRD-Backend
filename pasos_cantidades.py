@@ -265,6 +265,16 @@ def _concuerda(mm) -> str:
     return f"{q}{mm.group(2)}{mm.group(3)}{plural}"
 
 
+#: [P1-PLAN-LOTE-326 · 2026-09-25] y el adjetivo concuerda con UNO o una fracción sola: «pela y corta ½ plátano verdes»,
+#: «lava ½ hoja grandes de lechuga», «bate 1 huevo enteros» — el reescritor del conteo cambia «2 plátanos» por «½ plátano»
+#: y deja el adjetivo en plural (28 pasos en las baterías guardadas; la lista ya decía «½ plátano verde»). Sólo tras un
+#: conteo solo (no «1½», que es plural) y un sustantivo en singular; lista cerrada de adjetivos. tooltip-anchor: P1-PLAN-LOTE-326
+_ADJ_TRAS_UNO_RE = re.compile(
+    r"(?<![\w.,/])((?:1|½|¼|¾|⅓|⅔|un|una|medio|media)\s+[a-záéíóúñü]*[a-rt-záéíóúñü]\s+)"
+    r"(verde|grande|madur[oa]|pequeñ[oa]|median[oa]|roj[oa]|blanc[oa]|fresc[oa]|enter[oa]|amarill[oa]|morad[oa])s\b",
+    re.IGNORECASE)
+
+
 def decimales_de_cocina(meal) -> int:
     """Nº de textos reescritos (pasos + líneas visibles). 0 ante cualquier error. Las notas (⚠/💡/🌱/⚕) no se tocan."""
     try:
@@ -279,6 +289,7 @@ def decimales_de_cocina(meal) -> int:
                 if not isinstance(s, str) or (es_paso and any(e in s for e in ("⚠", "💡", "🌱", "⚕"))):
                     continue
                 nuevo = _CONCORDANCIA_RE.sub(_concuerda, _DECIMAL_COCINA_RE.sub(_a_cocina, s))
+                nuevo = _ADJ_TRAS_UNO_RE.sub(r"\1\2", nuevo)  # [P1-PLAN-LOTE-326] «½ plátano verdes»
                 if nuevo != s:
                     lista[i] = nuevo
                     n += 1
@@ -406,3 +417,277 @@ def sincronizar_exacto(meal) -> int:
         return int(_qs(meal) or 0)
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-328..331 · 2026-09-25] El paso dice lo que dice la lista, también en piezas, porciones y pizcas ──────
+# Los pases de arriba ven las menciones «N <unidad> de X» contra líneas «N <unidad> de X». Las baterías del 25-sep
+# (330 comidas re-medidas con el contrato vigente) enseñaron las formas que ninguno leía. `lo_que_dice_la_lista` las
+# corre en orden dentro del contrato final (modo `repair`), después de `pesos_de_la_lista`. Todo fail-closed: ante la
+# duda, el texto no se toca.
+_NOTAS_PASO = ("⚠", "💡", "🌱", "⚕", "🤰")
+
+
+def _es_nota(p) -> bool:
+    return not isinstance(p, str) or any(e in p for e in _NOTAS_PASO)
+
+
+# ── 328 · los gramos de un paso siguen a la PIEZA de la lista ────────────────────────────────────────────────────────
+# «Mise en place: corta 205 g de pechuga en tiras» con «1 pechuga de pollo (≈158 g)» en la lista; «corta 172 g de pechuga
+# de pollo en cubos» con «¾ pechuga de pollo (≈138 g)»: 11 de 330 comidas, casi todas de pollo. El sincronizador sólo lee
+# líneas «N g de X» y el lote 310 sólo el paréntesis que sigue al MISMO texto de la línea. El paso pasa a pesar lo que
+# dice la pieza. Nunca: lo cocido contra lo crudo (lote 309), un reparto (mitad, resto, cada…), dos pesos distintos para
+# la misma pieza, ni un alimento que la lista también trae en gramos (ambiguo). tooltip-anchor: P1-PLAN-LOTE-328
+_PIEZA_CON_PESO_RE = re.compile(
+    r"^\s*(?:\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s+(?P<cuerpo>[^()\d]+?)\s*"
+    r"\(\s*[≈~]\s*(?P<g>\d+(?:[.,]\d+)?)\s*g\s*\)\s*$", re.IGNORECASE)
+_LINEA_EN_GRAMOS_RE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|ml)\s+(?:de\s+)?(?P<cuerpo>.+)$", re.IGNORECASE)
+_GRAMOS_EN_PASO_RE = re.compile(
+    r"(?<![\w.,/½¼¾⅓⅔])(?P<n>\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+de\s+"
+    r"(?P<food>[a-záéíóúñü]+(?:\s+[a-záéíóúñü]+){0,3})", re.IGNORECASE)
+
+
+def gramos_de_la_pieza(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        piezas, en_gramos = [], []
+        for ln in meal.get("ingredients") or []:
+            s = str(ln)
+            m = _PIEZA_CON_PESO_RE.match(s)
+            if m:
+                t = _toks(m.group("cuerpo"))
+                if t:
+                    piezas.append((t, float(m.group("g").replace(",", ".")), m.group("cuerpo")))
+                continue
+            md = _LINEA_EN_GRAMOS_RE.match(s)
+            if md:
+                t = _toks(re.sub(r"\(.*?\)", " ", md.group("cuerpo")))
+                if t:
+                    en_gramos.append(t)
+        if not piezas:
+            return 0
+
+        def _cual(ft):
+            cp = [k for k, p in enumerate(piezas) if p[0][0] == ft[0]]
+            cg = [t for t in en_gramos if t[0] == ft[0]]
+            if len(cp) + len(cg) > 1:
+                if len(ft) < 2:
+                    return None
+                cp = [k for k in cp if len(piezas[k][0]) > 1 and piezas[k][0][1] == ft[1]]
+                cg = [t for t in cg if len(t) > 1 and t[1] == ft[1]]
+            return cp[0] if len(cp) == 1 and not cg else None
+
+        hallazgos, vetadas = {}, set()
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            for mm in _GRAMOS_EN_PASO_RE.finditer(p):
+                ft = _toks(mm.group("food"))
+                k = _cual(ft) if ft else None
+                if k is None:
+                    continue
+                cola = p[mm.end():mm.end() + 40]
+                corte = _CORTE_MENCION_RE.search(cola)
+                mencion = mm.group(0) + (cola[:corte.start()] if corte else cola)
+                cuerpo = piezas[k][2]
+                if (_REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():])
+                        or _cocido(mencion) != _cocido(cuerpo) or _forma_huevo(mencion) != _forma_huevo(cuerpo)):
+                    vetadas.add(k)
+                    continue
+                hallazgos.setdefault(k, []).append((i, mm.start("n"), mm.end("n"),
+                                                    float(mm.group("n").replace(",", "."))))
+        cambios = {}
+        for k, lst in hallazgos.items():
+            if k in vetadas or len({x[3] for x in lst}) != 1:
+                continue
+            g = piezas[k][1]
+            if abs(lst[0][3] - g) < 0.5:
+                continue
+            for i, ini, fin, _v in lst:
+                cambios.setdefault(i, []).append((ini, fin, str(int(round(g)))))
+        if not cambios:
+            return 0
+        nuevos = list(rec)
+        for i, cs in cambios.items():
+            s = nuevos[i]
+            for ini, fin, txt in sorted(cs, reverse=True):
+                s = s[:ini] + txt + s[fin:]
+            nuevos[i] = s
+        meal["recipe"] = nuevos
+        meal.pop("_display", None)      # DELETE-on-write: `_display[locale].recipe` espeja los pasos por índice
+        return len(cambios)
+    except Exception:
+        return 0
+
+
+# ── 329 · las porciones del paso son las de la lista ─────────────────────────────────────────────────────────────────
+# «Mise en place: mide 2 porciones de casabe (15 g)» con «1 porción de casabe (15 g)» en la lista: 3 de 330 comidas (el
+# peso se sincronizó y el número no: «porción» no es una unidad del sincronizador). tooltip-anchor: P1-PLAN-LOTE-329
+_PORCION_RE = re.compile(
+    r"(?<![\w.,/½¼¾⅓⅔])(?P<n>\d+|½|¼|¾)\s+porci(?:ón|on|ones)\s+de\s+(?P<food>[a-záéíóúñü]+)", re.IGNORECASE)
+_FRAC_PORCION = {"½": 0.5, "¼": 0.25, "¾": 0.75}
+
+
+def _valor(q) -> float:
+    return _FRAC_PORCION[q] if q in _FRAC_PORCION else float(q)
+
+
+def porciones_de_la_lista(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lista, amb = {}, set()
+        for ln in meal.get("ingredients") or []:
+            m = _PORCION_RE.match(str(ln).strip())
+            t = _toks(m.group("food")) if m else []
+            if not t:
+                continue
+            if t[0] in lista:
+                amb.add(t[0])
+            lista[t[0]] = m.group("n")
+        for t in amb:
+            lista.pop(t, None)
+        if not lista:
+            return 0
+        n = 0
+        nuevos = []
+        for p in rec:
+            if _es_nota(p):
+                nuevos.append(p)
+                continue
+
+            def _sub(mm, _p=p):
+                t = _toks(mm.group("food"))
+                q = lista.get(t[0]) if t else None
+                if q is None or _valor(q) == _valor(mm.group("n")) or _REPARTO_ANTES_RE.search(_p[:mm.start()]):
+                    return mm.group(0)
+                return f"{q} {'porción' if _valor(q) <= 1 else 'porciones'} de {mm.group('food')}"
+            s = _PORCION_RE.sub(_sub, p)
+            n += int(s != p)
+            nuevos.append(s)
+        if n:
+            meal["recipe"] = nuevos
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── 330 · una pizca de la lista no es «½ g» en el paso ───────────────────────────────────────────────────────────────
+# «mide … y ½ g de semillas de girasol» con «1 pizca de semillas de girasol sin sal» en la lista; «⅔ g de ajonjolí» con
+# «1 pizca de ajonjolí»: el pulido de la lista convierte las migajas en pizcas (lote 181) y el paso se quedaba con el
+# gramo de máquina. tooltip-anchor: P1-PLAN-LOTE-330
+_MIGAJA_EN_PASO_RE = re.compile(
+    r"(?<![\w.,/])(?P<q>0[.,]\d+|½|¼|¾|⅓|⅔)\s*(?:g|gr|gramos)\s+de\s+(?P<food>[a-záéíóúñü]+)", re.IGNORECASE)
+_PIZCA_LINEA_RE = re.compile(r"^\s*1\s+pizca\s+de\s+(?P<food>.+)$", re.IGNORECASE)
+
+
+def pizcas_de_la_lista(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        pizcas = set()
+        for ln in meal.get("ingredients") or []:
+            m = _PIZCA_LINEA_RE.match(str(ln))
+            t = _toks(m.group("food")) if m else []
+            if t:
+                pizcas.add(t[0])
+        if not pizcas:
+            return 0
+        n = 0
+        nuevos = []
+        for p in rec:
+            if _es_nota(p):
+                nuevos.append(p)
+                continue
+
+            def _sub(mm):
+                t = _toks(mm.group("food"))
+                return f"1 pizca de {mm.group('food')}" if t and t[0] in pizcas else mm.group(0)
+            s = _MIGAJA_EN_PASO_RE.sub(_sub, p)
+            n += int(s != p)
+            nuevos.append(s)
+        if n:
+            meal["recipe"] = nuevos
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── 331 · el mismo alimento dos veces en una enumeración ─────────────────────────────────────────────────────────────
+# «Mise en place: … mide 50 g de aguacate, 30 g de aguacate, 5 g de semillas de calabaza» con «50 g de aguacate» en la
+# lista (el cerrador añadió la cifra nueva a la enumeración y la vieja se quedó): el mismo alimento, con el MISMO texto,
+# dos veces en un paso y una de ellas es la de la lista ⇒ la otra sobra. Sólo en enumeraciones con coma; «semillas de
+# girasol» y «semillas de chía» no son el mismo texto. tooltip-anchor: P1-PLAN-LOTE-331
+_ITEM_ENUM_RE = re.compile(
+    r"(?<![\w.,/])(?P<n>\d+(?:[.,]\d+)?)\s*(?P<u>g|gr|gramos|ml)\s+de\s+(?P<food>[a-záéíóúñü]+(?:\s+de\s+[a-záéíóúñü]+)?)"
+    r"(?=\s*(?:,|\by\b|\.|;|$))", re.IGNORECASE)
+
+
+def mencion_repetida(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lista = {}
+        for ln in meal.get("ingredients") or []:
+            m = re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos|ml)\s+de\s+(.+?)\s*$", str(ln), re.IGNORECASE)
+            if m:
+                lista[_sa(m.group(2).lower())] = float(m.group(1).replace(",", "."))
+        if not lista:
+            return 0
+        n = 0
+        nuevos = []
+        for p in rec:
+            if _es_nota(p):
+                nuevos.append(p)
+                continue
+            grupos = {}
+            for mm in _ITEM_ENUM_RE.finditer(p):
+                grupos.setdefault(_sa(mm.group("food").lower()), []).append(mm)
+            quitar = []
+            for food, mms in grupos.items():
+                real = lista.get(food)
+                if real is None or len(mms) != 2:
+                    continue
+                vs = [float(x.group("n").replace(",", ".")) for x in mms]
+                buenas = [x for x, v in zip(mms, vs) if abs(v - real) < 0.5]
+                if len(buenas) != 1 or abs(vs[0] - vs[1]) < 0.5:
+                    continue
+                mala = mms[1] if buenas[0] is mms[0] else mms[0]
+                despues = p[mala.end():]
+                sep = re.match(r"\s*,\s*", despues)
+                if sep:
+                    quitar.append((mala.start(), mala.end() + sep.end()))
+                    continue
+                antes = re.search(r",\s*$", p[:mala.start()])
+                if antes:
+                    quitar.append((antes.start(), mala.end()))
+            if not quitar:
+                nuevos.append(p)
+                continue
+            s = p
+            for ini, fin in sorted(quitar, reverse=True):
+                s = s[:ini] + s[fin:]
+            nuevos.append(s)
+            n += 1
+        if n:
+            meal["recipe"] = nuevos
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+def lo_que_dice_la_lista(meal) -> int:
+    """Los cuatro pases de arriba, en orden. Nº total de pasos reescritos."""
+    return (gramos_de_la_pieza(meal) + porciones_de_la_lista(meal) + pizcas_de_la_lista(meal)
+            + mencion_repetida(meal))

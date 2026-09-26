@@ -95,6 +95,37 @@ def _reescribir_pasos(meal, antes, despues_txt):
     meal["recipe"] = nuevo
 
 
+# [P1-PLAN-LOTE-325 · 2026-09-25] Los pasos siguen a la lista que este tope reescribe. Corre en la cola del escudo DESPUÉS
+# del contrato final de la receta, que ya había sincronizado los pasos: batería de cierre del 25-sep (colesterol + estatina),
+# «56 g de huevo» + «6 claras» → «1 huevo» + «7 claras» en la lista y el paso seguía «prepara 1 huevo y 6 claras de huevo»
+# (3 de 231 comidas; las tres, de este tope). Y cuando el paso contaba los huevos, `_reescribir_pasos` dejaba dos cuentas
+# de claras en la misma frase («bate 1 huevo y 2 claras y 3 claras de huevo»): se suman antes de sincronizar.
+# tooltip-anchor: P1-PLAN-LOTE-325
+_CLARAS_Y_CLARAS_RE = re.compile(r"\b(\d+)\s+claras?(?:\s+de\s+huevo)?\s+y\s+(\d+)\s+claras?(?:\s+de\s+huevo)?\b", re.I)
+
+
+def _pasos_siguen_la_lista(meal) -> None:
+    rec = meal.get("recipe")
+    if not isinstance(rec, list):
+        return
+    antes = list(rec)
+
+    def _suma(m):
+        n = int(m.group(1)) + int(m.group(2))
+        return f"{n} clara{'s' if n != 1 else ''} de huevo"
+    meal["recipe"] = [_CLARAS_Y_CLARAS_RE.sub(_suma, x) if isinstance(x, str) and x[:1] not in ("⚠", "💡", "⚕", "🤰")
+                      else x for x in rec]
+    try:
+        import pasos_cantidades as pc
+        pc.sincronizar_exacto(meal)
+        pc.decimales_de_cocina(meal)
+        pc.frases_repetidas(meal)
+    except Exception:
+        pass
+    if meal.get("recipe") != antes:
+        meal.pop("_display", None)      # DELETE-on-write: `_display[locale]` espeja los pasos
+
+
 def topar_yemas(plan: dict, form_data, db=None) -> int:
     """Aplica el tope. Devuelve cuántas líneas de huevo se convirtieron. Muta `plan`. Nunca lanza."""
     try:
@@ -169,6 +200,7 @@ def topar_yemas(plan: dict, form_data, db=None) -> int:
                         if claras_meal:
                             raw2.append(f"{int(round(claras_meal * _CLARA_G))}g de clara de huevo")
                         meal["ingredients_raw"] = raw2
+                    _pasos_siguen_la_lista(meal)  # [P1-PLAN-LOTE-325] «prepara 1 huevo y 6 claras» con 7 en la lista
                     if db is not None:
                         try:
                             import graph_orchestrator as go

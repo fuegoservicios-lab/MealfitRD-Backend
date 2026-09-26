@@ -917,6 +917,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         r = reconcile_meal(meal, index)
         __import__("pasos_cantidades").sincronizar_exacto(meal)   # [P1-PLAN-LOTE-308] el contrato tolera ±25 %
         __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»
+        __import__("pasos_cantidades").lo_que_dice_la_lista(meal)  # [P1-PLAN-LOTE-328..331] piezas, porciones, pizcas
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
         __import__("pasos_cantidades").decimales_de_cocina(meal)  # [P1-PLAN-LOTE-312] «2.22 cdas» → «2¼ cdas»
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-316] «Acompaña con X. Acompaña con X.»
