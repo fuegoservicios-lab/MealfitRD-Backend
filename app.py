@@ -759,7 +759,20 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # guiso» (batería real, HTA; 117 en el corpus) → «añade filete…»; mismas excepciones del 373.
 # [P1-PLAN-LOTE-399 · 2026-09-26] (backend) con uno, en singular: «1 rebanadas de pan integral», «1 tortas pequeñas de
 # casabe» (batería real, estatina; 84 pasos + 23 líneas en el corpus) → «1 rebanada», «1 torta pequeña».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-399 · 2026-09-26"
+# [P1-PLAN-LOTE-400 · 2026-09-26] (backend) la pista no repite el calificativo: «yogurt… pasteurizado (140 g)
+# pasteurizado», «descremado (0-2% de grasa) (135 g) descremado» → una vez (11 en el corpus).
+# [P1-PLAN-LOTE-401 · 2026-09-26] (backend) la frase del guiso concuerda: «hasta que esté cocidos; Incorpóralos» →
+# «estén cocidos; incorpóralos» (batería real, HTA; 18 + 54 en el corpus).
+# [P1-PLAN-LOTE-402 · 2026-09-26] (backend) el pescado del guiso no se cuece 15 minutos: 5-7 min hasta que se
+# desmenuce (63 °C); camarones 2-3 min (13 en el corpus). El ave y la carne conservan su tiempo.
+# [P1-PLAN-LOTE-403 · 2026-09-26] (backend) con artículo y una pieza, sin número: «tuesta las 1 rebanada» →
+# «tuesta la rebanada» (batería real sobre el 399, perfil del dueño; 33 en el corpus).
+# [P1-PLAN-LOTE-404 · 2026-09-26] (backend) «1 de cebolla roja» → «1 cebolla roja» en lista y pasos (26 líneas).
+# [P1-PLAN-LOTE-405 · 2026-09-26] (backend) las claras de la lista también se cocinan: «3 huevos + 3 claras» y
+# «hierve el huevo» (batería real, embarazo; 119 en el corpus) → un huevo por cada clara, sin yema; «a hervir».
+# [P1-PLAN-LOTE-406 · 2026-09-26] (backend) la masa de harina de maíz lleva su agua: «130 g de harina… con ½ taza
+# de agua» (batería real, dueño; 9 de 54 masas) → 2,3 ml por gramo, en la lista, el motor y el paso.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-406 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

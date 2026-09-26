@@ -947,6 +947,12 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").peso_de_la_pieza_en_el_paso(meal)  # [P1-PLAN-LOTE-397] «el filete de N g»
         __import__("pasos_cantidades").minuscula_tras_verbo(meal)  # [P1-PLAN-LOTE-398] «Añade Filete» → «añade filete»
         __import__("pasos_cantidades").uno_en_singular(meal)  # [P1-PLAN-LOTE-399] «1 rebanadas» → «1 rebanada»
+        __import__("pasos_cantidades").guiso_concuerda(meal)  # [P1-PLAN-LOTE-401] «esté cocidos», «; Incorpóralo»
+        __import__("pasos_cantidades").pescado_del_guiso(meal)  # [P1-PLAN-LOTE-402] el pescado del guiso, 5-7 min
+        __import__("pasos_cantidades").articulo_de_uno(meal)  # [P1-PLAN-LOTE-403] «las 1 rebanada» → «la rebanada»
+        __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»
+        __import__("pasos_cantidades").claras_de_la_lista(meal)  # [P1-PLAN-LOTE-405] las claras también se cocinan
+        __import__("pasos_cantidades").masa_con_su_agua(meal)  # [P1-PLAN-LOTE-406] la masa de maíz, con su agua
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

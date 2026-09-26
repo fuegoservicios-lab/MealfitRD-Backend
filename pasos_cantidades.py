@@ -1718,12 +1718,15 @@ def servir_lo_que_sobra(meal) -> int:
 # y la pista y el calificativo viejo se quedaron detrás. Aquí, en los pasos (no en las notas): (1) tras la pista, los
 # calificativos que ya estaban antes de ella se van, con los que los acompañan; (2) la pista que repite los gramos con que
 # empieza su misma mención se va; (3) el mismo calificativo dos veces seguidas queda una. tooltip-anchor: P1-PLAN-LOTE-359
-_QUAL_359 = r"(?:sin\s+az[uú]car|bajo\s+en\s+sodio|sin\s+sal|natural|enter[oa]|descremad[oa]|light|griego)"
+# [P1-PLAN-LOTE-400 · 2026-09-26] «yogurt griego sin azúcar pasteurizado (140 g) pasteurizado» (11 en el corpus, perfiles
+# de embarazo y lactancia) y «descremado (0-2% de grasa) (135 g) descremado» (batería real sobre el 379): el pasteurizado
+# y el paréntesis del porcentaje de grasa entre el calificativo y la pista. tooltip-anchor: P1-PLAN-LOTE-400
+_QUAL_359 = r"(?:sin\s+az[uú]car|bajo\s+en\s+sodio|sin\s+sal|natural|enter[oa]|descremad[oa]|light|griego|pasteurizad[oa])"
 _PISTA_REPITE_359_RE = re.compile(
     r"(?<![\d.,])(?P<n>\d+(?:[.,]\d+)?)(?P<u>\s*(?:g|gr|gramos)\s+de\s+)(?P<x>(?:(?!\by\b)[^().;:,\d]){2,50}?)"
     r"\s*\(\s*≈?\s*(?P=n)\s*g\s*\)")
 _CALIF_TRAS_PISTA_359_RE = re.compile(
-    r"\b(?P<antes>(?:" + _QUAL_359 + r"\s*)+)(?P<pista>\(\s*≈?\s*\d+(?:[.,]\d+)?\s*g\s*\))(?P<despues>(?:\s+" + _QUAL_359 + r")+)",
+    r"\b(?P<antes>(?:" + _QUAL_359 + r"\s*)+(?:\([^()]*%[^()]*\)\s*)?)(?P<pista>\(\s*≈?\s*\d+(?:[.,]\d+)?\s*g\s*\))(?P<despues>(?:\s+" + _QUAL_359 + r")+)",
     re.IGNORECASE)
 _CALIF_DOBLE_359_RE = re.compile(r"\b(" + _QUAL_359 + r")\s+\1\b", re.IGNORECASE)
 
@@ -2317,7 +2320,8 @@ def licuadora_a_tiempo(meal) -> int:
 _CLARAS_HERVIDAS_390_RE = re.compile(
     r"(?P<cl>\b(?:\d+(?:[.,]\d+)?|[½¼¾⅓⅔]|\d+\s*[½¼¾])\s+(?:g\s+de\s+)?(?P<n>claras?)(?:\s+de\s+huevos?)?\b)"
     r"(?P<par>\s*\([^)]*\))?", re.IGNORECASE)
-_HIERVE_390_RE = re.compile(r"\bhierv\w*|\bhi[eé]rvel\w*|\bhirviendo\b|\bsancoch\w*", re.IGNORECASE)
+_HIERVE_390_RE = re.compile(r"\bhierv\w*|\bhi[eé]rvel\w*|\bhirviendo\b|\bsancoch\w*|\bherv(?:ir|id[oa]s?)\b",  # 405: «a hervir»
+                            re.IGNORECASE)
 _PELA_390_RE = re.compile(r"\bp[eé]l(?:al[oa]s?|arl[oa]s?)\b|\bpela(?=\s*(?:y\b|,|;|\.|$))|\bc[aá]scara\b|\bduros?\b",
                           re.IGNORECASE)
 _OTRO_VERBO_390_RE = re.compile(r"\b(?:bate|batir|batid[oa]s?|mezcla|revuelve|agrega|añade|incorpora|vierte|licúa|licua|"
@@ -2861,6 +2865,307 @@ def uno_en_singular(meal) -> int:
                 if s != x:
                     xs[i] = s
                     n += 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-401 · 2026-09-26] La frase del guiso concuerda ─────────────────────────────────────────────────────────
+# Batería REAL sobre el 379 (adulto mayor con HTA, día 2): «Agrega yautía al guiso y cocínalos a fuego medio 12-15 minutos,
+# hasta que esté cocidos por dentro; Incorpóralos con cuidado para no deshacer el resto». La plantilla del cerrador para
+# guisos (`_closer_protein_step_text`, stewy) concuerda el verbo con el alimento pero deja «esté» en singular y abre con
+# mayúscula tras el punto y coma. Corpus de 317 planes: «esté cocidos/as» 18, «; Incorpóralo…» 54. tooltip-anchor:
+# P1-PLAN-LOTE-401
+_ESTE_PLURAL_401_RE = re.compile(r"\bhasta que esté (cocid[oa]s)\b")
+_PC_MAYUS_401_RE = re.compile(r"; (Incorpóral|Sírvel|Agrégal|Añádel|Mézclal)(\w*)")
+
+
+def guiso_concuerda(meal) -> int:
+    """Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            s = _ESTE_PLURAL_401_RE.sub(r"hasta que estén \1", p)
+            s = _PC_MAYUS_401_RE.sub(lambda m: "; " + m.group(1)[0].lower() + m.group(1)[1:] + m.group(2), s)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-402 · 2026-09-26] El pescado del guiso no se cuece 15 minutos ──────────────────────────────────────────
+# La misma batería: «Añade Filete de pescado blanco al guiso y cocínalo a fuego medio 12-15 minutos, hasta que esté cocido
+# por dentro» — la plantilla del cerrador para guisos da a toda proteína el tiempo del pollo; 12-15 min deshacen el
+# pescado (y el propio paso pide «con cuidado para no deshacer el resto»). Corpus: 13. Pescado: 5-7 min, hasta que se
+# desmenuce fácilmente (63 °C al centro); camarones y mariscos: 2-3 min, rosados y opacos. tooltip-anchor: P1-PLAN-LOTE-402
+_GUISO_PEZ_402_RE = re.compile(
+    r"(?P<pre>\b(?:Añade|Agrega|Incorpora)\s+(?P<food>[^.;]{2,50}?)\s+al\s+guiso\s+y\s+cocínal(?P<cl>[oa]s?)\s+a\s+fuego\s+medio\s+)"
+    r"12-15\s+minutos,\s+hasta\s+que\s+est(?:é|én)\s+cocid[oa]s?\s+por\s+dentro", re.IGNORECASE)
+
+
+def pescado_del_guiso(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+
+        def _sub(m):
+            nonlocal n
+            fn = _sa(m.group("food").lower())
+            if _CARNE_377_RE.search(fn):
+                return m.group(0)                       # «filete de pollo», «filete de res»: el tiempo del ave/la carne se queda
+            if _MARISCO_377_RE.search(fn):
+                n += 1
+                return m.group("pre") + "2-3 minutos, hasta que estén rosados y opacos"
+            if _PESCADO_377_RE.search(fn) or _PEZ_392_RE.search(fn):
+                n += 1
+                return m.group("pre") + "5-7 minutos, hasta que se desmenuce fácilmente (63 °C al centro)"
+            return m.group(0)
+
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            s = _GUISO_PEZ_402_RE.sub(_sub, p)
+            if s != p:
+                rec[i] = s
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-403 · 2026-09-26] «tuesta las 1 rebanada» → «tuesta la rebanada» ──────────────────────────────────────
+# Batería REAL sobre el 399 (perfil del dueño, día 1): «tuesta las 1 rebanada de pan integral» — el 399 dejó la unidad en
+# singular pero el artículo plural y el número quedaron (corpus: 33, 26 de «las 1 rebanada»). Con artículo y una sola
+# pieza, como en el 376: sin número y con el artículo en singular (género por la terminación del sustantivo).
+# tooltip-anchor: P1-PLAN-LOTE-403
+_ART_UNO_403_RE = re.compile(r"\b(?P<a>[Ll]os|[Ll]as|[Uu]nos|[Uu]nas)\s+1\s+(?P<n>[a-záéíóúñ]+)\b")
+
+
+def _art_uno_403(m) -> str:
+    n = m.group("n")
+    fem = n.endswith(("a", "ción", "sión", "dad")) or n in ("cdta", "cda")
+    a = m.group("a")
+    indef = a.lower().startswith("un")
+    art = ("una" if fem else "un") if indef else ("la" if fem else "el")
+    if a[0].isupper():
+        art = art.capitalize()
+    return f"{art} {n}"
+
+
+def articulo_de_uno(meal) -> int:
+    """Nº de textos corregidos (pasos + lista); 0 ante cualquier error."""
+    try:
+        if not isinstance(meal, dict):
+            return 0
+        n = 0
+        for campo in ("recipe", "ingredients"):
+            xs = meal.get(campo)
+            if not isinstance(xs, list):
+                continue
+            for i, x in enumerate(xs):
+                if not isinstance(x, str) or (campo == "recipe" and _es_nota(x)):
+                    continue
+                s = _ART_UNO_403_RE.sub(_art_uno_403, x)
+                if s != x:
+                    xs[i] = s
+                    n += 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-404 · 2026-09-26] «1 de cebolla» → «1 cebolla» ────────────────────────────────────────────────────────
+# La misma batería: la lista trae «1 de cebolla roja», «1 de cebolla» (corpus: 26 líneas, todas cebolla): el humanizador
+# escribe «½ de cebolla» para la fracción y, cuando la cantidad redondea a 1, deja el «de». Con «1» exacto, sin «de».
+# tooltip-anchor: P1-PLAN-LOTE-404
+_UNO_DE_404_RE = re.compile(r"(?<![\d.,/½¼¾⅓⅔])\b1\s+de\s+(?!cada\b|los\b|las\b|el\b|la\b)(?=[a-záéíóúñ])")
+
+
+def uno_sin_de(meal) -> int:
+    """Nº de textos corregidos (pasos + lista); 0 ante cualquier error."""
+    try:
+        if not isinstance(meal, dict):
+            return 0
+        n = 0
+        for campo in ("recipe", "ingredients"):
+            xs = meal.get(campo)
+            if not isinstance(xs, list):
+                continue
+            for i, x in enumerate(xs):
+                if not isinstance(x, str) or (campo == "recipe" and _es_nota(x)):
+                    continue
+                s = _UNO_DE_404_RE.sub("1 ", x)
+                if s != x:
+                    xs[i] = s
+                    n += 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-405 · 2026-09-26] Las claras de la lista también se cocinan ───────────────────────────────────────────
+# Batería REAL sobre el 399 (embarazo, día 2): «3 huevos» y «3 claras de huevo» en la lista y el paso «hierve el huevo en
+# agua durante 10-12 min»: las claras que el tope de yemas añadió (lote 235) no las cocina ningún paso. Corpus de 317
+# planes: 119 platos de huevo duro así; 12 «pon 3 huevos y 2 claras de huevo a hervir… y pela» que el 390 no veía («a
+# hervir»); y 17 con sólo claras en la lista y el cerrador «Cocina huevo a la plancha o hervido y sírvelo como proteína»
+# (una clara suelta no se hierve). (1) El hervor del 390 reconoce «hervir»; (2) la frase que hierve los huevos suma, sin
+# cifras que la regla 2 reescriba, «un huevo por cada clara… quítales la yema»; (3) con sólo claras, el cerrador las
+# cuaja en la sartén. Nunca si un paso ya cocina las claras. tooltip-anchor: P1-PLAN-LOTE-405
+_CLARA_COCINADA_405_RE = re.compile(
+    r"(?:\bbate\w*|\bcuaj\w*|\bhierv\w*|\bherv(?:ir|id[oa]s?)\b|\bcocin\w*|\brevuelv\w*|\bvierte\b|\blicu\w*|\bmezcl\w*|"
+    r"\bincorpor\w*|\bagreg\w*|\banad\w*)[^.;]{0,40}\bclaras?\b|\bclaras?\b[^.;]{0,20}(?:\bcuaj\w*|\bfirmes\b|\brevuelt\w*|"
+    r"\bbatid\w*)")
+_HUEVO_DURO_405_RE = re.compile(r"(?:\bhierv\w*|\bherv(?:ir|id[oa]s?)\b|agua hirviendo|\bcuece\b)[^.]*\bhuevos?\b|"
+                                r"\bhuevos?\b[^.]*(?:\bhierv\w*|\bherv(?:ir|id[oa]s?)\b|agua hirviendo)")
+_CERRADOR_HUEVO_405_RE = re.compile(r"Cocina huevo a la plancha o hervido y sírvelo como proteína del plato\.")
+
+
+def claras_de_la_lista(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lista = " | ".join(_sa(str(x).lower()) for x in (meal.get("ingredients") or []))
+        if not re.search(r"\bclaras? de huevos?\b", lista):
+            return 0
+        enteros = bool(re.search(r"\bhuevos?\b", re.sub(r"(?:claras?|yemas?) de huevos?", " ", lista)))
+        pasos = [(i, p) for i, p in enumerate(rec) if isinstance(p, str) and not _es_nota(p)]
+        texto = " ".join(_sa(p.lower()) for _, p in pasos)
+        if "dentro de su huevo entero" in texto or "un huevo por cada clara" in texto:
+            return 0
+        if not enteros:
+            for i, p in pasos:
+                s = _CERRADOR_HUEVO_405_RE.sub("Cuaja las claras de huevo en la sartén, revueltas, hasta que estén firmes y "
+                                               "opacas, y sírvelas como proteína del plato.", p)
+                if s != p:
+                    rec[i] = s
+                    meal["recipe"] = rec
+                    meal.pop("_display", None)
+                    return 1
+            return 0
+        if _CLARA_COCINADA_405_RE.search(texto):
+            return 0
+        for i, p in pasos:
+            partes = re.split(r"(?<=\.)\s+", p)
+            for k, frase in enumerate(partes):
+                fn = _sa(frase.lower())
+                if "clara" in fn or not _HUEVO_DURO_405_RE.search(fn):
+                    continue
+                cuerpo = frase.rstrip()
+                punto = cuerpo.endswith(".")
+                if punto:
+                    cuerpo = cuerpo[:-1]
+                partes[k] = (cuerpo + "; para las claras de huevo de la lista, hierve también con cáscara un huevo por cada "
+                             "clara y, al pelarlos, quítales la yema" + ("." if punto else ""))
+                rec[i] = " ".join(partes)
+                meal["recipe"] = rec
+                meal.pop("_display", None)
+                return 1
+        return 0
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-406 · 2026-09-26] La masa de harina de maíz lleva su agua ─────────────────────────────────────────────
+# Batería REAL sobre el 399 (perfil del dueño, día 3): «mezcla 130 g de harina de maíz precocida con ½ taza de agua» —
+# 0,9 ml por gramo, cuando la masa pide ~2,3 (la mediana del corpus es 2,4, la del paquete 1¼ taza por taza). El ajuste
+# de calorías sube la harina y el agua, que no suma nada, se queda: «100 g de harina + 15 ml de agua» no hace masa. Corpus
+# de 319 planes: 9 de 54 masas por debajo de 1,2 ml/g, casi todas del perfil del dueño (ganar músculo). Como el 311 con la
+# avena: el agua que falta no suma calorías ni se compra. Con UNA línea de harina en gramos y UNA cantidad de agua (lista
+# o paso) por debajo de 1,5 ml/g, el agua pasa a 2,3 ml/g (en decenas), en la lista, en el motor y en el paso.
+# tooltip-anchor: P1-PLAN-LOTE-406
+_HARINA_406_RE = re.compile(r"^\s*(?P<g>\d+(?:[.,]\d+)?)\s*g\s+de\s+harina\s+de\s+ma[ií]z\s+precocida", re.IGNORECASE)
+_AGUA_406_RE = re.compile(r"(?P<q>(?:\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔]))\s*(?P<u>ml|tazas?|cdas?|cucharadas?)\s+de\s+agua\b",
+                          re.IGNORECASE)
+
+
+_MEZCLA_406 = r"\b(?:mezcla\w*|amasa\w*|une|combina\w*|hidrata\w*|forma\w*)\b"
+
+
+def pasos_406(rec) -> list:
+    return [(i, p) for i, p in enumerate(rec or []) if isinstance(p, str) and not _es_nota(p)]
+
+
+def _ml_406(q: str, u: str) -> float:
+    return _num_397(q) * (240.0 if u.lower().startswith("taza") else 15.0 if u.lower().startswith(("cda", "cuchar")) else 1.0)
+
+
+def masa_con_su_agua(meal) -> int:
+    """Nº de textos corregidos; 0 ante cualquier error."""
+    try:
+        if not isinstance(meal, dict):
+            return 0
+        ings = meal.get("ingredients") if isinstance(meal.get("ingredients"), list) else []
+        harinas = [float(m.group("g").replace(",", ".")) for m in (_HARINA_406_RE.match(str(x)) for x in ings) if m]
+        if len(harinas) != 1 or harinas[0] <= 0:
+            return 0
+        g = harinas[0]
+        rec = meal.get("recipe") if isinstance(meal.get("recipe"), list) else []
+        aguas_lista = [(i, m) for i, x in enumerate(ings) for m in [_AGUA_406_RE.match(str(x).strip())] if m]
+        aguas_paso = [(i, m) for i, p in enumerate(rec) if isinstance(p, str) and not _es_nota(p)
+                      for m in _AGUA_406_RE.finditer(p)]
+        if len(aguas_lista) > 1 or (not aguas_lista and len({m.group(0) for _, m in aguas_paso}) != 1):
+            return 0
+        ref = aguas_lista[0][1] if aguas_lista else aguas_paso[0][1]
+        ml = _ml_406(ref.group("q"), ref.group("u"))
+        if ml <= 0 or ml / g >= 1.5:
+            return 0
+        nuevo_ml = int(round(g * 2.3 / 10.0) * 10)
+        viejo_txt = ref.group(0)
+        # sólo el agua que la receta usa EN la masa: «mezcla la harina… con ½ taza de agua»; la del Mise («mide… 2 cdas de
+        # agua») o la de otro alimento («la auyama con la cucharada de agua») no es la de la masa (replay del 406)
+        masa = any(re.search(_MEZCLA_406, cl, re.IGNORECASE) and re.search(r"\bharina\b", cl, re.IGNORECASE) and viejo_txt in cl
+                   for _, p in pasos_406(rec) for cl in re.split(r"[.;](?!\d)", p))
+        if not masa:
+            return 0
+        nuevo_txt = f"{nuevo_ml} ml de agua"
+        n = 0
+        if aguas_lista:
+            i, m = aguas_lista[0]
+            ings[i] = str(ings[i]).replace(m.group(0), nuevo_txt, 1)
+            n += 1
+            motor = meal.get("ingredients_raw")
+            if isinstance(motor, list):               # la línea del motor se resuelve por su TEXTO (el agua con esos ml), nunca
+                hecho, nuevo_motor = False, []        # por índice paralelo a la lista (P1-RAW-INDEX-INVENTORY)
+                for x in motor:
+                    mr = _AGUA_406_RE.match(str(x).strip())
+                    if not hecho and mr and abs(_ml_406(mr.group("q"), mr.group("u")) - ml) < 1.0:
+                        nuevo_motor.append(str(x).replace(mr.group(0), nuevo_txt, 1))
+                        hecho = True
+                    else:
+                        nuevo_motor.append(x)
+                if hecho:
+                    meal["ingredients_raw"] = nuevo_motor
+        for i, p in enumerate(rec):
+            if isinstance(p, str) and not _es_nota(p) and viejo_txt in p:
+                rec[i] = p.replace(viejo_txt, nuevo_txt)
+                n += 1
         if n:
             meal.pop("_display", None)
         return n
