@@ -684,7 +684,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # fKb) para separar el congelado de 919 ms al volver de la galería (plugin nativo vs JS); la foto nativa a 1600 px/q85.
 # [P1-PLAN-LOTE-347 · 2026-09-26] (backend + frontend) «Otra…» en las dudas de la foto: el usuario escribe su respuesta
 # y el escáner re-analiza la MISMA foto con esa aclaración (`aclaracion` en /api/diary/upload, citada como dato).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-347 · 2026-09-26"
+# [P1-PLAN-LOTE-348 · 2026-09-26] (backend + frontend) «¿Qué comiste?» para armar un plato desde cero: tres formas
+# de empezar a la vista, «Descríbelo y lo calculo» (`/consumed/estimate-plate` → partes editables; casa solo PLATOS del
+# catálogo, los alimentos son crudos) y líneas estimadas/a mano editables.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-348 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
