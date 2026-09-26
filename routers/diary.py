@@ -399,6 +399,9 @@ async def api_diary_upload(
     # [P1-PLAN-LOTE-225 · 2026-09-24] El idioma que la pantalla está mostrando (`getLocale()`): el nombre del plato y el
     # de sus ingredientes se devuelven en él PARA LEER. Ausente (cliente anterior) ⇒ el del perfil; sin perfil ⇒ español.
     locale: Optional[str] = Form(None),
+    # [P1-PLAN-LOTE-347 · 2026-09-26] «Otra…»: lo que el usuario escribió cuando ninguna opción de la duda encajaba.
+    # Se vuelve a analizar LA MISMA foto con ese dato (vision_agent._prompt_de_escaneo lo limpia y lo cita).
+    aclaracion: Optional[str] = Form(None),
     # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28 →
     # P1-VISION-NO-LOCAL · 2026-07-28] Quota-exempt PERMANENTE (doctrina
     # P1-NEVERA-QUOTA-EXEMPT): `verify_api_quota` devolvería 402 al cap
@@ -582,7 +585,7 @@ async def api_diary_upload(
         # 3. Procesar imagen con Visión SINCRÓNICAMENTE
         logger.info("\n-------------------------------------------------------------")
         logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
-        vision_result = await process_image_with_vision(file_bytes)
+        vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion)
         
         description = vision_result.get("description", "No se pudo analizar la imagen.")
         is_food = vision_result.get("is_food", False)

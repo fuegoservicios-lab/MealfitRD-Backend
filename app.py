@@ -680,7 +680,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # medianos», «espinacas picado» → «picadas» — `pulido_lineas`.
 # [P1-PLAN-LOTE-342 · 2026-09-25] (backend) en unas «tortitas» el huevo es aglutinante: el autocorrector de proteína
 # repetida ya no las cambia por pechuga («bate ¾ pechuga de pollo», «NO botes pechuga de pollo»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-342 · 2026-09-26"
+# [P1-PLAN-LOTE-346 · 2026-09-26] (frontend) la sonda marca el viaje de la foto (fSel/fVuelve/fLeida/prepW|P/prepFin/
+# fKb) para separar el congelado de 919 ms al volver de la galería (plugin nativo vs JS); la foto nativa a 1600 px/q85.
+# [P1-PLAN-LOTE-347 · 2026-09-26] (backend + frontend) «Otra…» en las dudas de la foto: el usuario escribe su respuesta
+# y el escáner re-analiza la MISMA foto con esa aclaración (`aclaracion` en /api/diary/upload, citada como dato).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-347 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
