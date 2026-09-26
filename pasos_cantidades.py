@@ -3171,3 +3171,144 @@ def masa_con_su_agua(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+
+# ── [P1-PLAN-LOTE-407 · 2026-09-26] La proteína que la lista compra cruda y el paso usa cocida trae su cocción ──────────
+# Batería REAL sobre el 331 (bariátrica, día 1): «ten lista la pechuga de pollo cocida y desmenuzada» con «¼ pechuga de
+# pollo (≈63 g)» cruda en la lista y ningún paso que la cocine; en el corpus de 319 planes, 52 comidas así («desmenuza 265 g
+# de pechuga de pollo ya cocida», «añade filete de pescado blanco ya cocido»), casi todas en perfiles con poco tiempo: el
+# modelo supone pollo ya hecho y la lista compra la pechuga cruda. Como el 375 con las legumbres: la nota «💡 Cocción
+# previa» tras el Mise en place, con el punto seguro de cada proteína (ave 74 °C, pescado 63 °C, carne y cerdo 71 °C).
+# Nunca si la lista ya la compra cocida, en lata o ahumada, ni si algún paso la cocina. tooltip-anchor: P1-PLAN-LOTE-407
+_PROT_COCIDA_407_RE = re.compile(
+    r"(?:ten\s+list[oa]s?|usa|desmenuza|mide|agrega|anade|incorpora|coloca|reparte|mezcla|pesa)\b[^.;]{0,40}\b"
+    r"(?P<k>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}?(?:ya\s+)?cocid[oa]s?|"
+    r"\b(?P<k2>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}\bya\s+cocid[oa]s?")
+#: la cocción de verdad rige a la proteína («sella la pechuga», «hierve el pollo») o dice su punto («… hasta 74 °C»);
+#: «sofríe la cebolla y agrega el pollo desmenuzado» no cocina el pollo (bariátrica del 331)
+_SINONIMOS_407 = {"pollo": "(?:pollo|pechuga)", "pechuga": "(?:pollo|pechuga)", "pescado": "(?:pescado|filete|tilapia)",
+                  "filete": "(?:pescado|filete|tilapia)", "tilapia": "(?:pescado|filete|tilapia)", "carne": "(?:carne|res)",
+                  "res": "(?:carne|res)", "pavo": "(?:pavo|pechuga)", "cerdo": "(?:cerdo|lomo|chuleta)"}
+_VERBO_COCCION_407 = (r"\b(?:sofrie|saltea|cocina|hierve|sella|hornea|asa|guisa|dora|cuece|frie|marca)\w*\s+(?:el|la|los|las|"
+                      r"\d+(?:[.,]\d+)?\s*g\s+de|[\d½¼¾]+\s+)?\s*")
+_NOTA_PROT_407 = {
+    "ave": "💡 Cocción previa: cocina {n} en agua con sal 15-18 min, o a la plancha 5-7 min por lado, hasta que no quede "
+           "rosada por dentro (74 °C al centro); déjala reposar y desmenúzala o córtala como pide la receta.",
+    "pez": "💡 Cocción previa: cocina {n} a la plancha o al vapor 3-4 min por lado, hasta que se desmenuce fácilmente "
+           "(63 °C al centro).",
+    "carne": "💡 Cocción previa: cocina {n} a la plancha o guisada hasta que no quede rosada por dentro (71 °C al centro).",
+}
+
+
+def _clase_407(k: str, linea: str) -> tuple:
+    if k in ("pescado", "tilapia") or (k == "filete" and not _CARNE_377_RE.search(linea)):
+        return "pez", "el filete de pescado"
+    if k == "pavo" or "pavo" in linea:
+        return "ave", "la pechuga de pavo"
+    if k in ("pollo", "pechuga"):
+        return "ave", "la pechuga de pollo"
+    if k == "cerdo":
+        return "carne", "la carne de cerdo"
+    return "carne", "la carne de res"
+
+
+def proteina_cocida_de_la_lista(meal) -> int:
+    """Nº de notas añadidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [_sa(str(x).lower()) for x in (meal.get("ingredients") or [])]
+        pasos = [_sa(str(p).lower()) for p in rec if isinstance(p, str) and not _es_nota(p)]
+        todo = " . ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str))
+        texto = " . ".join(pasos)
+        notas = []
+        for mm in _PROT_COCIDA_407_RE.finditer(texto):
+            if "hasta que" in mm.group(0):
+                continue
+            k = mm.group("k") or mm.group("k2")
+            lin = [l for l in lineas if re.search(r"\b" + k, l)]
+            if not lin or any(re.search(r"cocid|\blata\b|enlatad|ahumad|\ben\s+agua\b|rostizad", l) for l in lin):
+                continue
+            resto = texto.replace(mm.group(0), " ")
+            sin = _SINONIMOS_407.get(k, k)
+            if (re.search(_VERBO_COCCION_407 + sin, resto)
+                    or re.search(sin + r"\b[^.;]{0,50}hasta\s+(?:que|alcanzar)[^.;]{0,40}(?:7[1-4]|6[3-9])\s*°?\s*c\b", resto)):
+                continue
+            clase, nombre = _clase_407(k, lin[0])
+            if "coccion previa" in todo and nombre.split()[-1] in todo[todo.find("coccion previa"):]:
+                continue
+            nota = _NOTA_PROT_407[clase].format(n=nombre)
+            if nota not in rec and nota not in notas:
+                notas.append(nota)
+        if not notas:
+            return 0
+        i_mise = next((i for i, s in enumerate(rec) if isinstance(s, str) and s.strip().lower().startswith("mise en place")), None)
+        pos = (i_mise + 1) if i_mise is not None else 0
+        rec[pos:pos] = notas
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return len(notas)
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-408 · 2026-09-26] El víver que el paso usa «ya hervido» y la lista compra crudo trae su hervor ─────────
+# Replay de la cola sobre 319 planes, tras el 407: «pela y maja la yautía ya hervida», «corta 350 g de batata cocida en
+# rodajas» con la yautía y la batata CRUDAS en la lista y ningún paso que las hierva — sobre todo en perfiles sin tiempo
+# («Nada»: el modelo supone el víver ya hecho). La yuca, además, cruda es tóxica. Como el 375 y el 407: «💡 Cocción previa»
+# con el tiempo de hervor del 394 y, para la yuca, «desecha el agua». Nunca si la lista lo compra cocido o precocido, ni si
+# un paso lo hierve, lo cuece, lo asa o lo hace al microondas. tooltip-anchor: P1-PLAN-LOTE-408
+_VIVER_408 = r"(platano|yuca|yautia|batata|papa|name|mapuey|auyama|guineo|guineito)"
+_VIVER_COCIDO_408_RE = re.compile(r"\b" + _VIVER_408 + r"s?\b(?P<mid>[^.;()]{0,25}?)\b(?:ya\s+)?(?:hervid|cocid|sancochad)[oa]s?\b")
+_NOMBRE_VIVER_408 = {"platano": "el plátano", "yuca": "la yuca", "yautia": "la yautía", "batata": "la batata", "papa": "la papa",
+                     "name": "el ñame", "mapuey": "el mapuey", "auyama": "la auyama", "guineo": "el guineo",
+                     "guineito": "los guineítos"}
+
+
+def viver_cocido_de_la_lista(meal) -> int:
+    """Nº de notas añadidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [_sa(str(x).lower()) for x in (meal.get("ingredients") or [])]
+        pasos = [_sa(str(p).lower()) for p in rec if isinstance(p, str) and not _es_nota(p)]
+        todo = " . ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str))
+        texto = " . ".join(pasos)
+        notas = []
+        for mm in _VIVER_COCIDO_408_RE.finditer(texto):
+            k = mm.group(1)
+            if re.search(r"hasta que|bien\s*$", texto[max(0, mm.start() - 15):mm.start()] + mm.group("mid")):
+                continue
+            lin = [l for l in lineas if re.search(r"\b" + k, l)]
+            if not lin or any(re.search(r"cocid|hervid|precocid|\blata\b|congelad|sancochad", l) for l in lin):
+                continue
+            if (re.search(r"\b(?:hierve|hiervel\w*|cuece|cuecel\w*|cocina|cocinal\w*|sancocha|hornea|asa)\b[^.;]{0,30}\b" + k, texto)
+                    or re.search(k + r"[^.;]{0,50}(?:microondas|hasta que (?:el|un) cuchillo|en agua (?:con sal )?(?:hirviendo)?\s*\d)",
+                                 texto)):
+                continue
+            nombre = _NOMBRE_VIVER_408[k]
+            if "coccion previa" in todo and k in todo[todo.find("coccion previa"):]:
+                continue
+            tiempo = next((t for k2, t in _HERVOR_394 if k2 == k or (k == "guineito" and k2 == "guineo")), "15-20 min")
+            nota = f"💡 Cocción previa: hierve {nombre} pelado{'s' if nombre.startswith('los') else ''} en agua {tiempo}, hasta que el cuchillo entre sin fuerza"
+            if nombre.startswith("la "):
+                nota = nota.replace("pelado", "pelada")
+            if k == "yuca":
+                nota += ", y desecha el agua de cocción (cruda no se come)"
+            nota += "."
+            if nota not in rec and nota not in notas:
+                notas.append(nota)
+        if not notas:
+            return 0
+        i_mise = next((i for i, s in enumerate(rec) if isinstance(s, str) and s.strip().lower().startswith("mise en place")), None)
+        pos = (i_mise + 1) if i_mise is not None else 0
+        rec[pos:pos] = notas
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return len(notas)
+    except Exception:
+        return 0

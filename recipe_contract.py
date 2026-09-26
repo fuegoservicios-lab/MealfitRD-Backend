@@ -953,6 +953,8 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»
         __import__("pasos_cantidades").claras_de_la_lista(meal)  # [P1-PLAN-LOTE-405] las claras también se cocinan
         __import__("pasos_cantidades").masa_con_su_agua(meal)  # [P1-PLAN-LOTE-406] la masa de maíz, con su agua
+        __import__("pasos_cantidades").proteina_cocida_de_la_lista(meal)  # [P1-PLAN-LOTE-407] el pollo cocido que la lista compra crudo
+        __import__("pasos_cantidades").viver_cocido_de_la_lista(meal)  # [P1-PLAN-LOTE-408] el víver hervido que la lista compra crudo
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

@@ -772,7 +772,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «hierve el huevo» (batería real, embarazo; 119 en el corpus) → un huevo por cada clara, sin yema; «a hervir».
 # [P1-PLAN-LOTE-406 · 2026-09-26] (backend) la masa de harina de maíz lleva su agua: «130 g de harina… con ½ taza
 # de agua» (batería real, dueño; 9 de 54 masas) → 2,3 ml por gramo, en la lista, el motor y el paso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-406 · 2026-09-26"
+# [P1-PLAN-LOTE-407 · 2026-09-26] (backend) la proteína que la lista compra cruda y el paso usa cocida trae su
+# cocción: «ten lista la pechuga de pollo cocida» sin paso que la cocine (52 en el corpus) → «💡 Cocción previa» 74 °C.
+# [P1-PLAN-LOTE-408 · 2026-09-26] (backend) el víver que el paso usa «ya hervido» y la lista compra crudo trae su
+# hervor: «maja la yautía ya hervida» sin paso que la hierva → «💡 Cocción previa» con el tiempo del 394.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-408 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
