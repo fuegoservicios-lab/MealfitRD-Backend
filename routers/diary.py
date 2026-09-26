@@ -126,6 +126,13 @@ _ESTIMATE_SYSTEM_PROMPT = (
 )
 
 
+class EstimatePlateRequest(BaseModel):
+    """[P1-PLAN-LOTE-348] «Descríbelo y lo calculo»: el plato en texto libre, para separarlo en partes."""
+    text: str = Field(..., min_length=3, max_length=300)
+    meal_type: Optional[str] = Field(default=None, max_length=32)
+    locale: Optional[str] = Field(default=None, max_length=16)
+
+
 class RepeatMealRequest(BaseModel):
     """Repetir toma COORDENADAS (el id de una fila propia), no contenido — el
     cliente no puede inventar macros por esta vía tampoco."""
@@ -325,6 +332,8 @@ _REPEAT_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # de planes. Limitador propio (10/60s): el LLM cuesta, pero la persona escribe un plato,
 # no diez por minuto.
 _ESTIMATE_MACROS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+# [P1-PLAN-LOTE-348] el plato descrito y separado en partes (mismo coste y la misma exención que el anterior)
+_ESTIMATE_PLATE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -1082,6 +1091,45 @@ async def api_estimate_macros(
         "estimated": True,
         "model": model,
     }
+
+
+@router.post("/consumed/estimate-plate")
+async def api_estimate_plate(
+    payload: EstimatePlateRequest,
+    verified_user_id: Optional[str] = Depends(_ESTIMATE_PLATE_LIMITER),
+):
+    """[P1-PLAN-LOTE-348 · 2026-09-26] «Descríbelo y lo calculo»: el texto libre separado en partes EDITABLES
+    (`plato_descrito.py`). Como el estimador de macros: exento de la cuota de planes (el gasto va a
+    `llm_usage_events`), borrador que el usuario revisa, y registro por `/consumed/manual`. Soft-fail 200."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    import plato_descrito
+    text = " ".join(str(payload.text or "").split())[:300]
+    if len(text) < 3:
+        raise HTTPException(status_code=422, detail="Describe el plato con al menos 3 caracteres")
+    try:
+        from traduccion_para_mostrar import locale_soportado
+        from prompts.chat_agent import _COACH_LANGUAGE_NAMES
+        _loc = locale_soportado(payload.locale)
+        idioma = _COACH_LANGUAGE_NAMES.get(_loc or "")
+    except Exception:
+        idioma = None
+    fallo = {
+        "operation_failed": True,
+        "error_code": "estimate_unavailable",
+        "error_message": "No pudimos calcular tu plato ahora; añade los alimentos a mano o inténtalo de nuevo.",
+    }
+    try:
+        est = await plato_descrito.estimar_con_ia(text, idioma, verified_user_id)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-348] plato descrito falló user={verified_user_id[:8]}: {type(e).__name__}: {e}")
+        return fallo
+    lineas = plato_descrito.lineas_del_plato((est or {}).get("items"))
+    if not lineas:
+        return {**fallo, "error_code": "estimate_empty"}
+    nombre = " ".join(str((est or {}).get("name") or "").split())[:120] or text[:120]
+    logger.info(f"[P1-PLAN-LOTE-348] user={verified_user_id[:8]} «{text[:60]}» → {len(lineas)} partes")
+    return {"name": nombre, "lineas": lineas, "estimated": True}
 
 
 @router.post("/consumed/manual")

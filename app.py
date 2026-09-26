@@ -710,7 +710,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # contrato: «½ g de Sal» con «1 pizca de sal» en la lista (pulido_lineas.pulir_plan → pizcas_de_la_lista).
 # [P1-PLAN-LOTE-359 · 2026-09-26] (backend) la pista de gramos no repite la mención ni arrastra calificativos dobles:
 # «80 g de yogurt griego sin azúcar (80 g) natural sin azúcar» (25 de 314 planes) → «80 g de yogurt griego sin azúcar».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-359 · 2026-09-26"
+# [P1-PLAN-LOTE-348 · 2026-09-26] (backend + frontend) «¿Qué comiste?» para armar un plato desde cero: tres formas
+# de empezar a la vista, «Descríbelo y lo calculo» (`/consumed/estimate-plate` → partes editables; casa solo PLATOS del
+# catálogo, los alimentos son crudos) y líneas estimadas/a mano editables.
+# [P1-PLAN-LOTE-360 · 2026-09-26] (frontend) al volver de la galería el iPhone se congelaba 769 ms: WebKit decodificaba
+# la foto GRANDE de la vista previa en el hilo principal; en iOS la caja espera a la miniatura (worker, sin 650 ms).
+# «Otra…» recalcula solo al terminar de escribir y el campo se centra.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-360 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
