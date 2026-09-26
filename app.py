@@ -655,7 +655,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-328..331 · 2026-09-25] (backend) el paso dice lo que dice la lista también en piezas («corta 205 g de
 # pechuga» con «1 pechuga (≈158 g)»), porciones («2 porciones de casabe» con 1), pizcas («½ g de semillas» con «1
 # pizca») y enumeraciones («50 g de aguacate, 30 g de aguacate») — `pasos_cantidades.lo_que_dice_la_lista`.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-331 · 2026-09-25"
+# [P1-PLAN-LOTE-336 · 2026-09-26] (frontend) la sonda del teclado anota pausas del hilo principal (> 50 ms) y traza
+# fotograma a fotograma quién mueve la página (paneo S, scroll sy, contenedor top, caja) tras foco/aviso del teclado:
+# el video del dueño enseña la página desplazada al abrir/cerrar y hay que saber QUIÉN antes de tocar el nativo.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-336 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
