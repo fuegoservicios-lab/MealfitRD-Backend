@@ -2123,3 +2123,183 @@ def conteos_con_unidad(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-377 · 2026-09-26] Lo crudo nunca «ya viene cocido»: el pescado fresco se cocina ─────────────────────
+# Batería REAL sobre el 376 (perfil del dueño, día 3, cena): «…dora el queso blanco fresco… Escurre e incorpora filete de
+# pescado blanco (ya viene cocido) a la preparación antes de servir» con «¾ filete de pescado (≈88 g)» en la lista —
+# pescado CRUDO que la receta manda servir sin cocerlo. El cerrador de proteína puso atún en lata con su frase de
+# enlatado; el tope de sodio lo cambió por filete fresco (`swap_canned`) y reescribió el NOMBRE, no la frase. La guarda
+# P1-CLOSER-FRESH-COCIDO existe pero su regex arranca en el PRIMER verbo del párrafo («Cocina las arepitas…») y no llega a
+# la frase fusionada. Corpus: 2 comidas más. Aquí, en la cola del contrato, la frase «(ya viene cocido)» cuyo alimento
+# está en la lista SIN ninguna marca de enlatado o cocido pasa a una cocción con su temperatura segura. Seguridad
+# alimentaria: sin línea en la lista para decidirlo, no se toca. tooltip-anchor: P1-PLAN-LOTE-377
+_YA_COCIDO_377_RE = re.compile(
+    r"(?P<v>Escurre e incorpora|Incorpora)\s+(?P<food>[^.;:()]{3,60}?)\s+\(ya viene cocid[oa]\)\s+"
+    r"(?P<post>a la preparaci[oó]n antes de servir|al guiso en los [uú]ltimos minutos)\.?", re.IGNORECASE)
+_PRECOCIDO_377_RE = re.compile(r"\blata\b|enlatad|\ben\s+agua\b|\ben\s+aceite\b|sardina|ahumad|cocid|precocid")
+_PESCADO_377_RE = re.compile(r"\b(?:pescado|filete|tilapia|merluza|dorado|mero|chillo|corvina|pargo|salmon|bacalao|atun)\b")
+_CARNE_377_RE = re.compile(r"\b(?:pollo|pechuga|muslo|pavo|cerdo|res|carne|lomo|chuleta)\b")
+_MARISCO_377_RE = re.compile(r"\b(?:camarones?|langostinos?|calamar(?:es)?|mariscos?)\b")
+#: cabezas genéricas: «pechuga de pavo» se busca en la lista por «pavo» — la línea «pechuga de pollo cocida» no la hace
+#: cocida (así se engañó también el cerrador: pavo CRUDO «ya viene cocido» en el replay, celíaco de producción)
+_GENERICO_377 = {"queso", "yogurt", "yogur", "pechuga", "filete", "carne"}
+
+
+def crudo_no_viene_cocido(meal) -> int:
+    """Nº de frases reescritas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [_sa(str(x).lower()) for x in list(meal.get("ingredients") or []) + list(meal.get("ingredients_raw") or [])]
+
+        def _sub(mm):
+            food = mm.group("food").strip()
+            fn = _sa(food.lower())
+            toks = [t for t in _toks(fn) if t not in ("blanco", "blanca", "fresco", "fresca", "natural", "entero", "entera")]
+            if len(toks) > 1:
+                toks = [t for t in toks if t not in _GENERICO_377] or toks
+            cands = [l for l in lineas if any(t in l for t in toks)]
+            if not toks or not cands or any(_PRECOCIDO_377_RE.search(l) for l in cands):
+                return mm.group(0)
+            primera = fn.split()[0]
+            fem = primera.endswith("a") or primera in ("carne",)
+            plural = primera.endswith("s") and not primera.endswith("ss")
+            art = ("las" if fem else "los") if plural else ("la" if fem else "el")
+            lo = ("las" if fem else "los") if plural else ("la" if fem else "lo")
+            destino = ("a la preparación antes de servir" if mm.group("post").lower().startswith("a la")
+                       else "al guiso en los últimos minutos")
+            if _MARISCO_377_RE.search(fn):
+                como = "2-3 min por lado, hasta que estén rosados y opacos por dentro"
+            elif _PESCADO_377_RE.search(fn):
+                como = "a la plancha 3-4 min por lado, hasta que se desmenuce fácilmente (63 °C al centro)"
+            elif _CARNE_377_RE.search(fn):
+                como = "a la plancha 5-7 min por lado, hasta que no quede rosado por dentro (74 °C al centro)"
+            else:
+                como = "por completo, hasta que esté bien cocido por dentro"
+            return f"Cocina {art} {food} {como}, y agréga{lo} {destino}."
+
+        n = 0
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            s = _YA_COCIDO_377_RE.sub(_sub, p)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-379 · 2026-09-26] La licuadora va antes del fuego, y ni la carne ni el huevo van a ella ────────────────
+# Batería REAL sobre el 376 (perfil del dueño, día 1): «licúa la avena, el yogurt…; cocina los panqueques en sartén… 2-3
+# minutos por lado… Agrega queso cottage a la licuadora y licúa hasta integrar» — el cerrador de proteína ve «licúa» en los
+# pasos y escribe su frase de batido, pero la masa YA se cocinó. Corpus de 315 planes: 5 masas así (panqueques, tortitas,
+# una tarta horneada) y dos disparates peores: «Agrega pechuga de pavo a la licuadora» en unas arepitas y «Agrega huevo a
+# la licuadora» en un bowl FRÍO (huevo crudo licuado). En la cola del contrato: (a) carne, pescado o huevo crudos nunca van
+# a la licuadora — si otro paso ya los cocina la frase sobra; si no, pasa a cocción con su punto seguro y «sírvelo al
+# lado»; lo enlatado o cocido, al lado; (b) un lácteo sobre una MASA ya cocinada (panqueque, tortita, arepita, tarta…) va
+# al lado, o sobra si el plato ya lo sirve aparte. Un batido, un bowl frío o un yogur licuado conservan su frase.
+# tooltip-anchor: P1-PLAN-LOTE-379
+_LICUADORA_379_RE = re.compile(r"(?:💪\s*)?Agrega (?P<food>[^.;:()]{2,60}?) a la licuadora y licúa hasta integrar\.",
+                               re.IGNORECASE)
+_MASA_379_RE = re.compile(r"\b(?:panqueques?|pancakes?|tortitas?|arepitas?|crepes?|crepas?|waffles?|tartas?|bizcochos?|"
+                          r"muffins?|magdalenas?|quiches?|budin|pudin)\b")
+_FUEGO_379_RE = re.compile(r"sarten|hornea|\bhorno\b|airfryer|a fuego|plancha|\bcocina\b|cocinal|vierte la masa")
+_CRUDO_379_RE = re.compile(r"\b(?:huevos?|claras?|pollo|pechuga|pavo|res|cerdo|carne|pescado|filete|tilapia|merluza|"
+                           r"salmon|atun|sardinas?|camarones?|chuleta|lomo)\b")
+_COCCION_379_RE = re.compile(r"\b(?:cocin\w*|cuec\w*|cuece|hierv\w*|plancha|hornea\w*|saltea\w*|dora\w*|frie|sofrie\w*|"
+                             r"revuelv\w*)\b")
+_APARTE_379_RE = re.compile(r"\b(?:acompana con|al lado|por encima|sirve con)\b")
+_ADJ_379 = {"griego", "griega", "entero", "entera", "natural", "fresco", "fresca", "blanco", "blanca", "pasteurizado",
+            "descremado", "light", "bajo", "grasa", "azucar"}
+_CABECERA_379_RE = re.compile(r"^\s*[^:.]{1,40}:\s*$")
+
+
+def _frase_coccion_379(food: str) -> str:
+    fn = _sa(food.lower())
+    primera = fn.split()[0]
+    fem = primera.endswith("a") or primera in ("carne",)
+    plural = primera.endswith("s") and not primera.endswith("ss")
+    art = ("las" if fem else "los") if plural else ("la" if fem else "el")
+    lo = ("las" if fem else "los") if plural else ("la" if fem else "lo")
+    if re.search(r"\bclaras?\b", fn):
+        como = "en la sartén a fuego medio hasta que estén firmes y opacas"
+    elif re.search(r"\bhuevos?\b", fn):
+        como = "en la sartén a fuego medio hasta que la clara y la yema estén firmes"
+    elif _MARISCO_377_RE.search(fn):
+        como = "2-3 min por lado, hasta que estén rosados y opacos por dentro"
+    elif _PESCADO_377_RE.search(fn):
+        como = "a la plancha 3-4 min por lado, hasta que se desmenuce fácilmente (63 °C al centro)"
+    elif _CARNE_377_RE.search(fn):
+        como = "a la plancha 5-7 min por lado, hasta que no quede rosado por dentro (74 °C al centro)"
+    else:
+        como = "por completo, hasta que esté bien cocido por dentro"
+    return f"Cocina {art} {food} {como} y sírve{lo} al lado."
+
+
+def licuadora_a_tiempo(meal) -> int:
+    """Nº de frases del cerrador corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        nombre = _sa(str(meal.get("name") or "").lower())
+        lineas = [_sa(str(x).lower()) for x in list(meal.get("ingredients") or []) + list(meal.get("ingredients_raw") or [])]
+        n = 0
+        i = 0
+        while i < len(rec):
+            p = rec[i]
+            mm = _LICUADORA_379_RE.search(p) if isinstance(p, str) else None
+            if not mm:
+                i += 1
+                continue
+            food = mm.group("food").strip()
+            fn = _sa(food.lower())
+            toks = [t for t in _toks(fn) if t not in _ADJ_379]
+            if len(toks) > 1:                                    # «queso cottage» se busca por «cottage», no por «queso»
+                toks = [t for t in toks if t not in _GENERICO_377] or toks
+            if not toks:
+                i += 1
+                continue
+            resto = [_sa(str(q).lower()) if j != i else _sa((p[:mm.start()] + " " + p[mm.end():]).lower())
+                     for j, q in enumerate(rec)]
+            clausulas = [c for c in re.split(r"[.;:]", " . ".join(resto))
+                         if any(re.search(r"\b" + re.escape(t), c) for t in toks)]
+            aparte = any(_APARTE_379_RE.search(c) for c in clausulas)
+            if _CRUDO_379_RE.search(fn):
+                precocido = _PRECOCIDO_377_RE.search(fn) or any(
+                    _PRECOCIDO_377_RE.search(l) for l in lineas if any(t in l for t in toks))
+                if precocido:
+                    nuevo = "" if aparte else f"Sirve {food} al lado para acompañar."
+                elif any(_COCCION_379_RE.search(c) for c in clausulas):
+                    nuevo = ""
+                else:
+                    nuevo = _frase_coccion_379(food)
+            else:
+                antes = " ".join(_sa(str(q).lower()) for q in rec[:i]) + " " + _sa(p[:mm.start()].lower())
+                ult = antes.rfind("licu")                  # el fuego cuenta DESPUÉS de la última licuada (el batido
+                if not (_MASA_379_RE.search(nombre)        # que se licúa tras cocinar las arepitas sigue en su vaso)
+                        and _FUEGO_379_RE.search(antes[ult:] if ult >= 0 else antes)):
+                    i += 1
+                    continue
+                nuevo = "" if aparte else f"Sirve {food} al lado para acompañar."
+            s = re.sub(r"\s{2,}", " ", p[:mm.start()] + nuevo + p[mm.end():]).strip()
+            n += 1
+            if not s or _CABECERA_379_RE.match(s) or s in ("💪",):
+                del rec[i]
+                continue
+            rec[i] = s
+            i += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0

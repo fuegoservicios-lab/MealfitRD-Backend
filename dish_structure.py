@@ -86,7 +86,8 @@ def familia(meal) -> str:
     """La familia del plato por su NOMBRE (y, si el nombre calla, por los pasos para tortilla/revoltillo)."""
     try:
         n = _norm((meal or {}).get("name"))
-        if _TORTILLA_PAN_RE.search(n):
+        es_wrap, n = _nombre_de_familia_378(n)      # [P1-PLAN-LOTE-378] la tortilla que acompaña no hace wrap
+        if es_wrap:
             return "tostada_wrap"
         for f in ("tortilla_revuelto", "panqueque", "tostada_wrap", "batido_crema", "guiso", "ensalada", "bowl"):
             if _FAM_RE[f].search(n):
@@ -143,7 +144,7 @@ def componentes(meal) -> dict:
                 out["liquidos_ml"] += ml
                 continue
             out["solidos_g"] += g
-            if _PAN_RE.search(nm) and g:
+            if _es_pan_378(nm) and g:                    # [P1-PLAN-LOTE-378] «almendras tostadas» no es pan
                 if out["soporte"] is None or g > out["soporte"][1]:
                     out["soporte"] = (nm, g)
                 continue
@@ -173,7 +174,8 @@ def relaciones(meal, comp: Optional[dict] = None, fam: Optional[str] = None) -> 
                             "detalle": (f"promete espesor con {comp['solidos_g']:g} g de sólidos en {comp['liquidos_ml']:g} ml "
                                         f"({ratio:.2f} g/ml, umbral {UMBRALES['crema_solidos_por_ml_min']}) y ningún paso reduce ni espesa"),
                             "evidencia": EVIDENCIA["crema_sin_espesante"]})
-        if fam == "tostada_wrap" and comp["soporte"] and comp["soporte"][1] > 0 and not _ABIERTA_RE.search(n):  # [P1-PLAN-LOTE-344]
+        if (fam == "tostada_wrap" and comp["soporte"] and comp["soporte"][1] > 0 and not _ABIERTA_RE.search(n)  # [P1-PLAN-LOTE-344]
+                and _soporte_del_nombre_378(n, comp["soporte"][0])):                     # [P1-PLAN-LOTE-378]
             relleno = comp["solidos_g"] - comp["soporte"][1]
             ratio = relleno / comp["soporte"][1]
             if ratio > UMBRALES["wrap_relleno_por_pan_max"] and not _WRAP_APARTE_RE.search(pasos):
@@ -250,3 +252,51 @@ def contract(meal) -> dict:
                 "fuente": "nombre+lista+pasos", "umbrales": dict(UMBRALES)}
     except Exception:
         return {"familia": "otro", "componentes": {}, "relaciones": [], "confianza": "baja", "fuente": "error"}
+
+
+
+# ── [P1-PLAN-LOTE-378 · 2026-09-26] El wrap es el plato que se ENVUELVE ─────────────────────────────────────────────────
+# Batería REAL sobre el 376 (perfil del dueño, día 3): «Wok rápido de pollo y auyama con tortilla integral» recibía un
+# SEGUNDO Montaje —«rellena la casabe con lo que cierra (unos 150 g del relleno)… un wrap que se puede cerrar»—. Tres
+# fallos del detector del lote 27: (1) una «tortilla integral/de trigo/de maíz» en CUALQUIER lugar del nombre hacía wrap
+# al plato, también cuando ACOMPAÑA («… con tortilla integral», «… y tortillas de maíz») o es la BASE («… sobre tortilla
+# integral»): sólo es la vasija cuando el nombre EMPIEZA por ella o la dice con «en»/«de» («… en tortilla integral»,
+# «Wrap de tortilla integral»); si acompaña, el plato es lo demás («Revoltillo … con tortilla integral» es un revoltillo);
+# (2) el soporte era el pan con más gramos de la lista —el casabe que el cerrador añadió de guarnición—, no el pan que el
+# nombre dice; (3) «almendras tostadas» y «soya tostada» contaban como pan (y como tostada del nombre). En el corpus de
+# 315 planes hay 15 reparaciones así y 14 van sobre algo que no se cierra. tooltip-anchor: P1-PLAN-LOTE-378
+_VASIJA_378 = ("en", "de")
+_ADJ_PAN_378_RE = re.compile(r"^\s*(?:tostad[ao]s?|dorad[ao]s?|tibi[ao]s?|calientes?|crujientes?|horneadas?)\b")
+_ADJ_TOSTADA_378_RE = re.compile(r"\b(?!(?:pan|tortillas?|casabe|arepas?)\b)[a-z]+\s+tostad[ao]s?\b")
+_PAN_NOMBRE_378_RE = re.compile(r"\b(pan|tortillas?|pita|casabe|arepas?)\b")
+
+
+def _nombre_de_familia_378(n: str):
+    """`(es_wrap, nombre_sin_acompañantes)`: la tortilla-pan es la vasija sólo al empezar el nombre o tras «en»/«de»; si
+    acompaña o es la base, sale del nombre (con su adjetivo) y el plato es lo demás. «X tostada(s)» con X que no es pan
+    tampoco es una tostada."""
+    while True:
+        m = _TORTILLA_PAN_RE.search(n)
+        if not m:
+            break
+        antes = n[:m.start()].split()
+        if not antes or antes[-1] in _VASIJA_378:
+            return True, n
+        n = n[:m.start()] + " " + _ADJ_PAN_378_RE.sub(" ", n[m.end():])
+    return False, _ADJ_TOSTADA_378_RE.sub(" ", n)
+
+
+def _es_pan_378(nm: str) -> bool:
+    """Una línea es pan si nombra uno; «tostada(s)» sólo cuando ES la línea («tostadas integrales»), no su adjetivo
+    («almendras tostadas», «soya tostada»)."""
+    for m in _PAN_RE.finditer(str(nm or "")):
+        if m.group(1).startswith("tostada") and m.start() > 0:
+            continue
+        return True
+    return False
+
+
+def _soporte_del_nombre_378(n: str, soporte: str) -> bool:
+    """Si el nombre dice su pan, el soporte ES ese pan; sin nombrar pan («Wrap de pollo»), vale cualquiera."""
+    nombrados = {w[:-1] if w.endswith("s") else w for w in _PAN_NOMBRE_378_RE.findall(str(n or ""))}
+    return not nombrados or any(re.search(r"\b" + re.escape(w), str(soporte or "")) for w in nombrados)

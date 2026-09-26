@@ -730,7 +730,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # («mide 140 g de garbanzos cocidos» con los secos en la lista: 123 comidas con V7c) — pasos_cantidades.coccion_previa.
 # [P1-PLAN-LOTE-376 · 2026-09-26] (backend) el conteo del paso sigue al de la lista también en piezas, filetes y
 # guineítos: «mide 2 piezas de casabe» con 1, «los 2 guineítos verdes» con 1 (pasos_cantidades.conteos_con_unidad).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-376 · 2026-09-26"
+# [P1-PLAN-LOTE-377 · 2026-09-26] (backend) lo crudo nunca «ya viene cocido»: «Escurre e incorpora filete de pescado
+# blanco (ya viene cocido)» con el filete FRESCO en la lista (batería real del dueño) → cocción con 63 °C.
+# [P1-PLAN-LOTE-378 · 2026-09-26] (backend) el wrap es el plato que se envuelve: «Wok … con tortilla integral»
+# recibía «rellena la casabe con lo que cierra… un wrap que se puede cerrar» (batería real del dueño); se retira.
+# [P1-PLAN-LOTE-379 · 2026-09-26] (backend) la licuadora va antes del fuego: «Agrega queso cottage a la licuadora»
+# tras cocinar los panqueques (batería real del dueño) → al lado; carne o huevo crudos nunca van a la licuadora.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-379 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

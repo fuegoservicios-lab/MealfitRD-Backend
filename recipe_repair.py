@@ -162,6 +162,7 @@ def reparar_estructura(meal: dict) -> dict:
         if not isinstance(meal, dict) or not isinstance(meal.get("recipe"), list):
             return out
         from dish_structure import componentes, familia, relaciones
+        out["retirado"] = retirar_wrap_que_no_es(meal)       # [P1-PLAN-LOTE-378] el wrap que no es un wrap
         fam = familia(meal)
         comp = componentes(meal)
         for r in relaciones(meal, comp, fam):
@@ -422,3 +423,41 @@ def colapsar_repeticiones(meal: dict, index: dict) -> dict:
         return out
     return out
 
+
+
+# ── [P1-PLAN-LOTE-378 · 2026-09-26] La reparación del wrap que no es un wrap se retira ──────────────────────────────────
+# El reparador añade su propio Montaje al final («rellena la X con lo que cierra… un wrap que se puede cerrar»); el
+# detector del lote 27 lo disparaba sobre un wok servido con tortilla, sobre tostadas abiertas y sobre «almendras
+# tostadas» (dish_structure, lote 378). Los planes ya guardados lo llevan escrito: en la siguiente pasada del contrato
+# se retira SÓLO si el plato no es un wrap (familia), es abierto (tostada), o lo que «rellena» no es pan o no es el pan
+# que el nombre dice. Un wrap de verdad conserva su paso aunque la lista haya cambiado de gramos a piezas.
+_WRAP_PASO_378_RE = re.compile(
+    r"^Montaje: rellena la (?P<pan>.+?) con lo que cierra \(unos \d+(?:[.,]\d+)? g del relleno\) y sirve el resto del "
+    r"relleno \(~\d+(?:[.,]\d+)? g\) al lado, como ensalada: misma compra, un wrap que se puede cerrar\.$")
+
+
+def retirar_wrap_que_no_es(meal: dict) -> int:
+    """Nº de pasos retirados; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list):
+            return 0
+        from dish_structure import _ABIERTA_RE, _es_pan_378, _soporte_del_nombre_378, familia
+        nombre = _norm(meal.get("name"))
+        quitar = []
+        for i, p in enumerate(rec):
+            m = _WRAP_PASO_378_RE.match(str(p).strip())
+            if not m:
+                continue
+            pan = _norm(m.group("pan"))
+            if (familia(meal) != "tostada_wrap" or _ABIERTA_RE.search(nombre) or not _es_pan_378(pan)
+                    or not _soporte_del_nombre_378(nombre, pan)):
+                quitar.append(i)
+        for i in reversed(quitar):
+            del rec[i]
+        if quitar:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return len(quitar)
+    except Exception:
+        return 0
