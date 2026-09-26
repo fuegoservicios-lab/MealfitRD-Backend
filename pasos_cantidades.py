@@ -3312,3 +3312,45 @@ def viver_cocido_de_la_lista(meal) -> int:
         return len(notas)
     except Exception:
         return 0
+
+
+
+# ── [P1-PLAN-LOTE-409 · 2026-09-26] El huevo duro que ningún paso hierve trae su hervor ──────────────────────────────────
+# Replay de la cola sobre 319 planes, tras el 407-408: «pela 3 huevos y 2 claras de huevo cocidos», «ten listos 2 huevos
+# enteros bien cocidos», «pela 75 g de huevo cocido» con los huevos CRUDOS en la lista y ningún paso que los hierva (9
+# comidas, perfiles sin tiempo, embarazo y lactancia). Como el 407: «💡 Cocción previa» con el hervor del huevo y, si la
+# lista trae claras, un huevo más por cada clara sin su yema (390, 405). Nunca si la lista los compra cocidos ni si un paso
+# los hierve. tooltip-anchor: P1-PLAN-LOTE-409
+_HUEVO_DURO_409_RE = re.compile(r"(?:pela|corta|agrega|anade|incorpora|coloca|reparte|mide|ten\s+list[oa]s?)\b[^.;]{0,40}"
+                                r"\bhuevos?\b[^.;]{0,20}\b(?:ya\s+)?(?:bien\s+)?(?:cocid|hervid|dur)[oa]s?\b")
+_HIERVE_HUEVO_409_RE = re.compile(r"\b(?:hierve|hiervel\w*|cuece|cocina|pon\s+a\s+hervir|sumerge)\w*[^.;]{0,40}\bhuevos?\b|"
+                                  r"\bhuevos?\b[^.;]{0,40}(?:agua hirviendo|a hervir|\d+\s*-\s*\d+\s*min)")
+
+
+def huevo_duro_de_la_lista(meal) -> int:
+    """Nº de notas añadidas (0 o 1); 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lista = " | ".join(_sa(str(x).lower()) for x in (meal.get("ingredients") or []))
+        sin_formas = re.sub(r"(?:claras?|yemas?) de huevos?", " ", lista)
+        if not re.search(r"\bhuevos?\b", sin_formas) or re.search(r"huevos? (?:cocid|dur|hervid)", lista):
+            return 0
+        texto = " . ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str) and not _es_nota(p))
+        todo = " . ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str))
+        if not _HUEVO_DURO_409_RE.search(texto) or _HIERVE_HUEVO_409_RE.search(texto):
+            return 0
+        if "coccion previa" in todo and "huevo" in todo[todo.find("coccion previa"):]:
+            return 0
+        nota = "💡 Cocción previa: hierve los huevos 10-12 min, pásalos a agua fría y pélalos"
+        if re.search(r"\bclaras? de huevos?\b", lista):
+            nota += "; para las claras de huevo de la lista, hierve también un huevo por cada clara y quítale la yema al pelarlo"
+        nota += "."
+        i_mise = next((i for i, s in enumerate(rec) if isinstance(s, str) and s.strip().lower().startswith("mise en place")), None)
+        rec.insert((i_mise + 1) if i_mise is not None else 0, nota)
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return 1
+    except Exception:
+        return 0
