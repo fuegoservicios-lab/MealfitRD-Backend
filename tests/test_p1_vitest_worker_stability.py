@@ -100,7 +100,8 @@ def test_el_conteo_esperado_de_archivos_sigue_siendo_verificable():
     assert reales >= 200, f"solo {reales} archivos de test encontrados: ¿ruta mala?"
     # 2026-09-04: 368 (+49 desde el 08-23). 2026-09-19: 409 (+41: lotes 85-112 del plan).
     # 2026-09-22: 450 (+41: lotes 113-157, la tanda de la app nativa y el repaso del coach).
-    documentado = 450
+    # 2026-09-26: 492 (+42: lotes 158-364, escáner, teclado y coach).
+    documentado = 492
     assert abs(reales - documentado) <= 40, (
         f"el config documenta {documentado} archivos y hay {reales}: actualiza la nota "
         "o la referencia deja de detectar una corrida incompleta")
