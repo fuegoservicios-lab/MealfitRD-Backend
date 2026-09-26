@@ -118,7 +118,12 @@ def test_fototeca_directa_en_la_app_nativa():
     assert "onClick={openGallery}" in sm
     pk = _front("src/utils/nativeChatImagePicker.js")
     assert "export async function chooseNativeGalleryImage()" in pk
-    assert "allowMultipleSelection: false," in pk
+    # [P1-PLAN-LOTE-367] una sola foto; en iOS por el selector de Apple (`pickImages`), si no por `chooseFromGallery`
+    if "elegirDeLaFototeca" in pk:
+        assert "elegirDeLaFototeca({ limit: 1, quality: 90, size: 2000 })" in pk
+        assert "allowMultipleSelection: limit > 1," in pk
+    else:
+        assert "allowMultipleSelection: false," in pk
     # el plugin ya está en el proyecto iOS y el permiso declarado
     assert '"@capacitor/camera"' in _front("package.json")
     assert "NSPhotoLibraryUsageDescription" in _front("ios/App/App/Info.plist")
