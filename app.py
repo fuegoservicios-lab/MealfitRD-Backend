@@ -778,7 +778,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # hervor: «maja la yautía ya hervida» sin paso que la hierva → «💡 Cocción previa» con el tiempo del 394.
 # [P1-PLAN-LOTE-409 · 2026-09-26] (backend) el huevo duro que ningún paso hierve trae su hervor: «pela 3 huevos y 2
 # claras de huevo cocidos» con huevos crudos en la lista (9 en el replay) → «💡 Cocción previa: hierve los huevos…».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-409 · 2026-09-26"
+# [P1-PLAN-LOTE-420 · 2026-09-26] (backend) el pan de un «Wrap integral» es la tortilla, no el casabe del cerrador.
+# [P1-PLAN-LOTE-421..424 · 2026-09-26] (backend) batería real sobre el 409 (dueño): claras «a la plancha o
+# hervidas» → cuajadas; «corta 5 g,» sin alimento sale; «1½ tortas de casabe» con 1 en la lista; «4 claras con 4».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-424 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

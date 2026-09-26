@@ -3354,3 +3354,147 @@ def huevo_duro_de_la_lista(meal) -> int:
         return 1
     except Exception:
         return 0
+
+
+
+# ── [P1-PLAN-LOTE-421 · 2026-09-26] Las claras sueltas no se hierven: el cerrador las cuaja ──────────────────────────────
+# Batería REAL sobre el 409 (perfil del dueño, día 1): «Cocina 3 huevos y 2 claras de huevo a la plancha o hervidos y
+# sírvelos como proteína del plato» — la plantilla del cerrador ofrece hervir, y una clara suelta no se hierve (21 en el
+# corpus; el 405 sólo cubría «Cocina huevo…» con sólo claras). Con claras en el objeto, la frase las cuaja en la sartén.
+# tooltip-anchor: P1-PLAN-LOTE-421
+_CERRADOR_CLARAS_421_RE = re.compile(
+    r"Cocina (?P<obj>[^.;]*?\bclaras? de huevo[^.;]*?) a la plancha o hervid[oa]s? y sírvel[oa]s? como proteína del plato\.")
+
+
+def claras_del_cerrador(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+
+            def _sub(m):
+                obj = m.group("obj")
+                enteros = re.search(r"\bhuevos?\b", re.sub(r"(?:claras?|yemas?) de huevos?", " ", obj))
+                rev, lo = ("revueltos", "sírvelos") if enteros else ("revueltas", "sírvelas")
+                return f"Cocina {obj} en la sartén, {rev}, hasta que cuajen por completo, y {lo} como proteína del plato."
+
+            s = _CERRADOR_CLARAS_421_RE.sub(_sub, p)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-422 · 2026-09-26] «corta 5 g,» sin alimento sale ──────────────────────────────────────────────────────
+# La misma batería (cena, día 1): «…corta 1 pepino mediano y ½ nabo pequeño en cubos finos; corta 5 g, exprime 1 limón» —
+# el alimento se fue del paso (la retirada de lo que la lista no trae, lote 30) y quedó su verbo con los gramos. Corpus:
+# 14 («lava y corta 5 g;», «y mide 30 g.»). Un «corta/pica/mide/pesa N g» sin alimento detrás se retira con su «y».
+# tooltip-anchor: P1-PLAN-LOTE-422
+_MIGAJA_422_RE = re.compile(
+    r"(?P<pre>(?:,|;|:)\s*|\s+y\s+)(?:(?:lava|pela)\s+y\s+)?(?:corta|pica|mide|pesa)\s+\d+(?:[.,]\d+)?\s*g(?=\s*[,;.])")
+
+
+def migaja_sin_alimento(meal) -> int:
+    """Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            s = _MIGAJA_422_RE.sub(lambda m: m.group("pre") if m.group("pre").strip() in (",", ";", ":") else "", p)
+            s = re.sub(r"\s*([,;])\s*([,;.])", r"\2", s)                 # «; ,» / «, .» que quedan
+            s = re.sub(r":\s*[,;]\s*", ": ", s)
+            s = re.sub(r"\s{2,}", " ", s).strip()
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-423 · 2026-09-26] Las tortas de casabe del paso son las de la lista ────────────────────────────────────
+# La misma batería (merienda, día 1): «mide 1½ tortas pequeñas de casabe» con «1 torta pequeña de casabe» en la lista
+# (corpus: 4; el 376 no conoce «torta»). Con UNA línea de casabe contada en tortas y UNA mención en los pasos, el paso
+# dice la cantidad de la lista, con el sustantivo y el adjetivo en su número. tooltip-anchor: P1-PLAN-LOTE-423
+_TORTAS_423_RE = re.compile(r"(?<![\w.,/½¼¾⅓⅔])(?P<q>\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔])\s+(?P<t>tortas?)"
+                            r"(?P<adj>\s+(?:pequeñas?|medianas?|grandes?))?\s+de\s+casabe\b", re.IGNORECASE)
+
+
+def tortas_de_casabe(meal) -> int:
+    """Nº de menciones corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [m for m in (_TORTAS_423_RE.match(str(x).strip()) for x in (meal.get("ingredients") or [])) if m]
+        casabes = [x for x in (meal.get("ingredients") or []) if "casabe" in _sa(str(x).lower())]
+        if len(lineas) != 1 or len(casabes) != 1:
+            return 0
+        q_lista = lineas[0].group("q").replace(" ", "")
+        valor = _valor_cuenta(q_lista)
+        menciones = [(i, m) for i, p in enumerate(rec) if isinstance(p, str) and not _es_nota(p)
+                     for m in _TORTAS_423_RE.finditer(p)]
+        if len(menciones) != 1:
+            return 0
+        i, m = menciones[0]
+        if abs(_valor_cuenta(m.group("q")) - valor) < 1e-6:
+            return 0
+        plural = valor > 1
+        adj = (m.group("adj") or "").strip()
+        if adj:
+            base = re.sub(r"s$", "", adj)
+            adj = " " + (base + "s" if plural else base)
+        nuevo = f"{q_lista} {'tortas' if plural else 'torta'}{adj} de casabe"
+        p = rec[i]
+        rec[i] = p[:m.start()] + nuevo + p[m.end():]
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return 1
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-424 · 2026-09-26] «bate 4 claras de huevo con 4 claras de huevo» → una vez ──────────────────────────────
+# La misma batería (desayuno, día 1): «bate 4 claras de huevo con 4 claras de huevo (130 g)» — el tope de yemas pasó el
+# huevo entero a claras y la regla 2 reescribió también el «1 huevo» del paso a la forma de la lista (corpus: 3). La misma
+# mención dos veces seguidas queda una (con su pista). tooltip-anchor: P1-PLAN-LOTE-424
+_CLARAS_DOBLES_424_RE = re.compile(r"(?P<x>\d+ claras? de huevo)\s+(?:con|y)\s+(?P=x)(?P<p>\s*\(\d+(?:[.,]\d+)?\s*g\))?")
+
+
+def claras_una_vez(meal) -> int:
+    """Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            s = _CLARAS_DOBLES_424_RE.sub(lambda m: m.group("x") + (m.group("p") or ""), p)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0

@@ -269,6 +269,10 @@ _VASIJA_378 = ("en", "de")
 _ADJ_PAN_378_RE = re.compile(r"^\s*(?:tostad[ao]s?|dorad[ao]s?|tibi[ao]s?|calientes?|crujientes?|horneadas?)\b")
 _ADJ_TOSTADA_378_RE = re.compile(r"\b(?!(?:pan|tortillas?|casabe|arepas?)\b)[a-z]+\s+tostad[ao]s?\b")
 _PAN_NOMBRE_378_RE = re.compile(r"\b(pan|tortillas?|pita|casabe|arepas?)\b")
+#: [P1-PLAN-LOTE-420 · 2026-09-26] «Wrap integral de queso…» no nombra su pan, pero un wrap se envuelve en
+#: tortilla: su soporte no es el casabe que añadió el cerrador (batería real sobre el 409, perfil del dueño).
+#: tooltip-anchor: P1-PLAN-LOTE-420
+_WRAP_NOMBRE_420_RE = re.compile(r"\b(?:wraps?|burritos?|tacos?|quesadillas?|fajitas?)\b")
 
 
 def _nombre_de_familia_378(n: str):
@@ -299,4 +303,6 @@ def _es_pan_378(nm: str) -> bool:
 def _soporte_del_nombre_378(n: str, soporte: str) -> bool:
     """Si el nombre dice su pan, el soporte ES ese pan; sin nombrar pan («Wrap de pollo»), vale cualquiera."""
     nombrados = {w[:-1] if w.endswith("s") else w for w in _PAN_NOMBRE_378_RE.findall(str(n or ""))}
+    if not nombrados and _WRAP_NOMBRE_420_RE.search(str(n or "")):    # [P1-PLAN-LOTE-420] su pan es la tortilla
+        return bool(re.search(r"\b(?:tortillas?|wraps?|pitas?)\b", str(soporte or "")))
     return not nombrados or any(re.search(r"\b" + re.escape(w), str(soporte or "")) for w in nombrados)

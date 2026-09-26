@@ -956,6 +956,10 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").proteina_cocida_de_la_lista(meal)  # [P1-PLAN-LOTE-407] el pollo cocido que la lista compra crudo
         __import__("pasos_cantidades").viver_cocido_de_la_lista(meal)  # [P1-PLAN-LOTE-408] el víver hervido que la lista compra crudo
         __import__("pasos_cantidades").huevo_duro_de_la_lista(meal)  # [P1-PLAN-LOTE-409] el huevo duro, con su hervor
+        __import__("pasos_cantidades").claras_del_cerrador(meal)  # [P1-PLAN-LOTE-421] las claras no se hierven
+        __import__("pasos_cantidades").migaja_sin_alimento(meal)  # [P1-PLAN-LOTE-422] «corta 5 g,» sin alimento
+        __import__("pasos_cantidades").tortas_de_casabe(meal)  # [P1-PLAN-LOTE-423] las tortas de la lista
+        __import__("pasos_cantidades").claras_una_vez(meal)  # [P1-PLAN-LOTE-424] «4 claras con 4 claras»
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):
