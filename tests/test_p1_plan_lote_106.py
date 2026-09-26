@@ -53,7 +53,8 @@ def test_la_revision_son_cuatro_preguntas_y_manda_days_ago():
     for q in ("t('¿Qué es?')", "t('¿Cuánto comiste?')", "t('¿Qué comida es?')", "t('¿Cuándo?')", "t('Revisa y registra')"):
         assert q in sm, q
     assert "<select" not in sm
-    assert "days_ago: daysAgo," in sm
+    # [P1-PLAN-LOTE-366] cada plato viaja con SU día (el común si no lo marcó aparte)
+    assert "days_ago: destino.daysAgo," in sm and "destinoDelPlato(p, mealType, daysAgo)" in sm
     # [P1-PLAN-LOTE-124] los chips vienen de ./dayOptions.js e incluyen el día pedido (el escáner se abre desde el diario)
     assert "options={_getDayOptionsCon(t, initialDaysAgo)} value={daysAgo} onChange={setDaysAgo}" in sm
     assert "t('Quedó en el diario de {dia}; la ves en «Ver días anteriores».', { dia })" in sm

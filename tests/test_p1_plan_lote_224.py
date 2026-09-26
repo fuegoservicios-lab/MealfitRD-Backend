@@ -241,7 +241,8 @@ def test_el_escaner_manda_lo_que_el_servidor_espera():
     sm = _front("src/components/dashboard/ScanMealModal.jsx")
     assert "deduct_pantry: descontar," in sm
     assert "ingredients: ingredientesParaGuardar(p)," in sm
-    assert "days_ago: daysAgo," in sm
+    # [P1-PLAN-LOTE-366] cada plato viaja con SU día (el común si no lo marcó aparte)
+    assert "days_ago: destino.daysAgo," in sm and "destinoDelPlato(p, mealType, daysAgo)" in sm
     dishes = _front("src/components/dashboard/scanMealDishes.js")
     # el formato que `_parse_quantity` entiende, con punto decimal
     assert "`${cantidadParaServidor(c.qty)} ${c.unit} de ${c.name}`" in dishes

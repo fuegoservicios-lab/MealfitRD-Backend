@@ -53,7 +53,8 @@ def test_el_escaner_tambien_desde_el_diario_y_en_el_dia_que_se_mira():
     assert "if (registrando || escaneando) return;" in dh, "con cualquiera de las dos hojas encima, las teclas son suyas"
     sm = _front("src/components/dashboard/ScanMealModal.jsx")
     assert "useState(() => normalizarDiasAtras(initialDaysAgo));" in sm
-    assert "const dia = nombreDelDiaAtras(t, daysAgo);" in sm
+    # [P1-PLAN-LOTE-366] el aviso nombra el día de cada plato con el mismo helper (nunca «antier» a hace cinco días)
+    assert "nombreDelDiaAtras(t, conDia[0].daysAgo)" in sm and "nombreDelDiaAtras(t, r.daysAgo)" in sm
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
     assert "days_ago: int = Field(default=0, ge=0, le=7)" in diary, "el escáner no promete más días que el backend"
 
