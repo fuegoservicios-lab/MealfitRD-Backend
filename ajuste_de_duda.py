@@ -30,6 +30,8 @@ class PeticionAjuste(BaseModel):
     opciones: list[OpcionDeDuda] = Field(default_factory=list, max_length=6)
     respuesta: str = Field(..., min_length=1, max_length=200)
     locale: Optional[str] = Field(default=None, max_length=16)
+    # [P1-PLAN-LOTE-363] el ingrediente al que se refiere la duda (nombre, cantidad, unidad), si el escáner lo sabe
+    ingrediente: Optional[dict] = None
 
 
 class AjusteModelo(BaseModel):
@@ -38,6 +40,7 @@ class AjusteModelo(BaseModel):
     carbs: float = 0.0
     healthy_fats: float = 0.0
     nombre_plato: str = Field(default="", max_length=120)
+    cantidad: Optional[float] = None   # [P1-PLAN-LOTE-363] unidades del ingrediente de la duda según la respuesta
 
 
 _SISTEMA = (
@@ -45,8 +48,12 @@ _SISTEMA = (
     "que se le ofrecieron al usuario, cada una con cuánto cambia el PLATO ENTERO (la supuesta vale 0). El usuario no "
     "eligió ninguna: escribió la suya. Estima cuánto cambia el plato entero con SU respuesta, en la misma escala que las "
     "opciones (úsalas como referencia). Si su respuesta cambia qué es el plato, da el nombre nuevo en 'nombre_plato'; "
-    "si no, déjalo vacío. Devuelve SOLO un JSON: {\"calories\": número, \"protein\": número, \"carbs\": número, "
-    "\"healthy_fats\": número, \"nombre_plato\": \"...\"}. Los números pueden ser negativos. Sin texto fuera del JSON."
+    "si no, déjalo vacío. Si te doy el ingrediente de la duda, pon en 'cantidad' cuántas UNIDADES de ese ingrediente "
+    "dice su respuesta (\"4\" o \"4 huevos\" → 4; \"4 huevos con 3 yemas\" → 4) o null si no dice un número de él; "
+    "y en el ajuste cuenta TODO lo que dijo (en ese ejemplo: los huevos de más Y la yema de menos). "
+    "Devuelve SOLO un JSON: {\"calories\": número, \"protein\": número, \"carbs\": número, "
+    "\"healthy_fats\": número, \"nombre_plato\": \"...\", \"cantidad\": número o null}. Los ajustes pueden ser "
+    "negativos. Sin texto fuera del JSON."
 )
 
 
@@ -69,6 +76,9 @@ def mensaje_para_el_modelo(p: PeticionAjuste) -> str:
         f"{round(_num(m.get('protein')))} g proteína, {round(_num(m.get('carbs')))} g carbohidratos, "
         f"{round(_num(m.get('healthy_fats')))} g grasa.",
         f"Duda: {_limpio(p.pregunta, 160)}",
+        *( [f"Ingrediente de la duda: {_limpio(p.ingrediente.get('nombre'), 80)} — "
+            f"{_num(p.ingrediente.get('cantidad')):g} {_limpio(p.ingrediente.get('unidad'), 20)}"]
+           if isinstance(p.ingrediente, dict) and p.ingrediente.get('nombre') else [] ),
         "Opciones ofrecidas (ajuste del plato entero):",
     ]
     for o in p.opciones:
@@ -95,6 +105,9 @@ def normalizar(crudo) -> dict:
     nombre = _limpio(crudo.get("nombre_plato"), 120)
     if nombre:
         out["nombre_plato"] = nombre
+    cant = _num(crudo.get("cantidad"))
+    if 0 < cant <= 100:
+        out["cantidad"] = round(cant, 2)
     return out
 
 
