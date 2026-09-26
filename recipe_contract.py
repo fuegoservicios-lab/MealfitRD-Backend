@@ -931,6 +931,8 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").servir_lo_que_sobra(meal)  # [P1-PLAN-LOTE-357] «70 g de queso mozzarella» sin paso
         __import__("pasos_cantidades").pista_sin_eco(meal)  # [P1-PLAN-LOTE-359] «80 g de yogurt (80 g) … sin azúcar»
         __import__("pasos_cantidades").articulo_de_los_gramos(meal)  # [P1-PLAN-LOTE-371] «las 40 g» → «los 40 g»
+        __import__("pasos_cantidades").pasos_en_minuscula(meal)  # [P1-PLAN-LOTE-373] «, Sal al gusto y Pimienta»
+        __import__("pasos_cantidades").pista_de_taza_del_motor(meal)  # [P1-PLAN-LOTE-374] «1¼ tazas de avena (65 g)» con 107
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

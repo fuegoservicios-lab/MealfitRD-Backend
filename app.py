@@ -722,7 +722,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «ten listas las 135 g» → «los 40 g», «listos los 135 g» (pasos_cantidades.articulo_de_los_gramos).
 # [P1-PLAN-LOTE-372 · 2026-09-26] (backend) el paso ya no nombra lo que la lista perdió: «termina con maní fileteado»
 # en el plan real del dueño (la retirada no conocía «fileteado» y se deshacía) — recipe_repair.quitar_mencion.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-372 · 2026-09-26"
+# [P1-PLAN-LOTE-373 · 2026-09-26] (backend) en los pasos, los nombres del catálogo van en minúscula a media frase («,
+# Sal al gusto y Pimienta») y el participio una vez («maní fileteado fileteado») — pasos_cantidades.pasos_en_minuscula.
+# [P1-PLAN-LOTE-374 · 2026-09-26] (backend) la pista de una taza dice lo que mide el motor: «1¼ tazas de avena (65 g)»
+# con 107 g contados (78 de 313 pistas de taza) — pasos_cantidades.pista_de_taza_del_motor.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-374 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

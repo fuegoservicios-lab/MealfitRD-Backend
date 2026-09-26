@@ -1839,3 +1839,117 @@ def articulo_de_los_gramos(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-373 · 2026-09-26] Los nombres del catálogo van en minúscula a media frase; el participio, una vez ─────
+# Replay de la cola real (314 planes): «añade el tomate y la pechuga, Sal al gusto y Pimienta negra», «¾ cdta de Aceite de
+# oliva, Limón y Orégano dominicano» (15 pasos: el cerrador y las sustituciones copian el nombre de la fila del catálogo,
+# con su mayúscula) y «15 g de maní fileteado fileteado» (3 pasos). La lista ya se pule (lote 181, `_mayuscula`); los pasos
+# no. Aquí, sólo en pasos y sólo tras «, », «y», «e», «o», «de», «con»: la mayúscula de una palabra que sigue en minúscula
+# pasa a minúscula, salvo que la siguiente palabra también empiece por mayúscula (marca o nombre propio: «Corn Flakes»). Y el
+# mismo participio o calificativo dos veces seguidas queda una. Nunca las notas. tooltip-anchor: P1-PLAN-LOTE-373
+_MAYUS_EN_PASO_373_RE = re.compile(
+    r"(?:(?<=,\s)|(?<=\by\s)|(?<=\be\s)|(?<=\bo\s)|(?<=\bde\s)|(?<=\bcon\s))(?P<l>[A-ZÁÉÍÓÚÑ])(?P<r>[a-záéíóúñü]{2,})\b"
+    r"(?P<sig>\s+[A-ZÁÉÍÓÚÑ])?")
+_PARTICIPIO_DOBLE_373_RE = re.compile(
+    r"\b([a-záéíóúñü]{3,}(?:ad[oa]s?|id[oa]s?)|natural(?:es)?|enter[oa]s?|fresc[oa]s?)\s+\1\b", re.IGNORECASE)
+
+
+#: nombres propios que viven dentro de nombres de alimentos («coles de Bruselas», «mostaza Dijon», «canela de Ceilán»)
+_PROPIOS_373 = {"bruselas", "oaxaca", "cotija", "chihuahua", "dijon", "worcestershire", "tabasco", "sosua", "parma", "modena",
+                "jerez", "idiazabal", "burgos", "cabrales", "roquefort", "philadelphia", "ceilan", "cassia", "valencia",
+                "provenza", "maggi", "goya", "knorr", "kellogg", "nutella", "barilla", "badia", "campos", "manchego",
+                "serrano", "iberico", "california", "kalamata", "jalisco", "yucatan", "baviera", "normandia"}
+
+
+def _minuscula_373(mm) -> str:
+    if mm.group("sig"):
+        return mm.group(0)                       # «Corn Flakes», un nombre propio: se queda
+    if _sa((mm.group("l") + mm.group("r")).lower()) in _PROPIOS_373:
+        return mm.group(0)                       # «coles de Bruselas»
+    if mm.string[max(0, mm.start() - 9):mm.start()].lower().endswith("toque de "):
+        return mm.group(0)                       # el rótulo «El Toque de Fuego»
+    return mm.group("l").lower() + mm.group("r")
+
+
+def pasos_en_minuscula(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            s = _PARTICIPIO_DOBLE_373_RE.sub(r"\1", _MAYUS_EN_PASO_373_RE.sub(_minuscula_373, p))
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-374 · 2026-09-26] La pista «(N g)» de una taza dice lo que mide el motor ─────────────────────────────
+# Replay de la cola real (314 planes): 78 de 313 pistas de taza en los pasos no son lo que el motor mide para ese alimento
+# (su línea de `ingredients_raw` en gramos): «1¼ tazas de avena en hojuelas (65 g)» con 107 g en el motor (perfil del
+# dueño), «⅓ taza de yogurt griego (120 g)» con 79 g, «¼ taza de yogurt (240 g)» con 62 g. La taza del paso ya sigue a la
+# lista (el humanizador la sacó de esos gramos); la pista es la cifra vieja del modelo. El lote 332 sólo corrige la pista
+# cuando la línea VISIBLE trae peso; la de taza no lo trae. Aquí la pista pasa a los gramos del motor si difieren en más de
+# un 10 % y 5 g. Nunca: dos líneas del motor para ese alimento, un reparto, cocido contra crudo, ni una línea del motor que
+# no esté en gramos. Las notas no se tocan. tooltip-anchor: P1-PLAN-LOTE-374
+_TAZA_CON_PISTA_374_RE = re.compile(
+    r"(?<![\w.,/])(?:\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔])\s*tazas?\s+de\s+(?P<food>[a-záéíóúñü]+)(?P<resto>[^()]{0,40}?)"
+    r"\(\s*(?P<g>\d+(?:[.,]\d+)?)\s*g\s*\)", re.IGNORECASE)
+_RAW_GRAMOS_374_RE = re.compile(r"^\s*(?P<g>\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+(?:de\s+)?(?P<cuerpo>.+)$", re.IGNORECASE)
+
+
+def pista_de_taza_del_motor(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        raw = [str(x) for x in (meal.get("ingredients_raw") or [])]
+        if not raw:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            cambios = []
+            for mm in _TAZA_CON_PISTA_374_RE.finditer(p):
+                t = _toks(mm.group("food"))
+                if not t:
+                    continue
+                cand = [r for r in raw if t[0] in _toks(re.sub(r"\(.*?\)", " ", r))]
+                if len(cand) != 1:
+                    continue
+                rg = _RAW_GRAMOS_374_RE.match(cand[0])
+                if not rg:
+                    continue
+                mencion = mm.group(0)
+                if (_cocido(mencion) != _cocido(cand[0]) or _REPARTO_ANTES_RE.search(p[:mm.start()])
+                        or _REPARTO_DESPUES_RE.search(p[mm.end():])):
+                    continue
+                motor = float(rg.group("g").replace(",", "."))
+                viejo = float(mm.group("g").replace(",", "."))
+                if motor <= 0 or abs(viejo - motor) <= max(5.0, 0.1 * motor):
+                    continue
+                cambios.append((mm.start("g"), mm.end("g"), str(int(round(motor)))))
+            if cambios:
+                s = p
+                for ini, fin, txt in sorted(cambios, reverse=True):
+                    s = s[:ini] + txt + s[fin:]
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
