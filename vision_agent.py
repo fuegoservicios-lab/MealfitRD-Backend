@@ -322,7 +322,8 @@ _MEAL_VISION_PROMPT = (
     "mucho las calorias: una cantidad que no se puede contar (ej: huevos revueltos fusionados -> 'Cuantos huevos "
     "eran?'; un bowl hondo de arroz -> 'Cuanto arroz, 1 taza o 2?'), un alimento que se confunde con otro (queso "
     "blanco o tofu, pollo o cerdo) o la grasa de coccion que no se ve si es mucha (frito vs. a la plancha). Cada una "
-    "con 'sobre' (el componente) y 'pregunta' (UNA pregunta corta y concreta, en espanol dominicano). NO pongas dudas "
+    "con 'sobre' (el 'name' EXACTO del item de 'items' al que se refiere, copiado tal cual) y 'pregunta' (UNA pregunta "
+    "corta y concreta, en espanol dominicano). NO pongas dudas "
     "de lo que se ve claro (2 rebanadas de pan, un guineo, 1 huevo frito entero) ni de detalles que no cambian la cuenta "
     "(la sal, el oregano). Aunque haya dudas, estima igual con la opcion MAS probable: el usuario la confirma. "
     # [P1-PLAN-LOTE-322 · 2026-09-25] El dueño: «una forma más fácil de responder esas preguntas».
@@ -374,7 +375,7 @@ class _MealVisionOpcion(BaseModel):
 
 
 class _MealVisionDuda(BaseModel):
-    sobre: str = Field(default="", description="El componente del plato al que se refiere la duda.")
+    sobre: str = Field(default="", description="El name EXACTO del item de items al que se refiere la duda (P1-PLAN-LOTE-362).")
     pregunta: str = Field(default="", description="UNA pregunta corta para el usuario, en español dominicano.")
     opciones: list[_MealVisionOpcion] = Field(default_factory=list, description="2-5 respuestas de un toque.")
 
