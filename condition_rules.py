@@ -107,6 +107,18 @@ _DM2_GLYCEMIC_SUBS = (
      "plátano maduro (índice glucémico alto: el verde lleva almidón resistente)", True),
 )
 
+# [P1-PLAN-LOTE-338 · 2026-09-25] Bariátrica: la fruta DESHIDRATADA es azúcar concentrado (dátiles ≈ 63 % de azúcar) y
+# dispara dumping. Batería real del 25-sep: «55 g de dátiles» en la merienda PM → el revisor lo rechazó CRÍTICO, el reintento
+# no convergió y el plan salió degradado tras 12,5 min. Los topes de fruta (lote 27-jun) no la veían: sus fichas son de
+# fruta FRESCA. Pasa a fresa con los mismos gramos (fruta entera medida, lo que la propia regla recomienda).
+# tooltip-anchor: P1-PLAN-LOTE-338
+_BARIATRIC_DRIED_FRUIT_SUBS = (
+    (("dátiles", "datiles", "dátil", "datil", "uvas pasas", "pasas", "ciruelas pasas", "ciruela pasa", "higos secos",
+      "higo seco", "arándanos secos", "arandanos secos", "arándanos deshidratados", "arandanos deshidratados",
+      "mango deshidratado", "frutas deshidratadas", "fruta deshidratada"),
+     "Fresa", "fruta deshidratada (azúcar concentrado → dumping)", True),
+)
+
 _HTA_SODIUM_SUBS = (
     # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini, batch P2-ENGINE-CLINICAL-SAVERS)
     # "Sal al gusto"/"pizca de sal" PLANAS: el prompt HTA exige "sal medida mínima" pero el LLM las
@@ -460,7 +472,8 @@ CONDITION_RULES: tuple = (
         # [P1-BARIATRIC-TORONJA · 2026-06-27] + _DM2_GLYCEMIC_SUBS: incluye TORONJA→Fresa (contraindicación
         # ABSOLUTA bariátrica: inhibe CYP3A4 → toxicidad farmacológica + irrita la anastomosis; el revisor la
         # rechazaba CRÍTICO, corr=c42e0575) + refinados→integral (IG bajo, también deseable en bariátrica).
-        precedence=20, substitutions=_DM2_SUGAR_SUBS + _DM2_GLYCEMIC_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
+        precedence=20, substitutions=_DM2_SUGAR_SUBS + _DM2_GLYCEMIC_SUBS + _BARIATRIC_DRIED_FRUIT_SUBS,  # [P1-PLAN-LOTE-338]
+        sub_negatives=_DM2_SUGAR_NEGATIVES,
         prompt_block=(
             "🔻 REGLA CLÍNICA — CIRUGÍA BARIÁTRICA (sleeve/bypass/manga, fase de MANTENIMIENTO / dieta general, "
             ">6 meses post-op; prevención de SÍNDROME DE DUMPING y obstrucción del pouch):\n"
@@ -475,7 +488,8 @@ CONDITION_RULES: tuple = (
             "pescado, queso) ANTES que cualquier almidón. Si no cabe todo, se sacrifica el almidón, NUNCA la "
             "proteína; si el piso no se alcanza, añade otra fuente proteica pequeña en vez de almidón.\n"
             "   • PROHIBIDO TODO AZÚCAR SIMPLE/LIBRE (dispara dumping): miel, azúcar, panela, melaza, sirope, "
-            "leche condensada, jugos/refrescos/gaseosas/malta, frutas en almíbar y dulces (habichuelas con "
+            "leche condensada, jugos/refrescos/gaseosas/malta, frutas en almíbar, frutas DESHIDRATADAS (dátiles, "
+            "pasas, ciruelas pasas, higos secos) y dulces (habichuelas con "
             "dulce, dulce de leche/coco/batata). Endulza con estevia, canela o fruta entera medida.\n"
             "   • SIN BEBIDAS CON LA COMIDA: no incluyas líquidos junto a sólidos en la misma comida; agua/té/"
             "café sin azúcar van ENTRE comidas. NADA de gaseosas ni alcohol. NADA de agua de coco/jugo (azúcar "

@@ -688,6 +688,520 @@ def mencion_repetida(meal) -> int:
 
 
 def lo_que_dice_la_lista(meal) -> int:
-    """Los cuatro pases de arriba, en orden. Nº total de pasos reescritos."""
+    """Los pases de arriba (y la pista de peso del 332, abajo), en orden. Nº total de pasos reescritos."""
     return (gramos_de_la_pieza(meal) + porciones_de_la_lista(meal) + pizcas_de_la_lista(meal)
-            + mencion_repetida(meal))
+            + mencion_repetida(meal) + pistas_de_la_lista(meal) + conteos_de_la_lista(meal))
+
+
+# ── [P1-PLAN-LOTE-332 · 2026-09-25] La pista de peso de un paso sigue a la de la lista ───────────────────────────────
+# «Mise en place: … ½ cda de mantequilla de maní natural (16 g)» con «½ cda de mantequilla de maní natural sin sal (8 g)»
+# en la lista; «pica la cebolla (20 g)» con «½ cda de cebolla picada (5 g)»: el sincronizador cambió la cantidad y la pista
+# del paréntesis se quedó con la cifra vieja (32 pasos en el corpus de 308 planes, 3 de 330 comidas en la batería de
+# cierre). El lote 310 solo la veía cuando el paso repite EXACTAMENTE el texto de la línea («sin sal» de menos bastaba
+# para no verla). Aquí la pista pertenece al alimento de la lista MÁS CERCANO que tiene delante en su cláusula («y» también
+# corta: «210 g de jitomate y ½ cebolla (50 g)» es de la cebolla); si esa línea trae peso, el paréntesis pasa a ser el
+# suyo. Nunca: una línea sin peso (la pista del paso es entonces la única cifra), una cantidad del paso distinta de la de
+# la lista («1 taza … (205 g)» con «½ taza» — eso es del sincronizador), una cláusula que ya pesa el alimento en gramos,
+# un reparto (mitad, resto, cada…), cocido contra crudo, ni un alimento con dos líneas. tooltip-anchor: P1-PLAN-LOTE-332
+_PISTA_RE = re.compile(r"\(\s*(?P<aprox>[≈~])?\s*(?P<g>\d+(?:[.,]\d+)?)\s*g\s*\)")
+_LEAD_DE_LINEA_RE = re.compile(
+    r"^\s*(?:\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s*(?:(?:g|gr|gramos|ml|tazas?|cdas?|cdtas?|cucharadas?|cucharaditas?|"
+    r"porci(?:ón|on|ones)|rebanadas?|lonjas?|unidad(?:es)?|pedazos?|dientes?|puñados?|ramitas?|hojas?|latas?|filetes?)"
+    r"\.?\s+)?(?:de\s+|del\s+)?", re.IGNORECASE)
+_GRAMOS_LIDER_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+de\s+", re.IGNORECASE)
+_FRONTERA_PISTA_RE = re.compile(r"[(),;:]|(?<!\d)\.|\.(?!\d)|\by\b|\be\b", re.IGNORECASE)
+_CANTIDAD_EN_CLAUSULA_RE = re.compile(r"(?<![\w.,/])(?:\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])(?![\w])")
+_GRAMOS_EN_CLAUSULA_RE = re.compile(r"(?<![\w.,/])\d+(?:[.,]\d+)?\s*(?:g|gr|gramos)\s+de\s", re.IGNORECASE)
+
+
+def _patron_cantidad(lead: str):
+    palabras = re.sub(r"\s+del?$", "", _sa(str(lead or "").lower()).strip()).split()
+    if not palabras:
+        return None
+    partes = [re.escape(palabras[0])] + [re.escape(w[:-1] if w.endswith("s") else w) + "s?" for w in palabras[1:]]
+    return re.compile(r"(?<![\w.,/])" + r"\s*".join(partes) + r"(?![\w])")
+
+
+def pistas_de_la_lista(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error. Las notas no se tocan."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas, amb = {}, set()
+        for ln in meal.get("ingredients") or []:
+            s = str(ln)
+            lead = _LEAD_DE_LINEA_RE.match(s)
+            cuerpo = re.sub(r"\(.*?\)", " ", s[lead.end():] if lead else s)
+            t = _toks(cuerpo)
+            if not t:
+                continue
+            h = _PISTA_RE.search(s)
+            gl = _GRAMOS_LIDER_RE.match(s)
+            if h:
+                peso, aprox = float(h.group("g").replace(",", ".")), bool(h.group("aprox"))
+            elif gl:
+                peso, aprox = float(gl.group(1).replace(",", ".")), False
+            else:
+                peso, aprox = None, False
+            if t[0] in lineas:
+                amb.add(t[0])
+            lineas[t[0]] = (peso, aprox, cuerpo, lead.group(0) if lead else "")
+        if not any(v[0] is not None for k, v in lineas.items() if k not in amb):
+            return 0
+        n = 0
+        nuevos = []
+        for p in rec:
+            if _es_nota(p):
+                nuevos.append(p)
+                continue
+            cambios = []
+            for h in _PISTA_RE.finditer(p):
+                previo = p[:h.start()]
+                fronteras = list(_FRONTERA_PISTA_RE.finditer(previo))
+                clausula = previo[fronteras[-1].end():] if fronteras else previo
+                clave = next((t for t in reversed(_toks(clausula)) if t in lineas), None)
+                if clave is None or clave in amb:
+                    continue
+                peso, aprox, cuerpo, lead = lineas[clave]
+                if (peso is None or _GRAMOS_EN_CLAUSULA_RE.search(clausula) or _REPARTO_ANTES_RE.search(clausula)
+                        or _REPARTO_DESPUES_RE.search(p[h.end():]) or _cocido(clausula) != _cocido(cuerpo)
+                        or _forma_huevo(clausula) != _forma_huevo(cuerpo)):
+                    continue
+                if _CANTIDAD_EN_CLAUSULA_RE.search(clausula):
+                    rx = _patron_cantidad(lead)
+                    if rx is None or not rx.search(_sa(clausula.lower())):
+                        continue
+                viejo = float(h.group("g").replace(",", "."))
+                if abs(viejo - peso) <= max(2.0, 0.1 * peso):
+                    continue
+                cambios.append((h.start(), h.end(), f"({'≈' if aprox else ''}{int(round(peso))} g)"))
+            if not cambios:
+                nuevos.append(p)
+                continue
+            s = p
+            for ini, fin, txt in sorted(cambios, reverse=True):
+                s = s[:ini] + txt + s[fin:]
+            nuevos.append(s)
+            n += 1
+        if n:
+            meal["recipe"] = nuevos
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-333 · 2026-09-25] La plantilla del cerrador de proteína, puesta a lo que no es proteína ─────────────
+# «Incorpora arroz blanco crudo a la plancha o hervido y sírvelo como proteína del plato» (perfil del dueño, batería de
+# cierre), «Cocina cebolla a la plancha o hervida y sírvela como proteína del plato», «Añade tayota…», «Incorpora
+# quinoa…»: 22 frases en el corpus de 308 planes, ya en el `pipeline_result` (la IA que corrige un día imita la plantilla
+# del cerrador, que ve en su entrada). En las 22 el alimento aparece en OTRO paso del mismo plato: la frase es un eco que
+# sobra y se quita. Si la frase es lo único que nombra al alimento, no se toca (quitarla dejaría la línea sin paso).
+# Proteína = palabra de proteína o fila del catálogo en «Proteínas»/«Lácteos». tooltip-anchor: P1-PLAN-LOTE-333
+_FRASE_CERRADOR_RE = re.compile(
+    r"(?:(?<=[.;:!?])\s*|^\s*(?:💪\s*)?)(?P<verbo>Cocina|Incorpora|Agrega|Añade)\s+(?P<obj>[^.;:!?]*?)\s+a\s+la\s+plancha\s+o\s+"
+    r"hervid[oa]s?\s+y\s+s[ií]rvel[oa]s?\s+como\s+prote[ií]na\s+del\s+plato\.?", re.IGNORECASE)
+_PALABRA_PROTEINA_RE = re.compile(
+    r"\b(?:pollo|pechugas?|muslos?|huevos?|claras?|pescados?|filetes?|tilapia|salmon|bacalao|atun|sardinas?|carnes?|res|"
+    r"cerdo|chuletas?|pavo|jamon|quesos?|camarones|camaron|langostas?|langostinos?|pulpo|calamar(?:es)?|tofu|tempeh|"
+    r"longaniza|salami|chorizo|mero|dorado|chillo|merluza|gandules?|habichuelas?|lentejas?|garbanzos?|frijoles?|soya|"
+    r"edamame|seitan|yogu?rt?|cottage|chicharos?|guisantes?|chivo|percebes?|habas?|cordero|conejo|mejillones|almejas?|"
+    r"cangrejos?|jaibas?|proteina)\b")
+_CATEGORIAS_PROTEINA = ("proteínas", "proteinas", "lácteos", "lacteos")
+
+
+def plantilla_de_proteina(meal, index=None) -> int:
+    """Nº de frases quitadas; 0 ante cualquier error. `index`: el índice culinario del contrato (opcional)."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        quitadas = 0
+        nuevos = list(rec)
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            s = p
+            for mm in reversed(list(_FRASE_CERRADOR_RE.finditer(p))):
+                obj = mm.group("obj")
+                if _PALABRA_PROTEINA_RE.search(_sa(obj.lower())):
+                    continue
+                if index:
+                    try:
+                        import culinary_coherence as _cc
+                        cats = [str((index.get(_cc._norm(nm)) or {}).get("category") or "").lower()
+                                for nm in _cc.find_catalog_foods(_sa(obj.lower()), index)]
+                    except Exception:
+                        cats = ["?"]
+                    if any(c in _CATEGORIAS_PROTEINA or c == "?" for c in cats):
+                        continue
+                t = _toks(obj)
+                if not t:
+                    continue
+                otros = _sa(" ".join([x for j, x in enumerate(nuevos) if j != i and isinstance(x, str)]
+                                     + [s[:mm.start()] + " " + s[mm.end():]]).lower())
+                if not re.search(r"\b" + re.escape(t[0]), otros):
+                    continue                     # la frase es lo único que nombra al alimento: se queda
+                s = (s[:mm.start()] + " " + s[mm.end():]).strip()
+                quitadas += 1
+            if s != p:
+                s = re.sub(r"\s{2,}", " ", s)
+                nuevos[i] = s if _toks(re.sub(r"^\s*[^:]{0,30}:\s*", "", s)) else None
+        if not quitadas:
+            return 0
+        meal["recipe"] = [x for x in nuevos if x is not None]
+        meal.pop("_display", None)
+        return quitadas
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-334 · 2026-09-25] El mismo alimento no se sirve dos veces ────────────────────────────────────────────
+# «El Toque de Fuego: … Sirve queso cottage al lado para acompañar. Sirve yogurt natural entero al lado para acompañar.» y
+# «Montaje: … Acompaña con queso cottage. Acompaña con yogurt natural entero.»: el cerrador de proteína escribe «Sirve X
+# al lado» (lote 48), otro pase lo funde en el paso de fuego y el Montaje recibe además «Acompaña con X»
+# (P2-CLOSER-MENTION-IN-MONTAJE). 368 de 3.778 comidas del corpus (~10 %) servían así dos veces el mismo alimento. Se
+# queda «Acompaña con X» (el Montaje es donde se sirve) y sale la frase «Sirve X al lado para acompañar»; si era un paso
+# entero, sale el paso. tooltip-anchor: P1-PLAN-LOTE-334
+_SIRVE_AL_LADO_RE = re.compile(
+    r"(?:(?<=[.;:!?])\s*|^\s*(?:💪\s*)?)Sirve\s+(?:el\s+|la\s+|los\s+|las\s+)?(?P<x>[^.;:!?]+?)\s+al\s+lado\s+para\s+"
+    r"acompañar\.?", re.IGNORECASE)
+_ACOMPANA_CON_RE = re.compile(r"\bAcompaña\s+con\s+(?P<xs>[^.;:!?]+)", re.IGNORECASE)
+_ARTICULO_RE = re.compile(r"^(?:el|la|los|las|un|una|unos|unas)\s+")
+
+
+def _servido(txt) -> str:
+    return _ARTICULO_RE.sub("", _sa(str(txt or "").lower()).strip()).strip()
+
+
+def _mismo_servido(x: str, acompana: set) -> bool:
+    """[P1-PLAN-LOTE-339 · 2026-09-25] «Sirve Yogurt al lado» con «Acompaña con yogurt natural entero», «Sirve queso
+    cottage bajo en sodio al lado» con «Acompaña con queso cottage» (batería real del 25-sep sobre el 331): el mismo
+    alimento con el nombre corto en un sitio y el largo en el otro. Mismo sustantivo de cabeza y las palabras de uno
+    contenidas en las del otro. tooltip-anchor: P1-PLAN-LOTE-339"""
+    if x in acompana:
+        return True
+    tx = set(_toks(x))
+    if not tx:
+        return False
+    for a in acompana:
+        ta = set(_toks(a))
+        if ta and _toks(a)[0] == _toks(x)[0] and (ta <= tx or tx <= ta):
+            return True
+    return False
+
+
+def servir_una_vez(meal) -> int:
+    """Nº de frases «Sirve X al lado para acompañar» quitadas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        acompana = set()
+        for p in rec:
+            if _es_nota(p):
+                continue
+            for mm in _ACOMPANA_CON_RE.finditer(p):
+                for it in re.split(r",\s*|\s+y\s+|\s+e\s+", mm.group("xs")):
+                    x = _servido(it)
+                    if x:
+                        acompana.add(x)
+        if not acompana:
+            return 0
+        quitadas = 0
+        nuevos = []
+        for p in rec:
+            if _es_nota(p):
+                nuevos.append(p)
+                continue
+            s = p
+            for mm in reversed(list(_SIRVE_AL_LADO_RE.finditer(p))):
+                if _mismo_servido(_servido(mm.group("x")), acompana):  # [P1-PLAN-LOTE-339] «Yogurt» ↔ «yogurt natural entero»
+                    s = (s[:mm.start()] + " " + s[mm.end():]).strip()
+                    quitadas += 1
+            if s != p:
+                s = re.sub(r"\s{2,}", " ", s)
+                if not _toks(re.sub(r"^\s*[^:]{0,30}:\s*", "", s)):
+                    continue                     # el paso era solo esa frase
+            nuevos.append(s)
+        if quitadas:
+            meal["recipe"] = nuevos
+            meal.pop("_display", None)
+        return quitadas
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-335 · 2026-09-25] El nombre y los pasos nombran la variedad que trae la lista ──────────────────────
+# Baterías del 25-sep (330 comidas re-medidas): «habichuelas blancas» en los pasos con «habichuelas negras» en la lista,
+# «pica el ají cubanela» con ají morrón, «tortillas de trigo» con tortilla integral — el usuario compra lo de la lista y
+# la receta le nombra otra cosa. Si el plato nombra una fila del catálogo que NO está en su lista y la lista trae
+# exactamente UNA hermana (mismo sustantivo de cabeza), la mención pasa a la hermana. Nunca una mención genérica («el
+# yogurt griego» con «yogurt griego sin azúcar» en la lista: todas sus palabras están en la hermana), ni una nota del
+# sistema, ni un alias del MISMO alimento (el catálogo decide la identidad: «yogur natural entero» es alias de «Yogurt
+# griego entero»). tooltip-anchor: P1-PLAN-LOTE-335
+def _patron_superficie(superficie_norm: str):
+    partes = []
+    for t in superficie_norm.split():
+        if t in ("yogur", "yogurt"):
+            partes.append(r"yogurt?s?")
+        elif t in ("de", "del", "con", "sin", "en"):
+            partes.append(re.escape(t))
+        else:
+            base = t[:-2] if (t.endswith("es") and len(t) > 5) else (t[:-1] if (t.endswith("s") and len(t) > 4) else t)
+            partes.append(re.escape(base) + r"(?:s|es)?")
+    return re.compile(r"(?<![\w])" + r"\s+".join(partes) + r"(?![\w])")
+
+
+_CONECTORES = ("de", "del", "con", "sin", "en", "y", "al", "a")
+_AGUDA = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u"}
+
+
+def _plural(frase: str) -> str:
+    """«tortilla integral» → «tortillas integrales», «ají morrón» → «ajíes morrones»; lo que sigue a un conector no."""
+    out, conector = [], False
+    for w in frase.split():
+        if conector or w in _CONECTORES or w.endswith("s"):
+            conector = conector or w in _CONECTORES
+            out.append(w)
+        elif w[-1] in "aeoáéó":
+            out.append(w + "s")
+        elif w[-1] in "iuíú":
+            out.append(w + "es")
+        elif w.endswith("z"):
+            out.append(w[:-1] + "ces")
+        else:
+            out.append(re.sub(r"[áéíóú](?=[^aeiouáéíóú]*$)", lambda m: _AGUDA[m.group(0)], w) + "es")
+    return " ".join(out)
+
+
+def _singular(tokens) -> set:
+    out = set()
+    for t in tokens:
+        out.add(t[:-2] if (t.endswith("es") and len(t) > 5) else (t[:-1] if (t.endswith("s") and len(t) > 4) else t))
+    return out
+
+
+def variedad_de_la_lista(meal, index=None) -> int:
+    """Nº de menciones reescritas; 0 ante cualquier error o sin índice culinario."""
+    try:
+        if not index or not isinstance(meal, dict):
+            return 0
+        import culinary_coherence as _cc
+        en_lista = set()
+        for ln in meal.get("ingredients") or []:
+            en_lista.update(_cc.find_catalog_foods(str(ln), index))
+        if not en_lista:
+            return 0
+        rec = meal.get("recipe") if isinstance(meal.get("recipe"), list) else []
+        campos = [None] + [i for i, p in enumerate(rec) if isinstance(p, str) and not _es_nota(p)]
+
+        def _texto(i):
+            return str(meal.get("name") or "") if i is None else rec[i]
+
+        def _cabeza(n):
+            t = _cc._norm(n).split()
+            return t[0] if t else ""
+        cambios = {}                                   # superficie normalizada -> nombre de la hermana
+        for i in campos:
+            t = _texto(i)
+            blob = _cc._norm(t)
+            for ini, fin, nombre in _cc._catalog_food_spans(t, index):
+                if nombre in en_lista:
+                    continue
+                hermanas = [f for f in en_lista if _cabeza(f) == _cabeza(nombre) and f != nombre]
+                if len(hermanas) != 1:
+                    continue
+                sup = blob[ini:fin]
+                if _singular(sup.split()) <= _singular(_cc._norm(hermanas[0]).split()):
+                    continue                           # mención genérica de la hermana
+                cambios[sup] = hermanas[0]
+        if not cambios:
+            return 0
+        n = 0
+        for sup, f in sorted(cambios.items(), key=lambda kv: -len(kv[0])):
+            rx = _patron_superficie(sup)
+            tf = _singular(_cc._norm(f).split()) - set(_CONECTORES)
+            nuevo = str(f).lower()
+            if sup.split()[0].endswith("s") and not _cc._norm(f).split()[0].endswith("s"):
+                nuevo = _plural(nuevo)                 # «las tortillas de trigo» → «las tortillas integrales»
+            for i in campos:
+                viejo = _texto(i)
+                base = _sa(viejo.lower())
+                if len(base) != len(viejo):
+                    continue
+                spans = []
+                for m in rx.finditer(base):
+                    # «tortilla de trigo integral», «yogurt griego natural sin azúcar»: lo que sigue ya es la hermana
+                    sigue = [w for w in re.findall(r"[a-zñ]+", base[m.end():m.end() + 30])[:3] if w not in _CONECTORES][:1]
+                    if sigue and _singular(sigue) <= tf:
+                        continue
+                    spans.append((m.start(), m.end()))
+                if not spans:
+                    continue
+                s = viejo
+                for a, b in reversed(spans):
+                    rep = nuevo[:1].upper() + nuevo[1:] if s[a:a + 1].isupper() else nuevo
+                    s = s[:a] + rep + s[b:]
+                if i is None:
+                    meal["name"] = s
+                else:
+                    rec[i] = s
+                n += len(spans)
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-337 · 2026-09-25] Las piezas contadas del paso son las de la lista ────────────────────────────────
+# «pica 1 diente de ajo» con «3 dientes de ajo» en la lista, «pica ½ ají cubanela» con «1½ ají cubanela», «exprime ½
+# limón» con «1 limón»: 33 de 384 comidas de las baterías re-medidas (22 de ajo). El pase de conteos del sincronizador
+# solo conoce ocho sustantivos y solo conteos ENTEROS de la lista. Aquí: si la lista trae UNA línea con ese sustantivo
+# contado y el paso lo cuenta UNA sola vez (las demás menciones sin número son la misma porción), el número del paso
+# pasa a ser el de la lista, con su número gramatical. Dos menciones con número («1 tomate mediano… 1 tomate pequeño
+# para decorar») o una marca de reparto (mitad, resto, cada…) no se tocan. tooltip-anchor: P1-PLAN-LOTE-337
+_PIEZAS = {
+    "diente": ("diente", "dientes"), "aji": ("ají", "ajíes"), "tomate": ("tomate", "tomates"),
+    "limon": ("limón", "limones"), "cebolla": ("cebolla", "cebollas"), "pepino": ("pepino", "pepinos"),
+    "zanahoria": ("zanahoria", "zanahorias"), "tortilla": ("tortilla", "tortillas"), "arepita": ("arepita", "arepitas"),
+    "pechuga": ("pechuga", "pechugas"), "berenjena": ("berenjena", "berenjenas"), "papa": ("papa", "papas"),
+}
+_PIEZA_NOMBRE_RE = r"(?P<pieza>dientes?|aj[ií](?:es)?|tomates?|lim[oó]n(?:es)?|cebollas?|pepinos?|zanahorias?|tortillas?|arepitas?|pechugas?|berenjenas?|papas?)"
+_CUENTA = r"(?P<q>\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔])"
+_PIEZA_EN_LISTA_RE = re.compile(r"^\s*" + _CUENTA + r"\s+" + _PIEZA_NOMBRE_RE + r"\b", re.IGNORECASE)
+_PIEZA_EN_PASO_RE = re.compile(r"(?<![\w.,/½¼¾⅓⅔])" + _CUENTA + r"\s+" + _PIEZA_NOMBRE_RE + r"\b", re.IGNORECASE)
+_ADJ_PIEZA = {"mediano": "medianos", "mediana": "medianas", "pequeño": "pequeños", "pequeña": "pequeñas",
+              "grande": "grandes", "verde": "verdes", "maduro": "maduros", "madura": "maduras", "rojo": "rojos",
+              "roja": "rojas", "entero": "enteros", "entera": "enteras", "fresco": "frescos", "fresca": "frescas"}
+_ADJ_SING = {v: k for k, v in _ADJ_PIEZA.items()}
+
+
+def _clave_pieza(palabra) -> str:
+    w = _sa(str(palabra).lower())
+    for k in _PIEZAS:
+        if w == k or w == k + "s" or w == k + "es":
+            return k
+    return ""
+
+
+def _valor_cuenta(q) -> float:
+    q = str(q).replace(" ", "")
+    fr = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
+    if q in fr:
+        return fr[q]
+    if q[-1] in fr:
+        return float(q[:-1]) + fr[q[-1]]
+    return float(q.replace(",", "."))
+
+
+def conteos_de_la_lista(meal) -> int:
+    """Nº de menciones reescritas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lista, amb = {}, set()
+        for ln in meal.get("ingredients") or []:
+            m = _PIEZA_EN_LISTA_RE.match(str(ln))
+            k = _clave_pieza(m.group("pieza")) if m else ""
+            if not k:
+                continue
+            if k in lista:
+                amb.add(k)
+            lista[k] = m.group("q").replace(" ", "")
+        for k in amb:
+            lista.pop(k, None)
+        if not lista:
+            return 0
+        menciones = {}
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            for mm in _PIEZA_EN_PASO_RE.finditer(p):
+                k = _clave_pieza(mm.group("pieza"))
+                if k in lista:
+                    menciones.setdefault(k, []).append((i, mm))
+        cambios = {}                                       # paso -> [(ini, fin, texto)]
+        for k, ms in menciones.items():
+            if len(ms) != 1:
+                continue                                   # dos menciones con número: un reparto, no se toca
+            i, mm = ms[0]
+            p = rec[i]
+            q_lista = lista[k]
+            try:
+                if abs(_valor_cuenta(mm.group("q")) - _valor_cuenta(q_lista)) < 1e-6:
+                    continue
+                plural = _valor_cuenta(q_lista) > 1
+            except Exception:
+                continue
+            if _REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():]):
+                continue
+            sing, plur = _PIEZAS[k]
+            nombre = plur if plural else sing
+            if mm.group("pieza")[:1].isupper():
+                nombre = nombre[:1].upper() + nombre[1:]
+            ini, fin, texto = mm.start(), mm.end(), f"{q_lista} {nombre}"
+            art = re.search(r"\b(los|las|el|la)(\s+)$", p[:mm.start()], re.IGNORECASE)
+            if art:                                        # «machaca los 2 dientes» → «machaca el 1 diente»
+                a = art.group(1)
+                a2 = {"los": "el", "las": "la"}.get(a.lower(), a) if not plural else {"el": "los", "la": "las"}.get(a.lower(), a)
+                if a2 != a.lower():
+                    a2 = a2[:1].upper() + a2[1:] if a[:1].isupper() else a2
+                    ini, texto = art.start(), a2 + art.group(2) + texto
+            adj = re.match(r"(\s+)([a-záéíóúñ]+)", p[mm.end():])
+            if adj:
+                w = adj.group(2)
+                w2 = _ADJ_PIEZA.get(w, w) if plural else _ADJ_SING.get(w, w)
+                if w2 != w:
+                    fin, texto = mm.end() + adj.end(), texto + adj.group(1) + w2
+            cambios.setdefault(i, []).append((ini, fin, texto))
+        n = 0
+        for i, cs in cambios.items():
+            s = rec[i]
+            for ini, fin, texto in sorted(cs, reverse=True):
+                s = s[:ini] + texto + s[fin:]
+                n += 1
+            rec[i] = s
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-340 · 2026-09-25] La proteína huérfana sale con su frase, no se vuelve «proteína» ─────────────────
+# El autocorrector de coherencia (P3-RECIPE-COHERENCE-AUTOFIX, `graph_orchestrator._run_assembly_validations`) ve un paso
+# que nombra una proteína sin línea en la lista y la cambia por la proteína REAL del plato; si el plato no trae otra,
+# escribía la palabra «proteína»: «Cocina jamón de proteína a la plancha o hervido y sírvelo como proteína del plato» y
+# «Acompaña con jamón de proteína» (batería real del 25-sep, perfil del dueño; el parche del revisor había quitado el
+# jamón de la lista). Sin reemplazo real, la FRASE que la nombra sale; si esa frase era todo el paso, se conserva la
+# conducta de antes (el paso no se queda vacío). tooltip-anchor: P1-PLAN-LOTE-340
+_ETIQUETA_PASO_RE = re.compile(r"^\s*([^:.!?]{0,40}:)\s*")
+_CORTE_FRASE_RE = re.compile(r"(?<=[.!?;])\s+")
+
+
+def sin_frases_de(texto, patron, reemplazo="proteína") -> str:
+    try:
+        s = str(texto or "")
+        if not patron.search(s):
+            return s
+        mlab = _ETIQUETA_PASO_RE.match(s)
+        etiqueta = mlab.group(1) if mlab else ""
+        cuerpo = s[mlab.end():] if mlab else s
+        quedan = [f for f in _CORTE_FRASE_RE.split(cuerpo) if f and not patron.search(f)]
+        if quedan and any(_toks(f) for f in quedan):
+            return ((etiqueta + " ") if etiqueta else "") + " ".join(quedan)
+        # la frase era todo: sale el trozo «y jamón de pavo» / «con jamón de pavo» («Arepitas con queso y jamón de pavo.»)
+        trozo = re.compile(r"(?:,\s*|\s+(?:y|e|con|más)\s+)(?:[a-záéíóúñü]+\s+de\s+)?(?:" + patron.pattern + r")",
+                           re.IGNORECASE)
+        s2 = trozo.sub("", s)
+        if s2 != s and _toks(_ETIQUETA_PASO_RE.sub("", s2)):
+            return s2
+        return patron.sub(reemplazo, s)
+    except Exception:
+        return str(texto or "")

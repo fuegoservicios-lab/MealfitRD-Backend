@@ -658,7 +658,29 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-336 · 2026-09-26] (frontend) la sonda del teclado anota pausas del hilo principal (> 50 ms) y traza
 # fotograma a fotograma quién mueve la página (paneo S, scroll sy, contenedor top, caja) tras foco/aviso del teclado:
 # el video del dueño enseña la página desplazada al abrir/cerrar y hay que saber QUIÉN antes de tocar el nativo.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-336 · 2026-09-26"
+# [P1-PLAN-LOTE-332 · 2026-09-25] (backend) la pista de peso de un paso sigue a la de la lista: «½ cda de mantequilla
+# de maní natural (16 g)» con «(8 g)» en la lista — `pasos_cantidades.pistas_de_la_lista`.
+# [P1-PLAN-LOTE-333 · 2026-09-25] (backend) la plantilla del cerrador de proteína puesta a lo que no es proteína
+# («Incorpora arroz blanco crudo a la plancha o hervido y sírvelo como proteína del plato»): el eco sale si el
+# alimento ya está en otro paso — `pasos_cantidades.plantilla_de_proteina`.
+# [P1-PLAN-LOTE-334 · 2026-09-25] (backend) el mismo alimento no se sirve dos veces: «Sirve yogurt al lado para
+# acompañar.» en el paso de fuego + «Acompaña con yogurt.» en el Montaje (~10 % de las comidas) —
+# `pasos_cantidades.servir_una_vez`.
+# [P1-PLAN-LOTE-335 · 2026-09-25] (backend) el nombre y los pasos nombran la variedad que trae la lista («habichuelas
+# blancas» con negras en la lista, «ají cubanela» con morrón) — `pasos_cantidades.variedad_de_la_lista`.
+# [P1-PLAN-LOTE-337 · 2026-09-25] (backend) las piezas contadas del paso son las de la lista: «pica 1 diente de ajo»
+# con «3 dientes de ajo», «½ ají» con «1½ ají» — `pasos_cantidades.conteos_de_la_lista`.
+# [P1-PLAN-LOTE-338 · 2026-09-25] (backend) bariátrica: la fruta deshidratada (dátiles, pasas…) pasa a fresa —
+# «55 g de dátiles» en una merienda era un crítico del revisor y un plan degradado (condition_rules).
+# [P1-PLAN-LOTE-339 · 2026-09-25] (backend) «Sirve Yogurt al lado» con «Acompaña con yogurt natural entero»: el mismo
+# alimento con nombre corto y largo tampoco se sirve dos veces; la variedad (335) va antes y las frases repetidas al final.
+# [P1-PLAN-LOTE-340 · 2026-09-25] (backend) la proteína huérfana sale con su frase: el autocorrector ya no escribe
+# «Cocina jamón de proteína…» cuando el plato no trae otra proteína — `pasos_cantidades.sin_frases_de`.
+# [P1-PLAN-LOTE-341 · 2026-09-25] (backend) en la lista, «1½ ají cubanela» → «ajíes», «2 nabo mediano» → «nabos
+# medianos», «espinacas picado» → «picadas» — `pulido_lineas`.
+# [P1-PLAN-LOTE-342 · 2026-09-25] (backend) en unas «tortitas» el huevo es aglutinante: el autocorrector de proteína
+# repetida ya no las cambia por pechuga («bate ¾ pechuga de pollo», «NO botes pechuga de pollo»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-342 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

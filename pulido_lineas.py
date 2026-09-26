@@ -83,6 +83,50 @@ def _mayuscula(s: str) -> str:
     return s[:m.start(2)] + m.group(2).lower() + resto
 
 
+# [P1-PLAN-LOTE-341 · 2026-09-25] Y el número concuerda cuando son VARIOS: «1½ ají cubanela», «4 ají cubanela», «2 nabo
+# mediano» (26 líneas en el corpus de 308 planes) → «ajíes», «nabos medianos»; y el participio con su sustantivo en plural:
+# «2½ tazas de espinacas picado» (38 líneas) → «picadas». Solo el display; la cabeza cerrada de sustantivos contables.
+# tooltip-anchor: P1-PLAN-LOTE-341
+_PLURALES = {"aji": "ajíes", "ají": "ajíes", "nabo": "nabos", "tomate": "tomates", "limon": "limones", "limón": "limones",
+             "cebolla": "cebollas", "pepino": "pepinos", "zanahoria": "zanahorias", "diente": "dientes",
+             "tortilla": "tortillas", "arepita": "arepitas", "berenjena": "berenjenas", "papa": "papas",
+             "batata": "batatas", "pechuga": "pechugas"}
+_ADJ_PLURALES = {"mediano": "medianos", "mediana": "medianas", "pequeño": "pequeños", "pequeña": "pequeñas",
+                 "grande": "grandes", "verde": "verdes", "maduro": "maduros", "madura": "maduras", "rojo": "rojos",
+                 "roja": "rojas", "entero": "enteros", "entera": "enteras", "fresco": "frescos", "fresca": "frescas"}
+_VARIOS_SINGULAR = re.compile(
+    r"^(\s*(?:\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?))\s+(" + "|".join(sorted(_PLURALES, key=len, reverse=True))
+    + r")\b(\s+([a-záéíóúñ]+))?", re.IGNORECASE)
+_PARTICIPIO_TRAS_PLURAL = re.compile(r"\b([a-záéíóúñ]+(?:as|os))\s+(picad|rallad|cocid|trocead|cortad|pelad|lavad)o\b",
+                                     re.IGNORECASE)
+_FRAC_VAL = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
+
+
+def _plural_con_varios(s: str) -> str:
+    m = _VARIOS_SINGULAR.match(s)
+    if not m:
+        return s
+    try:
+        valor = sum(_FRAC_VAL[p] if p in _FRAC_VAL else float(p.replace(",", "."))
+                    for p in re.findall(r"\d+(?:[.,]\d+)?|[½¼¾⅓⅔]", m.group(1)))
+    except Exception:
+        return s
+    if valor <= 1:
+        return s
+    sust = _PLURALES[m.group(2).lower()]
+    if m.group(2)[:1].isupper():
+        sust = sust[:1].upper() + sust[1:]
+    cola = m.group(3) or ""
+    if m.group(4) and m.group(4).lower() in _ADJ_PLURALES:
+        cola = cola[:len(cola) - len(m.group(4))] + _ADJ_PLURALES[m.group(4).lower()]
+    return s[:m.start(2)] + sust + cola + s[m.end():]
+
+
+def _concuerda_participio(mm) -> str:
+    fem = mm.group(1).lower().endswith("as")
+    return f"{mm.group(1)} {mm.group(2)}{'as' if fem else 'os'}"
+
+
 def pulir_linea(s: str) -> str:
     """Una línea del display, pulida. Lo que no reconoce lo devuelve igual."""
     if not isinstance(s, str) or not s.strip():
@@ -113,6 +157,7 @@ def pulir_linea(s: str) -> str:
     if m:
         sing = _SINGULAR[m.group(2).lower()]
         out = f"{m.group(1)} {sing}" + out[m.end(2):]
+    out = _PARTICIPIO_TRAS_PLURAL.sub(_concuerda_participio, _plural_con_varios(out))  # [P1-PLAN-LOTE-341]
     return _mayuscula(out)
 
 

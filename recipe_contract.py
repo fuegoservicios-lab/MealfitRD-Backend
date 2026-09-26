@@ -921,6 +921,10 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
         __import__("pasos_cantidades").decimales_de_cocina(meal)  # [P1-PLAN-LOTE-312] «2.22 cdas» → «2¼ cdas»
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-316] «Acompaña con X. Acompaña con X.»
+        __import__("pasos_cantidades").variedad_de_la_lista(meal, index)  # [P1-PLAN-LOTE-335] «habichuelas blancas» con negras
+        __import__("pasos_cantidades").plantilla_de_proteina(meal, index)  # [P1-PLAN-LOTE-333] «cebolla… como proteína»
+        __import__("pasos_cantidades").servir_una_vez(meal)       # [P1-PLAN-LOTE-334] «Sirve X al lado» + «Acompaña con X»
+        __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-339] otra vez: 333-335 pueden dejar dos iguales
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

@@ -24643,7 +24643,7 @@ def _run_assembly_validations(
                             _new_steps.append(_s)
                             continue
                         for _p in _pats:
-                            _s = _p.sub(_repl, _s)
+                            _s = _p.sub(_repl, _s) if _actual_protein else __import__("pasos_cantidades").sin_frases_de(_s, _p, _repl)  # [P1-PLAN-LOTE-340]
                         _s = _reparar_concordancia_huevo(_s, _orphan_keys, _sa_af)
                         _new_steps.append(_re.sub(r'\s{2,}', ' ', _s).strip())
                     _recipe_steps = _new_steps
@@ -24667,7 +24667,7 @@ def _run_assembly_validations(
                             continue
                         _d2 = _desc_af
                         for _p in _pats:
-                            _d2 = _p.sub(_repl, _d2)
+                            _d2 = _p.sub(_repl, _d2) if _actual_protein else __import__("pasos_cantidades").sin_frases_de(_d2, _p, _repl)
                         if _d2 != _desc_af:
                             meal[_desc_key] = _re.sub(r'\s{2,}', ' ', _d2).strip()
                             logger.info(f"🩹 [P1-DESC-KEY-DEAD] Día {day.get('day')} "
@@ -30306,7 +30306,7 @@ def _diversify_egg_pools(skeleton_days: list, form_data=None) -> int:
 # [P1-EGG-CAP-AUTOFIX · 2026-07-05] Platos donde el huevo es AGLUTINANTE funcional — jamás
 # reemplazarlo ahí (rompería la receta). Mismo racional que P2-SLOT-CROQUETA-BINDER.
 _EGG_BINDER_DISH_TOKENS = ("croqueta", "albondiga", "panqueque", "pancake", "arepita",
-                           "torta", "bollito", "waffle", "empanizad", "apanad")
+                           "torta", "bollito", "waffle", "empanizad", "apanad", "tortita", "tortica")  # [P1-PLAN-LOTE-342] «tortitas» no contiene «torta»
 # Reemplazos slot-aware, nombres EXACTOS del catálogo verificado (lookup de micros/costos los
 # resuelve). El label del marker alimenta el fidelity-discount y el guard anti-colisión.
 _EGG_REPLACEMENT_LADDER = {
