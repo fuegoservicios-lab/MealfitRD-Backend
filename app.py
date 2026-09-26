@@ -716,7 +716,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-360 · 2026-09-26] (frontend) al volver de la galería el iPhone se congelaba 769 ms: WebKit decodificaba
 # la foto GRANDE de la vista previa en el hilo principal; en iOS la caja espera a la miniatura (worker, sin 650 ms).
 # «Otra…» recalcula solo al terminar de escribir y el campo se centra.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-360 · 2026-09-26"
+# [P1-PLAN-LOTE-370 · 2026-09-26] (backend) la pieza contada de la lista dice cuánto pesa, con lo que mide el motor:
+# «¼ filete de pescado (≈55 g)» (renal: un cuarto de catálogo son 37 g) — pasos_cantidades.peso_de_la_pieza.
+# [P1-PLAN-LOTE-371 · 2026-09-26] (backend) el artículo concuerda con los gramos: «escurre las 40 g de habichuelas»,
+# «ten listas las 135 g» → «los 40 g», «listos los 135 g» (pasos_cantidades.articulo_de_los_gramos).
+# [P1-PLAN-LOTE-372 · 2026-09-26] (backend) el paso ya no nombra lo que la lista perdió: «termina con maní fileteado»
+# en el plan real del dueño (la retirada no conocía «fileteado» y se deshacía) — recipe_repair.quitar_mencion.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-372 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -220,10 +220,16 @@ def _secable(food: str) -> bool:
 # si el paso no decía otra cosa, la frase entera), se comprueba con el propio detector V5 y, si la mención sobrevive, se
 # deshace y se declara. Nunca toca la lista. tooltip-anchor: P1-PLAN-LOTE-30-SIN-LISTA
 
-_ART = r"(?:(?:el|la|los|las|un|una|unos|unas|del|al)\s+)?"
+_ART = r"(?:(?:el|la|los|las|un|una|unos|unas|del|al|su|sus|tu|tus)\s+)?"  # [P1-PLAN-LOTE-372] «con su sofrito»
 _CANT = (r"(?:[\d½⅓¼¾⅔⅛][\d.,/½⅓¼¾⅔⅛]*\s*(?:g|gr|gramos?|kg|ml|l|cdas?|cdtas?|cucharad\w*|tazas?|unid\w*|piezas?|rebanadas?|"
          r"hojas?|dientes?|pizcas?|pu[nñ]ad\w*|ramitas?)?\s*(?:de\s+)?)?")
-_MOD = r"(?:\s+(?:reservad|tostad|picad|rallad|fresc|restant|troce|cortad|desmenuzad|cocid|crud|madur|natural|enter|integral)\w*)?"
+# [P1-PLAN-LOTE-372 · 2026-09-26] + fileteado, molido, laminado, triturado, pelado, rebanado, machacado, asado,
+# hervido, dorado, pasteurizado — y hasta DOS («maní tostado picado»). Plan real del dueño (26-sep, 04:34 UTC):
+# «y 10 g de maní fileteado» no casaba como ítem, la retirada caía a la FRASE entera, se llevaba el yogurt y la
+# avena (V3) y se deshacía: el paso siguió diciendo «termina con maní fileteado» sin maní en la lista. Corpus: «¾ ml
+# de leche pasteurizada», «guisado con su sofrito» (artículo posesivo). tooltip-anchor: P1-PLAN-LOTE-372
+_MOD = (r"(?:\s+(?:reservad|tostad|picad|rallad|fresc|restant|troce|cortad|desmenuzad|cocid|crud|madur|natural|enter|integral|"
+        r"filetead|molid|laminad|triturad|pelad|rebanad|machacad|asad|hervid|dorad|pasteurizad)\w*){0,2}")
 _TRAS = r"(?=\s*(?:[.,;:)]|$|\s+\d|\s+(?:y|e|o|hasta|para|en|con|sobre|por|durante|mientras|al|a)\b))"
 _PREP = r"(?:con|de|sobre|junto\s+a|junto\s+con|acompa[nñ]ad[oa]s?\s+de|encima\s+de|m[aá]s)"
 #: lo que sigue a «ITEM y » para que cuente como enumeración: otro ítem con artículo o cantidad, no un verbo
@@ -277,6 +283,9 @@ def quitar_mencion(paso: str, alimento: str) -> str:
                 i = clausula.rfind(", ")
                 clausula = clausula[:i] + " y " + clausula[i + 2:]
             nuevo = antes[:ini] + clausula + despues
+    if nuevo == cuerpo:
+        # [P1-PLAN-LOTE-372] «…, y termina con ITEM»: se va la cláusula de remate entera, no sólo «con ITEM» («y termina.»)
+        nuevo = re.sub(rf",?\s*(?:\b(?:y|e)\s+)?\b(?:termin|coron|decor|espolvore|adorn|remat|acompa[nñ])\w*\s+(?:(?:con|de)\s+)?{it}{_TRAS}", "", cuerpo, count=1, flags=fl)
     if nuevo == cuerpo:
         nuevo = re.sub(rf"\s+{_PREP}\s+{it}{_TRAS}", "", cuerpo, count=1, flags=fl)                 # «corona con ITEM»
     if nuevo == cuerpo or re.search(rf"\b{al}", nuevo, fl):                                          # cae la frase que lo nombra

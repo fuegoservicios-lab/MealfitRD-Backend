@@ -918,6 +918,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").sincronizar_exacto(meal)   # [P1-PLAN-LOTE-308] el contrato tolera ±25 %
         __import__("pasos_cantidades").cocido_de_la_lista(meal, db)  # [P1-PLAN-LOTE-343] «155 g … cocidos» con 155 g secos
         __import__("pasos_cantidades").pieza_del_catalogo(meal, db)  # [P1-PLAN-LOTE-356] «¼ filete» y «90 g de tilapia»
+        __import__("pasos_cantidades").peso_de_la_pieza(meal, db)  # [P1-PLAN-LOTE-370] «¼ filete de pescado (≈55 g)»
         __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»
         __import__("pasos_cantidades").lo_que_dice_la_lista(meal)  # [P1-PLAN-LOTE-328..331] piezas, porciones, pizcas
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
@@ -929,6 +930,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-339] otra vez: 333-335 pueden dejar dos iguales
         __import__("pasos_cantidades").servir_lo_que_sobra(meal)  # [P1-PLAN-LOTE-357] «70 g de queso mozzarella» sin paso
         __import__("pasos_cantidades").pista_sin_eco(meal)  # [P1-PLAN-LOTE-359] «80 g de yogurt (80 g) … sin azúcar»
+        __import__("pasos_cantidades").articulo_de_los_gramos(meal)  # [P1-PLAN-LOTE-371] «las 40 g» → «los 40 g»
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

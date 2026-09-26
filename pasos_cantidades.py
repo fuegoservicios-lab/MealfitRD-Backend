@@ -1760,3 +1760,82 @@ def pista_sin_eco(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-370 · 2026-09-26] La pieza contada de la lista dice cuánto pesa: «¼ filete de pescado (≈55 g)» ─────────
+# Plan renal real: la lista visible dice «¼ filete de pescado» y el motor mide 55 g (su línea de `ingredients_raw`); un
+# cuarto de un filete de catálogo son 37 g. El humanizador sólo anota el peso de las unidades VAGAS de su tabla (pedazo,
+# porción…) y «filete», «pechuga», «muslo» y «chuleta» no lo eran para él, aunque su tamaño varía el doble de una pieza a
+# otra: en el corpus de 314 planes, 461 líneas visibles contadas sin peso. Aquí se les anexa «(≈N g)» con lo que mide el
+# motor (la misma fuente que el lote 356 usa para los pasos: el raw en gramos, o el peso de catálogo de la pieza contada).
+# Sólo display; nunca ante ambigüedad (dos líneas del motor de la misma clase) ni sin catálogo; lo cocido lleva su base
+# («(≈270 g cocida)» no: se deja sin anexo). tooltip-anchor: P1-PLAN-LOTE-370
+def peso_de_la_pieza(meal, db=None) -> int:
+    """Nº de líneas visibles anotadas; 0 ante cualquier error o sin catálogo."""
+    try:
+        ings = meal.get("ingredients") if isinstance(meal, dict) else None
+        if db is None or not isinstance(ings, list) or not ings:
+            return 0
+        raw = [str(x) for x in (meal.get("ingredients_raw") or [])]
+        n = 0
+        for i, ln in enumerate(ings):
+            s = str(ln)
+            m = _PIEZA_SIN_PESO_RE.match(s)
+            if not m:
+                continue
+            toks = {_raiz_356(x) for x in _toks(m.group("cuerpo"))}
+            peso = _peso_del_motor_356(toks, s, raw, db) if toks else None
+            if not peso or peso[0] <= 0 or not peso[1] or peso[2]:
+                continue
+            g = int(round(peso[0] / 5.0) * 5) or int(round(peso[0]))
+            ings[i] = f"{s.rstrip()} (≈{g} g)"
+            n += 1
+        if n:
+            meal["ingredients"] = ings
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-371 · 2026-09-26] «los 40 g», no «las 40 g»: el artículo concuerda con los gramos ───────────────────
+# Replay de la cola real (314 planes): «escurre las 40 g de habichuelas negras cocidas», «ten listas las 135 g de
+# habichuelas rojas cocidas», «corta la 20 g de queso blanco fresco», «corta las 350 g de papa» — el sincronizador mete la
+# cifra detrás del artículo que el paso tenía para el alimento («escurre las habichuelas»), y «gramos» es masculino. El
+# artículo (y un «lista/listas» delante) pasa a masculino plural. Sólo pasos, nunca notas. tooltip-anchor: P1-PLAN-LOTE-371
+_ARTICULO_GRAMOS_371_RE = re.compile(
+    r"\b(?:(?P<listo>listas?)\s+)?(?P<art>las|la|unas|una)\s+(?=\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|ml)\b)", re.IGNORECASE)
+
+
+def _articulo_371(mm) -> str:
+    art = mm.group("art")
+    nuevo = "los" if art.lower() in ("las", "la") else "unos"
+    if art[:1].isupper():
+        nuevo = nuevo.capitalize()
+    listo = mm.group("listo")
+    pre = ""
+    if listo:
+        pre = ("Listos" if listo[:1].isupper() else "listos") + " "
+    return pre + nuevo + " "
+
+
+def articulo_de_los_gramos(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            s = _ARTICULO_GRAMOS_371_RE.sub(_articulo_371, p)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
