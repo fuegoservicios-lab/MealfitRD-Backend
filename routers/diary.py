@@ -77,6 +77,8 @@ class ManualMealLine(BaseModel):
     unit: str = Field(default="g", max_length=24)
     name: Optional[str] = Field(default=None, max_length=120)
     macros: Optional[dict] = None
+    # [P1-PLAN-LOTE-383] los gramos de una parte `custom` («Lechosa · 150 g» de «Descríbelo»): con ellos se descuenta
+    grams: Optional[float] = Field(default=None, gt=0.0, le=5000.0)
 
 
 class ManualMealRequest(BaseModel):
