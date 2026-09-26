@@ -43,6 +43,7 @@ from nevera_opcional import nevera_activa
 
 logger = logging.getLogger(__name__)
 
+import ajuste_de_duda  # [P1-PLAN-LOTE-361] el modelo de la petición se resuelve al importar el router
 router = APIRouter(
     prefix="/api/diary",
     tags=["diary"],
@@ -334,6 +335,8 @@ _REPEAT_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _ESTIMATE_MACROS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # [P1-PLAN-LOTE-348] el plato descrito y separado en partes (mismo coste y la misma exención que el anterior)
 _ESTIMATE_PLATE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+# [P1-PLAN-LOTE-361] «Otra…» de una duda de la foto → su ajuste (texto, flash; exento como los estimadores)
+_AJUSTE_DUDA_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -1091,6 +1094,29 @@ async def api_estimate_macros(
         "estimated": True,
         "model": model,
     }
+
+
+@router.post("/scan/ajuste-duda")
+async def api_ajuste_de_duda(payload: ajuste_de_duda.PeticionAjuste, verified_user_id: Optional[str] = Depends(_AJUSTE_DUDA_LIMITER)):
+    """[P1-PLAN-LOTE-361 · 2026-09-26] «Otra…» se aplica como una opción más: el ajuste del plato por la respuesta
+    escrita, sin volver a analizar la foto (`ajuste_de_duda.py`). Exento de la cuota de planes; soft-fail 200."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    import ajuste_de_duda
+    try:
+        from traduccion_para_mostrar import locale_soportado
+        from prompts.chat_agent import _COACH_LANGUAGE_NAMES
+        idioma = _COACH_LANGUAGE_NAMES.get(locale_soportado(payload.locale) or "")
+    except Exception:
+        idioma = None
+    try:
+        crudo = await ajuste_de_duda.estimar_con_ia(payload, idioma, verified_user_id)
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-361] ajuste de duda falló user={verified_user_id[:8]}: {type(e).__name__}: {e}")
+        return {"operation_failed": True, "error_code": "adjust_unavailable",
+                "error_message": "No pudimos calcular tu respuesta ahora; elige una opción o corrige las calorías a mano."}
+    r = ajuste_de_duda.normalizar(crudo)
+    return {"texto": " ".join(payload.respuesta.split())[:40], **r}
 
 
 @router.post("/consumed/estimate-plate")

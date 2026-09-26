@@ -730,6 +730,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # («mide 140 g de garbanzos cocidos» con los secos en la lista: 123 comidas con V7c) — pasos_cantidades.coccion_previa.
 # [P1-PLAN-LOTE-376 · 2026-09-26] (backend) el conteo del paso sigue al de la lista también en piezas, filetes y
 # guineítos: «mide 2 piezas de casabe» con 1, «los 2 guineítos verdes» con 1 (pasos_cantidades.conteos_con_unidad).
+# [P1-PLAN-LOTE-361 · 2026-09-26] (backend + frontend) «Otra…» en las dudas de la foto se aplica como una opción más:
+# `/api/diary/scan/ajuste-duda` estima por TEXTO el ajuste del plato (ya no re-analiza la foto, que borraba las demás
+# respuestas); la duda queda «✓ 4 huevos» y el resto intacto.
 _LAST_KNOWN_PFIX = "P1-PLAN-LOTE-376 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
