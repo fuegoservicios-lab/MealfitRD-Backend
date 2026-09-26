@@ -2014,3 +2014,112 @@ def coccion_previa(meal, index=None) -> int:
         return len(notas)
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-376 · 2026-09-26] El conteo del paso sigue al de la lista también en piezas, filetes y guineítos ─────
+# Replay de la cola real: el contrato acusa 41 V7e («el paso pide 2 y la lista compra 1»), 10 en las baterías recientes:
+# «mide 2 piezas de casabe» con «1 pieza de casabe», «ten listos … 1½ piezas de casabe» con 1, «pela y corta los 2
+# guineítos verdes» con «1 guineíto verde», «corta 1¾ filetes de pescado» con «1½ filetes». El lote 337 conoce doce
+# sustantivos contados sin «de» (diente, tomate, limón…), no las UNIDADES («N piezas DE casabe») ni estos víveres. Aquí,
+# con las mismas guardas que el 337 (UNA línea de la lista por clave, UNA mención numerada en los pasos, sin reparto): el
+# número del paso pasa a ser el de la lista, con la unidad en su número gramatical. Una unidad con «de» se ata también por
+# su alimento («pieza de casabe» no es «pieza de pollo»). Las notas no se tocan. tooltip-anchor: P1-PLAN-LOTE-376
+_UNIDADES_376 = {"pieza": ("pieza", "piezas"), "porcion": ("porción", "porciones"), "rebanada": ("rebanada", "rebanadas"),
+                 "filete": ("filete", "filetes"), "guineito": ("guineíto", "guineítos"), "guineo": ("guineo", "guineos"),
+                 "platano": ("plátano", "plátanos"), "batata": ("batata", "batatas")}
+_CON_DE_376 = {"pieza", "porcion", "rebanada", "filete"}
+_UNIDAD_376 = r"(?P<u>piezas?|porci[oó]n(?:es)?|rebanadas?|filetes?|guine[ií]tos?|guineos?|pl[aá]tanos?|batatas?)"
+_CONTEO_LISTA_376_RE = re.compile(r"^\s*" + _CUENTA + r"\s+" + _UNIDAD_376 + r"\b(?P<resto>.*)$", re.IGNORECASE)
+_CONTEO_PASO_376_RE = re.compile(r"(?<![\w.,/½¼¾⅓⅔])" + _CUENTA + r"\s+" + _UNIDAD_376 + r"\b", re.IGNORECASE)
+_DE_ALIMENTO_376_RE = re.compile(r"^(?:\s+[a-záéíóúñü]+)?\s+de\s+(?P<food>[a-záéíóúñü]+)", re.IGNORECASE)
+
+
+def _clave_376(unidad: str, cola: str):
+    u = _sa(str(unidad).lower())
+    k = next((c for c in _UNIDADES_376 if u in (c, c + "s", c + "es")), "")
+    if not k:
+        return None
+    if k in _CON_DE_376:
+        md = _DE_ALIMENTO_376_RE.match(cola or "")
+        if not md:
+            return None
+        return (k, _sa(md.group("food").lower()))
+    return (k, "")
+
+
+def conteos_con_unidad(meal) -> int:
+    """Nº de menciones reescritas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lista, amb = {}, set()
+        for ln in meal.get("ingredients") or []:
+            m = _CONTEO_LISTA_376_RE.match(str(ln))
+            clave = _clave_376(m.group("u"), m.group("resto")) if m else None
+            if not clave:
+                continue
+            if clave in lista:
+                amb.add(clave)
+            lista[clave] = m.group("q").replace(" ", "")
+        for c in amb:
+            lista.pop(c, None)
+        if not lista:
+            return 0
+        menciones = {}
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            for mm in _CONTEO_PASO_376_RE.finditer(p):
+                clave = _clave_376(mm.group("u"), p[mm.end():mm.end() + 60])
+                if clave in lista:
+                    menciones.setdefault(clave, []).append((i, mm))
+        cambios = {}
+        for clave, ms in menciones.items():
+            if len(ms) != 1:
+                continue
+            i, mm = ms[0]
+            p = rec[i]
+            q_lista = lista[clave]
+            try:
+                if abs(_valor_cuenta(mm.group("q")) - _valor_cuenta(q_lista)) < 1e-6:
+                    continue
+                plural = _valor_cuenta(q_lista) > 1
+            except Exception:
+                continue
+            if _REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():]):
+                continue
+            sing, plur = _UNIDADES_376[clave[0]]
+            nombre = plur if plural else sing
+            if mm.group("u")[:1].isupper():
+                nombre = nombre[:1].upper() + nombre[1:]
+            ini, fin, texto = mm.start(), mm.end(), f"{q_lista} {nombre}"
+            art = re.search(r"\b(los|las|el|la)(\s+)$", p[:mm.start()], re.IGNORECASE)
+            if art:
+                a = art.group(1)
+                a2 = {"los": "el", "las": "la"}.get(a.lower(), a) if not plural else {"el": "los", "la": "las"}.get(a.lower(), a)
+                a2 = a2[:1].upper() + a2[1:] if a[:1].isupper() else a2
+                if q_lista == "1":                         # «sobre la pieza de casabe», no «sobre la 1 pieza»
+                    ini, texto = art.start(), a2 + art.group(2) + nombre
+                elif a2.lower() != a.lower():
+                    ini, texto = art.start(), a2 + art.group(2) + texto
+            adj = re.match(r"(\s+)([a-záéíóúñ]+)", p[mm.end():])
+            if adj:
+                w = adj.group(2)
+                w2 = _ADJ_PIEZA.get(w, w) if plural else _ADJ_SING.get(w, w)
+                if w2 != w:
+                    fin, texto = mm.end() + adj.end(), texto + adj.group(1) + w2
+            cambios.setdefault(i, []).append((ini, fin, texto))
+        n = 0
+        for i, cs in cambios.items():
+            s = rec[i]
+            for ini, fin, texto in sorted(cs, reverse=True):
+                s = s[:ini] + texto + s[fin:]
+                n += 1
+            rec[i] = s
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0

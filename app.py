@@ -728,7 +728,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # con 107 g contados (78 de 313 pistas de taza) — pasos_cantidades.pista_de_taza_del_motor.
 # [P1-PLAN-LOTE-375 · 2026-09-26] (backend) lo que la lista compra SECO y el paso usa cocido trae su cocción previa
 # («mide 140 g de garbanzos cocidos» con los secos en la lista: 123 comidas con V7c) — pasos_cantidades.coccion_previa.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-375 · 2026-09-26"
+# [P1-PLAN-LOTE-376 · 2026-09-26] (backend) el conteo del paso sigue al de la lista también en piezas, filetes y
+# guineítos: «mide 2 piezas de casabe» con 1, «los 2 guineítos verdes» con 1 (pasos_cantidades.conteos_con_unidad).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-376 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

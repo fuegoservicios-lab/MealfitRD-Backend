@@ -934,6 +934,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").pasos_en_minuscula(meal)  # [P1-PLAN-LOTE-373] «, Sal al gusto y Pimienta»
         __import__("pasos_cantidades").pista_de_taza_del_motor(meal)  # [P1-PLAN-LOTE-374] «1¼ tazas de avena (65 g)» con 107
         __import__("pasos_cantidades").coccion_previa(meal, index)  # [P1-PLAN-LOTE-375] secos en la lista, cocidos en el paso
+        __import__("pasos_cantidades").conteos_con_unidad(meal)  # [P1-PLAN-LOTE-376] «2 piezas de casabe» con 1
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):
