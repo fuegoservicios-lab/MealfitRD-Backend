@@ -937,6 +937,16 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").conteos_con_unidad(meal)  # [P1-PLAN-LOTE-376] «2 piezas de casabe» con 1
         __import__("pasos_cantidades").crudo_no_viene_cocido(meal)  # [P1-PLAN-LOTE-377] pescado crudo «ya viene cocido»
         __import__("pasos_cantidades").licuadora_a_tiempo(meal)  # [P1-PLAN-LOTE-379] la licuadora antes del fuego
+        __import__("pasos_cantidades").claras_en_su_huevo(meal)  # [P1-PLAN-LOTE-390] claras duras, en su huevo
+        __import__("pasos_cantidades").lo_que_se_desgrana(meal)  # [P1-PLAN-LOTE-391] se desgrana la granada
+        __import__("pasos_cantidades").ave_a_74(meal)  # [P1-PLAN-LOTE-392] el ave, a 74 °C
+        __import__("pasos_cantidades").seco_usado_cocido(meal)  # [P1-PLAN-LOTE-393] secos usados cocidos
+        __import__("pasos_cantidades").hervor_con_su_tiempo(meal)  # [P1-PLAN-LOTE-394] el hervor, con su tiempo
+        __import__("pasos_cantidades").yogur_sin_forma(meal)  # [P1-PLAN-LOTE-395] el yogur, sin cubos
+        __import__("pasos_cantidades").no_se_hierve(meal)  # [P1-PLAN-LOTE-396] el queso no se hierve
+        __import__("pasos_cantidades").peso_de_la_pieza_en_el_paso(meal)  # [P1-PLAN-LOTE-397] «el filete de N g»
+        __import__("pasos_cantidades").minuscula_tras_verbo(meal)  # [P1-PLAN-LOTE-398] «Añade Filete» → «añade filete»
+        __import__("pasos_cantidades").uno_en_singular(meal)  # [P1-PLAN-LOTE-399] «1 rebanadas» → «1 rebanada»
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

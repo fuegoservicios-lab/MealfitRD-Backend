@@ -2270,7 +2270,7 @@ def licuadora_a_tiempo(meal) -> int:
                 continue
             resto = [_sa(str(q).lower()) if j != i else _sa((p[:mm.start()] + " " + p[mm.end():]).lower())
                      for j, q in enumerate(rec)]
-            clausulas = [c for c in re.split(r"[.;:]", " . ".join(resto))
+            clausulas = [c for c in re.split(r"[.;:](?!\d)", " . ".join(resto))    # [P1-PLAN-LOTE-52] sin partir decimales
                          if any(re.search(r"\b" + re.escape(t), c) for t in toks)]
             aparte = any(_APARTE_379_RE.search(c) for c in clausulas)
             if _CRUDO_379_RE.search(fn):
@@ -2299,6 +2299,569 @@ def licuadora_a_tiempo(meal) -> int:
             i += 1
         if n:
             meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-390 · 2026-09-26] Las claras duras se hierven dentro de su huevo ──────────────────────────────────────
+# Plan de la batería real (adulto mayor con HTA): «hierve 3 huevos y 3 claras de huevo 10-11 minutos, enfríalos y
+# pélalos» — una clara suelta no se hierve ni se pela. El LLM escribió «hierve 6 huevos… pélalos» y la regla 2 del
+# contrato (`egg_forms_step_sync`, lote 24: los pasos siguen a la forma de la lista) convirtió los enteros de las claras en
+# «claras de huevo». Corpus de 315 planes: 10 comidas («hierve 6 claras de huevo 8-10 min, pélalos», «cuece el huevo
+# entero y 4 claras en agua hirviendo…; enfría, pela y reserva»). El paso conserva la cantidad de la lista (el sync la
+# vigila) y dice cómo: las claras se hierven dentro de su huevo entero y la yema se quita al pelar. Nunca en una oración
+# que bate, mezcla, revuelve, cuaja, licúa o separa. tooltip-anchor: P1-PLAN-LOTE-390
+_CLARAS_HERVIDAS_390_RE = re.compile(
+    r"(?P<cl>\b(?:\d+(?:[.,]\d+)?|[½¼¾⅓⅔]|\d+\s*[½¼¾])\s+(?:g\s+de\s+)?(?P<n>claras?)(?:\s+de\s+huevos?)?\b)"
+    r"(?P<par>\s*\([^)]*\))?", re.IGNORECASE)
+_HIERVE_390_RE = re.compile(r"\bhierv\w*|\bhi[eé]rvel\w*|\bhirviendo\b|\bsancoch\w*", re.IGNORECASE)
+_PELA_390_RE = re.compile(r"\bp[eé]l(?:al[oa]s?|arl[oa]s?)\b|\bpela(?=\s*(?:y\b|,|;|\.|$))|\bc[aá]scara\b|\bduros?\b",
+                          re.IGNORECASE)
+_OTRO_VERBO_390_RE = re.compile(r"\b(?:bate|batir|batid[oa]s?|mezcla|revuelve|agrega|añade|incorpora|vierte|licúa|licua|"
+                                r"cuaja|cuájal\w*|separa|separar)\b", re.IGNORECASE)
+
+
+def claras_en_su_huevo(meal) -> int:
+    """Nº de oraciones corregidas (una por plato); 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        if any(isinstance(p, str) and "dentro de su huevo entero" in p for p in rec):
+            return 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            partes = re.split(r"(?<=\.)\s+", p)
+            for k, frase in enumerate(partes):
+                mm = _CLARAS_HERVIDAS_390_RE.search(frase)
+                if not mm or not _HIERVE_390_RE.search(frase) or _OTRO_VERBO_390_RE.search(frase):
+                    continue
+                # «hierve 1 huevo y 3 claras de huevo 10 minutos» (se pelan en el Montaje): el verbo rige a las claras
+                directo = re.search(r"\b(?:hierv[ea]|cuece)\s+(?:(?:\d+|[½¼¾])\s+huevos?\s+(?:enteros?\s+)?y\s+)?$",
+                                    frase[:mm.start()], re.IGNORECASE)
+                if not directo and not _PELA_390_RE.search(frase[mm.end():]):
+                    continue
+                uno = mm.group("n").lower() == "clara"
+                dentro = f" ({'hiérvela' if uno else 'hiérvelas'} dentro de su huevo entero, con cáscara)"
+                par = mm.group("par") or ""
+                if par and re.search(r"c[aá]scara", par, re.IGNORECASE):
+                    nueva = frase[:mm.end("cl")] + dentro + frase[mm.end():]         # «(se pesan sin cáscara)» se sustituye
+                else:
+                    nueva = frase[:mm.end()] + dentro + frase[mm.end():]
+                nueva = nueva.rstrip()
+                if nueva.endswith((".", ";")):
+                    nueva = nueva[:-1]
+                # sin «el/los huevo(s)»: con sólo claras en la lista, la regla 2 los reescribiría a «la(s) clara(s)»
+                cola = ("quita la yema del huevo pelado: usa solo la clara" if uno
+                        else "quita la yema de cada huevo pelado: usa solo la clara")
+                partes[k] = f"{nueva}; {cola}."
+                rec[i] = " ".join(partes)
+                meal["recipe"] = rec
+                meal.pop("_display", None)
+                return 1
+        return 0
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-391 · 2026-09-26] Lo que se desgrana es la granada ─────────────────────────────────────────────────────
+# Plan de la batería real (adulto mayor con HTA): «desgrana 45 g de guineo», «desgrana 65 g de piña» y, en el corpus,
+# «¼ taza de guineo desgranada» o «desgrana guineo y desecha la cáscara blanca»: la sustitución que saca la GRANADA del
+# plato (interacciones del perfil) cambia el alimento y deja su verbo y su adjetivo — la cáscara blanca es la de la
+# granada. Corpus de 315 planes: ~25 menciones, casi todas en perfiles con HTA, estatina o IMAO. Una fruta que no se
+# desgrana se pela y se corta; la uva, el maíz, los guandules y la granada sí se desgranan y no se tocan.
+# tooltip-anchor: P1-PLAN-LOTE-391
+_FRUTA_391 = (r"guineos?(?:\s+maduros?)?|bananas?|pl[aá]tanos?(?:\s+maduros?)?|piñas?|lechosas?|papayas?|mangos?|"
+              r"mel[oó]n(?:es)?|sand[ií]as?|peras?|manzanas?|chinolas?|toronjas?|naranjas?|mandarinas?")
+_DESGRANA_391_RE = re.compile(
+    r"\b(?P<v>[Dd]esgrana)\s+(?P<q>(?:(?:\d+(?:[.,]\d+)?|[½¼¾⅓⅔]|\d+\s*[½¼¾])\s*(?:(?:g|gr|gramos|tazas?)\s+de\s+)?|"
+    r"(?:suficiente|el|la|los|las)\s+)?)(?P<f>" + _FRUTA_391 + r")\b", re.IGNORECASE)
+_DESGRANADO_391_RE = re.compile(r"\b(?P<f>" + _FRUTA_391 + r")\s+desgranad[oa]s?\b", re.IGNORECASE)
+_CASCARA_BLANCA_391_RE = re.compile(r"\s+y\s+desecha\s+la\s+c[aá]scara\s+blanca\b", re.IGNORECASE)
+
+
+def _forma_391(fruta: str) -> str:
+    return "en ruedas" if re.match(r"(?:guineo|banana|pl[aá]tano)", fruta, re.IGNORECASE) else "en cubos"
+
+
+def lo_que_se_desgrana(meal) -> int:
+    """Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            s = _DESGRANA_391_RE.sub(lambda m: ("Pela y corta " if m.group("v")[0].isupper() else "pela y corta ")
+                                     + (m.group("q") or "") + m.group("f"), p)
+            s = _DESGRANADO_391_RE.sub(lambda m: f"{m.group('f')} {_forma_391(m.group('f'))}", s)
+            if s != p:
+                s = _CASCARA_BLANCA_391_RE.sub("", s)          # la cáscara blanca era la de la granada
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-392 · 2026-09-26] El pollo y el pavo se cocinan a 74 °C ───────────────────────────────────────────────
+# Batería REAL sobre el 379 (adulto mayor con HTA, día 1): «Marina pechuga de pollo…; cocina el filete 4 minutos por
+# lado, hasta 63 °C en el centro» — el cambio de proteína repetida (`_protein_autofix_applied: pescado->pollo`) cambia el
+# alimento y deja el punto del PESCADO. 63 °C es seguro para el pescado; el ave necesita 74 °C (USDA/FSIS, también
+# molida). Corpus de 315 planes: 18 comidas con pollo o pavo «a 63 °C», 11 por ese cambio y 7 escritas así por el
+# modelo — cinco en perfiles de EMBARAZO —, incluida la nota ⚠️ reescrita: «cocina pechuga de pollo hasta que… se separe
+# en lascas (63 °C en el centro)». En la cola: en una frase del ave (sin pescado ni huevo) la temperatura interna por
+# debajo de 74 °C sube a 74 °C y la señal del pescado («se separe en lascas») pasa a «sin partes rosadas». La del huevo
+# (≥71 °C) y las del horno (≥150 °C) no se tocan. tooltip-anchor: P1-PLAN-LOTE-392
+_AVE_392_RE = re.compile(r"\b(?:pollo|pechugas?|pavo|muslos?|contramuslos?|gallina)\b")
+_NO_CARNE_392_RE = re.compile(r"\b(?:caldo|consom\w*|cubitos?|sazon\w*|polvo)\b")
+_PEZ_392_RE = re.compile(r"\b(?:pescados?|tilapia|merluza|salmon|atun|sardinas?|bacalao|camarones?|mero|chillo|dorado|"
+                         r"corvina|pargo|mariscos?|langostinos?|calamar(?:es)?|lascas? de pescado)\b")
+_HUEVO_392_RE = re.compile(r"\b(?:huevos?|claras?|yemas?)\b")
+_TEMP_392_RE = re.compile(r"(?<![\d.,])(?P<t>[5-7]\d)(?P<sep>\s*)°\s*C")   # «160 °C» del horno no es «60 °C»
+_LASCAS_392_RE = re.compile(r"\s+y\s+se\s+separe\s+en\s+(?:lascas|l[aá]minas)\b")
+
+
+def ave_a_74(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [_sa(str(x).lower()) for x in (meal.get("ingredients") or [])]
+        if not any(_AVE_392_RE.search(l) and not _NO_CARNE_392_RE.search(l) for l in lineas):
+            return 0
+        pez_en_lista = any(_PEZ_392_RE.search(l) for l in lineas)
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or "°" not in p and "separe en" not in p:
+                continue
+            ave_en_paso = bool(_AVE_392_RE.search(_sa(p.lower())))
+            trozos = re.split(r"((?<=[.;])\s+)", p)
+            cambio = False
+            for k in range(0, len(trozos), 2):
+                c = trozos[k]
+                sc = _sa(c.lower())
+                if _HUEVO_392_RE.search(sc) or _PEZ_392_RE.search(sc):
+                    continue
+                if not (_AVE_392_RE.search(sc) or (ave_en_paso and not pez_en_lista)):
+                    continue
+                nuevo = _TEMP_392_RE.sub(lambda m: (f"74{m.group('sep')}°C" if int(m.group("t")) < 74 else m.group(0)), c)
+                if nuevo != c or _AVE_392_RE.search(sc):
+                    nuevo = _LASCAS_392_RE.sub(", sin partes rosadas", nuevo)
+                if nuevo != c:
+                    trozos[k] = nuevo
+                    cambio = True
+            if cambio:
+                rec[i] = "".join(trozos)
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-393 · 2026-09-26] «Escurre 355 g de garbanzos cocidos» con los secos en la lista trae su cocción ───────
+# Batería REAL sobre el 379 (estatina, día 1): la lista compra «1 taza de garbanzos secos» y los pasos dicen «escurre 355 g
+# de garbanzos cocidos… incorpora los garbanzos… y cocina 10 min». El lote 375 añade la «💡 Cocción previa» cuando el
+# detector V7c acusa, pero V7c da por cocidos los garbanzos que el paso «cocina 10 min» — y 10 min no cuecen un garbanzo
+# seco (60-90 min tras remojo). Aquí, sin V7c: si la lista compra el alimento seco/crudo, un paso lo usa «cocido» y ningún
+# paso lo remoja ni lo cuece de verdad (≥20 min, «según el paquete», «hasta que esté tierno»), sale la misma nota del 375.
+# tooltip-anchor: P1-PLAN-LOTE-393
+_SECO_393_RE = re.compile(r"\b(?P<f>garbanzos?|lentejas?|habichuelas?|frijol(?:es)?|gandules|guandules|habas?|"
+                          r"arroz(?:\s+integral)?|quinoa|bulgur|cebada)\b(?P<resto>[^|]*)")
+_REAL_393_RE = re.compile(r"\bremoj\w*|seg[uú]n\s+(?:las\s+(?:instrucciones|indicaciones)\s+del\s+|el\s+)?(?:paquete|empaque)|"
+                          r"hasta\s+que\s+(?:est[eé]n?|queden?)\s+tiern")
+_MIN_393_RE = re.compile(r"(\d{1,3})\s*(?:-\s*(\d{1,3})\s*)?min")
+_COCCION_393_RE = re.compile(r"\b(?:hierv\w*|cuec\w*|cuece|cocin\w*|sancoch\w*)")
+
+
+def seco_usado_cocido(meal) -> int:
+    """Nº de notas añadidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        pasos = [_sa(str(p).lower()) for p in rec if isinstance(p, str) and not _es_nota(p)]
+        notas_txt = " ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str))
+        notas = []
+        for linea in (meal.get("ingredients") or []):
+            ln = _sa(str(linea).lower())
+            mm = _SECO_393_RE.search(ln)
+            if not mm or not re.search(r"\b(?:sec[oa]s?|crud[oa]s?)\b", mm.group("resto")):
+                continue
+            food = mm.group("f")
+            raiz = re.sub(r"(?:es|s)$", "", food.split()[0]) if food.split()[0] not in ("arroz", "bulgur") else food.split()[0]
+            if "coccion previa" in notas_txt and raiz in notas_txt[notas_txt.find("coccion previa"):]:
+                continue
+            usa_cocido = any(re.search(r"\b" + re.escape(raiz) + r"\w*\s+(?:\w+\s+){0,2}cocid[oa]s?\b", p) for p in pasos)
+            if not usa_cocido:
+                continue
+            real = False
+            for p in pasos:
+                for cl in re.split(r"[.;](?!\d)", p):                  # [P1-PLAN-LOTE-52] «0.5 taza» no parte la frase
+                    if not re.search(r"\b" + re.escape(raiz), cl):
+                        continue
+                    if _REAL_393_RE.search(cl):
+                        real = True
+                    elif _COCCION_393_RE.search(cl):
+                        tiempos = [max(int(t.group(1)), int(t.group(2) or 0)) for t in _MIN_393_RE.finditer(cl)]
+                        if tiempos and max(tiempos) >= 20:
+                            real = True
+            if real:
+                continue
+            plantilla = next((t for k, t in _COCCION_PREVIA_375 if re.search(r"\b" + re.escape(k), food)), None)
+            if not plantilla:
+                continue
+            nombre = re.sub(r"\s+(?:sec[oa]s?|crud[oa]s?)\b", "", str(linea).lower())
+            nombre = re.sub(r"^\s*[\d½¼¾⅓⅔.,/]+\s*(?:tazas?|g|gr|gramos|cdas?|cucharadas?)?\s*(?:de\s+)?", "", nombre).strip()
+            texto = "💡 Cocción previa: " + plantilla.format(n=nombre or food)
+            if any(k in food for k in _LEGUMBRE_375):
+                texto += " (puedes cocinar la tanda de varios días y guardarla en la nevera hasta 4 días)"
+            texto += "."
+            if texto not in rec and texto not in notas:
+                notas.append(texto)
+        if not notas:
+            return 0
+        i_mise = next((i for i, s in enumerate(rec) if isinstance(s, str) and s.strip().lower().startswith("mise en place")), None)
+        pos = (i_mise + 1) if i_mise is not None else 0
+        rec[pos:pos] = notas
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return len(notas)
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-394 · 2026-09-26] Un hervor no lo mide la plancha de otra frase ───────────────────────────────────────
+# Batería REAL sobre el 379 (estatina, día 3): «cocina la cebada en agua según las instrucciones del paquete, hasta que
+# esté tierna, aproximadamente 3-4 min por lado a fuego medio-alto». El recorte de tiempos implausibles
+# (`_clamp_recipe_time_temp_outliers`) elige la técnica con el PASO entero: la otra frase dice «sartén», el techo de la
+# plancha es 30 min y los 35-40 min de la cebada pasan al «3-4 min por lado» de la plancha. Corpus: 7 hervores así —
+# «cocina el bulgur en agua hirviendo 1-2 min de licuado a velocidad altautos» (el recorte partía «minutos» y dejaba
+# «utos»; su regex se corrige en el orquestador). En la cola: en la frase que hierve un alimento conocido, la plantilla de
+# otra técnica pasa al tiempo de hervor de ese alimento, y el «utos» huérfano sale. tooltip-anchor: P1-PLAN-LOTE-394
+_HERVOR_394 = (("arroz integral", "35-45 min"), ("arroz", "15-20 min"), ("cebada", "30-40 min"), ("quinoa", "12-15 min"),
+               ("bulgur", "10-12 min"), ("pasta", "8-10 min"), ("fideo", "8-10 min"), ("espagueti", "8-10 min"),
+               ("lenteja", "20-25 min"), ("garbanzo", "60-90 min"), ("habichuela", "60-90 min"), ("frijol", "60-90 min"),
+               ("yuca", "20-25 min"), ("platano", "20-25 min"), ("guineo", "15-20 min"), ("papa", "15-20 min"),
+               ("batata", "15-20 min"), ("mapuey", "20-25 min"), ("yautia", "15-20 min"), ("name", "20-25 min"),
+               ("auyama", "10-15 min"), ("zanahoria", "10-12 min"))
+_HIERVE_394_RE = re.compile(r"\ben agua\b|\bhierv\w*|\bherv\w*|\bcuec\w*|\bcuece\b|\bsancoch\w*")
+_AJENA_394_RE = re.compile(r"(?P<pre>(?:unos|aproximadamente|durante)\s+)?\d+\s*-\s*\d+\s+min\s+(?:por\s+lado\s+a\s+fuego\s+"
+                           r"medio(?:-alto)?|de\s+licuado\s+a\s+velocidad\s+alta|hasta\s+dorar)(?:utos\b)?")
+_UTOS_394_RE = re.compile(r"(velocidad alta|fuego medio-alto|fuego medio|hasta dorar|al vapor|en agua hirviendo|a 180 °C)utos\b")
+
+
+def hervor_con_su_tiempo(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            trozos = re.split(r"((?<=[.;])\s+)", p)
+            for k in range(0, len(trozos), 2):
+                c = trozos[k]
+                nuevo = _UTOS_394_RE.sub(r"\1", c)
+                sc = _sa(nuevo.lower())
+                if _HIERVE_394_RE.search(sc) and _AJENA_394_RE.search(nuevo):
+                    tiempo = next((t for k2, t in _HERVOR_394 if re.search(r"\b" + k2, sc)), None)
+                    if tiempo:
+                        nuevo = _AJENA_394_RE.sub(lambda m: (m.group("pre") or "") + tiempo, nuevo, count=1)
+                if nuevo != c:
+                    trozos[k] = nuevo
+                    n += 1
+            if n:
+                rec[i] = "".join(trozos)
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-395 · 2026-09-26] El yogur no se corta en cubos ─────────────────────────────────────────────────────────
+# Batería REAL sobre el 379 (adulto mayor con HTA, día 2): «corta 1 taza de yogurt natural sin azúcar (231 g) bajo en
+# sodio en cubos… sirve los bollitos con los cubos de yogurt» — el ajuste de sodio cambió el queso del plato por yogur y
+# dejó la forma del queso (corpus: «yogurt … en láminas» dos veces más). Una forma de corte sobre el yogur sale: «corta»
+# pasa a «mide» y «los cubos de yogurt» a «el yogurt». tooltip-anchor: P1-PLAN-LOTE-395
+_FORMA_395 = r"(?:cubos|cubitos|l[aá]minas|lonjas|rodajas|tiras|dados|trocitos)"
+_CORTA_YOG_395_RE = re.compile(r"\b(?P<v>[Cc]orta|[Rr]ebana|[Dd]esmenuza|[Rr]alla|[Tt]rocea)\s+(?P<q>[^.;,]*?\byogu?rt?\w*[^.;,]*?)"
+                               r"\s+en\s+" + _FORMA_395 + r"\b")
+_LOS_CUBOS_395_RE = re.compile(r"\b(?:los|las)\s+" + _FORMA_395 + r"\s+de\s+(?P<y>yogu?rt?\w*)", re.IGNORECASE)
+_YOG_EN_FORMA_395_RE = re.compile(
+    r"(?P<y>\byogu?rt?\w*(?:\s+(?:natural|griega?o?|sin|az[uú]car|descremad[oa]|enter[oa]|bajo|en|sodio|light|"
+    r"\(\d+\s*g\)))*)\s+en\s+" + _FORMA_395 + r"\b", re.IGNORECASE)
+
+
+def yogur_sin_forma(meal) -> int:
+    """Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p) or not re.search(r"yogu?rt?", p, re.IGNORECASE):
+                continue
+            s = _CORTA_YOG_395_RE.sub(
+                lambda m: m.group(0) if " y " in m.group("q") or re.search(r"\bqueso\b", m.group("q"), re.IGNORECASE)
+                else ("Mide " if m.group("v")[0].isupper() else "mide ") + m.group("q"), p)
+            s = _LOS_CUBOS_395_RE.sub(lambda m: "el " + m.group("y"), s)
+            def _sin_forma(m, s_=s):
+                clausula = s_[max(s_.rfind(".", 0, m.start()), s_.rfind(";", 0, m.start()), s_.rfind(",", 0, m.start())) + 1:m.end()]
+                if re.search(r"\bqueso\b|helad|congel", clausula, re.IGNORECASE):   # «corta el queso y el yogurt helado»
+                    return m.group(0)
+                return m.group("y")
+            s = _YOG_EN_FORMA_395_RE.sub(_sin_forma, s)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-396 · 2026-09-26] El queso y el cilantro no se hierven «hasta que ablanden» ────────────────────────────
+# Batería REAL sobre el 379 (adulto mayor con HTA, día 3): «Incorpora cilantro picado en agua hasta que ablanden e
+# incorpóralo al plato». La frase es la del cerrador para una LEGUMBRE (`_closer_protein_step_text`: «Cocina {x} en agua
+# hasta que ablanden e incorpóralo al plato»); una sustitución posterior cambia el alimento y el verbo y deja el hervor.
+# Corpus de 315 planes: 15 frases así — «Incorpora queso blanco fresco en agua hasta que ablanden» (11), cilantro, aceite
+# de oliva, «Añade agua en agua». Lo que no se hierve deja el hervor: si otro paso ya lo usa, la frase sobra; si no, queda
+# «Incorpora {x} al plato.». Legumbres, granos y verduras conservan la suya. tooltip-anchor: P1-PLAN-LOTE-396
+_ABLANDEN_396_RE = re.compile(
+    r"(?P<v>Cocina|Incorpora|Añade|Agrega)\s+(?P<obj>[^.;:]{2,50}?)\s+en\s+agua\s+hasta\s+que\s+ablanden\s+e\s+"
+    r"incorp[oó]ral[oa]s?\s+al\s+plato(?:\s*\(~[^)]*\))?\.?", re.IGNORECASE)
+_NO_SE_HIERVE_396_RE = re.compile(r"\b(?:quesos?|cilantro|perejil|aceite|agua|yogu?rt?\w*|sal|pimienta|oregano|comino|canela|"
+                                  r"mantequilla|aguacate|limon|jugo|vinagre|miel|cottage|ricotta|mozzarella)\b")
+
+
+def no_se_hierve(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i in range(len(rec)):
+            p = rec[i]
+            if not isinstance(p, str):
+                continue
+            mm = _ABLANDEN_396_RE.search(p)
+            if not mm:
+                continue
+            obj = mm.group("obj").strip()
+            on = _sa(obj.lower())
+            if not _NO_SE_HIERVE_396_RE.search(on):
+                continue
+            toks = [t for t in _toks(on) if t not in ("blanco", "blanca", "fresco", "fresca", "picado", "picada")] or _toks(on)
+            resto = " ".join(_sa(str(q).lower()) for j, q in enumerate(rec) if j != i and isinstance(q, str))
+            resto += " " + _sa((p[:mm.start()] + " " + p[mm.end():]).lower())
+            if (toks and any(re.search(r"\b" + re.escape(t), resto) for t in toks)) or on == "agua":
+                nuevo = ""
+            else:
+                nuevo = f"Incorpora {obj[:1].lower() + obj[1:]} al plato."
+            s = re.sub(r"\s{2,}", " ", (p[:mm.start()] + nuevo + p[mm.end():])).strip()
+            rec[i] = s
+            n += 1
+        if n:
+            meal["recipe"] = [x for x in rec if not (isinstance(x, str) and re.fullmatch(r"\s*[^:.]{1,40}:\s*", x))
+                              and x != ""]
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-397 · 2026-09-26] «El filete de 195 g» pesa lo que dice la lista ──────────────────────────────────────
+# Batería REAL sobre el 379 (adulto mayor con HTA): «seca el filete de pescado blanco de 195 g» con «1 filete de pescado
+# (≈160 g)» en la lista, y «seca pechuga de pollo de 150 g» con «½ pechuga de pollo (≈100 g)». Los lotes 310/370 siguen
+# la pista «(N g)» de la lista; la forma «el filete … DE N g» no la sigue nadie (corpus: 16 de 22 discrepan >15 %). Con UNA
+# línea de la lista para esa pieza y su peso, el paso pasa a ese peso (por pieza si el paso cuenta varias o dice «cada»).
+# tooltip-anchor: P1-PLAN-LOTE-397
+_PIEZA_DE_G_397_RE = re.compile(
+    r"(?:(?P<c>\d+(?:[.,]\d+)?|[½¼¾⅓⅔]|\d+\s*[½¼¾])\s+)?\b(?P<k>filetes?|pechugas?)\b(?P<mid>[^.;()]{0,40}?)\bde\s+"
+    r"(?P<g>\d+(?:[.,]\d+)?)\s*g\b(?P<cada>\s+cada\s+un[oa]|\s+c/u)?", re.IGNORECASE)
+_PROT_397_RE = re.compile(r"\b(pollo|pavo|res|cerdo|pescado|tilapia|salmon|merluza|mero|dorado|chillo|atun|corvina|pargo)\b")
+_G_LINEA_397_RE = re.compile(r"\(\s*≈?\s*(\d+(?:[.,]\d+)?)\s*g\s*\)|^\s*(\d+(?:[.,]\d+)?)\s*g\s+de\b")
+
+
+def _num_397(s) -> float:
+    s = str(s).strip()
+    fr = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
+    tot = 0.0
+    for ch, v in fr.items():
+        if ch in s:
+            tot += v
+            s = s.replace(ch, "")
+    s = s.strip()
+    return tot + (float(s.replace(",", ".")) if s else 0.0)
+
+
+def peso_de_la_pieza_en_el_paso(meal) -> int:
+    """Nº de pesos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [str(x) for x in (meal.get("ingredients") or [])]
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+
+            def _sub(m):
+                nonlocal n
+                k = _sa(m.group("k").lower()).rstrip("s")
+                cands = [l for l in lineas if re.search(r"\b" + k + r"s?\b", _sa(l.lower()))]
+                if len(cands) != 1:
+                    return m.group(0)
+                linea_n = _sa(cands[0].lower())
+                for prot in _PROT_397_RE.findall(_sa(m.group("mid").lower())):   # «pechuga de pavo» no es la de pollo
+                    if prot not in linea_n and not (prot == "pescado" and _PEZ_392_RE.search(linea_n)):
+                        return m.group(0)
+                mg = _G_LINEA_397_RE.search(cands[0])
+                if not mg:
+                    return m.group(0)
+                total = float((mg.group(1) or mg.group(2)).replace(",", "."))
+                c = _num_397(m.group("c")) if m.group("c") else 1.0
+                por_pieza = bool(m.group("cada")) or c > 1
+                objetivo = total / c if (por_pieza and c > 0) else total
+                g = float(m.group("g").replace(",", "."))
+                if objetivo <= 0 or abs(g - objetivo) / objetivo <= 0.10:
+                    return m.group(0)
+                n += 1
+                nuevo_g = f"{round(objetivo):d}"
+                return m.group(0)[:m.start("g") - m.start()] + nuevo_g + m.group(0)[m.end("g") - m.start():]
+
+            s = _PIEZA_DE_G_397_RE.sub(_sub, p)
+            if s != p:
+                rec[i] = s
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-398 · 2026-09-26] Tras el verbo, el alimento va en minúscula ───────────────────────────────────────────
+# Batería REAL sobre el 379 (adulto mayor con HTA): «Añade Filete de pescado blanco al guiso», «Cocina Filete de pescado
+# blanco a la plancha», «Incorpora también Queso blanco», «añade Sal al gusto» — el cerrador y las sustituciones copian el
+# nombre de la fila del catálogo con su mayúscula. El lote 373 lo baja tras «, », «y», «de», «con»; no tras el verbo que
+# lo gobierna. Corpus de 317 planes: 117 («Pechuga» 34, «Filete» 17, «Tilapia» 12, «Plátano» 10…). Mismas excepciones del
+# 373: nombre propio, marca de dos palabras con mayúscula, «Toque de Fuego». Nunca las notas. tooltip-anchor: P1-PLAN-LOTE-398
+_VERBO_MAYUS_398_RE = re.compile(
+    r"\b(?P<v>(?i:añade|agrega|incorpora|cocina|sirve|mezcla|coloca|pon|usa|corta|pica|mide|saltea|hierve|tuesta|marina|"
+    r"sazona|sella|también|acompaña con|reparte|calienta|espolvorea|rocía|unta|ralla|lava|pela|desmenuza|licúa|bate|"
+    r"vierte))\s+(?P<l>[A-ZÁÉÍÓÚÑ])(?P<r>[a-záéíóúñü]{2,})\b(?P<sig>\s+[A-ZÁÉÍÓÚÑ])?")
+
+
+def _minuscula_398(mm) -> str:
+    if mm.group("sig") or _sa((mm.group("l") + mm.group("r")).lower()) in _PROPIOS_373:
+        return mm.group(0)
+    return mm.group(0)[:mm.start("l") - mm.start()] + mm.group("l").lower() + mm.group(0)[mm.start("r") - mm.start():]
+
+
+def minuscula_tras_verbo(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            s = _VERBO_MAYUS_398_RE.sub(_minuscula_398, p)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+
+# ── [P1-PLAN-LOTE-399 · 2026-09-26] «1 rebanadas», «1 tortas pequeñas»: con uno, en singular ─────────────────────────────
+# Batería REAL sobre el 379 (estatina): «mide ½ aguacate y 1 rebanadas de pan integral», «1 ajíes morrones» en la lista;
+# en el corpus de 317 planes, 84 pasos con «1 rebanadas» y 23 líneas de lista («1 tortas pequeñas de casabe» 13,
+# «1 dátiles sin hueso» 6, «1 ajíes morrones» 3): la unidad del catálogo viene en plural y el conteo 1 no la cambia. Con
+# «1» exacto (no «1½», no «11», no «0,1»), el sustantivo y sus adjetivos conocidos pasan a singular, en pasos y en la
+# lista. Cantidades, alimentos y macros intactos. tooltip-anchor: P1-PLAN-LOTE-399
+_SING_399 = {"rebanadas": "rebanada", "tortas": "torta", "dátiles": "dátil", "datiles": "dátil", "ajíes": "ají", "ajies": "ají",
+             "rábanos": "rábano", "rabanos": "rábano", "pedazos": "pedazo", "piezas": "pieza", "porciones": "porción",
+             "tazas": "taza", "cucharadas": "cucharada", "cucharaditas": "cucharadita", "unidades": "unidad", "filetes": "filete",
+             "pechugas": "pechuga", "huevos": "huevo", "claras": "clara", "tomates": "tomate", "limones": "limón",
+             "guineos": "guineo", "plátanos": "plátano", "lonjas": "lonja", "hojas": "hoja", "ramitas": "ramita",
+             "dientes": "diente", "tallos": "tallo", "sobres": "sobre", "latas": "lata", "vasos": "vaso"}
+_ADJ_SING_399 = {"pequeñas": "pequeña", "pequeños": "pequeño", "medianas": "mediana", "medianos": "mediano",
+                 "grandes": "grande", "morrones": "morrón", "maduros": "maduro", "maduras": "madura", "verdes": "verde",
+                 "integrales": "integral", "finas": "fina", "finos": "fino", "gruesas": "gruesa", "gruesos": "grueso",
+                 "enteros": "entero", "enteras": "entera", "frescos": "fresco", "frescas": "fresca", "rojos": "rojo",
+                 "rojas": "roja", "cubanelas": "cubanela", "dulces": "dulce", "picados": "picado", "picadas": "picada",
+                 "pelados": "pelado", "peladas": "pelada", "cortados": "cortado", "cortadas": "cortada",
+                 "rallados": "rallado", "ralladas": "rallada", "tostados": "tostado", "tostadas": "tostada"}
+_UNO_PLURAL_399_RE = re.compile(
+    r"(?<![\d.,/½¼¾⅓⅔])\b1\s+(?P<n>" + "|".join(sorted(_SING_399, key=len, reverse=True)) + r")\b"
+    r"(?P<adj>(?:\s+(?:" + "|".join(sorted(_ADJ_SING_399, key=len, reverse=True)) + r")\b)*)")
+
+
+def _singular_399(mm) -> str:
+    n = mm.group("n")
+    sing = _SING_399.get(n) or _SING_399.get(n.lower(), n)
+    adj = re.sub(r"\S+", lambda a: _ADJ_SING_399.get(a.group(0), a.group(0)), mm.group("adj") or "")
+    return f"1 {sing}{adj}"
+
+
+def uno_en_singular(meal) -> int:
+    """Nº de textos corregidos (pasos + líneas de la lista); 0 ante cualquier error."""
+    try:
+        if not isinstance(meal, dict):
+            return 0
+        n = 0
+        for campo in ("recipe", "ingredients"):
+            xs = meal.get(campo)
+            if not isinstance(xs, list):
+                continue
+            for i, x in enumerate(xs):
+                if not isinstance(x, str) or (campo == "recipe" and _es_nota(x)):
+                    continue
+                s = _UNO_PLURAL_399_RE.sub(_singular_399, x)
+                if s != x:
+                    xs[i] = s
+                    n += 1
+        if n:
             meal.pop("_display", None)
         return n
     except Exception:

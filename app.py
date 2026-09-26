@@ -739,7 +739,27 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-361 · 2026-09-26] (backend + frontend) «Otra…» en las dudas de la foto se aplica como una opción más:
 # `/api/diary/scan/ajuste-duda` estima por TEXTO el ajuste del plato (ya no re-analiza la foto, que borraba las demás
 # respuestas); la duda queda «✓ 4 huevos» y el resto intacto.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-379 · 2026-09-26"
+# [P1-PLAN-LOTE-390 · 2026-09-26] (backend) las claras duras se hierven dentro de su huevo: «hierve 3 huevos y 3
+# claras de huevo… pélalos» (batería real, HTA) → «(hiérvelas dentro de su huevo entero, con cáscara)… quita la yema».
+# [P1-PLAN-LOTE-391 · 2026-09-26] (backend) lo que se desgrana es la granada: «desgrana 45 g de guineo» (batería real,
+# HTA; sustitución de la granada) → «pela y corta 45 g de guineo»; «guineo desgranada» → «guineo en ruedas».
+# [P1-PLAN-LOTE-392 · 2026-09-26] (backend) el pollo y el pavo se cocinan a 74 °C: «cocina el filete… hasta 63 °C» con
+# pechuga de pollo (batería real, HTA: cambio pescado→pollo; 18 en el corpus, 5 de embarazo) → 74 °C.
+# [P1-PLAN-LOTE-393 · 2026-09-26] (backend) «escurre 355 g de garbanzos cocidos» con los secos en la lista (batería
+# real, estatina; V7c los daba por cocidos con «cocina 10 min») → «💡 Cocción previa» del 375.
+# [P1-PLAN-LOTE-394 · 2026-09-26] (backend) un hervor no lo mide la plancha de otra frase: «cocina la cebada en
+# agua… aproximadamente 3-4 min por lado a fuego medio-alto» (batería real, estatina) → 30-40 min; sin «utos».
+# [P1-PLAN-LOTE-395 · 2026-09-26] (backend) el yogur no se corta en cubos: «corta 1 taza de yogurt… en cubos» (batería
+# real, HTA: el ajuste de sodio cambió el queso por yogur y dejó la forma) → «mide 1 taza de yogurt».
+# [P1-PLAN-LOTE-396 · 2026-09-26] (backend) el queso y el cilantro no se hierven: «Incorpora cilantro picado en agua hasta
+# que ablanden» (batería real, HTA; 15 en el corpus) → la frase sobra o queda «Incorpora X al plato».
+# [P1-PLAN-LOTE-397 · 2026-09-26] (backend) «seca el filete de pescado blanco de 195 g» con «1 filete (≈160 g)» en la
+# lista (batería real, HTA; 16 de 22 en el corpus) → el paso pesa lo que dice la lista.
+# [P1-PLAN-LOTE-398 · 2026-09-26] (backend) tras el verbo, el alimento en minúscula: «Añade Filete de pescado blanco al
+# guiso» (batería real, HTA; 117 en el corpus) → «añade filete…»; mismas excepciones del 373.
+# [P1-PLAN-LOTE-399 · 2026-09-26] (backend) con uno, en singular: «1 rebanadas de pan integral», «1 tortas pequeñas de
+# casabe» (batería real, estatina; 84 pasos + 23 líneas en el corpus) → «1 rebanada», «1 torta pequeña».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-399 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

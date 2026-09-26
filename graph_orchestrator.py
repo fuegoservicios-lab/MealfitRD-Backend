@@ -23326,7 +23326,7 @@ _TIMETEMP_TECHNIQUE_MAX_MIN = (
 )
 _TIMETEMP_ABS_MAX_MIN = 180   # nada en este producto cocina >3h
 _TIMETEMP_MAX_TEMP_C = 260    # horno doméstico
-_TT_MIN_RE = _re.compile(r"(\d{1,3})\s*(?:-\s*(\d{1,3})\s*)?min", _re.I)
+_TT_MIN_RE = _re.compile(r"(\d{1,3})\s*(?:-\s*(\d{1,3})\s*)?min(?:utos?)?\b", _re.I)  # [P1-PLAN-LOTE-394] «minutos» entero
 _TT_HORA_RE = _re.compile(r"(\d{1,2})\s*(?:-\s*\d{1,2}\s*)?horas?", _re.I)
 _TT_TEMP_RE = _re.compile(r"(\d{2,3})\s*(?:°\s*c|grados)", _re.I)
 
