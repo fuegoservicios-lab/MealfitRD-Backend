@@ -736,6 +736,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # recibía «rellena la casabe con lo que cierra… un wrap que se puede cerrar» (batería real del dueño); se retira.
 # [P1-PLAN-LOTE-379 · 2026-09-26] (backend) la licuadora va antes del fuego: «Agrega queso cottage a la licuadora»
 # tras cocinar los panqueques (batería real del dueño) → al lado; carne o huevo crudos nunca van a la licuadora.
+# [P1-PLAN-LOTE-361 · 2026-09-26] (backend + frontend) «Otra…» en las dudas de la foto se aplica como una opción más:
+# `/api/diary/scan/ajuste-duda` estima por TEXTO el ajuste del plato (ya no re-analiza la foto, que borraba las demás
+# respuestas); la duda queda «✓ 4 huevos» y el resto intacto.
 _LAST_KNOWN_PFIX = "P1-PLAN-LOTE-379 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
