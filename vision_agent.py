@@ -1107,7 +1107,10 @@ async def process_image_with_vision(image_bytes: bytes, aclaracion=None) -> dict
         f"skipped_reason={resize_info['skipped_reason']}"
     )
 
-    return await _dispatch_openai_compatible_vision(image_bytes, aclaracion=aclaracion)
+    # [P1-PLAN-LOTE-347] la aclaración solo viaja si la hay: la llamada de siempre no cambia de forma
+    if aclaracion:
+        return await _dispatch_openai_compatible_vision(image_bytes, aclaracion=aclaracion)
+    return await _dispatch_openai_compatible_vision(image_bytes)
 
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
 # "multimodal" siempre vectorizó el TEXTO de la descripción (no la imagen),
