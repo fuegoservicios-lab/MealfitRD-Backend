@@ -91,7 +91,7 @@ _DM2_GLYCEMIC_SUBS = (
     (("toronja", "pomelo", "grapefruit"), "Fresa", "toronja/pomelo (interacción CYP3A4 con antidiabéticos → hipoglucemia)", True),
     (("arroz blanco", "arroz pulido"), "Arroz integral", "arroz blanco refinado (IG alto)", True),
     (("pan blanco", "pan rallado", "pan de molde blanco", "pan de agua"), "Pan integral", "pan blanco/refinado (IG alto)", True),
-    (("tortilla de trigo", "tortilla de harina"), "Pan integral", "tortilla de trigo refinada (IG alto)", True),
+    (("tortilla de trigo", "tortilla de harina"), "Tortilla integral", "tortilla de trigo refinada (IG alto)", True),  # [P1-PLAN-LOTE-355]
     # [P1-PLAN-LOTE-178] + «harina de trigo» a secas: el revisor la marcó («harina de trigo refinada (15 g)») en unos
     # panqueques de avena de un plan DM2 real. El motor compara por subcadena y las negativas son de la regla entera, así
     # que la integral también pasa a avena: a sabiendas, en DM2 la avena es la base preferida.
@@ -118,6 +118,19 @@ _BARIATRIC_DRIED_FRUIT_SUBS = (
       "mango deshidratado", "frutas deshidratadas", "fruta deshidratada"),
      "Fresa", "fruta deshidratada (azúcar concentrado → dumping)", True),
 )
+
+# [P1-PLAN-LOTE-355 · 2026-09-26] La tortilla INTEGRAL ya es la versión integral: no se cambia por pan. Corpus de
+# baterías: 18 comidas DM2/bariátricas con «se sustituyó tortilla de trigo refinada» cuyo plato era «Wrap Integral de
+# Lentejas…», «Tortilla Integral Humedecida…» — la fila casaba «tortilla de trigo» dentro de «tortilla de trigo
+# integral», la cambiaba por «Pan integral» y el plato salía «Wrap de Pan Integral» con una nota que llamaba refinada
+# a una tortilla integral. Vetos POR FILA (las `sub_negatives` son de la regla entera): la tortilla integral o de maíz
+# no es la refinada, y una tortilla no es harina suelta (sin este veto, al vetar la fila de la tortilla la de la harina
+# la cambiaba por avena). Y la refinada pasa a «Tortilla integral» (fila del catálogo): un wrap sigue siendo un wrap.
+# tooltip-anchor: P1-PLAN-LOTE-355
+_NEGATIVAS_DE_FILA = {
+    "tortilla de trigo refinada (IG alto)": ("integral", "maiz"),
+    "harina refinada (IG alto)": ("tortilla",),
+}
 
 _HTA_SODIUM_SUBS = (
     # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini, batch P2-ENGINE-CLINICAL-SAVERS)
@@ -754,7 +767,7 @@ def collect_substitutions(form_data, diet_type=None) -> list:
                 repl = _neutralize_do_only_target(repl)
             repl = _redirect_replacement_for_diet(repl, _dc)  # [P2-13] diet-aware redirect
             out.append({"tokens": tokens, "replacement": repl, "label": label,
-                        "negatives": r.sub_negatives or (), "condition": r.id,
+                        "negatives": tuple(r.sub_negatives or ()) + _NEGATIVAS_DE_FILA.get(label, ()), "condition": r.id,  # [P1-PLAN-LOTE-355]
                         "preserve_qty": preserve_qty})
     return out
 

@@ -225,6 +225,15 @@ _DECIMAL_COCINA_RE = re.compile(
 _FRACCIONES_COCINA = ((0.0, ""), (0.25, "¼"), (1 / 3, "⅓"), (0.5, "½"), (2 / 3, "⅔"), (0.75, "¾"), (1.0, ""))
 
 
+#: [P1-PLAN-LOTE-353 · 2026-09-26] Cucharadas y cucharaditas van SIEMPRE a la cuadrícula de la cuchara (¼ ½ ¾, la misma
+#: del cuantizador `nutrition_db._SPOON_FRACS`; nunca 0: lo mínimo es ¼): «calienta 1.82 cdtas de aceite» (plan
+#: bariátrico real, con «1¾ cdtas» en la lista), «pesa 1.56 cdas de ricotta», «0.14 cdta de orégano». La tolerancia de
+#: 0,06 del lote 312 es para la taza, donde un décimo sí son 24 ml; en una cucharadita son medio mililitro.
+#: tooltip-anchor: P1-PLAN-LOTE-353
+_CUCHARA_353_RE = re.compile(r"^(?:cdas?|cdtas?|cucharadas?|cucharaditas?)$", re.IGNORECASE)
+_FRACCIONES_CUCHARA = ((0.0, ""), (0.25, "¼"), (0.5, "½"), (0.75, "¾"), (1.0, ""))
+
+
 def _a_cocina(mm) -> str:
     entero = int(mm.group(1))
     frac = float("0." + mm.group(2))
@@ -234,9 +243,14 @@ def _a_cocina(mm) -> str:
         if v < 1.0:
             return mm.group(0)                                   # traza: no se maquilla
         return f"{int(round(v))}{esp}{unidad}"
-    val, simb = min(_FRACCIONES_COCINA, key=lambda t: abs(frac - t[0]))
-    if abs(frac - val) > 0.06:
-        return mm.group(0)
+    if _CUCHARA_353_RE.match(unidad):                                      # [P1-PLAN-LOTE-353] «1.82 cdtas»
+        val, simb = min(_FRACCIONES_CUCHARA, key=lambda t: abs(frac - t[0]))
+        if entero == 0 and val == 0.0:
+            val, simb = 0.25, "¼"
+    else:
+        val, simb = min(_FRACCIONES_COCINA, key=lambda t: abs(frac - t[0]))
+        if abs(frac - val) > 0.06:
+            return mm.group(0)
     e = entero + (1 if val == 1.0 else 0)
     if e == 0 and not simb:
         return mm.group(0)
@@ -293,6 +307,7 @@ def decimales_de_cocina(meal) -> int:
                 if nuevo != s:
                     lista[i] = nuevo
                     n += 1
+        n += conteos_de_cocina(meal)                                # [P1-PLAN-LOTE-354] «0.27 pepino»
         if n:
             meal.pop("_display", None)      # DELETE-on-write: `_display[locale]` espeja la lista y los pasos
         return n
@@ -376,6 +391,14 @@ _TRAZA_DOSIS_RE = re.compile(
     r"salsa|mostaza|especias?|hierbas?|perejil|cilantro|laurel|tomillo|romero|clavo|anis|cafe|te|cacao|sazon)\b")
 
 
+#: [P1-PLAN-LOTE-352 · 2026-09-26] «maní tostado SIN SAL» no es una dosis de sal: la palabra «sal» de la negación
+#: hacía que la traza («0.01 g de maní tostado sin sal», plan DM2 real) se quedara en la lista y en el paso («mide 0.01 g
+#: de maní»). La misma lección del lote 203 en el pulido de líneas. Pero si el NOMBRE del plato nombra ese alimento («Casabe
+#: crujiente con queso blanco fresco, maní y huevo») la traza se queda: quitarla deja un plato que promete lo que la lista
+#: no trae; el pulido la escribe «1 pizca» y el paso la sigue (lote 358). tooltip-anchor: P1-PLAN-LOTE-352
+_SIN_SAL_RE = re.compile(r"\b(?:sin|bajos?\s+en|bajas?\s+en|reducid[oa]s?\s+en)\s+sal\b")
+
+
 def quitar_trazas(meal) -> int:
     """Nº de líneas-traza quitadas de `ingredients` (y sus iguales de `ingredients_raw`). 0 ante cualquier error."""
     try:
@@ -383,9 +406,13 @@ def quitar_trazas(meal) -> int:
         if not isinstance(ings, list) or len(ings) < 3:
             return 0
         fuera = []
+        nombre = _sa(str(meal.get("name") or "").lower())
         for s in ings:
             m = _TRAZA_RE.match(str(s)) if isinstance(s, str) else None
-            if m and not _TRAZA_DOSIS_RE.search(_sa(m.group("food").lower())):
+            if m and not _TRAZA_DOSIS_RE.search(_SIN_SAL_RE.sub(" ", _sa(m.group("food").lower()))):  # [P1-PLAN-LOTE-352]
+                t = _toks(m.group("food"))
+                if t and re.search(r"\b" + re.escape(t[0][:5]), nombre):
+                    continue                    # [P1-PLAN-LOTE-352] el nombre del plato lo promete: la traza se queda (pizca)
                 fuera.append(s)
         if not fuera or len(ings) - len(fuera) < 2:
             return 0
@@ -581,9 +608,15 @@ def porciones_de_la_lista(meal) -> int:
 # «mide … y ½ g de semillas de girasol» con «1 pizca de semillas de girasol sin sal» en la lista; «⅔ g de ajonjolí» con
 # «1 pizca de ajonjolí»: el pulido de la lista convierte las migajas en pizcas (lote 181) y el paso se quedaba con el
 # gramo de máquina. tooltip-anchor: P1-PLAN-LOTE-330
-_MIGAJA_EN_PASO_RE = re.compile(
-    r"(?<![\w.,/])(?P<q>0[.,]\d+|½|¼|¾|⅓|⅔)\s*(?:g|gr|gramos)\s+de\s+(?P<food>[a-záéíóúñü]+)", re.IGNORECASE)
+_MIGAJA_EN_PASO_RE = re.compile(  # [P1-PLAN-LOTE-358] también «mide 0 g de almendras» (el cero a secas)
+    r"(?<![\w.,/])(?P<q>0(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?:g|gr|gramos)\s+de\s+(?P<food>[a-záéíóúñü]+)", re.IGNORECASE)
 _PIZCA_LINEA_RE = re.compile(r"^\s*1\s+pizca\s+de\s+(?P<food>.+)$", re.IGNORECASE)
+
+
+def _primera_358(txt) -> list:
+    """[P1-PLAN-LOTE-358] La primera palabra, sin mínimo de letras: `_toks` pide ≥ 4 y la «sal» nunca casaba."""
+    w = _sa(str(txt or "").lower()).split()
+    return w[:1]
 
 
 def pizcas_de_la_lista(meal) -> int:
@@ -595,7 +628,7 @@ def pizcas_de_la_lista(meal) -> int:
         pizcas = set()
         for ln in meal.get("ingredients") or []:
             m = _PIZCA_LINEA_RE.match(str(ln))
-            t = _toks(m.group("food")) if m else []
+            t = _primera_358(m.group("food")) if m else []   # [P1-PLAN-LOTE-358] «sal» tiene 3 letras
             if t:
                 pizcas.add(t[0])
         if not pizcas:
@@ -608,8 +641,8 @@ def pizcas_de_la_lista(meal) -> int:
                 continue
 
             def _sub(mm):
-                t = _toks(mm.group("food"))
-                return f"1 pizca de {mm.group('food')}" if t and t[0] in pizcas else mm.group(0)
+                t = _primera_358(mm.group("food"))
+                return f"1 pizca de {mm.group('food').lower()}" if t and t[0] in pizcas else mm.group(0)  # [P1-PLAN-LOTE-358] «de Sal»
             s = _MIGAJA_EN_PASO_RE.sub(_sub, p)
             n += int(s != p)
             nuevos.append(s)
@@ -690,7 +723,8 @@ def mencion_repetida(meal) -> int:
 def lo_que_dice_la_lista(meal) -> int:
     """Los pases de arriba (y la pista de peso del 332, abajo), en orden. Nº total de pasos reescritos."""
     return (gramos_de_la_pieza(meal) + porciones_de_la_lista(meal) + pizcas_de_la_lista(meal)
-            + mencion_repetida(meal) + pistas_de_la_lista(meal) + conteos_de_la_lista(meal))
+            + mencion_repetida(meal) + pistas_de_la_lista(meal) + conteos_de_la_lista(meal)
+            + gramos_por_dos_palabras(meal))
 
 
 # ── [P1-PLAN-LOTE-332 · 2026-09-25] La pista de peso de un paso sigue a la de la lista ───────────────────────────────
@@ -1205,3 +1239,524 @@ def sin_frases_de(texto, patron, reemplazo="proteína") -> str:
         return patron.sub(reemplazo, s)
     except Exception:
         return str(texto or "")
+
+
+# ── [P1-PLAN-LOTE-343 · 2026-09-25] Lo cocido del paso es el equivalente de lo SECO de la lista ─────────────────────────
+# Batería real sobre el 331 (vegana en México): la lista y el motor cuentan «155 g de frijoles negros secos» (≈530 kcal)
+# y el paso dice «Mide 155 g de frijoles negros cocidos» (≈200 kcal): quien sigue la receta come 2,7 veces menos
+# legumbre de la planificada. En el corpus de 308 planes, 103 de 137 comidas con legumbre seca en gramos. El reparador
+# de cantidades del contrato (C2) copiaba los gramos de la lista sin mirar la base (el sincronizador sí lo mira desde el
+# lote 309). Aquí la mención COCIDA de un grano/legumbre cuya línea está en seco pasa a los gramos cocidos equivalentes,
+# con el MISMO factor calórico con el que el motor convierte lo cocido a la base de la fila (lote 284): cocidos = secos ×
+# kcal_fila / kcal_cocido. «secos (cocidos)» queda «cocidos». Nunca: un reparto (mitad, resto…), dos cifras distintas del
+# mismo alimento, ni sin catálogo. tooltip-anchor: P1-PLAN-LOTE-343
+_GRAMOS_LINEA_SECA_RE = re.compile(r"^\s*(?P<g>\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+de\s+(?P<nombre>.+)$", re.IGNORECASE)
+_SECO_EN_TEXTO_RE = re.compile(r"\b(crud[oa]s?|sec[oa]s?|en seco)\b")
+_SECOS_COCIDOS_RE = re.compile(r"\bsec([oa])s?\s*\(\s*(cocid[oa]s?)\s*\)", re.IGNORECASE)
+
+
+def cocido_de_la_lista(meal, db=None) -> int:
+    """Nº de menciones reescritas; 0 ante cualquier error o sin catálogo."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if db is None or not isinstance(rec, list) or not rec:
+            return 0
+        import cocido_en_catalogo as _cc
+        from nutrition_db import _split_qty_unit_name
+        secos = {}
+        for ln in meal.get("ingredients") or []:
+            s = str(ln)
+            m = _GRAMOS_LINEA_SECA_RE.match(s)
+            if not m or _cc._COCIDO_RX.search(_cc._norm(s)) or _cc._LISTO_RX.search(_cc._norm(s)):
+                continue
+            _q, _u, nombre = _split_qty_unit_name(s)
+            info = db.lookup(nombre)
+            fam = _cc.familia(getattr(info, "name", "")) if info else None
+            if not fam:
+                continue
+            kcal_fila = float(getattr(info, "kcal", 0) or 0)
+            if kcal_fila <= 0 or kcal_fila / fam[0] < 1.5:
+                continue                                   # la fila ya está en cocido
+            t = _toks(_SECO_EN_TEXTO_RE.sub(" ", _sa(m.group("nombre").lower())))
+            if t:
+                secos.setdefault(t[0], []).append(float(m.group("g").replace(",", ".")) * kcal_fila / fam[0])
+        secos = {k: v[0] for k, v in secos.items() if len(v) == 1}
+        if not secos:
+            return 0
+        menciones = {}
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            for mm in _GRAMOS_EN_PASO_RE.finditer(p):
+                t = _toks(mm.group("food"))
+                if not t or t[0] not in secos:
+                    continue
+                cola = p[mm.end():mm.end() + 30]
+                corte = _CORTE_MENCION_RE.search(cola)
+                mencion = mm.group(0) + (cola[:corte.start()] if corte else cola)
+                if not (_cocido(mencion) or re.match(r"\s*\(\s*cocid[oa]s?\s*\)", cola, re.IGNORECASE)):
+                    continue                           # «115 g de frijoles negros secos (cocidos)» también es cocido
+                if _REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():]):
+                    menciones[t[0]] = None
+                    continue
+                if menciones.get(t[0], []) is None:
+                    continue
+                menciones.setdefault(t[0], []).append((i, mm))
+        cambios = {}                                   # paso -> [(ini, fin, texto)]
+        for k, ms in menciones.items():
+            if not ms or len({float(x[1].group("n").replace(",", ".")) for x in ms}) != 1:
+                continue
+            cocidos = secos[k]
+            actual = float(ms[0][1].group("n").replace(",", "."))
+            if abs(actual - cocidos) <= 0.15 * cocidos:
+                continue
+            nuevo = str(int(round(cocidos / 5.0) * 5))
+            for i, mm in ms:
+                cambios.setdefault(i, []).append((mm.start("n"), mm.end("n"), nuevo))
+        n = 0
+        for i, cs in cambios.items():
+            p = rec[i]
+            for ini, fin, texto in sorted(cs, reverse=True):
+                p = p[:ini] + texto + p[fin:]
+                n += 1
+            rec[i] = _SECOS_COCIDOS_RE.sub(lambda z: z.group(2), p)
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-345 · 2026-09-26] Una sustitución no reescribe las notas-plantilla ────────────────────────────────
+# El reescritor de pasos tras una sustitución (`graph_orchestrator._rewrite_recipe_steps_after_subs`: alergias, condición,
+# proteína repetida) cambiaba el alimento también dentro de las NOTAS: la de sodio salía «enjuaga los enlatados (yogurt
+# griego sin azúcar, granos)» (su «atún» es un EJEMPLO de la plantilla) y la del nutricionista «esta receta usa solo
+# pechuga de pollo — NO botes pechuga de pollo: guárdalas tapadas» (batería real sobre el 331: adulto mayor con HTA,
+# suplementos + estatina). La nota de sodio se queda como está; una nota 🌱 que nombra el alimento que acaba de salir ya
+# no describe el plato y sale. tooltip-anchor: P1-PLAN-LOTE-345
+def nota_plantilla(paso) -> bool:
+    s = str(paso or "")
+    return s.lstrip().startswith("🌱") or "bajas en sodio y enjuaga" in s
+
+
+def nota_obsoleta(paso, patrones) -> bool:
+    s = str(paso or "")
+    try:
+        return s.lstrip().startswith("🌱") and any(p.search(s) for p in (patrones or []))
+    except Exception:
+        return False
+
+
+# ── [P1-PLAN-LOTE-351 · 2026-09-26] Dos quesos en la lista: la mención se ata por sus DOS primeras palabras ──────────
+# Plan del dueño (batería real sobre el 331, día 1): «20 g de queso blanco fresco» y «70 g de queso mozzarella» en la
+# lista y el paso «ten listos 15 g de queso blanco fresco». El sincronizador identifica cada línea por su PRIMERA palabra
+# y, con dos «queso», descarta ambas por ambiguas: el paso se quedaba con la cifra vieja. Aquí, cuando la primera palabra
+# es ambigua y las dos primeras señalan UNA sola línea en gramos, el paso toma sus gramos. Mismas guardas que el
+# sincronizador: nunca cocido contra crudo ni otra forma del huevo, un reparto, ni dos cifras distintas del mismo
+# alimento. tooltip-anchor: P1-PLAN-LOTE-351
+_LINEA_GRAMOS_351_RE = re.compile(r"^\s*(?P<g>\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+de\s+(?P<nombre>.+)$", re.IGNORECASE)
+
+
+def gramos_por_dos_palabras(meal) -> int:
+    """Nº de menciones reescritas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        por_primera = {}
+        lineas = []
+        for ln in meal.get("ingredients") or []:
+            s = str(ln)
+            t = _toks(re.sub(r"\(.*?\)", " ", s))
+            if t:
+                por_primera[t[0]] = por_primera.get(t[0], 0) + 1
+            m = _LINEA_GRAMOS_351_RE.match(s)
+            if not m:
+                continue
+            tn = _toks(re.sub(r"\(.*?\)", " ", m.group("nombre")))
+            if len(tn) >= 2:
+                lineas.append(((tn[0], tn[1]), float(m.group("g").replace(",", ".")), m.group("nombre")))
+        dos = {}
+        for clave, g, nombre in lineas:
+            if por_primera.get(clave[0], 0) < 2:
+                continue                                   # sin ambigüedad: es del sincronizador
+            dos.setdefault(clave, []).append((g, nombre))
+        dos = {k: v[0] for k, v in dos.items() if len(v) == 1}
+        if not dos:
+            return 0
+        menciones, vetadas = {}, set()
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            for mm in _GRAMOS_EN_PASO_RE.finditer(p):
+                ft = _toks(mm.group("food"))
+                if len(ft) < 2 or (ft[0], ft[1]) not in dos:
+                    continue
+                clave = (ft[0], ft[1])
+                cola = p[mm.end():mm.end() + 40]
+                corte = _CORTE_MENCION_RE.search(cola)
+                mencion = mm.group(0) + (cola[:corte.start()] if corte else cola)
+                nombre = dos[clave][1]
+                if (_REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():])
+                        or _cocido(mencion) != _cocido(nombre) or _forma_huevo(mencion) != _forma_huevo(nombre)):
+                    vetadas.add(clave)
+                    continue
+                menciones.setdefault(clave, []).append((i, mm))
+        cambios = {}
+        for clave, ms in menciones.items():
+            if clave in vetadas or len({float(x[1].group("n").replace(",", ".")) for x in ms}) != 1:
+                continue
+            g = dos[clave][0]
+            if abs(float(ms[0][1].group("n").replace(",", ".")) - g) < 0.5:
+                continue
+            txt = str(int(g)) if abs(g - round(g)) < 1e-6 else f"{g:g}"
+            for i, mm in ms:
+                cambios.setdefault(i, []).append((mm.start("n"), mm.end("n"), txt))
+        n = 0
+        for i, cs in cambios.items():
+            s = rec[i]
+            for ini, fin, txt in sorted(cs, reverse=True):
+                s = s[:ini] + txt + s[fin:]
+                n += 1
+            rec[i] = s
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-354 · 2026-09-26] Los conteos con decimales de máquina también se escriben como en la cocina ─────────
+# Plan bariátrico real (porciones escaladas ×0,27): «0.27 pepino», «0.27 diente de ajo», «0.27 limón» en la lista y «Pica
+# 0.27 diente de ajo, 0.27 de ají cubanela y 0.27 de cebolla… jugo de 0.27 limón» en los pasos. El cuantizador del display
+# (`nutrition_db.quantize_ingredient_string`) los deja: su cuadrícula de conteo es (0, ½, 1) y ½ está a un factor 1,85 de
+# 0,27, fuera de su guarda. Aquí, sólo la lista visible y los pasos (`ingredients_raw` sigue midiendo): el conteo va a la
+# fracción de cocina más cercana (¼ ⅓ ½ ⅔ ¾) si está a ≤ 0,06; en un paso, si la lista ya dice ese alimento con una cantidad
+# limpia y cercana (factor 0,6-1,67), manda la de la lista. Sólo sustantivos contables de una lista cerrada: nunca «2.5 cm»,
+# «1.5 min», ni huevo/rebanada/tortilla (no se parten). Las notas no se tocan. tooltip-anchor: P1-PLAN-LOTE-354
+_CONTABLES_354 = (r"pepinos?|tomates?|cebollas?|dientes?|aj[ií](?:es|s)?|lim[oó]n(?:es)?|limas?|naranjas?|toronjas?|"
+                  r"pl[aá]tanos?|guineos?|batatas?|papas?|zanahorias?|aguacates?|mangos?|manzanas?|peras?|chinolas?|"
+                  r"pimientos?|berenjenas?|calabac[ií]n(?:es)?|tallos?|ramas?|mazorcas?|remolachas?|nabos?|puerros?|"
+                  r"chayotes?|tayotas?|guayabas?|kiwis?")
+_CONTEO_DECIMAL_RE = re.compile(
+    r"(?<![\d.,/])(?P<e>\d+)[.,](?P<f>\d{1,2})(?!\d)(?P<esp>\s+)(?=(?:de\s+)?(?P<noun>" + _CONTABLES_354 + r")\b)",
+    re.IGNORECASE)
+_LINEA_CONTEO_RE = re.compile(
+    r"^\s*(?P<q>\d+\s*[¼½¾⅓⅔]|\d+(?:[.,]\d+)?|[¼½¾⅓⅔])\s+(?:de\s+)?(?P<noun>" + _CONTABLES_354 + r")\b", re.IGNORECASE)
+
+
+def _raices_354(palabra) -> set:
+    k = _sa(str(palabra or "").lower())
+    out = {k}
+    if k.endswith("es"):
+        out.add(k[:-2])
+    if k.endswith("s"):
+        out.add(k[:-1])
+    return out
+
+
+def _valor_354(q):
+    q = str(q or "").replace(" ", "")
+    try:
+        if q in _FRAC_VALOR:
+            return _FRAC_VALOR[q]
+        if q and q[-1] in _FRAC_VALOR:
+            return float(q[:-1]) + _FRAC_VALOR[q[-1]]
+        return float(q.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _conteo_a_cocina(entero: int, frac: float):
+    val, simb = min(_FRACCIONES_COCINA, key=lambda t: abs(frac - t[0]))
+    if abs(frac - val) > 0.06:
+        return None
+    e = entero + (1 if val == 1.0 else 0)
+    if e == 0 and not simb:
+        return None
+    return f"{e if e else ''}{simb}"
+
+
+def conteos_de_cocina(meal) -> int:
+    """Nº de textos reescritos (líneas visibles + pasos). 0 ante cualquier error."""
+    try:
+        if not isinstance(meal, dict):
+            return 0
+        n = 0
+        ings = meal.get("ingredients")
+        limpias = []                                     # (raíces del sustantivo, valor, texto de la cantidad)
+        if isinstance(ings, list):
+            for i, s in enumerate(ings):
+                if not isinstance(s, str):
+                    continue
+                inicio = len(s) - len(s.lstrip())
+                mm = _CONTEO_DECIMAL_RE.match(s, inicio)
+                if mm:
+                    c = _conteo_a_cocina(int(mm.group("e")), float("0." + mm.group("f")))
+                    if c:
+                        s = s[:mm.start()] + c + mm.group("esp") + s[mm.end():]
+                        ings[i] = s
+                        n += 1
+                ml = _LINEA_CONTEO_RE.match(s)
+                if ml and not re.search(r"[.,]", ml.group("q")):
+                    v = _valor_354(ml.group("q"))
+                    if v:
+                        limpias.append((_raices_354(ml.group("noun")), v, ml.group("q").replace(" ", "")))
+        rec = meal.get("recipe")
+        if isinstance(rec, list):
+            for i, p in enumerate(rec):
+                if _es_nota(p):
+                    continue
+
+                def _sub(mm):
+                    v_paso = int(mm.group("e")) + float("0." + mm.group("f"))
+                    raices = _raices_354(mm.group("noun"))
+                    for r, v, txt in limpias:
+                        if r & raices and v_paso > 0 and 0.6 <= v / v_paso <= 1.67:
+                            return txt + mm.group("esp")
+                    c = _conteo_a_cocina(int(mm.group("e")), float("0." + mm.group("f")))
+                    return (c + mm.group("esp")) if c else mm.group(0)
+                nuevo = _CONTEO_DECIMAL_RE.sub(_sub, p)
+                if nuevo != p:
+                    rec[i] = nuevo
+                    n += 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-356 · 2026-09-26] Los gramos del paso son los de la PIEZA que cuenta la lista (sin «≈») ──────────────
+# Plan renal real: la lista y el motor cuentan «¼ filete de pescado» (37,5 g con el peso del catálogo: el techo renal de
+# proteína lo recortó) y el paso dice «mide 90 g de tilapia» — quien sigue la receta come 2,4 veces la proteína que el
+# plan calculó. En los planes más recientes del corpus, 15 de 38 traen una pieza contada sin peso («1½ pechugas de pollo»,
+# «1 filete de pescado») y un paso en gramos que no es el suyo («300 g de pechuga», «205 g de pescado»). El lote 328 sólo
+# lee piezas con «(≈N g)». Aquí manda lo que mide el motor: la línea de `ingredients_raw` del mismo alimento — sus gramos
+# si está en gramos (y su base: «cocida» casa con lo cocido del paso), o el peso de catálogo de la pieza si está contada;
+# sin línea en `ingredients_raw`, el peso de catálogo de la visible. El paso pasa a esos gramos (a 5 g). Pescado blanco
+# genérico acepta la especie en el paso (tilapia, merluza…). Nunca: lo cocido contra lo crudo, un reparto, dos cifras
+# distintas, dos piezas o dos líneas del motor de la misma clase, ni sin catálogo. tooltip-anchor: P1-PLAN-LOTE-356
+_PIEZA_SIN_PESO_RE = re.compile(
+    r"^\s*(?:\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s+(?P<cuerpo>(?:filetes?|pechugas?|muslos?|chuletas?)\b[^()\d≈~]*?)\s*$",
+    re.IGNORECASE)
+_RAW_EN_GRAMOS_356_RE = re.compile(r"^\s*(?P<g>\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+(?:de\s+)?(?P<cuerpo>.+)$", re.IGNORECASE)
+_PESCADO_BLANCO_356 = {"pescado", "tilapia", "merluza", "dorado", "chillo", "corvina", "pargo", "basa"}
+
+
+def _raiz_356(t: str) -> str:
+    return t[:-1] if len(t) > 4 and t.endswith("s") else t
+
+
+def _peso_del_motor_356(cuerpo_toks: set, visible: str, raw: list, db):
+    """(gramos, fila del catálogo, base cocida?) de lo que mide el motor para la pieza visible; None si es ambiguo."""
+    cabeza = next(iter(sorted(cuerpo_toks & {"pechuga", "filete", "muslo", "chuleta"})), None)
+    candidatas = [r for r in raw if cabeza and cabeza in {_raiz_356(x) for x in _toks(re.sub(r"\(.*?\)", " ", r))}]
+    if len(candidatas) > 1:
+        return None
+    fuente = candidatas[0] if candidatas else visible
+    mg = _RAW_EN_GRAMOS_356_RE.match(fuente)
+    info = db.macros_from_ingredient_string(fuente)
+    fila = _sa(str((info or {}).get("name") or "").lower())
+    if mg:
+        return float(mg.group("g").replace(",", ".")), fila, _cocido(fuente)
+    return float((info or {}).get("grams") or 0), fila, _cocido(fuente)
+
+
+def pieza_del_catalogo(meal, db=None) -> int:
+    """Nº de menciones reescritas; 0 ante cualquier error o sin catálogo."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if db is None or not isinstance(rec, list) or not rec:
+            return 0
+        raw = [str(x) for x in (meal.get("ingredients_raw") or [])]
+        piezas, en_gramos = [], []
+        for ln in meal.get("ingredients") or []:
+            s = str(ln)
+            m = _PIEZA_SIN_PESO_RE.match(s)
+            if not m:
+                md = _LINEA_EN_GRAMOS_RE.match(s)
+                if md:
+                    t = _toks(re.sub(r"\(.*?\)", " ", md.group("cuerpo")))
+                    if t:
+                        en_gramos.append({_raiz_356(x) for x in t})
+                continue
+            toks = {_raiz_356(x) for x in _toks(m.group("cuerpo"))}
+            peso = _peso_del_motor_356(toks, s, raw, db) if toks else None
+            if not peso or peso[0] <= 0 or not peso[1]:
+                continue
+            if "pescado" in peso[1]:
+                toks = toks | _PESCADO_BLANCO_356
+            piezas.append((toks, peso[0], peso[2]))
+        if not piezas:
+            return 0
+
+        def _cual(ft):
+            cp = [k for k, p in enumerate(piezas) if _raiz_356(ft[0]) in p[0]]
+            if len(cp) != 1 or any(_raiz_356(ft[0]) in t for t in en_gramos):
+                return None
+            return cp[0]
+
+        hallazgos, vetadas = {}, set()
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            for mm in _GRAMOS_EN_PASO_RE.finditer(p):
+                ft = _toks(mm.group("food"))
+                k = _cual(ft) if ft else None
+                if k is None:
+                    continue
+                cola = p[mm.end():mm.end() + 40]
+                corte = _CORTE_MENCION_RE.search(cola)
+                mencion = mm.group(0) + (cola[:corte.start()] if corte else cola)
+                if (_REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():])
+                        or _cocido(mencion) != piezas[k][2]):
+                    vetadas.add(k)
+                    continue
+                hallazgos.setdefault(k, []).append((i, mm.start("n"), mm.end("n"),
+                                                    float(mm.group("n").replace(",", "."))))
+        cambios = {}
+        for k, lst in hallazgos.items():
+            if k in vetadas or len({x[3] for x in lst}) != 1:
+                continue
+            g = int(round(piezas[k][1] / 5.0) * 5) or int(round(piezas[k][1]))
+            if abs(lst[0][3] - g) < 5:
+                continue
+            for i, ini, fin, _v in lst:
+                cambios.setdefault(i, []).append((ini, fin, str(g)))
+        if not cambios:
+            return 0
+        n = 0
+        for i, cs in cambios.items():
+            s = rec[i]
+            for ini, fin, txt in sorted(cs, reverse=True):
+                s = s[:ini] + txt + s[fin:]
+                n += 1
+            rec[i] = s
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-357 · 2026-09-26] Lo listo para comer que la lista compra y ningún paso usa se sirve ────────────────────
+# Plan del perfil del dueño (batería sobre el 331): «Pisto criollo… con queso blanco pochado» con «70 g de queso
+# mozzarella» en la lista (≈200 kcal y 15 g de proteína contados en el día) y ningún paso que lo nombre — el cerrador lo
+# añadió sin su «Acompaña con». Bariátrico sobre el 331: «25 g de pavo molido cocido» en una merienda de mandarina y maní,
+# sin paso. En el corpus, 7-8 líneas huérfanas de queso/yogur por cada ~300 planes. Lo que ya se come tal cual (lácteos;
+# proteína marcada cocida, de lata o dura) se sirve: el Montaje gana «Acompaña con <alimento>.» (la frase del cerrador; la
+# etiqueta de embarazo, que corre después, le añade «pasteurizado»). Nunca lo que hay que cocinar (pollo, pescado o huevo
+# crudos), nunca sin Montaje, y con dos quesos en la lista cada uno se reconoce por su segunda palabra.
+# tooltip-anchor: P1-PLAN-LOTE-357
+_LACTEO_LISTO_RE = re.compile(r"^(?:queso|yogur|yogurt|ricotta|cottage|requeson|mozzarella)\b")
+_PROTE_357_RE = re.compile(r"^(?:pollo|pechuga|pavo|res|carne|cerdo|pescado|tilapia|atun|sardinas?|camarones?|huevos?)\b")
+_LISTO_357_RE = re.compile(r"\bcocid[oa]s?\b|\ben\s+(?:agua|aceite|lata)\b|\bduros?\b")
+_CUERPO_357_RE = re.compile(
+    r"^\s*(?:\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s*(?:(?:g|gr|gramos|ml|tazas?|cdas?|cdtas?|lonjas?|rebanadas?|"
+    r"porci[oó]n(?:es)?|pedazos?|unidad(?:es)?|potes?)\s+)?(?:de\s+)?(?P<cuerpo>[^()]+?)\s*(?:\(.*)?$", re.IGNORECASE)
+_NO_CLAVE_357 = {"fresco", "fresca", "natural", "entero", "entera", "light", "bajo", "baja", "pasteurizado", "pasteurizada",
+                 "griego", "rallado", "rallada", "desmenuzado", "desmenuzada", "semidescremado", "descremado"}
+
+
+def servir_lo_que_sobra(meal) -> int:
+    """Nº de alimentos añadidos al Montaje; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        i_mont = next((i for i, s in enumerate(rec) if isinstance(s, str) and s.strip().lower().startswith("montaje")), None)
+        if i_mont is None:
+            return 0
+        texto = _sa(" ".join(str(p) for p in rec if not _es_nota(p)).lower())
+        lacteos = []
+        for ln in meal.get("ingredients") or []:
+            m = _CUERPO_357_RE.match(str(ln))
+            if not m:
+                continue
+            cuerpo = m.group("cuerpo").strip().rstrip(".")
+            t = _sa(cuerpo.lower()).split()
+            j = " ".join(t)
+            if t and (_LACTEO_LISTO_RE.match(j) or (_PROTE_357_RE.match(j) and _LISTO_357_RE.search(j))):
+                lacteos.append((cuerpo, t))
+        if not lacteos:
+            return 0
+        n_quesos = sum(1 for _c, t in lacteos if t[0] == "queso")
+        faltan = []
+        for cuerpo, t in lacteos:
+            cab = "yogur" if t[0].startswith("yogur") else t[0]
+            if t[0] == "queso" and n_quesos > 1:
+                clave = next((w for w in t[1:] if len(w) >= 4 and w not in _NO_CLAVE_357 and w != "de"), None)
+                if not clave:
+                    continue                                  # ambiguo: no se toca
+                patron = r"\b" + re.escape(clave[:6])
+            else:
+                patron = r"\b" + re.escape(cab[:5])
+            if re.search(patron, texto):
+                continue
+            faltan.append(cuerpo[:1].lower() + cuerpo[1:])
+        if not faltan:
+            return 0
+        mont = str(rec[i_mont]).rstrip()
+        if not mont.endswith((".", "!", "?")):
+            mont += "."
+        rec[i_mont] = f"{mont} Acompaña con {', '.join(faltan[:-1]) + ' y ' + faltan[-1] if len(faltan) > 1 else faltan[0]}."
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return len(faltan)
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-359 · 2026-09-26] La pista de gramos no repite la mención ni arrastra calificativos dobles ─────────────
+# Replay de la cola real sobre 314 planes: 25 traen «retira del refrigerador 80 g de yogurt griego sin azúcar (80 g)
+# natural sin azúcar» (bariátrico real sobre el 331), «mide 25 g de harina de maíz precocida (25 g)», «yogurt griego
+# natural sin azúcar (160 g) sin azúcar», «yogurt natural natural sin azúcar». La pista «(N g)» nació al lado de una taza
+# («⅓ taza de yogurt (80 g)»); el sincronizador cambió la taza por los gramos de la lista y el nombre por el de la lista,
+# y la pista y el calificativo viejo se quedaron detrás. Aquí, en los pasos (no en las notas): (1) tras la pista, los
+# calificativos que ya estaban antes de ella se van, con los que los acompañan; (2) la pista que repite los gramos con que
+# empieza su misma mención se va; (3) el mismo calificativo dos veces seguidas queda una. tooltip-anchor: P1-PLAN-LOTE-359
+_QUAL_359 = r"(?:sin\s+az[uú]car|bajo\s+en\s+sodio|sin\s+sal|natural|enter[oa]|descremad[oa]|light|griego)"
+_PISTA_REPITE_359_RE = re.compile(
+    r"(?<![\d.,])(?P<n>\d+(?:[.,]\d+)?)(?P<u>\s*(?:g|gr|gramos)\s+de\s+)(?P<x>(?:(?!\by\b)[^().;:,\d]){2,50}?)"
+    r"\s*\(\s*≈?\s*(?P=n)\s*g\s*\)")
+_CALIF_TRAS_PISTA_359_RE = re.compile(
+    r"\b(?P<antes>(?:" + _QUAL_359 + r"\s*)+)(?P<pista>\(\s*≈?\s*\d+(?:[.,]\d+)?\s*g\s*\))(?P<despues>(?:\s+" + _QUAL_359 + r")+)",
+    re.IGNORECASE)
+_CALIF_DOBLE_359_RE = re.compile(r"\b(" + _QUAL_359 + r")\s+\1\b", re.IGNORECASE)
+
+
+def _calificativos_359(txt: str) -> set:
+    return {re.sub(r"\s+", " ", _sa(x.lower())) for x in re.findall(_QUAL_359, str(txt), re.IGNORECASE)}
+
+
+def pista_sin_eco(meal) -> int:
+    """Nº de pasos reescritos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+
+        def _tras(mm):
+            if _calificativos_359(mm.group("antes")) & _calificativos_359(mm.group("despues")):
+                return mm.group("antes") + mm.group("pista")
+            return mm.group(0)
+
+        n = 0
+        for i, p in enumerate(rec):
+            if _es_nota(p):
+                continue
+            s = _CALIF_TRAS_PISTA_359_RE.sub(_tras, p)
+            s = _PISTA_REPITE_359_RE.sub(lambda mm: mm.group("n") + mm.group("u") + mm.group("x").rstrip(), s)
+            s = _CALIF_DOBLE_359_RE.sub(r"\1", s)
+            if s != p:
+                rec[i] = s
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0

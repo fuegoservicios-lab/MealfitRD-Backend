@@ -13477,8 +13477,8 @@ def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
         # alimento ORIGINAL a propósito — reescribirlas rompe la procedencia ("se reemplazó
         # el proteína crudo", batido cd4ae3c3). Exentas del replace; el resto de notas
         # deterministas (💪 closer de proteína) SÍ deben seguir al swap.
-        if "se reemplaz" in _sa_steps_note(s.lower()):
-            out.append(s)
+        if "se reemplaz" in _sa_steps_note(s.lower()) or __import__("pasos_cantidades").nota_plantilla(s):  # [P1-PLAN-LOTE-345]
+            _obs = __import__("pasos_cantidades").nota_obsoleta(s, [_p for _l, _p, _n in pats]); changed = changed or _obs; out.extend([] if _obs else [s])
             continue
         for _ln, pat, new_disp in pats:
             # [P1-RECIPE-QUALITY-100 · 2026-07-10] IDEMPOTENCIA REAL: si el texto YA contiene el
@@ -17338,7 +17338,7 @@ _MUST_COOK_VIVER_LEGUME_RE = _viv_re.compile(
 # Indicadores de COCCIÓN (absuelven): si el nombre/receta los menciona, el víver/legumbre va cocido → no flag.
 # 'casabe'/'mangu'/'sancocho'/'moro'/'locrio'/'asopao'/'potaje' = preparaciones es-DO inequívocamente cocidas.
 _VIVER_LEGUME_COOK_INDICATORS = (
-    "hervid", "cocid", "cocin", "cuece", "cuec", "guisad", "al horno", "horne", "frit", "asad", "estofad",
+    "hervid", "hierv", "cocid", "cocin", "cuece", "cuec", "guisad", "al horno", "horne", "frit", "asad", "estofad",  # [P1-PLAN-LOTE-350] «hierve»
     "sancoch", "potaje", "moro", "locrio", "asopao", "sopa", "crema", "pure", "majad", "mangu", "casabe",
     "enlatad", "de lata", "al vapor", "vapor", "saltea", "saltead", "salcoch", "tostad",
 )

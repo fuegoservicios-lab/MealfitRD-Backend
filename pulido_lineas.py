@@ -46,6 +46,9 @@ _MIGAJA = re.compile(r"^\s*(?:0(?:[.,]\d+)?|[½¼¾⅓⅔⅛])\s*(?:g|gr|gramos)
 # [P1-PLAN-LOTE-219] lo que se sirve a cucharadas: «1.53 g de yogurt natural» → «1 cdta de yogurt natural»
 _CUCHARABLE = re.compile(r"^(?:yogur|yogurt|leche|crema|queso crema|miel|mantequilla)\b", re.IGNORECASE)
 _PIZCABLE = re.compile(rf"\b(?:semillas?|ch[ií]a|linaza|ajonjol[ií]|s[eé]samo|cacao|sal|{_ESPECIA})\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-352] Menos de 1 g de un fruto seco que el nombre del plato promete (la traza se queda): «1 pizca de maní»,
+# como adorno. Antes salía pizca por accidente — el «sal» de «sin sal» casaba con `_PIZCABLE`.
+_FRUTO_SECO_352 = re.compile(r"\b(?:man[ií]|almendras?|nuez|nueces|pistachos?|mara[ñn][oó]n|avellanas?)\b", re.IGNORECASE)
 # [P1-PLAN-LOTE-203 · 2026-09-24] Entre 1 y 2,5 g con decimales —la zona que el cuantizador deja sin tocar («ya es pesable
 # en báscula de precisión»)—: «1.21 g de Ajo» (plan canario del dueño), «1.23 g de semillas de linaza». Nadie pesa 1,21 g
 # de ajo: medio diente (≈1,5 g) o media cucharadita (semillas, especias, sal) es lo que se mide en una cocina. Sólo con
@@ -133,7 +136,8 @@ def pulir_linea(s: str) -> str:
         return s
     out = s
     m = _MIGAJA.match(out)
-    if m and _PIZCABLE.search(m.group(1)):
+    if m and (_PIZCABLE.search(re.sub(r"\bsin\s+sal\b", "", m.group(1), flags=re.IGNORECASE))  # [P1-PLAN-LOTE-352]
+              or _FRUTO_SECO_352.search(m.group(1))):
         out = f"1 pizca de {m.group(1).strip()}"
     m = _DECIMAL_1_A_2_5.match(out)                                          # [P1-PLAN-LOTE-203]
     if m and 1.0 <= float(m.group(1).replace(",", ".")) < 2.5:
@@ -186,6 +190,13 @@ def pulir_plan(plan_data) -> int:
                 m["ingredients"] = nuevas
                 m.pop("_display", None)
                 n += cambios
+                # [P1-PLAN-LOTE-358 · 2026-09-26] El contrato (lote 330) ya corrió: si esta pasada convirtió una migaja
+                # de la lista en pizca («0.47 g de Sal» → «1 pizca de sal»), el paso («½ g de Sal») la sigue aquí.
+                # tooltip-anchor: P1-PLAN-LOTE-358
+                try:
+                    __import__("pasos_cantidades").pizcas_de_la_lista(m)
+                except Exception:                                              # noqa: BLE001
+                    pass
     if n:
         logger.info(f"🪄 [P1-PLAN-LOTE-181] {n} línea(s) pulidas al final de la cola (mayúsculas, pizcas, especias, conteos)")
     return n

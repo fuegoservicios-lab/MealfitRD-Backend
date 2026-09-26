@@ -684,7 +684,33 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # fKb) para separar el congelado de 919 ms al volver de la galería (plugin nativo vs JS); la foto nativa a 1600 px/q85.
 # [P1-PLAN-LOTE-347 · 2026-09-26] (backend + frontend) «Otra…» en las dudas de la foto: el usuario escribe su respuesta
 # y el escáner re-analiza la MISMA foto con esa aclaración (`aclaracion` en /api/diary/upload, citada como dato).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-347 · 2026-09-26"
+# [P1-PLAN-LOTE-343 · 2026-09-26] (backend) lo cocido del paso es el equivalente de lo seco de la lista: «Mide 155 g
+# de frijoles negros cocidos» con «155 g … secos» (2,7 veces menos) — `pasos_cantidades.cocido_de_la_lista`.
+# [P1-PLAN-LOTE-344 · 2026-09-26] (backend) una tostada no se cierra: fuera el «Montaje: rellena la pan integral 30 g
+# con lo que cierra… un wrap que se puede cerrar» sobre una tostada abierta (dish_structure).
+# [P1-PLAN-LOTE-345 · 2026-09-26] (backend) una sustitución no reescribe las notas-plantilla: «enjuaga los enlatados
+# (yogurt griego sin azúcar, granos)», «NO botes pechuga de pollo: guárdalas tapadas» — `pasos_cantidades`.
+# [P1-PLAN-LOTE-350 · 2026-09-26] (backend) «hierve la yautía 15-18 min» también es cocerla: fuera la nota «NO licúes
+# yuca… CRUDOS en un batido» en un bowl de yautía hervida (detector de víveres crudos).
+# [P1-PLAN-LOTE-351 · 2026-09-26] (backend) dos quesos en la lista: «ten listos 15 g de queso blanco fresco» con 20 g
+# en su línea y «queso mozzarella» en otra — la mención se ata por sus dos primeras palabras (pasos_cantidades).
+# [P1-PLAN-LOTE-352 · 2026-09-26] (backend) «maní tostado SIN SAL» no es una dosis de sal: la traza «0.01 g de maní»
+# sale de la lista y del paso (pasos_cantidades.quitar_trazas + pulido de líneas).
+# [P1-PLAN-LOTE-353 · 2026-09-26] (backend) cucharadas y cucharaditas siempre a ¼ ½ ¾: «calienta 1.82 cdtas de aceite»
+# con «1¾ cdtas» en la lista (plan bariátrico real) → «1¾ cdtas» (pasos_cantidades.decimales_de_cocina).
+# [P1-PLAN-LOTE-354 · 2026-09-26] (backend) conteos con decimales de máquina: «0.27 pepino», «Pica 0.27 diente de ajo»
+# (bariátrica escalada ×0,27) → «¼ pepino», «¼ diente»; el paso sigue a la lista (pasos_cantidades.conteos_de_cocina).
+# [P1-PLAN-LOTE-355 · 2026-09-26] (backend) DM2/bariátrica: la tortilla INTEGRAL no se cambia por pan («Wrap de Pan
+# Integral», 18 comidas del corpus); la refinada pasa a «Tortilla integral» (condition_rules, vetos por fila).
+# [P1-PLAN-LOTE-356 · 2026-09-26] (backend) el paso pesa la pieza que cuenta la lista: «¼ filete de pescado» (37,5 g,
+# techo renal) con «mide 90 g de tilapia»; «1½ pechugas» con «300 g» (pasos_cantidades.pieza_del_catalogo).
+# [P1-PLAN-LOTE-357 · 2026-09-26] (backend) el lácteo que la lista compra y ningún paso usa se sirve: «70 g de queso
+# mozzarella» en el pisto del perfil del dueño → «Acompaña con queso mozzarella.» (pasos_cantidades.servir_lo_que_sobra).
+# [P1-PLAN-LOTE-358 · 2026-09-26] (backend) el paso sigue a la pizca que el pulido de la cola escribe DESPUÉS del
+# contrato: «½ g de Sal» con «1 pizca de sal» en la lista (pulido_lineas.pulir_plan → pizcas_de_la_lista).
+# [P1-PLAN-LOTE-359 · 2026-09-26] (backend) la pista de gramos no repite la mención ni arrastra calificativos dobles:
+# «80 g de yogurt griego sin azúcar (80 g) natural sin azúcar» (25 de 314 planes) → «80 g de yogurt griego sin azúcar».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-359 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

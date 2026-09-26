@@ -173,7 +173,7 @@ def relaciones(meal, comp: Optional[dict] = None, fam: Optional[str] = None) -> 
                             "detalle": (f"promete espesor con {comp['solidos_g']:g} g de sólidos en {comp['liquidos_ml']:g} ml "
                                         f"({ratio:.2f} g/ml, umbral {UMBRALES['crema_solidos_por_ml_min']}) y ningún paso reduce ni espesa"),
                             "evidencia": EVIDENCIA["crema_sin_espesante"]})
-        if fam == "tostada_wrap" and comp["soporte"] and comp["soporte"][1] > 0:
+        if fam == "tostada_wrap" and comp["soporte"] and comp["soporte"][1] > 0 and not _ABIERTA_RE.search(n):  # [P1-PLAN-LOTE-344]
             relleno = comp["solidos_g"] - comp["soporte"][1]
             ratio = relleno / comp["soporte"][1]
             if ratio > UMBRALES["wrap_relleno_por_pan_max"] and not _WRAP_APARTE_RE.search(pasos):
@@ -201,6 +201,11 @@ def relaciones(meal, comp: Optional[dict] = None, fam: Optional[str] = None) -> 
 
 #: [P1-PLAN-LOTE-29] lo servido APARTE con intención (el resto del relleno como ensalada; el líquido sobrante como bebida) no
 #: es un defecto de estructura: es la reparación de `recipe_repair`, y reconocerla es lo que la hace idempotente.
+# [P1-PLAN-LOTE-344 · 2026-09-26] Una TOSTADA es un plato abierto: el topping va encima y no hay nada que «cerrar». La
+# bariátrica de la batería del 25-sep recibía «Montaje: rellena la pan integral 30 g con lo que cierra… un wrap que se
+# puede cerrar» sobre una «Tostada Integral con Hummus y Tomate». Solo el sustantivo «tostada(s)» (no el adjetivo
+# «tostado»: un «wrap tostado» sigue siendo un wrap). tooltip-anchor: P1-PLAN-LOTE-344
+_ABIERTA_RE = re.compile(r"\btostadas?\b|\bbruschettas?\b|\bcrostinis?\b")
 _WRAP_APARTE_RE = re.compile(r"resto del relleno|relleno[^.]{0,40}\bal lado\b|como ensalada")
 _CREMA_APARTE_RE = re.compile(r"\d+\s*ml[^.]{0,40}\brestantes\b|como bebida|ml[^.]{0,30}\bal lado\b")
 _HUEVO_COCINA_RE = re.compile(r"\b(vierte|anade|agrega|incorpora|echa|cuaja|revuelve|mezcla|pon|vuelca)\b[^.]{0,50}?\b(huevos?|claras?)\b|"
