@@ -83,8 +83,10 @@ def test_la_foto_se_ve_al_instante_y_su_preparacion_espera_al_teclado():
     assert "const addFiles = useCallback((inputFiles, { prepararTrasMs = 0 } = {}) => {" in hook
     assert "programarPump(0);" in hook, "ENVIAR no espera el aplazamiento"
     ap = _front("src/pages/AgentPage.jsx")
-    assert "addFiles(files, { prepararTrasMs: reopenKeyboardAfterAttachmentRef.current ? ESPERA_PREPARAR_FOTO_MS : 0 });" in ap
-    assert "{item.status !== 'error' && (item.thumbDataUrl || (item.previewUrl && !previewsRotas.has(item.id))) ? (" in ap
+    # [P1-PLAN-LOTE-360] con el worker la preparación no aplaza, y en iOS la caja no pinta la foto grande mientras se
+    # prepara (WebKit la decodificaba en el hilo principal: 769 ms congelado al volver de la galería)
+    assert "addFiles(files, { prepararTrasMs: reopenKeyboardAfterAttachmentRef.current && !workerDeImagenDisponible() ? ESPERA_PREPARAR_FOTO_MS : 0 });" in ap
+    assert "const srcVista = vistaPreviaDelAdjunto(item, { ios: _esIOS, rota: previewsRotas.has(item.id) });" in ap
     # el contrato del lote de fotos sigue en pie: la burbuja toma la mejor URL y la preparación produce la miniatura
     assert "url: item.url || item.image_url || item.thumbDataUrl || item.previewUrl" in ap
     assert "prepareChatImage(job.sourceFile" in hook
