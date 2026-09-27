@@ -29044,7 +29044,7 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
 
         repl = next((c for c in ("Aguacate", "Tomate", "Batata") if _replacement_ok(c)), None)  # [P1-PLAN-LOTE-613] crudo antes que batata
         if repl is None:
-            return 0
+            return __import__("fruta_al_lado").separar(days)  # [P1-PLAN-LOTE-616] sin sustituto admitido, la fruta va al lado
 
         fixed = 0
         for _d in days if isinstance(days, list) else []:
@@ -42765,6 +42765,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
             try:
                 result: ReviewResult = await invoke_with_retry()
             except Exception as _thk_e:
+                if (_resp615 := __import__("revisor_respaldo").respaldo(_reviewer_model, _thk_e, plan)):  # [P1-PLAN-LOTE-615] OpenAI caído
+                    _reviewer_model, _rev_is_openai, _reviewer_cb, _rev_thinking = _resp615, False, _get_circuit_breaker(_resp615), True
                 # [P1-REVIEWER-THINKING · 2026-07-05] Fail-open hacia el reviewer ESTÁNDAR
                 # (NUNCA hacia aprobar): si la rama thinking+json_mode rompe (cambio del API,
                 # parse), el gate clínico sigue vivo con function_calling sin thinking. El

@@ -949,7 +949,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «arroz integral… escúrrela», «espinacas… se ablande», «filete… cocínalos», «maní fileteado» en los pasos.
 # [P1-PLAN-LOTE-613 · 2026-09-27] (backend) La fruta del plato salado se cambia por algo que se come crudo: sin
 # aguacate, tomate — la batata (que hay que cocinar) salía «fresca cortada en cubos» junto al mangú.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-613 · 2026-09-27"
+# [P1-PLAN-LOTE-614 · 2026-09-27] (backend) La leche de una cucharadita no es un ingrediente: «5 ml de leche» que el
+# motor dejaba en avenas y batidos sale de la lista y de los pasos cuando el plato tiene otra base líquida.
+# [P1-PLAN-LOTE-615 · 2026-09-27] (backend) El revisor clínico no se queda sin modelo cuando OpenAI falla: con el
+# breaker abierto o sin saldo, el veredicto se pide al modelo de respaldo en vez de regenerar el plan entero.
+# [P1-PLAN-LOTE-616 · 2026-09-27] (backend) Sin sustituto admitido para la fruta de un plato salado (Nevera exigida),
+# la fruta va al lado en vez de dejar el pareo al revisor: dos regeneraciones completas menos por bloque.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-616 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
