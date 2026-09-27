@@ -924,7 +924,15 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # dulce en granos» para una tortilla que el paso hacía con harina de maíz precocida.
 # [P1-PLAN-LOTE-586 · 2026-09-27] (backend) La proteína que el plato ya cuece no se cuece otra vez («…guisa la tilapia
 # 8-10 min… Añade tilapia fresca al guiso y cocínala…»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-586 · 2026-09-27"
+# [P1-PLAN-LOTE-587 · 2026-09-27] (backend) La avena se cocina con la leche que la espesa y el resto se sirve en un vaso
+# («30 g de avena» con «575 ml de leche… hasta que espese»).
+# [P1-PLAN-LOTE-588 · 2026-09-27] (backend) Una sustitución no reescribe las notas clínicas ⚕️ («el pescado de aleta
+# (tilapia, mero, pechuga de pavo…)»).
+# [P1-PLAN-LOTE-589 · 2026-09-27] (backend) «Aguacate (0.25 unidad)» → «¼ aguacate» antes del motor (salía «½ aguacate
+# (0.25 unidad)» y «1 aceite de oliva (1 cdta)»).
+# [P1-PLAN-LOTE-590 · 2026-09-27] (backend) «1 pizca», «jugo de ½ limón» y «Limón» ya no abortan el recálculo de macros
+# de la comida (quedaban los números viejos: 98 g de proteína mostrados con 26 g en sus líneas).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-590 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

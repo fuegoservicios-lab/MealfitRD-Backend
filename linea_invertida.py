@@ -58,8 +58,19 @@ def _singular(nombre: str) -> str:
     return cab + sep + resto
 
 
+# [P1-PLAN-LOTE-589 · 2026-09-27] La misma inversión con la cantidad ENTRE PARÉNTESIS: «Aguacate (0.25 unidad)», «Aceite de
+# oliva (1 cdta)», «Harina de maíz precocida (45 g)». Batería real del dueño (día 1 entero así): el motor no ve cantidad
+# delante, antepone la suya y la línea sale con DOS que se contradicen («½ aguacate (0.25 unidad)», «1 aceite de oliva (1
+# cdta)», «30 g de harina de maíz precocida (17 g)»). Corpus: 28 de 1.242 días, 57 líneas. Sólo si la línea NO empieza por
+# una cantidad (las pistas que el motor añade detrás de su cantidad no se tocan). tooltip-anchor: P1-PLAN-LOTE-589
+_PARENTESIS_589 = re.compile(
+    r"^\s*(?P<nombre>[^\d½¼¾⅓⅔,(≈~][^\d½¼¾⅓⅔,(]*?)\s*\(\s*"
+    r"(?P<q>\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔])\s*"
+    r"(?:(?P<u>" + _UNIDADES + r")\b\.?)?\s*\)(?P<resto>\s+[^\d½¼¾⅓⅔,()]+)?\s*$", re.IGNORECASE)
+
+
 def _partes(linea):
-    m = _INVERTIDA.match(str(linea or ""))
+    m = _INVERTIDA.match(str(linea or "")) or _PARENTESIS_589.match(str(linea or ""))  # [P1-PLAN-LOTE-589]
     if not m:
         return None
     nombre = m.group("nombre").strip()

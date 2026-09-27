@@ -924,6 +924,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
         __import__("avena_liquido").ubicar_agua(meal)  # [P1-PLAN-LOTE-428] el agua donde se nombra el líquido
         __import__("avena_liquido").agua_en_la_coccion(meal)  # [P1-PLAN-LOTE-448] el agua medida va a la olla
+        __import__("avena_con_su_leche").separar(meal)  # [P1-PLAN-LOTE-587] la leche que sobra, en un vaso
         __import__("pasos_cantidades").decimales_de_cocina(meal)  # [P1-PLAN-LOTE-312] «2.22 cdas» → «2¼ cdas»
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-316] «Acompaña con X. Acompaña con X.»
         __import__("pasos_cantidades").variedad_de_la_lista(meal, index)  # [P1-PLAN-LOTE-335] «habichuelas blancas» con negras

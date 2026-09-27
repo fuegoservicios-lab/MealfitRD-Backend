@@ -20939,6 +20939,8 @@ def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
         any_resolved = False
         for ing in ings:
             mc = db.macros_from_ingredient_string(str(ing))
+            if mc is None and __import__("truthup_sin_masa").legible(ing):  # [P1-PLAN-LOTE-590] «Limón, 1 unidad», «1–2 ciruelas»
+                mc = db.macros_from_ingredient_string(__import__("truthup_sin_masa").legible(ing))
             if mc is None:
                 # No resuelve por nombre O cantidad no-convertible ('al gusto'/'1 lata'). Si el NOMBRE
                 # resuelve pero la cantidad no → hay masa real no sumable → NO override (conservador).

@@ -1370,7 +1370,10 @@ def cocido_de_la_lista(meal, db=None) -> int:
 # no describe el plato y sale. tooltip-anchor: P1-PLAN-LOTE-345
 def nota_plantilla(paso) -> bool:
     s = str(paso or "")
-    return s.lstrip().startswith("🌱") or "bajas en sodio y enjuaga" in s
+    # [P1-PLAN-LOTE-588 · 2026-09-27] + las notas clínicas ⚕️: «el pescado de aleta (tilapia, mero, atún, sardina…) no es
+    # un marisco» salía «(tilapia, mero, pechuga de pavo, sardina…)» (5 de 55 en las baterías): sus alimentos son EJEMPLOS
+    # o la procedencia de un ajuste («se sustituyó X por…»), nunca el plato. tooltip-anchor: P1-PLAN-LOTE-588
+    return s.lstrip().startswith(("🌱", "⚕")) or "bajas en sodio y enjuaga" in s
 
 
 def nota_obsoleta(paso, patrones) -> bool:
