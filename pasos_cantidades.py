@@ -3574,6 +3574,65 @@ def tortas_de_casabe(meal) -> int:
         return 0
 
 
+# ── [P1-PLAN-LOTE-526 · 2026-09-27] «mide 175 g de casabe» con «2 tortas pequeñas de casabe» en la lista ──────────────────
+# Batería real del dueño (compra única, días 25-28): el humanizador cuenta el casabe en tortas de 20 g («175 g» → «8¾
+# tortas») y un tope posterior deja la lista en «2 tortas»; el paso seguía con los gramos del modelo —175, 115, 90 y 70 g
+# para «2 tortas» (40 g)—: el usuario comía hasta cuatro veces lo que el plan cuenta (13 de 24 comidas con casabe en
+# tortas en las baterías; 61 de 156 en el replay forzado). El 423 sólo leía «tortas» en el paso. Con UNA línea de casabe
+# en tortas y UNA mención en gramos que no le corresponde, el paso dice las tortas de la lista con su peso.
+# tooltip-anchor: P1-PLAN-LOTE-526
+_CASABE_G_526_RE = re.compile(r"(?<![\w.,/½¼¾⅓⅔])(?P<g>\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+de\s+casabe\b"
+                              r"(?:\s*\(\s*≈?\s*\d+(?:[.,]\d+)?\s*g\s*\))?", re.IGNORECASE)
+
+
+def _g_por_torta_526() -> float:
+    try:
+        from humanize_ingredients import DOMINICAN_HOUSEHOLD_MEASURES as _medidas
+        return float(_medidas["casabe"]["weight"])
+    except Exception:
+        return 20.0
+
+
+def gramos_de_casabe(meal) -> int:
+    """Nº de menciones corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        lineas = [m for m in (_TORTAS_423_RE.match(str(x).strip()) for x in (meal.get("ingredients") or [])) if m]
+        casabes = [x for x in (meal.get("ingredients") or []) if "casabe" in _sa(str(x).lower())]
+        if len(lineas) != 1 or len(casabes) != 1:
+            return 0
+        q_lista = lineas[0].group("q").replace(" ", "")
+        valor = _valor_cuenta(q_lista)
+        if not valor or valor <= 0:
+            return 0
+        peso = valor * _g_por_torta_526()
+        menciones = [(i, m) for i, p in enumerate(rec) if isinstance(p, str) and not _es_nota(p)
+                     for m in _CASABE_G_526_RE.finditer(p)]
+        if len(menciones) != 1:
+            return 0
+        i, m = menciones[0]
+        if abs(float(m.group("g").replace(",", ".")) - peso) <= max(5.0, 0.15 * peso):
+            return 0
+        nuevo = f"{q_lista} {'tortas pequeñas' if valor > 1 else 'torta pequeña'} de casabe (≈{int(round(peso))} g)"
+        p = rec[i]
+        antes = p[:m.start()]
+        # «calienta los 35 g de casabe» → «calienta la torta pequeña…», no «los 1 torta» (el artículo es de las tortas)
+        art = re.search(r"\b(?P<a>[Ll]os|[Ll]as|[Ee]l|[Ll]a)\s+$", antes)
+        if art:
+            a = ("las" if valor > 1 else "la")
+            a = a.capitalize() if art.group("a")[0].isupper() else a
+            antes = antes[:art.start()] + a + " "
+            nuevo = nuevo if valor > 1 else nuevo[len(q_lista) + 1:]      # «la torta pequeña…», sin «1»
+        rec[i] = antes + nuevo + p[m.end():]
+        meal["recipe"] = rec
+        meal.pop("_display", None)
+        return 1
+    except Exception:
+        return 0
+
+
 # ── [P1-PLAN-LOTE-424 · 2026-09-26] «bate 4 claras de huevo con 4 claras de huevo» → una vez ──────────────────────────────
 # La misma batería (desayuno, día 1): «bate 4 claras de huevo con 4 claras de huevo (130 g)» — el tope de yemas pasó el
 # huevo entero a claras y la regla 2 reescribió también el «1 huevo» del paso a la forma de la lista (corpus: 3). La misma

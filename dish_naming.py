@@ -330,6 +330,16 @@ def sustituir_alimento(meal: dict, pat, repl: str) -> str:
     return pulir_nombre(nuevo) or nuevo
 
 
+# [P1-PLAN-LOTE-527 · 2026-09-27] «yogur» y «yogurt» son el mismo alimento. El reflejo de la proteína añadida
+# (`_reflect_added_protein_in_name`) buscaba «yogurt» en «Yogur con manzana y queso cottage», no lo veía y titulaba
+# «Yogur con manzana, queso cottage y yogurt» (4 nombres en las baterías reales, 9 en el replay forzado).
+# tooltip-anchor: P1-PLAN-LOTE-527
+def canon_yogur(texto) -> str:
+    """«yogurt» / «yoghurt» / «yogures» → «yogur». Sólo para COMPARAR: nunca se escribe en el plato."""
+    import re as _re527
+    return _re527.sub(r"\byog(?:h)?(?:ou|u)r(?:t|th)?(?:s|es)?\b", "yogur", str(texto or ""), flags=_re527.IGNORECASE)
+
+
 __all__ = ["_NAME_STOPWORDS", "_NAME_FEM_FOODS", "_NAME_ADJ_FEM",
            "participio_concordado", "_titulo_en_title_case", "_food_display_for_title",
-           "pulir_nombre", "sustituir_alimento", "fix_name_gender_agreement"]
+           "pulir_nombre", "sustituir_alimento", "fix_name_gender_agreement", "canon_yogur"]

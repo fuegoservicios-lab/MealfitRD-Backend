@@ -964,6 +964,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").claras_del_cerrador(meal)  # [P1-PLAN-LOTE-421] las claras no se hierven
         __import__("pasos_cantidades").migaja_sin_alimento(meal)  # [P1-PLAN-LOTE-422] «corta 5 g,» sin alimento
         __import__("pasos_cantidades").tortas_de_casabe(meal)  # [P1-PLAN-LOTE-423] las tortas de la lista
+        __import__("pasos_cantidades").gramos_de_casabe(meal)  # [P1-PLAN-LOTE-526] los gramos, a tortas
         __import__("pasos_cantidades").claras_una_vez(meal)  # [P1-PLAN-LOTE-424] «4 claras con 4 claras»
         __import__("pasos_cerrador").legumbre_del_cerrador(meal)  # [P1-PLAN-LOTE-425] lo del cerrador, una vez
         __import__("pasos_cerrador").huevo_sustituido(meal)  # [P1-PLAN-LOTE-426] el sustituto del huevo no es huevo

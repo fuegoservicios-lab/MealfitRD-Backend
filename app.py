@@ -849,7 +849,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-524 · 2026-09-27] (backend) Compra única: el duradero que el plato YA traía no se repite — la nueva
 # línea se suma a la que había («½ zanahoria» + «170 g de zanahoria» → «200 g de zanahoria rallada»), una «al gusto»
 # cede su sitio y el paso nombra el alimento una vez (~620 de 3.519 comidas del replay forzado).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-524 · 2026-09-27"
+# [P1-PLAN-LOTE-525 · 2026-09-27] (backend) Una hierba o especia SIN cantidad («Orégano dominicano», «Ajo») ya no
+# aborta el recálculo de macros de la comida desde sus líneas (un almuerzo mostraba 938 kcal / 98 g con 762 / 68 reales).
+# [P1-PLAN-LOTE-526 · 2026-09-27] (backend) El paso mide las tortas de casabe de la lista: «mide 175 g de casabe» con
+# «2 tortas pequeñas de casabe» (40 g) en la lista → «mide 2 tortas pequeñas de casabe (≈40 g)».
+# [P1-PLAN-LOTE-527 · 2026-09-27] (backend) «yogur» ≡ «yogurt» al reflejar la proteína añadida en el nombre:
+# fuera «Yogur con manzana, queso cottage y yogurt».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-527 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

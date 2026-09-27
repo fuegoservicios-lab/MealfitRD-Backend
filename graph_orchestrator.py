@@ -19770,7 +19770,7 @@ def _meal_slot_is_light(meal: dict, strip_accents_fn) -> bool:
 # Se reexportan para que los call sites y los tests que importan de aquí sigan funcionando.
 from dish_naming import (  # noqa: E402,F401
     _NAME_STOPWORDS, _NAME_FEM_FOODS, _NAME_ADJ_FEM,
-    participio_concordado, _titulo_en_title_case, _food_display_for_title,
+    participio_concordado, _titulo_en_title_case, _food_display_for_title, canon_yogur as _yog527,
 )
 
 
@@ -19790,11 +19790,11 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         pname = str(protein_name or "").strip()
         if not name or not pname:
             return False
-        name_low = strip_accents_fn(name.lower())
+        name_low = _yog527(strip_accents_fn(name.lower()))  # [P1-PLAN-LOTE-527] «yogur» ≡ «yogurt»
         # tokens significativos de la proteína (sin stopwords, ≥3 chars). Si ALGUNO ya está en el
         # nombre, la proteína ya está representada → no duplicar (ej. 'res' de 'carne de res' ya en
         # 'Res Molida'; 'queso' de 'queso mozzarella' ya en 'Queso Blanco').
-        sig_tokens = [t for t in strip_accents_fn(pname.lower()).split()
+        sig_tokens = [t for t in _yog527(strip_accents_fn(pname.lower())).split()
                       if len(t) >= 3 and t not in _NAME_STOPWORDS]
         # [P1-NAMEFIX-WORDBOUNDARY · 2026-07-26] El chequeo era por SUBCADENA y la proteína
         # "Atún en agua" tiene el token 'agua', que vive dentro de "agua-cate". En el plan vivo
@@ -20946,6 +20946,8 @@ def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
                     # "opcional"/"una pizca") → aporta ~0 → saltar SIEMPRE (incluso especias densas como
                     # "pimienta negra al gusto" 327 kcal/100g, que abortaban el truth-up del aguacate).
                     if _TRUTHUP_NOMASS_QTY_RE.search(str(ing).lower()):
+                        continue
+                    if __import__("truthup_sin_masa").sin_masa(ing):   # [P1-PLAN-LOTE-525] «Orégano dominicano», «Ajo»
                         continue
                     # [P1-TRUTHUP-NEGLIGIBLE-SKIP · 2026-07-07] EXCEPCIÓN: si el alimento es de aporte
                     # macro DESPRECIABLE por-100g (hierba/hoja: cilantro/perejil/lechuga en "taza" sin
