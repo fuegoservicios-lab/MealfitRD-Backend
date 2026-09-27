@@ -87,9 +87,22 @@ def _ten_a_mano(frase: str) -> str:
 def tecnica_del_sustituto(pasos, sustituto) -> tuple:
     """Tras cambiar un carbohidrato por otro en los pasos, la técnica pasa a ser la del alimento NUEVO. Hoy sólo el casabe
     la necesita (batata, yuca, ñame y auyama se hierven igual que se hervía el arroz): la frase que lo hierve pasa a
-    tostarlo, la que lo enjuaga pasa a tenerlo a mano, y sólo se tuesta una vez. `(pasos, cambios)`."""
-    if (not _knob("MEALFIT_CARB_SWAP_TECHNIQUE") or not isinstance(pasos, list)
-            or _sa(sustituto).strip() != "casabe"):
+    tostarlo, la que lo enjuaga pasa a tenerlo a mano, y sólo se tuesta una vez. `(pasos, cambios)`.
+
+    [P1-PLAN-LOTE-427 · 2026-09-26] …pero «se hierven igual» no bastaba: «cocina el Yuca en agua con sal según el paquete
+    hasta que quede suelto», «Incorpora el Yuca cocido» (batería real sobre el 424). Batata, yuca, auyama y ñame salen en
+    minúscula, con su artículo y su participio, pelados en vez de enjuagados y hervidos hasta que el cuchillo entre
+    (`pasos_cerrador.concordar_tuberculo`, el mismo que repara la cola)."""
+    if not _knob("MEALFIT_CARB_SWAP_TECHNIQUE") or not isinstance(pasos, list):
+        return pasos, 0
+    if _sa(sustituto).strip() in ("batata", "yuca", "auyama", "name"):        # [P1-PLAN-LOTE-427] su artículo y su hervor
+        try:
+            from pasos_cerrador import concordar_tuberculo
+            out = [concordar_tuberculo(p, sustituto) if isinstance(p, str) else p for p in pasos]
+            return out, sum(1 for a, b in zip(pasos, out) if a != b)
+        except Exception:                                                          # noqa: BLE001
+            return pasos, 0
+    if _sa(sustituto).strip() != "casabe":
         return pasos, 0
     hay_hervir = any(isinstance(p, str) and any("casabe" in _sa(f) and _HERVIR_RE.search(_sa(f))
                                                 for f in _frases(_partir(p)[1])) for p in pasos)

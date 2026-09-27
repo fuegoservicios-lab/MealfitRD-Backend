@@ -1840,6 +1840,23 @@ _V7F_GENERICAS = frozenset({"blanco", "blanca", "verde", "verdes", "maduro", "ma
                             "magra", "magro", "fresco", "fresca", "entero", "entera", "pelado", "pelada", "grande",
                             "mediano", "mediana", "sin", "piel", "hueso"})
 _V7F_MIN_MINUTOS_VIVERES = 8
+# [P1-PLAN-LOTE-444 · 2026-09-26] Cuatro falsos «sin cocción» de víveres que el reparador del lote 68 convertía en un
+# SEGUNDO paso de cocción («🍠 Añade Plátano maduro al guiso y cocínalo 15-20 minutos» en un pollo AL HORNO): replay de la
+# cola sobre 322 planes, 7 de los 19 disparos del detector. (1) Lo que se pone en un RECIPIENTE de cocción se cuece con él:
+# «Coloca el pollo, el plátano maduro y los espárragos en una bandeja; …; Hornea 18-22 min, hasta que el pollo alcance
+# 74 °C» — la cláusula del horno nombra el pollo, no el maduro; cuenta si lo que nombra ya estaba en el recipiente, y el
+# fuego del recipiente («apto para microondas») vale para la cláusula siguiente («tápala y caliéntala 4-5 minutos, hasta
+# que esté tierna»). (2) El microondas TAPADO o con agua cuece al vapor («con una cucharada de agua, tapa y cocina a
+# potencia alta 5-7 min»). (3) Lo que sigue en la sartén sigue cociéndose: «Cocina la auyama y la cebolla 4-5 min, añade
+# el pollo… y cocina 5-6 min» son 9-11 min, no 6. (4) «1 pieza de casabe de yuca» es casabe (listo para comer), no yuca
+# cruda; y «los guineítos» son el guineo de la lista. tooltip-anchor: P1-PLAN-LOTE-444
+_V7F_RECIPIENTE_RE = re.compile(r"\b(?:coloc|pon|acomod|distribu|repart|extiend|dispon|ech|met|agreg|anad|incorpor)"
+                                r"\w*\b[^.;]*?\b(?:en|a)\s+(?:la|una|el|un)\s+(?:bandeja|fuente|molde|olla|sarten|"
+                                r"cacerola|caldero|recipiente|canasta|cesta|airfryer|freidora|refractario|vaporera)\b")
+_V7F_MICRO_VAPOR_RE = re.compile(r"\bmicroondas\b[^.;]*?\b(?:tap|agua|cubiert|film)|\b(?:tap|agua|cubiert|film)\w*\b"
+                                 r"[^.;]*?\bmicroondas\b")
+_V7F_MICRO_MIN_MINUTOS = 5
+_V7F_RETIRA_RE = re.compile(r"\b(?:retira|reserva|saca|aparta)\w*")
 
 
 def _v7f_enabled() -> bool:
@@ -1913,23 +1930,46 @@ def _v7f_evidencia(clausula: str) -> bool:
     return bool(_V7F_FUEGO_RE.search(clausula) and _duracion_max_min(clausula) is not None)
 
 
-def _v7f_otros_alimentos(clausula: str, index: dict) -> bool:
-    """¿Nombra la cláusula algún alimento que no sea un condimento, grasa o agua?"""
+def _v7f_propios(clausula: str, index: dict) -> set:
+    """[P1-PLAN-LOTE-444] Los alimentos de la cláusula que no son condimento, grasa ni agua."""
+    out = set()
     for f in find_catalog_foods(clausula, index):
         nf = _norm(f)
         if nf in ("agua", "hielo") or nf.startswith("aceite") or any(rx.search(nf) for rx in _CONDIMENT_EXEMPT_RES):
             continue
-        return True
-    return False
+        out.add(f)
+    return out
 
 
-def _v7f_cuece(clausula: str, clase: str) -> bool:
-    if not _v7f_evidencia(clausula):
+def _v7f_otros_alimentos(clausula: str, index: dict) -> bool:
+    """¿Nombra la cláusula algún alimento que no sea un condimento, grasa o agua?"""
+    return bool(_v7f_propios(clausula, index))
+
+
+def _v7f_duracion_desde(clausula: str, desde: int = 0):
+    """[P1-PLAN-LOTE-444] Minutos al fuego desde que el alimento entra (`desde`): cada tramo que abre un verbo de
+    cocción suma su mayor duración («Cocina la auyama… 4-5 min, añade el pollo… y cocina 5-6 min» = 11); un «retira» o
+    «reserva» corta la cuenta. `None` si la cláusula no dice ninguna duración."""
+    resto = clausula[desde:]
+    r = _V7F_RETIRA_RE.search(resto)
+    if r:
+        resto = resto[:r.start()]
+    cortes = [0] + [m.start() for m in _V7F_COCCION_RE.finditer(resto) if m.start() > 0] + [len(resto)]
+    ds = [_duracion_max_min(resto[a:b]) for a, b in zip(cortes, cortes[1:])]
+    ds = [d for d in ds if d is not None]
+    return sum(ds) if ds else None
+
+
+def _v7f_cuece(clausula: str, clase: str, desde: int = 0, ctx: str = "") -> bool:
+    # [P1-PLAN-LOTE-444] `ctx`: la cláusula del recipiente donde se puso el alimento (su fuego vale aquí)
+    if not (_v7f_evidencia(clausula) or (ctx and _V7F_FUEGO_RE.search(ctx) and _duracion_max_min(clausula) is not None)):
         return False
     if clase == "viver" and not _V7F_PROFUNDA_RE.search(clausula):
         if _V7F_TIERNO_RE.search(clausula) or _V7F_MADURO_RE.search(clausula):
             return True                              # [P1-PLAN-LOTE-221] dice hasta cuándo, o es maduro (blando)
-        d = _duracion_max_min(clausula)
+        d = _v7f_duracion_desde(clausula, desde)
+        if d is not None and d >= _V7F_MICRO_MIN_MINUTOS and _V7F_MICRO_VAPOR_RE.search(ctx + " " + clausula):
+            return True                              # [P1-PLAN-LOTE-444] microondas tapado o con agua: vapor
         if d is not None and d < _V7F_MIN_MINUTOS_VIVERES:
             return False                             # dorar la yuca 4-5 minutos no la cuece
     return True
@@ -1944,20 +1984,26 @@ def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
     («Hornea unos 20-25 minutos») y, si ya se mezcló, cualquiera que cueza la preparación («vierte la masa y cocina»)."""
     mencionado = mezclado = previa_lo_nombra = False
     for pn in pasos_norm:
+        recipiente = ""                              # [P1-PLAN-LOTE-444] el recipiente vale dentro de SU paso
         for a, b in clause_bounds(pn):
             cl = pn[a:b]
-            nombra = bool(rx.search(cl))
+            mf = rx.search(cl)
+            nombra = bool(mf)
             if nombra:
                 mencionado = True
-                if _v7f_cuece(cl, clase):
+                if _v7f_cuece(cl, clase, desde=mf.start()):
                     return "cocido"
                 if _v7f_usado_cocido(cl, rx):
                     return "usado_cocido"
                 if _V7F_MEZCLA_RE.search(cl):
                     mezclado = True
-            elif mencionado and _v7f_cuece(cl, clase):
+                if _V7F_RECIPIENTE_RE.search(cl):
+                    recipiente = cl
+            elif mencionado and _v7f_cuece(cl, clase, ctx=recipiente):
                 if mezclado:
                     return "cocido"                  # lo que cuece la preparación cuece lo que lleva
+                if recipiente and _v7f_propios(cl, index) <= _v7f_propios(recipiente, index):
+                    return "cocido"                  # [P1-PLAN-LOTE-444] «…en una bandeja; Hornea 18-22 min»
                 if _V7F_ENCLITICO_RE.search(cl):
                     if previa_lo_nombra:
                         return "cocido"              # «córtalos…; hornéalas 10-12 minutos»
@@ -1965,6 +2011,40 @@ def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
                     return "cocido"                  # «Hornea unos 20-25 minutos»: no hay otro a quien atribuirlo
             previa_lo_nombra = nombra
     return "sin_coccion" if mencionado else "no_mencionado"
+
+
+def _v7f_rx(food: str):
+    """La regex con la que V7f busca `food` en los pasos; `None` si el nombre no tiene token propio. [P1-PLAN-LOTE-444]
+    Con diminutivo: «los guineítos» son el «Guineo verde» de la lista."""
+    toks = [t for t in _norm(food).split() if (len(t) >= 4 or t in ("res",)) and t not in _V7F_GENERICAS]
+    if not toks:
+        return None
+    alts = [re.escape(t[:-1]) + "(?:" + t[-1] + "|it[oa]|ic[oa])" if len(t) >= 5 and t[-1] in "oa" else re.escape(t)
+            for t in toks]
+    return re.compile(r"\b(?:" + "|".join(alts) + r")(?:s|es)?\b")
+
+
+def _v7f_candidatos(meal: dict, index: dict):
+    """(alimento, clase, rx) de cada línea de la lista que V7f vigila: una línea, un alimento. [P1-PLAN-LOTE-444] Si el
+    PRIMER alimento de la línea es un producto listo para comer («1 pieza de casabe de yuca»), la línea es ese producto."""
+    vistos = set()
+    for ing in [str(x) for x in (meal.get("ingredients") or [])]:
+        if _V7F_DECLARADO_COCIDO_RE.search(_norm(ing)):
+            continue
+        foods = find_catalog_foods(ing, index)
+        if foods and (index.get(_norm(foods[0])) or {}).get("ready_to_eat") is True:
+            continue
+        for food in foods:
+            meta = index.get(_norm(food)) or {}
+            clase = _v7f_clase(food, meta)
+            if not clase or food in vistos:
+                continue
+            vistos.add(food)
+            rx = _v7f_rx(food)
+            if rx is None:
+                continue
+            yield food, clase, rx
+            break                                    # una línea, un alimento
 
 
 def alimentos_sin_coccion(meal: dict, index: dict) -> list:
@@ -1981,23 +2061,9 @@ def alimentos_sin_coccion(meal: dict, index: dict) -> list:
         if not pasos:
             return []
         pasos_norm = [_norm(x) for x in pasos]
-        vistos = set()
-        for ing in [str(x) for x in (meal.get("ingredients") or [])]:
-            if _V7F_DECLARADO_COCIDO_RE.search(_norm(ing)):
-                continue
-            for food in find_catalog_foods(ing, index):
-                meta = index.get(_norm(food)) or {}
-                clase = _v7f_clase(food, meta)
-                if not clase or food in vistos:
-                    continue
-                vistos.add(food)
-                toks = [t for t in _norm(food).split() if (len(t) >= 4 or t in ("res",)) and t not in _V7F_GENERICAS]
-                if not toks:
-                    continue
-                rx = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in toks) + r")(?:s|es)?\b")
-                if _v7f_estado(pasos_norm, rx, clase, index) == "sin_coccion":
-                    out.append((food, clase))
-                break
+        for food, clase, rx in _v7f_candidatos(meal, index):     # [P1-PLAN-LOTE-444] los mismos que V7f
+            if _v7f_estado(pasos_norm, rx, clase, index) == "sin_coccion":
+                out.append((food, clase))
     except Exception:
         return []
     return out
@@ -2013,26 +2079,13 @@ def _v7f_coccion_faltante(day, meal, index) -> list:
         if not pasos:
             return []
         pasos_norm = [_norm(p) for p in pasos]
-        vistos, usados, sin = set(), [], []
-        for ing in [str(x) for x in (meal.get("ingredients") or [])]:
-            if _V7F_DECLARADO_COCIDO_RE.search(_norm(ing)):
-                continue
-            for food in find_catalog_foods(ing, index):
-                meta = index.get(_norm(food)) or {}
-                clase = _v7f_clase(food, meta)
-                if not clase or food in vistos:
-                    continue
-                vistos.add(food)
-                toks = [t for t in _norm(food).split() if (len(t) >= 4 or t in ("res",)) and t not in _V7F_GENERICAS]
-                if not toks:
-                    continue
-                rx = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in toks) + r")(?:s|es)?\b")
-                estado = _v7f_estado(pasos_norm, rx, clase, index)
-                if estado == "usado_cocido":
-                    usados.append(food)
-                elif estado == "sin_coccion":
-                    sin.append(food)
-                break                                # una línea, un alimento
+        usados, sin = [], []
+        for food, clase, rx in _v7f_candidatos(meal, index):     # [P1-PLAN-LOTE-444] los mismos que el reparador
+            estado = _v7f_estado(pasos_norm, rx, clase, index)
+            if estado == "usado_cocido":
+                usados.append(food)
+            elif estado == "sin_coccion":
+                sin.append(food)
         # UN hallazgo por comida: el dueño anota «Batata y pechuga de pollo» como un defecto, no como dos
         if usados or sin:
             todos = usados + sin

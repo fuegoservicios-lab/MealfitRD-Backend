@@ -58,7 +58,9 @@ def test_sin_medida_en_los_pasos_el_paso_que_la_cocina_lo_dice():
     m = _desayuno()
     m["recipe"][0] = "Mise en place: corta la pera en cubos."
     al.completar(m)
-    assert m["recipe"][1].endswith("Completa el líquido con 110 ml de agua para que la avena se cocine."), m["recipe"][1]
+    # [P1-PLAN-LOTE-428] …pero el agua entra con la leche que el paso nombra, no en una frase al final del paso
+    assert "cocina la avena con la leche descremada, 110 ml de agua y la canela" in m["recipe"][1], m["recipe"][1]
+    assert "Completa el líquido" not in m["recipe"][1]
 
 
 def test_lo_que_no_se_toca():

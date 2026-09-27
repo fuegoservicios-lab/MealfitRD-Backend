@@ -161,7 +161,9 @@ def test_un_plan_entregado_hoy_si_cuenta(tabla):
     """La semántica original no cambia: regenerar tras un plan ENTREGADO hoy sigue siendo «mismo día»."""
     filas, _ = tabla
     ahora = datetime.now(timezone.utc)
-    filas += [_fila(ahora - timedelta(minutes=30), "partial"), _fila(ahora, "generating")]
+    # [P1-PLAN-LOTE-444] «hace 30 min» cae AYER entre las 00:00 y las 00:30 UTC: el gate del 27-sep falló a las 00:2x
+    antes = max(ahora - timedelta(minutes=30), ahora.replace(hour=0, minute=0, second=0, microsecond=0))
+    filas += [_fila(antes, "partial"), _fila(ahora, "generating")]
     assert db_plans.check_meal_plan_generated_today("u") is True
 
 

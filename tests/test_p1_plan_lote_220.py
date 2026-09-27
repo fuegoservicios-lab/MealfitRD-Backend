@@ -159,9 +159,9 @@ def test_sin_tiempo_el_viver_se_cuece_en_cubos_pequenos():
     plan = {"days": [{"day": 1, "meals": [_viver_sin_cocer()]}]}
     assert go._auto_patch_uncooked_foods(plan, _catalogo(), form_data={"cookingTime": "none"}) == 1
     pasos = plan["days"][0]["meals"][0]["recipe"]
-    nuevo = [s for s in pasos if str(s).startswith("🍠")]
-    assert nuevo == ["🍠 Corta Ñame en cubos pequeños (1 cm) y hiérvelos 10-12 minutos, hasta que estén tiernos, "
-                     "antes de servir."], pasos
+    # [P1-PLAN-LOTE-444] la cocción va ANTES del fuego (tras el Mise en place), sobre los cubos que el Mise ya cortó
+    assert pasos[1] == ("💡 Cocción previa: hierve los cubos de ñame en agua 10-12 minutos, hasta que estén tiernos; "
+                        "escúrrelos."), pasos
     assert str(pasos[-1]).startswith("Montaje")
     # idempotente
     assert go._auto_patch_uncooked_foods(plan, _catalogo(), form_data={"cookingTime": "none"}) == 0

@@ -27,7 +27,9 @@ ML = {"ml": 1.0, "l": 1000.0, "litro": 1000.0, "litros": 1000.0, "taza": 240.0, 
 _FR = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
 _LINEA_RE = re.compile(r"^\s*(?P<q>\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s*(?P<u>[A-Za-z]+)\.?\s+(?:de\s+)?(?P<food>.+)$")
 _AVENA_RE = re.compile(r"\bavena\b")
-_NO_HOJUELA_RE = re.compile(r"\b(harina|leche|bebida|salvado|galletas?|barras?|granola|batido)\b")
+#: [P1-PLAN-LOTE-428 · 2026-09-26] «1¾ tazas de avena COCIDA» ya está hidratada: el plan de emergencia recibía 600 ml de
+#: agua encima («Completa el líquido con 600 ml de agua para que la avena se cocine», 24 de 36 casos del corpus).
+_NO_HOJUELA_RE = re.compile(r"\b(harina|leche|bebida|salvado|galletas?|barras?|granola|batido|cocid[ao]s?)\b")
 _LIQUIDO_RE = re.compile(r"\b(leche|bebida|agua)\b")
 _NO_LIQUIDO_RE = re.compile(r"\b(en polvo|condensada|evaporada)\b")
 _AGUA_RE = re.compile(r"^\s*agua\b")
@@ -122,7 +124,7 @@ def completar(meal) -> int:
                     avena_g += v * G_POR_TAZA_AVENA
             elif _LIQUIDO_RE.search(food) and not _NO_LIQUIDO_RE.search(food) and u in ML:
                 liquido += v * ML[u]
-                if _AGUA_RE.match(food) and u == "ml" and agua_idx is None:
+                if _AGUA_RE.match(food) and u in ML and agua_idx is None:     # [P1-PLAN-LOTE-428] «1 taza de agua» también
                     agua_idx = i
                 elif not _AGUA_RE.match(food) and leche_linea is None:
                     leche_linea = str(ln).strip()
@@ -133,7 +135,7 @@ def completar(meal) -> int:
         if agua_idx is not None:
             viejo = str(ings[agua_idx])
             mv = _LINEA_RE.match(viejo)
-            nuevo_total = (_num(mv.group("q")) or 0.0) + faltan
+            nuevo_total = (_num(mv.group("q")) or 0.0) * ML.get(_sa(mv.group("u")), 1.0) + faltan   # [P1-PLAN-LOTE-428]
             nueva = f"{_fmt(nuevo_total)} ml de {mv.group('food').strip()}"
             ings[agua_idx] = nueva
             if raw is not None:
@@ -159,6 +161,15 @@ def _reescribir_agua(meal, viejo_linea: str, agua_txt: str) -> None:
     """Hay línea de agua y creció: la primera mención cuantificada del agua en los pasos pasa al total nuevo."""
     rx = re.compile(r"\b\d+(?:[.,]\d+)?\s*ml\s+de\s+agua\b", re.IGNORECASE)
     rec = meal.get("recipe") or []
+    mv = _LINEA_RE.match(str(viejo_linea or ""))
+    if mv:                                    # [P1-PLAN-LOTE-428] «1 taza de agua» del paso → el total nuevo, en ml
+        rx_vieja = re.compile(r"(?<![\w½¼¾⅓⅔.,])" + re.escape(mv.group("q").strip()) + r"\s*" + re.escape(mv.group("u"))
+                              + r"\.?\s+de\s+agua\b", re.IGNORECASE)
+        hits = [i for i, p in enumerate(rec) if isinstance(p, str) and not any(e in p for e in _NOTA) and rx_vieja.search(p)]
+        if hits:
+            for i in hits:
+                rec[i] = rx_vieja.sub(agua_txt, rec[i])
+            return
     for i, p in enumerate(rec):
         if isinstance(p, str) and not any(e in p for e in _NOTA) and rx.search(p):
             rec[i] = rx.sub(agua_txt, p, count=1)
@@ -204,8 +215,96 @@ def _anadir_agua_al_paso(meal, leche_linea, agua_txt: str) -> None:
         if mm:
             rec[i] = p[:mm.start()] + p[mm.start(1):mm.end(1)] + f" {agua_txt}" + p[mm.end():]
             return
+    if _agua_donde_se_nombra_el_liquido(rec, agua_txt):          # [P1-PLAN-LOTE-428]
+        return
     for i, p in enumerate(rec):
         if isinstance(p, str) and not any(e in p for e in _NOTA) and _COCCION_RE.search(_sa(p)):
             s = p.rstrip()
             rec[i] = s + ("" if s.endswith(".") else ".") + f" Completa el líquido con {agua_txt} para que la avena se cocine."
             return
+
+
+# ── [P1-PLAN-LOTE-428 · 2026-09-26] El agua va donde se nombra el líquido, no al final del paso ─────────────────────────
+# Batería REAL sobre el 424 (familia de 4, desayuno del día 2): «lleva la leche descremada con la canela…; añade la avena y
+# cocina 8-10 minutos… En una sartén… saltea la pera y el mango… Completa el líquido con 160 ml de agua para que la avena se
+# cocine»: el agua llegaba DESPUÉS de cocinar la avena y de saltear la fruta. La mise en place nombraba la leche sin medida
+# y la frase del lote 311 no encontraba dónde ponerla. Ahora entra con la leche que el paso nombra («lleva la leche
+# descremada y 160 ml de agua…») o en «con el líquido» («cocina la avena con 600 ml de agua…»); si una receta ya trae la
+# frase al final, `ubicar_agua` la lleva a su sitio. tooltip-anchor: P1-PLAN-LOTE-428
+_LIQUIDO_NOMBRADO_428_RE = re.compile(r"\bcon el liquido\b")
+_LECHE_NOMBRADA_428_RE = re.compile(
+    r"\b(?:la|el)\s+(?:leche|bebida)(?:\s+(?:de\s+(?:almendras?|soya|coco|avena|arroz)|evaporada|descremada|"
+    r"semidescremada|entera|deslactosada|light|vegetal|sin\s+lactosa))*")
+_COMPLETA_428_RE = re.compile(r"\s*Completa el líquido con (?P<agua>\d+ ml de agua) para que la avena se cocine\.")
+
+
+def _agua_donde_se_nombra_el_liquido(rec: list, agua_txt: str) -> bool:
+    """«con el líquido» → «con N ml de agua»; si no, «la leche descremada» → «la leche descremada y N ml de agua» (con
+    «, N ml de agua y» cuando a la leche la sigue otro «y»). Sólo en un paso que cocina la avena. True si lo puso."""
+    for i, p in enumerate(rec):
+        if not isinstance(p, str) or any(e in p for e in _NOTA) or not _COCCION_RE.search(_sa(p)):
+            continue
+        base = _sa(p)
+        if len(base) != len(p):
+            continue
+        mm = _LIQUIDO_NOMBRADO_428_RE.search(base)
+        if mm:
+            rec[i] = p[:mm.start()] + f"con {agua_txt}" + p[mm.end():]
+            return True
+        ml = _LECHE_NOMBRADA_428_RE.search(base)
+        if ml:
+            despues = base[ml.end():]
+            if re.match(r"\s+y\s", despues):
+                rec[i] = p[:ml.end()] + f", {agua_txt}" + p[ml.end():]
+            else:
+                rec[i] = p[:ml.end()] + f" y {agua_txt}" + p[ml.end():]
+            return True
+        av = _AVENA_RE.search(base)                       # «cocina la avena con agua…»: el agua sin medida recibe la suya
+        ma = re.compile(r"\b(con|en)\s+(?:el\s+)?agua\b").search(base, av.end(), av.end() + 60) if av else None
+        if ma:
+            rec[i] = p[:ma.start()] + p[ma.start(1):ma.end(1)] + f" {agua_txt}" + p[ma.end():]
+            return True
+    return False
+
+
+_AVENA_COCIDA_428_RE = re.compile(r"\bavena\s+cocida\b")
+_COCINA_CON_LIQUIDO_428_RE = re.compile(
+    r"\b([Cc])ocina la avena con el líquido a fuego medio 5 minutos, removiendo hasta cremosa")
+
+
+def ubicar_agua(meal) -> int:
+    """La frase «Completa el líquido con N ml de agua para que la avena se cocine.» que un paso trae al final pasa a donde
+    el paso nombra el líquido; y la avena que la lista compra COCIDA, sin líquido en la lista, se calienta en vez de
+    cocinarse «con el líquido» (plantilla del plan de emergencia). 1 si cambió algo; 0 si no, o ante cualquier error."""
+    try:
+        if not activo() or not isinstance(meal, dict):
+            return 0
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            return 0
+        lista = [_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str)]
+        if any(_AVENA_COCIDA_428_RE.search(x) for x in lista) and not any(
+                _LIQUIDO_RE.search(x) and not _AVENA_RE.search(x) for x in lista):
+            for i, p in enumerate(rec):
+                if isinstance(p, str) and not any(e in p for e in _NOTA) and _COCINA_CON_LIQUIDO_428_RE.search(p):
+                    rec[i] = _COCINA_CON_LIQUIDO_428_RE.sub(
+                        lambda m: ("C" if m.group(1) == "C" else "c") + "alienta la avena cocida a fuego medio 2-3 minutos, "
+                        "removiendo hasta que esté cremosa", p)
+                    meal.pop("_display", None)
+                    return 1
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or any(e in p for e in _NOTA):
+                continue
+            mm = _COMPLETA_428_RE.search(p)
+            if not mm:
+                continue
+            prueba = list(rec)
+            prueba[i] = (p[:mm.start()] + p[mm.end():]).rstrip()
+            if _agua_donde_se_nombra_el_liquido(prueba, mm.group("agua")):
+                meal["recipe"] = prueba
+                meal.pop("_display", None)
+                return 1
+            return 0
+        return 0
+    except Exception:
+        return 0

@@ -922,6 +922,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»
         __import__("pasos_cantidades").lo_que_dice_la_lista(meal)  # [P1-PLAN-LOTE-328..331] piezas, porciones, pizcas
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
+        __import__("avena_liquido").ubicar_agua(meal)  # [P1-PLAN-LOTE-428] el agua donde se nombra el líquido
         __import__("pasos_cantidades").decimales_de_cocina(meal)  # [P1-PLAN-LOTE-312] «2.22 cdas» → «2¼ cdas»
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-316] «Acompaña con X. Acompaña con X.»
         __import__("pasos_cantidades").variedad_de_la_lista(meal, index)  # [P1-PLAN-LOTE-335] «habichuelas blancas» con negras
@@ -960,6 +961,15 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").migaja_sin_alimento(meal)  # [P1-PLAN-LOTE-422] «corta 5 g,» sin alimento
         __import__("pasos_cantidades").tortas_de_casabe(meal)  # [P1-PLAN-LOTE-423] las tortas de la lista
         __import__("pasos_cantidades").claras_una_vez(meal)  # [P1-PLAN-LOTE-424] «4 claras con 4 claras»
+        __import__("pasos_cerrador").legumbre_del_cerrador(meal)  # [P1-PLAN-LOTE-425] lo del cerrador, una vez
+        __import__("pasos_cerrador").huevo_sustituido(meal)  # [P1-PLAN-LOTE-426] el sustituto del huevo no es huevo
+        __import__("pasos_cerrador").tuberculo_del_arroz(meal)  # [P1-PLAN-LOTE-427] el víver del arroz de noche
+        __import__("pasos_cantidades").medio_sin_de(meal)  # [P1-PLAN-LOTE-429] «½ de cebolla» → «½ cebolla»
+        __import__("pasos_cantidades").minuscula_tras_articulo(meal)  # [P1-PLAN-LOTE-440] «la Leche» → «la leche»
+        __import__("pasos_cantidades").ave_desmenuzada_cruda(meal)  # [P1-PLAN-LOTE-441] el pollo desmenuzado crudo
+        __import__("pasos_cantidades").ave_hasta_74(meal)  # [P1-PLAN-LOTE-441] el ave cruda, a 74 °C
+        __import__("pasos_cantidades").fresco_no_se_escurre(meal)  # [P1-PLAN-LOTE-442] lo fresco se seca
+        __import__("pasos_cerrador").notas_de_otro_plato(meal)  # [P1-PLAN-LOTE-443] notas de otro plato
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

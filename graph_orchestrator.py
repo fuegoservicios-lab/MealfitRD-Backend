@@ -40557,19 +40557,14 @@ def _auto_patch_uncooked_foods(plan: dict, catalog: list, form_data: dict = None
                 if not isinstance(_m, dict) or not isinstance(_m.get("recipe"), list):
                     continue
                 for food, clase in (alimentos_sin_coccion(_m, idx) or []):
+                    _cv, _stewy = __import__("coccion_viver"), _meal_is_stewy(_m, strip_accents)
                     if clase == "proteina":
-                        paso = "💪 " + _closer_protein_step_text(food, False, stewy=_meal_is_stewy(_m, strip_accents))
-                    elif _sin_tiempo:
-                        _duro = any(t in strip_accents(str(food).lower())
-                                    for t in ("yuca", "name", "yautia", "malanga"))
-                        paso = (f"🍠 Corta {food} en cubos pequeños (1 cm) y hiérvelos "
-                                f"{'10-12' if _duro else '8-10'} minutos, hasta que estén tiernos, antes de servir.")
-                    else:
-                        paso = (f"🍠 Añade {food} al guiso y cocínalo 15-20 minutos, hasta que esté tierno por "
-                                f"dentro, antes de servir.")
+                        paso, _previa = "💪 " + _closer_protein_step_text(food, False, stewy=_stewy), False
+                    else:   # [P1-PLAN-LOTE-444] al guiso si lo hay; si no, «💡 Cocción previa» tras el Mise en place
+                        paso, _previa = _cv.paso_viver_sin_coccion(_m, food, _sin_tiempo, _stewy)
                     if any(isinstance(s, str) and s.strip() == paso.strip() for s in _m["recipe"]):
                         continue
-                    _m["recipe"] = _insert_step_before_montaje(_m["recipe"], paso)
+                    _m["recipe"] = (_cv.tras_la_mise if _previa else _insert_step_before_montaje)(_m["recipe"], paso)
                     n += 1
                     logger.info(f"🍳 [P1-PLAN-LOTE-68] '{food}' ({clase}) no lo cocía ningún paso en "
                                 f"'{str(_m.get('name'))[:40]}' → paso de cocción insertado")

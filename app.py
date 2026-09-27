@@ -781,7 +781,17 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-420 · 2026-09-26] (backend) el pan de un «Wrap integral» es la tortilla, no el casabe del cerrador.
 # [P1-PLAN-LOTE-421..424 · 2026-09-26] (backend) batería real sobre el 409 (dueño): claras «a la plancha o
 # hervidas» → cuajadas; «corta 5 g,» sin alimento sale; «1½ tortas de casabe» con 1 en la lista; «4 claras con 4».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-424 · 2026-09-26"
+# [P1-PLAN-LOTE-425..429 · 2026-09-26] (backend) batería real sobre el 424 (dm2 con insulina + familia de 4):
+# el cerrador sirve una vez (edamame cocido que se hervía, «Acompaña con» de lo que va dentro); el tope de huevo
+# ya no casca queso ni pela pollo; el víver del arroz de noche con su artículo y su hervor; el agua de la avena
+# donde se nombra el líquido; «½ de cebolla» → «½ cebolla».
+# [P1-PLAN-LOTE-440..443 · 2026-09-26] (backend) replay de la cola, planes leídos enteros: «la Leche» → «la leche»
+# (60 comidas); el pollo crudo que sólo se «calienta» (embarazo incluido) trae su cocción previa o llega a 74 °C;
+# lo fresco no se escurre; fuera las notas de un batido que no existe y el yogur «enlatado».
+# [P1-PLAN-LOTE-444 · 2026-09-26] (backend) el víver que ningún paso cuece: sin falsos «crudo» (bandeja al
+# horno, microondas tapado, sartén que sigue, casabe de yuca, «guineítos»: 7 de 19 en 322 planes) y su cocción
+# al guiso sólo si hay guiso; si no, «💡 Cocción previa» tras el Mise en place (coccion_viver.py).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-444 · 2026-09-26"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
