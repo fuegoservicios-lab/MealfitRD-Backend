@@ -230,6 +230,72 @@ def agregar(filas: list[dict]) -> dict:
     return r
 
 
+# [P1-PLAN-LOTE-601 · 2026-09-27] Regla de aceptación PAREADA. Medido: la MISMA base corrida dos veces dio 26,2 % y
+# 28,8 % de mediana en calorías (grasa 31,7 % y 36,2 %) y una lectura cambia una mediana de 6,8 % entre corridas, así
+# que comparar las medianas de UNA corrida contra otra con 2 puntos de tolerancia rechazaba la base contra sí misma.
+MIN_BASES_PAREADO = 2
+TOPE_ERROR_PAREADO = 1.0      # un plato disparatado (2.500 % de error) no decide la media
+UMBRAL_PAREADO = 0.02         # 2 puntos
+REMUESTRAS_PAREADO = 2000
+LATENCIA_MAX_PAREADO = 1.25
+
+
+def comparar_pareado(bases: list[list[dict]], candidata: list[dict], *, remuestras: int = REMUESTRAS_PAREADO,
+                     semilla: int = SEMILLA) -> dict:
+    """Candidata contra ≥ 2 corridas de la base, plato a plato (solo los que salen bien en TODAS las corridas).
+
+    Por plato: error de la candidata − media del error en las bases, cada error topado a TOPE_ERROR_PAREADO. Por
+    macro: la media de esas diferencias y su intervalo bootstrap al 90 % (remuestreando platos). Entra si calorías o
+    proteína mejoran ≥ 2 puntos con el intervalo entero por debajo de 0, ninguna macro empeora > 2 puntos con el
+    intervalo entero por encima de 0, no hay más fallos que en la peor base y la latencia p50 no sube más de un 25 %."""
+    if len(bases) < MIN_BASES_PAREADO:
+        return {"n": 0, "macros": {}, "acepta": False,
+                "motivo": f"hacen falta al menos {MIN_BASES_PAREADO} corridas de la base (una sola varía ±2-4 puntos)"}
+
+    def _ok(filas):
+        return {f["dish_id"]: f for f in filas if not f.get("fallo") and f.get("errores")}
+
+    idx_b = [_ok(b) for b in bases]
+    idx_c = _ok(candidata)
+    platos = sorted(set(idx_c).intersection(*idx_b))
+    if not platos:
+        raise ValueError("sin platos comunes entre la candidata y las bases")
+    rng = random.Random(semilla)
+    muestras = [[rng.randrange(len(platos)) for _ in platos] for _ in range(remuestras)]
+    macros: dict = {}
+    for k, _, _ in MACROS:
+        difs = [min(idx_c[d]["errores"][k], TOPE_ERROR_PAREADO)
+                - statistics.fmean(min(b[d]["errores"][k], TOPE_ERROR_PAREADO) for b in idx_b) for d in platos]
+        medias = sorted(sum(difs[i] for i in m) / len(m) for m in muestras)
+        macros[k] = {"media": round(statistics.fmean(difs), 4),
+                     "ic90": [round(medias[int(0.05 * remuestras)], 4), round(medias[int(0.95 * remuestras) - 1], 4)],
+                     "mejor": sum(1 for x in difs if x < -UMBRAL_PAREADO),
+                     "peor": sum(1 for x in difs if x > UMBRAL_PAREADO)}
+
+    def _tasa(filas):
+        return sum(1 for f in filas if f.get("fallo")) / len(filas) if filas else 0.0
+
+    def _p50(filas):
+        return percentil([f["latencia_s"] for f in filas if f.get("latencia_s") is not None], 0.5)
+
+    mejora = [k for k in ("kcal", "proteina_g")
+              if macros[k]["media"] <= -UMBRAL_PAREADO and macros[k]["ic90"][1] < 0]
+    peores = [k for k, m in macros.items() if m["media"] > UMBRAL_PAREADO and m["ic90"][0] > 0]
+    motivos = []
+    if not mejora:
+        motivos.append("no mejora calorías ni proteína (≥ 2 puntos, con el intervalo entero por debajo de 0)")
+    if peores:
+        motivos.append("empeora " + ", ".join(peores))
+    if _tasa(candidata) > max(_tasa(b) for b in bases):
+        motivos.append("más fallos que la base")
+    lat_b = [x for x in (_p50(b) for b in bases) if x is not None]
+    lat_c = _p50(candidata)
+    if lat_b and lat_c is not None and lat_c > LATENCIA_MAX_PAREADO * statistics.fmean(lat_b):
+        motivos.append("latencia p50 sube más de un 25 %")
+    return {"n": len(platos), "macros": macros, "acepta": not motivos,
+            "motivo": "; ".join(motivos) if motivos else "mejora " + ", ".join(mejora)}
+
+
 def sha256_de(datos: bytes) -> str:
     return hashlib.sha256(datos).hexdigest()
 
