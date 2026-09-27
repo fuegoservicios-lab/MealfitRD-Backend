@@ -94,10 +94,16 @@ ensalada. Dos variantes, cada una con su corrida guardada en `analyzer_benchmark
 | v2 · lo denso se cuenta (frutos secos, tocineta, aceite visible; `prompt 424f4d0bee4d`) | −11,5 % | 0,0 [−1,4, +1,5] | −0,9 [−2,3, +0,5] | rechazada |
 
 v2 reduce el sesgo (los platos grandes pasan de −38 % a −35 %) pero empuja los pequeños a sobreestimar (+11 %): el error
-no baja. Coincide con el estudio de 40 modelos sobre Nutrition5k citado en `vision_luna.md`: el prompt no mueve la
-precisión; la mueven el **modelo** y la **foto**. Palancas siguientes, por impacto esperado: probar en este banco un
-modelo de visión mejor (cambiar `MEALFIT_VISION_MODEL`, sin código), calcular las macros desde el catálogo cuando el
-ítem se resuelve, y las correcciones reales de los usuarios (`scan_outcome` y, con la política nueva, la capa 2).
+no baja.
+
+**Otro modelo, mismo prompt** (`MEALFIT_VISION_MODEL=gemini-pro-latest`, primeros 60 platos del manifiesto, sin
+guardar): la mediana de calorías sale 21,2 % frente a 27,6 % y 28,3 % de las bases en esos mismos platos, pero la
+diferencia pareada es +0,1 puntos [−4,4, +4,7] (mejora en 26 platos y empeora en otros 26) y la latencia p50 sube a
+16,2 s (×2,9). Rechazado: la mediana de una corrida engaña, que es justo lo que la regla pareada evita. Coincide con el estudio de 40 modelos sobre Nutrition5k citado en `vision_luna.md`: el prompt no mueve la
+precisión; la mueven el **modelo** y la **foto**. Y el modelo Gemini más grande tampoco la movió (abajo). Palancas
+que quedan: calcular las macros desde el catálogo cuando el ítem se resuelve, y las correcciones reales de los usuarios
+(`scan_outcome` y, con la política nueva, la capa 2), que miden el acierto con comida dominicana en vez de la de una
+cafetería de EE. UU.
 
 ## Límites
 
