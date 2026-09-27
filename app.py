@@ -876,7 +876,27 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # tandas… un guiso»: la tabla del tiempo buscaba «15/30/45» y el asistente manda none|30min|1hour|plenty.
 # [P1-PLAN-LOTE-549 · 2026-09-27] (backend) «Es FIN DE SEMANA… recetas más elaboradas y meal prep dominical» ya no pisa
 # «Nada»/«30 min» de tiempo ni «cocino al día» en el bloque (OBLIGATORIO) del prompt.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-549 · 2026-09-27"
+# [P1-PLAN-LOTE-550 · 2026-09-27] (backend) La Nevera APAGADA no se lee al cambiar platos: el gate de suficiencia
+# bloqueaba swap y «Actualizar platos» con «Agrega más ítems a tu Nevera» a quien ni la ve en el menú.
+# [P1-PLAN-LOTE-551 · 2026-09-27] (backend) La política declara lo que SUPUSO (`requested.source.defaulted`): el panel
+# afirmaba «Congelas algunos alimentos»/«Cocinas por tandas» a quien saltó el paso de compras.
+# [P1-PLAN-LOTE-552 · 2026-09-27] (backend) La última palabra del escudo ve lo tecleado en «Otra alergia»: en los bloques
+# 4+ el contexto trae `otherAllergies` aparte y sólo se leían los chips.
+# [P1-PLAN-LOTE-553 · 2026-09-27] (backend) Guardar un cambio de plato respeta lo tecleado en «Otra alergia/no me gusta»
+# y pasa por la última palabra del escudo: el finalizador del persist re-añadía lo que los pasos nombran.
+# [P1-PLAN-LOTE-554 · 2026-09-27] (backend) «Actualizar platos»: el cerrador de proteína ve la dieta, los rechazos, el país
+# y lo tecleado, y el día pasa por la última palabra antes de guardarse (nada lo re-chequeaba).
+# [P1-PLAN-LOTE-555 · 2026-09-27] (backend) El coach que cambia un plato: sus cerradores de proteína ven la dieta y los
+# «no me gusta» (con lo tecleado) y el plato pasa por la última palabra antes de guardarse.
+# [P1-PLAN-LOTE-556 · 2026-09-27] (backend) «Cambiar plato»: los tres cerradores de proteína del swap eligen con la dieta y
+# los «no me gusta», y la inspiración lee `diet_type` (la clave que manda el router).
+# [P1-PLAN-LOTE-557 · 2026-09-27] (backend) La restricción religiosa (halal, kosher, sin cerdo/res/mariscos/alcohol) es
+# exclusión DURA: la ven los cerradores de proteína y la última palabra, no sólo el prompt.
+# [P1-PLAN-LOTE-558 · 2026-09-27] (backend) Los topes de plan entero (pescado del embarazo ≤340 g/semana, casabe DM2,
+# yemas con colesterol) corren también al cambiar un plato, actualizar un día o modificar con el coach.
+# [P1-PLAN-LOTE-559 · 2026-09-27] (backend) Cambiar/actualizar platos con el horario (turno nocturno), «Tus básicos» y el
+# país sellado en el plan: el swap no recibía `scheduleType` y «Actualizar platos» descartaba los básicos y usaba el país vivo.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-559 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

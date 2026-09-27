@@ -3387,7 +3387,37 @@ def alergias_y_rechazos(form_data) -> list:
             s = str(x or "").strip()
             if s and strip_accents(s.lower()) not in ("ninguna", "ninguno", "ninguna alergia", "nada", "none"):
                 out.append(s)
-    return out
+    return out + exclusiones_religiosas(fd)   # [P1-PLAN-LOTE-557]
+
+
+# [P1-PLAN-LOTE-557 · 2026-09-27] La restricción cultural/religiosa de «Súper personalización» (halal, kosher, sin
+# cerdo, sin res, sin mariscos, sin alcohol) sólo llegaba al PROMPT («NUNCA incluyas…»): ni los cerradores de proteína
+# ni la última palabra la conocían, y el catálogo de los cerradores trae cerdo, camarones y pulpo (auditoría del
+# formulario). Aquí pasa a términos de exclusión, los mismos que un «no me gusta» (palabra completa: «res» no toca
+# «fresas»). Sobre-excluir es lo seguro: «jamón de pavo» cae con «jamón» para quien pidió halal. La «otra» (texto libre)
+# sigue sólo en el prompt: no se puede leer de forma determinista. tooltip-anchor: P1-PLAN-LOTE-557
+_CERDO_557 = ("cerdo", "puerco", "pernil", "chicharron", "longaniza", "salami", "tocino", "tocineta", "jamon", "lechon",
+              "chuleta", "cochinillo")
+_ALCOHOL_557 = ("vino tinto", "vino blanco", "vino de cocina", "vino seco", "cerveza", "licor", "ron", "brandy", "whisky",
+                "jerez")
+_EXCLUSIONES_RELIGIOSAS_557 = {
+    "halal": _CERDO_557 + _ALCOHOL_557,
+    "kosher": _CERDO_557 + ("mariscos",),
+    "sin_cerdo": _CERDO_557,
+    "sin_res": ("res", "carne de res", "bistec", "ternera", "carne molida"),
+    "sin_mariscos": ("mariscos",),
+    "sin_alcohol": _ALCOHOL_557,
+}
+
+
+def exclusiones_religiosas(form_data) -> list:
+    """Términos que la restricción religiosa declarada excluye (lista vacía si no hay o no se reconoce). Puro."""
+    try:
+        sp = (form_data or {}).get("super_personalization") or {}
+        rel = str(sp.get("religiousRestriction") or "").strip().lower() if isinstance(sp, dict) else ""
+        return list(_EXCLUSIONES_RELIGIOSAS_557.get(rel, ()))
+    except Exception:
+        return []
 
 
 def techniques_for_cooking_time(cooking_time) -> list:

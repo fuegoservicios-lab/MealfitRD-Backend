@@ -29,7 +29,8 @@ def _dislike_declarations(form_data) -> list:
         decl = [str(d).strip() for d in (fd.get("dislikes") or [])
                 if str(d).strip() and str(d).strip().lower() not in _go._SENTINEL_NONE_VALUES]
         extra = [t for d in decl for t in _DISLIKE_EXTRA_TERMS.get(_sa_dl(d.lower()), ())]
-        return decl + extra
+        # [P1-PLAN-LOTE-557] la restricción religiosa declarada excluye como un rechazo (y la última palabra la ve)
+        return decl + extra + __import__("constants").exclusiones_religiosas(form_data)
     except Exception:
         return []
 

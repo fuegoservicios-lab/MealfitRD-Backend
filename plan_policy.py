@@ -419,6 +419,15 @@ def policy_from_form(form_data: dict, *, country: Optional[str] = None) -> dict:
         "source": {
             "form_version": "v2" if any(form.get(k) not in (None, "", [], {}) for k in FORM_V2_FIELDS) else "v1",
             "adapter": COMPILER_VERSION,
+            # [P1-PLAN-LOTE-551 · 2026-09-27] Lo que se RELLENÓ sin respuesta (paso opcional de compras saltado): el
+            # panel decía «Congelas algunos alimentos» o «Cocinas por tandas» a quien no contestó. En `source`, que es
+            # volátil para el hash: no cambia `policy_hash`. Contrato del frontend (lote 417). La reposición sólo se
+            # pregunta con ciclo > 7 días. tooltip-anchor: P1-PLAN-LOTE-551
+            "defaulted": [k for k, falta in (
+                ("freezer_mode", str(form.get("freezerMode") or "").strip().lower() not in FREEZER_MODES),
+                ("batch_cooking", str(form.get("batchCooking") or "").strip().lower() not in BATCH_MODES),
+                ("fresh_topup_days", cycle > 7 and not str(form.get("freshTopup") or "").strip()),
+            ) if falta],
         },
     }
 

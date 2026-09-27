@@ -666,7 +666,8 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
     if user_id and user_id != "guest" and not actual_form_data.get("current_pantry_ingredients"):
         try:
             from db_inventory import get_user_inventory
-            actual_form_data["current_pantry_ingredients"] = get_user_inventory(user_id)
+            actual_form_data["current_pantry_ingredients"] = (
+                get_user_inventory(user_id) if nevera_activa(user_id) else [])   # [P1-PLAN-LOTE-550]
         except Exception as e:
             logger.error(f"⚠️ Error intentando extraer despensa para zero-waste nuevo plan: {e}")
             
@@ -1805,7 +1806,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     clean_ingredients = []
     try:
         from db_inventory import get_user_inventory
-        physical_inventory = get_user_inventory(user_id)
+        physical_inventory = get_user_inventory(user_id) if nevera_activa(user_id) else []   # [P1-PLAN-LOTE-550]
         if physical_inventory:
             clean_ingredients.extend(physical_inventory)
             
@@ -1822,7 +1823,9 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     
     # Fallback al inventario del fronend si la base de datos no arrojó datos
     if not clean_ingredients and form_data:
-        current_pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
+        # [P1-PLAN-LOTE-550] con la Nevera apagada la foto `current_pantry_ingredients` del perfil es VIEJA
+        current_pantry = ((form_data.get("current_pantry_ingredients") if nevera_activa(user_id) else None)
+                          or form_data.get("current_shopping_list", []))
         if current_pantry and isinstance(current_pantry, list):
             clean_ingredients = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item.strip()) > 2]
             
@@ -1881,6 +1884,17 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     _clin_allergies = []
     _clin_diet = None
     _hp = {}
+
+    def _restr555():
+        """[P1-PLAN-LOTE-555 · 2026-09-27] Lo que el cerrador de proteína del coach NO puede sembrar: alergias Y
+        rechazos, con lo tecleado en «Otra…». Sólo miraba las alergias —y sin la dieta—: «no me gusta el atún» +
+        «cámbiame la cena» podía guardar atún en agua (auditoría del formulario). tooltip-anchor: P1-PLAN-LOTE-555"""
+        try:
+            _ft = __import__("graph_orchestrator").profile_with_free_text(_hp) if isinstance(_hp, dict) else {}
+            return (list(_clin_allergies) + [str(d) for d in (_ft.get("dislikes") or []) if str(d).strip()]
+                    + __import__("constants").exclusiones_religiosas(_hp))   # [P1-PLAN-LOTE-557]
+        except Exception:
+            return list(_clin_allergies)
     # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] [Fix round 1 · F6] `locale` hidratado del MISMO
     # round-trip que `_hp` (`_get_profile(user_id)` ya trae `locale` como columna top-level de
     # `user_profiles`, espejo de `_swap_locale` en `/swap-meal/persist`) — evita un SELECT
@@ -2758,11 +2772,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 _cur_pm = float(new_meal_data.get("protein") or 0)
                 if _cur_pm < 0.90 * float(original_protein):
                     new_meal_data["_protein_closed"] = False
-                    _cands_pm = [c for c in _safe_pc_m(_clin_allergies, _cap_db_m, min_protein=18.0)
+                    _cands_pm = [c for c in _safe_pc_m(_restr555(), _cap_db_m, min_protein=18.0, diet=_clin_diet)
                                  if not any(_t in str(c[1]).lower()
                                             for _t in ("queso", "yogur", "leche", "ricotta", "cottage", "requeson"))]
                     if _cands_pm:
-                        _close_pc_m(new_meal_data, float(original_protein), _cap_db_m, _cands_pm, max_add_g=90)
+                        _close_pc_m(new_meal_data, float(original_protein), _cap_db_m, _cands_pm, max_add_g=90,
+                                    allergies=_restr555(), diet=_clin_diet)   # [P1-PLAN-LOTE-555]
             if _ndm or _nbm:
                 logger.info(f"🔒 [P1-SWAP-PORTION-CAP] plato de modify recortado: cap_dm2={_ndm} "
                             f"cap_baria={_nbm} | day={day_number} meal={meal_type}")
@@ -2835,11 +2850,27 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 from graph_orchestrator import _close_protein_gap_for_meal as _cpg_m, _safe_high_density_proteins as _shdp_m
                 from nutrition_db import IngredientNutritionDB as _ClDBm
                 _cl_db_m = _ClDBm()
-                _cands_m = _shdp_m(_clin_allergies, _cl_db_m, min_protein=18.0)
+                _cands_m = _shdp_m(_restr555(), _cl_db_m, min_protein=18.0, diet=_clin_diet)   # [P1-PLAN-LOTE-555]
                 if _cands_m:
-                    _cpg_m(new_meal_data, float(_anchor_p), _cl_db_m, _cands_m)
+                    _cpg_m(new_meal_data, float(_anchor_p), _cl_db_m, _cands_m, allergies=_restr555(), diet=_clin_diet)
             except Exception as _cpgm_e:
                 logger.warning(f"[P2-MACRO-UPD-1] protein-closer en modify falló (no bloquea): {type(_cpgm_e).__name__}: {_cpgm_e}")
+        # [P1-PLAN-LOTE-555] La última palabra (alergia/dieta/rechazo, con lo tecleado) sobre el plato del coach, tras los
+        # cerradores y ANTES de derivar las listas (fuera del lock): nada lo re-chequeaba antes de guardar.
+        try:
+            _ft555 = __import__("graph_orchestrator").profile_with_free_text(_hp) if isinstance(_hp, dict) else {}
+            _ctx555 = {"allergies": list(_clin_allergies), "dietType": _clin_diet,
+                       "dislikes": _ft555.get("dislikes") or [], "medications": _hp.get("medications"),
+                       "otherMedications": _hp.get("otherMedications") or _hp.get("other_medications"),
+                       "super_personalization": _hp.get("super_personalization")}   # [P1-PLAN-LOTE-557]
+            _rp555 = __import__("restricciones_finales").retirar_prohibidos(
+                {"days": [{"day": day_number, "meals": [new_meal_data]}]}, _ctx555, surface="chat_modify")
+            if _rp555.get("retiradas"):
+                from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu555
+                from nutrition_db import IngredientNutritionDB as _NDB555
+                _tu555(new_meal_data, _NDB555())
+        except Exception as _rp555_e:
+            logger.debug(f"[P1-PLAN-LOTE-555] última palabra (chat-modify) no-op: {type(_rp555_e).__name__}: {_rp555_e}")
         # [P2-MACRO-UPD-3 · 2026-06-29] (re-audit objetivo · P2) Telemetría de banda per-comida (paridad del canal
         # degraded/alert con S1): loguea si el plato modificado quedó materialmente fuera de la banda del macro
         # original (drift >15%). No bloquea (la banda ±15% per-comida del validador es el guard user-facing).
@@ -3018,7 +3049,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     # no corre (se gatea por presencia de key) y el closer puede añadir un alérgeno.
                     "allergies": [str(a).strip() for a in (_pwft_cm(_hp).get("allergies") or []) if str(a).strip()],
                     "dietType": _hp.get("dietType") or _hp.get("diet_type"),
-                    "dislikes": _hp.get("dislikes") or [],
+                    "dislikes": _pwft_cm(_hp).get("dislikes") or [],   # [P1-PLAN-LOTE-555] con lo tecleado
                 }
                 # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] pantry-strict (cocinar desde la nevera) → skip
                 # interno del closer; self-guards en MICRONUTRIENT_CLOSER_ENABLED, kcal/UL-bounded, renal-skip.
@@ -3058,6 +3089,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     logger.debug(f"[P1-UPDATE-MACRO-PARITY] (pre-listas) no-op: {_ume_pre_e}")
             except Exception as _cm_pre_e:
                 logger.debug(f"[P1-CHATMODIFY-CLOSER-ORDER] closer pre-listas falló (no bloquea): {_cm_pre_e}")
+        # [P1-PLAN-LOTE-558] los topes de plan ENTERO en la pasada PRE-LISTAS (y otra vez en el callback: mismo
+        # patrón closer-order, determinista) → las listas nacen con el plan que se guarda.
+        if _micro_form_cm:
+            __import__("topes_plan_entero").aplicar(plan_data, _micro_form_cm)
 
         # [P1-AUDIT-1 · 2026-05-15] Inicialización a None para que el callback
         # `_apply_meal_modification` pueda preservar las keys del fresh si la
@@ -3410,6 +3445,8 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 _rfc_cm(plan_data_fresh.get("days") or [], _NDB_rfc_cm())
             except Exception as _rfc_cm_e:
                 logger.debug(f"[P1-PLAN-LOTE-24] contrato final (chat-modify) no-op: {type(_rfc_cm_e).__name__}: {_rfc_cm_e}")
+            if _micro_form_cm:   # [P1-PLAN-LOTE-558] los mismos topes sobre el plan fresco
+                __import__("topes_plan_entero").aplicar(plan_data_fresh, _micro_form_cm)
 
             # Aggregated lists (overwrite — el agent_tool es source-of-truth
             # de estas keys tras una modificación). Solo escribimos si la

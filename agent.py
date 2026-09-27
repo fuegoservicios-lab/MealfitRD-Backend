@@ -1069,6 +1069,8 @@ def _swap_real_pantry_ledger_lines(user_id: str) -> list:
     precisamente el leak que este fix cierra)."""
     if not user_id or user_id == "guest":
         return []
+    if not _nevera_activa_para_chat(user_id):   # [P1-PLAN-LOTE-550] apagada: universo vacío ⇒ waiver del swap
+        return []
     try:
         from db import get_raw_user_inventory
         from nutrition_db import IngredientNutritionDB
@@ -1379,6 +1381,10 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             logger.debug(f"[P2-8-SWAP-SLOT-TARGET] slot target falló (no bloquea): {_p28_e}")
 
     allergies = form_data.get("allergies", [])
+    # [P1-PLAN-LOTE-556 · 2026-09-27] Lo que los TRES cerradores de proteína del swap no pueden sembrar: alergias Y
+    # rechazos (el router ya unió lo tecleado). Dos de ellos elegían sin dieta y sin «no me gusta» y el del tope de
+    # porción corre DESPUÉS del último chequeo (auditoría del formulario). tooltip-anchor: P1-PLAN-LOTE-556
+    _restr556 = __import__("constants").alergias_y_rechazos(form_data)
     dislikes = form_data.get("dislikes", [])
     liked_meals = form_data.get("liked_meals", [])
     disliked_meals = form_data.get("disliked_meals", [])
@@ -1449,7 +1455,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # [P3-SWAP-INSPIRATION-DIET · 2026-07-31] (audit v6 · F26) La inspiración se ofrecía sin
             # mirar dieta ni alergias: proponía "Res guisada" a un vegetariano, el backstop lo
             # rechazaba y el swap quemaba reintentos. Los datos ya estaban en scope.
-            diet_type=form_data.get("dietType") or form_data.get("diet"),
+            diet_type=form_data.get("dietType") or form_data.get("diet") or form_data.get("diet_type"),  # [P1-PLAN-LOTE-556]
             allergies=form_data.get("allergies") or [],
             # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Sin esto, el swap de un plato español
             # devolvía inspiración dominicana: arreglar sólo el day-gen habría dejado la mitad
@@ -2849,7 +2855,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                     if _tu_db_holder[0] is None:
                         from nutrition_db import IngredientNutritionDB as _PCDB
                         _tu_db_holder[0] = _PCDB()
-                    _pc_allergies = form_data.get("allergies") or []
+                    _pc_allergies = _restr556   # [P1-PLAN-LOTE-556] alergias y rechazos
                     _pc_used = set()
                     for _pb in (form_data.get("same_day_other_meal_blobs") or []):
                         _pc_used |= _pc_labels(str(_pb))
@@ -2858,12 +2864,13 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                     # rama lácteo-dulce, así que pasarlo sólo al pool deja media fuga abierta.
                     _g_pc = _pc_closer(
                         _pc_meal, _pc_target, _tu_db_holder[0],
-                        _pc_pool(_pc_allergies, _tu_db_holder[0], country=_swap_country),
+                        _pc_pool(_pc_allergies, _tu_db_holder[0], country=_swap_country, diet=diet_type),
                         allergies=_pc_allergies, fill_pct=1.0,
                         slot_cal_target=float(target_calories or 0),
                         enforce_min_threshold=False,
                         day_used_proteins=_pc_used,
                         country=_swap_country,
+                        diet=diet_type,   # [P1-PLAN-LOTE-556]
                     )
                     if _g_pc > 0:
                         try:
@@ -3556,9 +3563,10 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 # [P1-SUBS-WORD-BOUNDARY · 2026-09-05] …y `diet_type=`, que faltaba: sin él el cerrador del
                 # coach elige del pool completo y le mete pollo al plato de un vegetariano. Los cinco call
                 # sites del generador ya lo pasaban (P1-DIET-BLIND-DIRECTIVES); este se quedó atrás.
-                _cands = _safe_high_density_proteins(allergies, _cl_db, country=_swap_country, diet=diet_type)
+                _cands = _safe_high_density_proteins(_restr556, _cl_db, country=_swap_country, diet=diet_type)
                 _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands,
-                                                     country=_swap_country)
+                                                     country=_swap_country, allergies=_restr556,
+                                                     diet=diet_type)   # [P1-PLAN-LOTE-556]
                 if _added and clean_ingredients:
                     _reval_cl = validate_ingredients_against_pantry(
                         _out.get("ingredients") or [], clean_ingredients,
@@ -3666,13 +3674,13 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 if _cur_p < 0.90 * float(target_protein):
                     _out["_protein_closed"] = False
                     # [P2-AGENT-PROTEIN-CLOSER-COUNTRY · 2026-08-23] tercer par del mismo defecto.
-                    _cands_pc = [c for c in _safe_pc(allergies, _cap_db, min_protein=18.0,
-                                                     country=_swap_country)
+                    _cands_pc = [c for c in _safe_pc(_restr556, _cap_db, min_protein=18.0,
+                                                     country=_swap_country, diet=diet_type)   # [P1-PLAN-LOTE-556]
                                  if not any(_t in str(c[1]).lower()
                                             for _t in ("queso", "yogur", "leche", "ricotta", "cottage", "requeson"))]
                     if _cands_pc:
                         _close_pc(_out, float(target_protein), _cap_db, _cands_pc, max_add_g=90,
-                                  country=_swap_country)
+                                  country=_swap_country, allergies=_restr556, diet=diet_type)
             if _nd or _nb:
                 logger.info(f"🔒 [P1-SWAP-PORTION-CAP] plato de swap recortado: cap_dm2={_nd} "
                             f"cap_baria={_nb} | meal_type={meal_type}")

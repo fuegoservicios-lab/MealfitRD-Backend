@@ -71,7 +71,8 @@ def test_backstop_scans_new_meal_with_profile_data(persist_body):
         persist_body, re.DOTALL,
     )
     assert m, "el backstop no escanea new_meal con allergies/diet del perfil server-side"
-    assert '_hp_micro.get("allergies")' in persist_body, \
+    # [P1-PLAN-LOTE-553] del health_profile server-side CON lo tecleado en «Otra alergia» (misma fuente, unida)
+    assert "_hp_ft553 = _pwft553(_hp_micro)" in persist_body and '_hp_ft553.get("allergies")' in persist_body, \
         "las alergias deben nacer del health_profile server-side, no del body"
 
 

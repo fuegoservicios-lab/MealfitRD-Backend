@@ -85,6 +85,11 @@ def retirar_prohibidos(plan: dict, ctx: dict, db=None, surface: str = "") -> dic
         if not isinstance(plan, dict) or not isinstance(ctx, dict) or not ctx:
             return out
         import graph_orchestrator as go
+        # [P1-PLAN-LOTE-552 · 2026-09-27] Lo tecleado en «Otra alergia» también es alergia. En el merge de un bloque
+        # (días 4+) el contexto es el `form_data` CRUDO del worker, con `otherAllergies` aparte, y esta pasada sólo
+        # leía `allergies`: «Otra alergia: pimiento» no retiraba «100 g de pimiento» (auditoría del formulario). La
+        # unión es la del generador, idempotente y sobre copia. tooltip-anchor: P1-PLAN-LOTE-552
+        ctx = go.profile_with_free_text(ctx) or ctx
         alergias = [str(a).strip() for a in (ctx.get("allergies") or []) if _sa(a).strip() not in _SENT]
         dieta = ctx.get("dietType") or ctx.get("diet_type")
         rechazos = __import__("rechazos").terminos_de_rechazo(ctx)   # [P1-PLAN-LOTE-258] clase solo si la nombra

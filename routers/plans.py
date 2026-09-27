@@ -6738,6 +6738,12 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
         # al prompt (`horizon.cooking_time_rule`) y el frontend no lo manda. Fill-si-falta, crudo, como `country`.
         if not data.get("cookingTime") and hp.get("cookingTime"):
             data["cookingTime"] = hp.get("cookingTime")
+        # [P1-PLAN-LOTE-559 · 2026-09-27] El horario (turno nocturno / rotativo): el swap ya inyecta
+        # `horizon.schedule_rule(form_data)` (lote 241), pero nadie le pasaba `scheduleType` — el frontend no lo manda y
+        # aquí no se hidrataba: al turno nocturno le salía la cena «ligera, sin cafeína» sólo al generar el plan, nunca
+        # al cambiar un plato (auditoría del formulario). Fill-si-falta, crudo. tooltip-anchor: P1-PLAN-LOTE-559
+        if not data.get("scheduleType") and hp.get("scheduleType"):
+            data["scheduleType"] = hp.get("scheduleType")
         # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Adjuntar condiciones/medicamentos
         # del perfil → los updates inyectan directivas de condición + pisos de micro (paridad con S1).
         # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] (audit micros P1-2) + otherConditions/otherMedications:
@@ -7703,6 +7709,11 @@ def api_swap_meal_persist(
             from db import get_user_profile as _gup_micro
             _full_profile_micro = _gup_micro(verified_user_id) or {}
             _hp_micro = _full_profile_micro.get("health_profile") or {}
+            # [P1-PLAN-LOTE-553 · 2026-09-27] Alergias y rechazos con lo TECLEADO en «Otra…»: el persist sólo leía los
+            # chips, y su finalizador vuelve a añadir lo que los pasos nombran DESPUÉS del re-chequeo — «Otra alergia:
+            # pimiento» + «sofríe con pimiento» guardaba «100 g de pimiento» (y a la lista). tooltip-anchor: P1-PLAN-LOTE-553
+            from graph_orchestrator import profile_with_free_text as _pwft553
+            _hp_ft553 = _pwft553(_hp_micro)
             _swap_locale = _full_profile_micro.get("locale")
             # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] merge estilo P1-FORM-6: el free-text clínico
             # (otherConditions) se pliega en medicalConditions → el renal-skip del closer y el techo
@@ -7726,9 +7737,9 @@ def api_swap_meal_persist(
                 # key → sin estas tres el scan de alérgenos no corría. El dato ya estaba hidratado del
                 # perfil server-side tres líneas más abajo, para otro backstop; solo faltaba pasarlo.
                 # Siempre presentes (aunque sean [] / None): "ausente" ≠ "sin alergias".
-                "allergies": [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()],
+                "allergies": [str(a).strip() for a in (_hp_ft553.get("allergies") or []) if str(a).strip()],
                 "dietType": _hp_micro.get("dietType") or _hp_micro.get("diet_type"),
-                "dislikes": _hp_micro.get("dislikes") or [],
+                "dislikes": _hp_ft553.get("dislikes") or [],
                 # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g · MUTATOR-PURITY)] Mismo campo
                 # crudo que `_enrich_clinical_from_profile` (F2a) hidrata para swap_meal —
                 # `hp.get('country')` viaja SIN canonicalizar (`country_for_form_data` es la
@@ -7739,7 +7750,7 @@ def api_swap_meal_persist(
             }
             # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] Alergias + dieta del PERFIL (server-side) para el
             # backstop clínico de abajo — nunca del body del cliente (espejo de I2 / P0-UPDATE-CLINICAL-GUARD).
-            _persist_allergies = [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()]
+            _persist_allergies = [str(a).strip() for a in (_hp_ft553.get("allergies") or []) if str(a).strip()]
             _persist_diet = _hp_micro.get("dietType") or _hp_micro.get("diet_type")
         except Exception as _micro_form_e:
             logger.debug(f"[P2-SWAP-MICROS-STALE] no se pudo hidratar _micro_form: {_micro_form_e}")
@@ -8181,6 +8192,22 @@ def api_swap_meal_persist(
             # inline de las listas (post closer/requantize/qty-sync → reflejan los
             # ingredientes finales). El strip de arriba queda como estado de FALLBACK si
             # este rebuild falla (contrato legacy: el frontend recalcula).
+            # [P1-PLAN-LOTE-558] los topes de plan ENTERO (pescado del embarazo, casabe DM2, yemas) con el plato dentro
+            __import__("topes_plan_entero").aplicar(plan_data, _micro_form)
+            # [P1-PLAN-LOTE-553] La última palabra (alergia/dieta/rechazo) sobre el plato que se guarda, tras TODO lo que
+            # el mutator le añadió (finalizador, cierres, motor) y antes de derivar las listas. Puro: sin pool en el lock.
+            try:
+                if isinstance(meals[meal_index], dict) and _micro_form:
+                    _rp553 = __import__("restricciones_finales").retirar_prohibidos(
+                        {"days": [{"day": day_index + 1, "meals": [meals[meal_index]]}]}, _micro_form,
+                        surface="swap_persist")
+                    if _rp553.get("retiradas"):
+                        from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu553
+                        from nutrition_db import IngredientNutritionDB as _NDB553
+                        _tu553(meals[meal_index], _NDB553())
+            except Exception as _rp553_e:
+                logger.debug(f"[P1-PLAN-LOTE-553] última palabra (swap) no-op: {type(_rp553_e).__name__}: {_rp553_e}")
+
             _rebuild_plan_shopping_lists_inline(
                 plan_data, verified_user_id, surface="swap_persist", plan_id_hint=plan_id
             )
@@ -9211,7 +9238,9 @@ def api_regenerate_day(
         from db import get_raw_user_inventory
 
         _db = IngredientNutritionDB()
-        ledger = _inventory_grams_ledger(get_raw_user_inventory(user_id), _db)
+        # [P1-PLAN-LOTE-550] Nevera apagada: sin ledger (ni filas viejas que nadie mantiene) ⇒ cada swap usa su waiver
+        ledger = _inventory_grams_ledger(
+            get_raw_user_inventory(user_id) if __import__("nevera_opcional").nevera_activa(user_id) else [], _db)
         # [P2-REGEN-DAY-MACRO-REBALANCE · 2026-06-27] Snapshot del inventario ORIGINAL (antes de que el loop
         # decremente el ledger) para revalidar el día tras el rebalanceador de macros y revertir si excede.
         _orig_ledger_grams = dict(ledger)
@@ -9350,7 +9379,7 @@ def api_regenerate_day(
                 # que diet_type/allergies arriba: `meal_form` es un dict de keys EXPLÍCITAS (NO
                 # hace spread de `data`), así que sin esto `swap_meal(surface="day")` seguía
                 # cayendo a 'DO' aunque `data['country']` ya viniera hidratado.
-                "country": data.get("country"),
+                "country": __import__("constants").country_for_plan(plan_data, {"country": data.get("country")}),  # [P1-PLAN-LOTE-559]
                 "_culture_weights": data.get("_culture_weights"),  # [P1-ARQ25-F7-CULTURE] cocina del plan
                 "goal": data.get("goal") or data.get("mainGoal"),
                 # [P2-REGEN-DAY-BIOMETRICS-PROPAGATE · 2026-06-29] (cierre follow-up testing en vivo) Propaga los
@@ -9382,6 +9411,12 @@ def api_regenerate_day(
                 # («tomo espironolactona») que `medication_rules` lee de `otherMedications`.
                 # tooltip-anchor: P1-PLAN-LOTE-234-TIEMPO-EN-REGENERAR-DIA
                 "cookingTime": data.get("cookingTime"),
+                # [P1-PLAN-LOTE-559] horario y «Tus básicos»: `meal_form` es de claves EXPLÍCITAS y los descartaba (el
+                # frontend manda `staple_foods`; `_enrich_clinical_from_profile` los hidrata del perfil). Y el país
+                # (arriba) es el SELLO del plan, como en el swap y los bloques: plan dominicano + país cambiado a España
+                # ya no «actualiza» con el catálogo español; el perfil vivo sólo manda en planes legacy sin sello.
+                "scheduleType": data.get("scheduleType"),
+                "staple_foods": data.get("staple_foods") or data.get("stapleFoods"),
                 "otherConditions": data.get("otherConditions"),
                 "otherMedications": data.get("otherMedications"),
                 # Pantry reservada (gramos restantes tras los platos ya aceptados de hoy).
@@ -9841,7 +9876,21 @@ def api_regenerate_day(
                     "otherConditions": data.get("otherConditions") or _hp_clin.get("otherConditions"),
                     "allergies": data.get("allergies") or _hp_clin.get("allergies"),
                     "otherAllergies": data.get("otherAllergies") or _hp_clin.get("otherAllergies"),
+                    # [P1-PLAN-LOTE-554 · 2026-09-27] El cerrador de FASE A lee dieta, rechazos, país y objetivo
+                    # (`_repair_protein_floor_post_caps`): sin ellos elegía del catálogo entero — pollo para una
+                    # vegetariana si la Nevera lo tenía, atún a quien no le gusta (auditoría del formulario).
+                    # tooltip-anchor: P1-PLAN-LOTE-554
+                    "dietType": (data.get("dietType") or data.get("diet_type")
+                                 or _hp_clin.get("dietType") or _hp_clin.get("diet_type")),
+                    "dislikes": data.get("dislikes") or _hp_clin.get("dislikes"),
+                    "otherDislikes": data.get("otherDislikes") or _hp_clin.get("otherDislikes"),
+                    "country": data.get("country") or _hp_clin.get("country"),
+                    "mainGoal": data.get("mainGoal") or _hp_clin.get("mainGoal"),
+                    "super_personalization": (data.get("super_personalization")
+                                              or _hp_clin.get("super_personalization")),   # [P1-PLAN-LOTE-557]
                 }
+                # lo tecleado en «Otra alergia / no me gusta», unido a sus listas como en el generador
+                _clin_form = __import__("graph_orchestrator").profile_with_free_text(_clin_form) or _clin_form
                 _day_wrap = [{"meals": [m for m in new_meals if isinstance(m, dict)]}]
                 _n_dm2 = _cap_dm2(_day_wrap, _clin_form, _db)        # trim almidón alto-IG (DM2) — pantry-safe
                 _n_bar = _cap_baria(_day_wrap, _clin_form, _db)      # trim queso/yogurt/fruta/aguacate (bariátrica)
@@ -9889,6 +9938,14 @@ def api_regenerate_day(
                 logger.debug(f"[P2-REGEN-DAY-SODIUM-AUTOFIX] no-op: {_sod_e}")
 
         # Persistencia atómica de days[day_index].meals (espejo de _swap_mutator, escalado al día).
+        # [P1-PLAN-LOTE-554] Contexto clínico del PERFIL (con lo tecleado) para la última palabra del día, leído FUERA
+        # del FOR UPDATE (P2-MUTATOR-PURITY). `{}` = «no sé» ⇒ la pasada no hace nada.
+        try:
+            from db import build_clinical_form_from_profile as _bcfp554
+            _rp_ctx554 = _bcfp554(verified_user_id) or {}
+        except Exception:
+            _rp_ctx554 = {}
+
         def _day_mutator(pd: dict) -> dict:
             _days = pd.get("days")
             if not isinstance(_days, list):
@@ -10065,6 +10122,22 @@ def api_regenerate_day(
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas del plan con el día regenerado (el strip de arriba queda
             # como fallback si falla — contrato legacy con recalc del frontend).
+            # [P1-PLAN-LOTE-558] los topes de plan ENTERO (pescado del embarazo, casabe DM2, yemas) con el día dentro
+            __import__("topes_plan_entero").aplicar(pd, _rp_ctx554, _db)
+            # [P1-PLAN-LOTE-554] La última palabra (alergia/dieta/rechazo) sobre el día que se guarda: en «Actualizar
+            # platos» nada re-chequeaba lo que los cerradores añadieron. Antes de derivar las listas.
+            try:
+                if _rp_ctx554:
+                    _rp554 = __import__("restricciones_finales").retirar_prohibidos(
+                        {"days": [{"day": day_index + 1, "meals": new_meals}]}, _rp_ctx554, surface="regen_day")
+                    if _rp554.get("retiradas"):
+                        from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu554
+                        for _m554 in new_meals:
+                            if isinstance(_m554, dict):
+                                _tu554(_m554, _db)
+            except Exception as _rp554_e:
+                logger.debug(f"[P1-PLAN-LOTE-554] última palabra (regen-day) no-op: {type(_rp554_e).__name__}: {_rp554_e}")
+
             _rebuild_plan_shopping_lists_inline(
                 pd, verified_user_id, surface="regen_day", plan_id_hint=plan_id
             )

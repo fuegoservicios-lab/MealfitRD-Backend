@@ -90,5 +90,5 @@ def test_el_veto_sigue_siendo_por_subcadena():
 def test_el_cerrador_del_coach_mira_la_dieta():
     """Los cinco call sites del generador ya pasaban `diet=`; el del swap del coach se había quedado atrás."""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    i = src.index("_cands = _safe_high_density_proteins(allergies, _cl_db")
+    i = src.index("_cands = _safe_high_density_proteins(_restr556, _cl_db")   # [P1-PLAN-LOTE-556] + rechazos
     assert "diet=diet_type" in src[i:i + 200], "sin dieta, el coach le mete pollo al plato de un vegetariano"

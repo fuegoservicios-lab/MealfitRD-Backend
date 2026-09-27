@@ -209,6 +209,13 @@ def evaluate_pantry_sufficiency(
             nutrition_db = IngredientNutritionDB()
 
         if inventory_rows is None:
+            # [P1-PLAN-LOTE-550 · 2026-09-27] Con la Nevera APAGADA (a mano o por el apagado automático tras 48 h vacía)
+            # no hay Nevera que evaluar: el gate devolvía «Agrega más ítems a tu Nevera» a quien ni la ve en el menú
+            # (swap y «Actualizar platos» bloqueados para siempre; cuenta c7b90ca3 el 27-sep). Espejo del
+            # `_refresh_chunk_pantry` de nevera_opcional. tooltip-anchor: P1-PLAN-LOTE-550
+            from nevera_opcional import nevera_activa as _na550
+            if user_id and user_id != "guest" and not _na550(user_id):
+                return {"sufficient": True, "skipped": "nevera_apagada", "deficits": [], "message": None}
             from db import get_raw_user_inventory
             inventory_rows = get_raw_user_inventory(user_id)
 
