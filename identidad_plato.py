@@ -53,12 +53,22 @@ def _palabras(s) -> list:
     return [w for w in re.findall(r"[a-z]+", _sa(s)) if len(w) >= 3 and w not in _VACIAS]
 
 
+# [P1-PLAN-LOTE-583 · 2026-09-27] «yogur» y «yogurt» son el mismo alimento también aquí (el lote 527 lo arregló sólo al
+# reflejar la proteína en el nombre). Batería real: «Bowl fresco de fresas, yogur y almendras» con 10 g de «yogurt griego»
+# y «Vasito fresco de lechosa, yogur y maní…» con 5 g: el solver no protegía la línea (lote 172), los pisos no la subían
+# (174/178) y la compensación del día no la veía, porque «yogurt» no casaba con «yogur». Corpus: 356 de 4.871 comidas
+# (7 %) titulan «yogur» y compran «yogurt». tooltip-anchor: P1-PLAN-LOTE-583
+_YOGUR_583 = frozenset({"yogur", "yogures", "yogurs", "yogurt", "yogurts", "yogurtes", "yoghurt", "yoghurts"})
+
+
 def _variantes(w: str) -> set:
     v = {w, w + "s", w + "es"}
     if w.endswith("es"):
         v.add(w[:-2])
     if w.endswith("s"):
         v.add(w[:-1])
+    if v & _YOGUR_583:
+        v |= _YOGUR_583
     return v
 
 
@@ -546,6 +556,103 @@ def _es_proteico(alimento: str, db) -> bool:
         return False
 
 
+# ─────────────── [P1-PLAN-LOTE-584 · 2026-09-27] lo que el nombre promete y los pasos cocinan, en la lista ───────────────
+# Batería real (adulto mayor con HTA): «Pollo jugoso con majado de yautía…» pela, corta y hierve 250 g de yautía que la
+# lista no trae — ni se compra ni cuenta en las calorías. El detector V5 (el paso usa lo que la lista no trae) exime lo que
+# el NOMBRE nombra, y la identidad del modelo (lote 174) sólo subía lo PRESENTE. Corpus reciente: 4 de 738 comidas (la
+# yautía; el arroz y el gouda de un «moro con gouda»; la harina de una «tortilla de maíz»; el yogur de un «Yogur con…»).
+# Vuelve a la lista a su piso si al día le cabe (el margen del lote 49; si no cabe entero, lo que quepa desde la mitad del
+# piso), y el contrato final lleva el paso a esos gramos. No vuelve lo que otro pase sustituyó a propósito (proteína,
+# presupuesto, compra única) ni una proteína si la lista ya trae otra: la «tilapia» del paso es el «filete de pescado» de
+# la lista. Knob `MEALFIT_DISH_IDENTITY_MISSING` (True). tooltip-anchor: P1-PLAN-LOTE-584
+def faltantes_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return llm_on() and _env_bool("MEALFIT_DISH_IDENTITY_MISSING", True)
+    except Exception:                                                          # noqa: BLE001
+        return llm_on()
+
+
+_INAPRECIABLE_G = 0.5
+
+
+def _categoria(nombre, db) -> str:
+    try:
+        return _sa(db.category_of(nombre) or "")
+    except Exception:                                                          # noqa: BLE001
+        return ""
+
+
+def _anadir_faltantes(meal: dict, index: dict, db, allergies, margen, fase) -> list:
+    """Añade a la lista (y a la compra) lo que el nombre nombra y los pasos usan sin línea. `["+60 g de Yautía"]`."""
+    if not faltantes_on() or db is None or margen is None:
+        return []
+    import culinary_coherence as cc
+    from recipe_contract import _cantidades_lista
+    copia = dict(meal)
+    copia["name"] = ""
+    usados = []
+    for v in cc._v5_paso_usa_lo_que_no_esta({"day": 0}, copia, index) or []:
+        f = v.get("food")
+        if f and f not in usados:
+            usados.append(f)
+    if not usados:
+        return []
+    fuera = _sustituidos(meal)
+    for s in meal.get("_fresh_substituted") or []:
+        fuera |= set(_palabras(str(s).split("→")[0]))
+    lista = [x for x in (meal.get("ingredients") or []) if isinstance(x, str)]
+    cats_lista = {_categoria(k[0], db) for k in _cantidades_lista(lista, index)}
+    hechos = []
+    for food in usados:
+        if not nombrada_en_el_nombre(meal, food) or set(_palabras(food)) & fuera or _choca_alergia(food, allergies):
+            continue
+        canon = _canonico(food, index)
+        if not canon:
+            continue
+        cat = _categoria(canon, db)
+        if cat == "proteinas" and "proteinas" in cats_lista:
+            continue                     # la especie del paso es la proteína genérica de la lista
+        if fase is not None and _es_proteico(canon, db) != (fase == "proteina"):
+            continue
+        piso = _piso_de(canon, db)
+        if not piso:
+            continue
+        if allergies:
+            try:                         # el escáner de alérgenos del repo: «Gluten» no es una palabra de «harina de trigo»
+                from graph_orchestrator import _scan_allergen_violations as _sav
+                if _sav({"days": [{"meals": [{"name": "", "ingredients": [f"{piso} g de {canon}"]}]}]}, list(allergies)):
+                    continue
+            except Exception:                                                  # noqa: BLE001
+                continue                 # sin escáner, conservador: no se añade
+        mac = db.macros_from_ingredient_string(f"{piso} g de {canon}") or {}
+        dk, dg, dp = float(mac.get("kcal") or 0), float(mac.get("fats") or 0), float(mac.get("protein") or 0)
+        if dk <= 0:
+            continue
+        m_p = margen.get("proteina", float("inf"))
+        # un día ya pasado de grasa no le cierra la puerta a una yautía con 0,1 g: lo inapreciable no cuenta
+        frac = min(1.0, margen["kcal"] / dk, (margen["grasa"] / dg) if dg > _INAPRECIABLE_G else 1.0,
+                   (m_p / dp) if dp > _INAPRECIABLE_G else 1.0)
+        objetivo = int(piso * max(0.0, frac))
+        if objetivo < piso * 0.5:
+            logger.info(f"🧩 [P1-PLAN-LOTE-584] «{str(meal.get('name'))[:40]}»: {canon} falta en la lista y el día no tiene "
+                        f"sitio (quedan {margen['kcal']:.0f} kcal)")
+            continue
+        linea = f"{objetivo} g de {canon}"
+        mac = db.macros_from_ingredient_string(linea) or {}
+        meal.setdefault("ingredients", []).append(linea)
+        raw = meal.get("ingredients_raw")
+        if isinstance(raw, list):
+            raw.append(linea)
+        margen["kcal"] -= float(mac.get("kcal") or 0)
+        margen["grasa"] -= float(mac.get("fats") or 0)
+        if "proteina" in margen:
+            margen["proteina"] -= float(mac.get("protein") or 0)
+        cats_lista.add(cat)
+        hechos.append(f"+{linea}")
+    return hechos
+
+
 def _subir_identidad_del_modelo(meal: dict, index: dict, *, db=None, allergies=None, margen=None, fase=None) -> list:
     if not llm_on() or margen is None or db is None:
         return []
@@ -579,6 +686,10 @@ def _subir_identidad_del_modelo(meal: dict, index: dict, *, db=None, allergies=N
         sub = _subir_linea(meal, canon, piso, index, db, margen)
         if sub:
             hechos.append(sub)
+    try:
+        hechos += _anadir_faltantes(meal, index, db, allergies, margen, fase)   # [P1-PLAN-LOTE-584]
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-584] faltantes no-op: {type(e).__name__}: {e}")
     if hechos:
         meal["_identidad_restaurada"] = list(meal.get("_identidad_restaurada") or []) + hechos
         meal.pop("_display", None)

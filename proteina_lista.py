@@ -32,6 +32,9 @@ def filtrar_listas(cands, form_data, listos=None) -> list:
     cands = list(cands or [])
     if str((form_data or {}).get("cookingTime") or "").strip().lower() != "none" or not cands:
         return cands
+    # [P1-PLAN-LOTE-581] quien cocina por tandas a menudo tiene el pollo o la carne de su tanda ya cocidos
+    if str((form_data or {}).get("batchCooking") or "").strip().lower() == "often":
+        return cands
     listos = listos if listos is not None else _listos()
     out = []
     for c in cands:

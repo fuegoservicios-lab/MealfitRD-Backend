@@ -73,7 +73,8 @@ def test_la_regla_es_el_texto_del_generador_sin_el_codigo():
     r = horizon.cooking_time_rule({"cookingTime": "none"})
     assert r.startswith("NO TIENE TIEMPO para cocinar: cada comida se prepara en 10 minutos o menos")
     assert "`prep_time` de cada comida ≤ 10 min." in r and "none =" not in r
-    assert horizon.cooking_time_rule({"cookingTime": "30min"}) == (
+    # [P1-PLAN-LOTE-580] la regla de 30 min sigue con lo que NO cabe (arroz integral, legumbres secas…)
+    assert horizon.cooking_time_rule({"cookingTime": "30min"}).startswith(
         "cada comida en 30 minutos o menos en total; `prep_time` de cada comida ≤ 30 min.")
     assert "60 minutos" in horizon.cooking_time_rule({"cookingTime": " 1HOUR "})
     for sin_tope in ({"cookingTime": "plenty"}, {"cookingTime": ""}, {"cookingTime": "raro"}, {}, None):

@@ -31084,6 +31084,9 @@ def _phantom_resolve_food(phrase: str) -> "tuple[str, str] | None":
             _sa_ph(s) for s in _PHANTOM_SKIP_FOODS}:
         return None
     words = flat.split()
+    _r585 = __import__("harina_es_producto").resolver(words, idx)  # [P1-PLAN-LOTE-585] la harina es un producto
+    if _r585 is not None:
+        return _r585 or None
     # Pelar prefijos de parte/presentación ("pulpa de X", "trozos de X").
     _prefixes = {_sa_ph(p) for p in _PHANTOM_PART_PREFIXES}
     while len(words) >= 3 and words[0] in _prefixes and words[1] == "de":

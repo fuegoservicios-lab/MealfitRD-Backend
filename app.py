@@ -910,7 +910,21 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # exige «yema y clara firmes»: se alinea el paso (la nota es la política).
 # [P1-PLAN-LOTE-566 · 2026-09-27] (backend) «Tus básicos» con una clave canónica (`staple_foods`) para la política y el
 # motor: preferían claves opuestas y un básico de Configuración no llegaba a la política de los bloques siguientes.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-579 · 2026-09-27"
+# [P1-PLAN-LOTE-580 · 2026-09-27] (backend) Con «30 min» o «1 hora» el prompt dice qué no cabe en ese tiempo (arroz
+# integral, legumbres secas, guisos largos) y con qué cambiarlo: la IA elegía arroz integral y el plato sumaba 48 min.
+# [P1-PLAN-LOTE-581 · 2026-09-27] (backend) «Nada» de tiempo + cocina por tandas: el tope es el de armar la comida del
+# día (lo de la tanda llega cocido) y el cerrador de proteína ya no se limita a lo «listo».
+# [P1-PLAN-LOTE-582 · 2026-09-27] (backend) El Montaje no vuelve a servir lo que ya sirvió («…con el gouda y las
+# arepitas. Acompaña con queso gouda.»).
+# [P1-PLAN-LOTE-583 · 2026-09-27] (backend) «yogur» y «yogurt» son el mismo alimento para la identidad del plato: el
+# solver, los pisos y la compensación dejaban el yogur del nombre en 5-10 g.
+# [P1-PLAN-LOTE-584 · 2026-09-27] (backend) Lo que el nombre del plato promete y los pasos cocinan vuelve a la lista
+# («…con majado de yautía» hervía 250 g de yautía que no se compraban ni contaban en las calorías).
+# [P1-PLAN-LOTE-585 · 2026-09-27] (backend) La harina de maíz es un producto: el reparador de fantasmas compraba «maíz
+# dulce en granos» para una tortilla que el paso hacía con harina de maíz precocida.
+# [P1-PLAN-LOTE-586 · 2026-09-27] (backend) La proteína que el plato ya cuece no se cuece otra vez («…guisa la tilapia
+# 8-10 min… Añade tilapia fresca al guiso y cocínala…»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-586 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

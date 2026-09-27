@@ -1662,10 +1662,35 @@ _COOKING_TIME_PROMPT = {
              "no llegan cocidos — si el plato los lleva, se cocinan dentro de esos {m} minutos (víveres y auyama en el "
              "microondas) o se cambian por casabe, pan, tortilla o avena. Nada de guisos, horno, víveres hervidos ni "
              "cocciones largas; `prep_time` de cada comida ≤ {m} min."),  # [P1-PLAN-LOTE-283]
-    "30min": "30min = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min.",
-    "1hour": "1hour = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min.",
+    # [P1-PLAN-LOTE-580 · 2026-09-27] «30 min» y «1 hora» decían sólo el tope, y el modelo no sabe cuánto tarda cada
+    # cosa: batería real (mujer, perder grasa, 30 min) «Pollo Guisado Criollo con Arroz Integral y Habichuelas Rojas»,
+    # 48 min de pasos (el arroz integral son 40-45). Lo que NO cabe, y con qué cambiarlo. tooltip-anchor: P1-PLAN-LOTE-580
+    "30min": ("30min = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min. No caben en "
+              "{m} minutos: el arroz integral (40-45 min: usa arroz blanco, quinoa o cuscús), las legumbres secas (usa "
+              "las de lata, escurridas), los guisos largos de carne y los víveres grandes hervidos enteros (córtalos "
+              "en trozos pequeños o al microondas)."),
+    "1hour": ("1hour = cada comida en {m} minutos o menos en total; `prep_time` de cada comida ≤ {m} min. No caben "
+              "en {m} minutos las legumbres secas (remojo de horas + 60-90 min de hervor: usa las de lata, "
+              "escurridas)."),
     "plenty": "plenty = sin límite de tiempo: le gusta cocinar.",
 }
+
+
+def _tanda_581(form) -> str:
+    """[P1-PLAN-LOTE-581 · 2026-09-27] «Nada» de tiempo + «cocino por tandas a menudo»: el tope es el de ARMAR la comida
+    del día; lo de la tanda llega cocido. Sin esto el modelo recibía a la vez «nada de guisos» (el tiempo) y «cocina
+    por tandas… un guiso» (las tandas), y el cerrador sólo le ofrecía proteínas «listas»: batería real (turno
+    nocturno, 192 g de proteína) con un día al 84 % y el revisor rechazando. tooltip-anchor: P1-PLAN-LOTE-581"""
+    try:
+        f = form or {}
+        if (str(f.get("cookingTime") or "").strip().lower() == "none"
+                and str(f.get("batchCooking") or "").strip().lower() == "often"):
+            return (" EXCEPCIÓN — COCINA POR TANDAS: lo que cocina en su tanda (pollo, carne, arroz, habichuelas o "
+                    "víveres) llega YA COCIDO a la comida del día y sólo se calienta 1-3 minutos; el tope es el de "
+                    "armar la comida, no el de la tanda.")
+    except Exception:
+        pass
+    return ""
 
 
 def cooking_time_rule(form_data) -> str:
@@ -1681,7 +1706,7 @@ def cooking_time_rule(form_data) -> str:
         m = _COOKING_TIME_BUDGET_MIN.get(ct)
         if not txt or not m:
             return ""
-        return txt.split(" = ", 1)[-1].format(m=m)
+        return txt.split(" = ", 1)[-1].format(m=m) + _tanda_581(form_data)   # [P1-PLAN-LOTE-581]
     except Exception:
         return ""
 
@@ -1777,7 +1802,7 @@ def explain_form_codes_for_prompt(form_for_prompt):
     ct = str(form_for_prompt.get("cookingTime") or "").strip().lower()
     txt = _COOKING_TIME_PROMPT.get(ct)
     if txt:
-        out["cookingTime"] = txt.format(m=_COOKING_TIME_BUDGET_MIN.get(ct, 0))
+        out["cookingTime"] = txt.format(m=_COOKING_TIME_BUDGET_MIN.get(ct, 0)) + _tanda_581(form_for_prompt)
     st = schedule_rule(form_for_prompt)   # [P1-PLAN-LOTE-241]
     if st:
         out["scheduleType"] = st
