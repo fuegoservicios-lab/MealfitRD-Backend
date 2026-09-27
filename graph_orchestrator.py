@@ -38155,6 +38155,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             "days": partial.get("days", []),
         }
 
+    __import__("linea_invertida").normaliza_dias(result.get("days") or [])  # [P1-PLAN-LOTE-529] «Maní, 20 g»
     # Sanitizer de suplementos: el schema `SingleDayPlanModel.supplements` permite
     # al LLM rellenar el campo aunque el usuario no haya activado `includeSupplements`.
     # Como el day_generator prompt no menciona suplementos cuando están apagados,

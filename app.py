@@ -855,7 +855,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «2 tortas pequeñas de casabe» (40 g) en la lista → «mide 2 tortas pequeñas de casabe (≈40 g)».
 # [P1-PLAN-LOTE-527 · 2026-09-27] (backend) «yogur» ≡ «yogurt» al reflejar la proteína añadida en el nombre:
 # fuera «Yogur con manzana, queso cottage y yogurt».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-527 · 2026-09-27"
+# [P1-PLAN-LOTE-529 · 2026-09-27] (backend) «Maní tostado, 20 g» → «20 g de maní tostado» al entrar en assemble, antes
+# del motor de macros (que anteponía su cantidad: «15 g de maní tostado, 20 g»; 23 de 862 días de las baterías).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-529 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
