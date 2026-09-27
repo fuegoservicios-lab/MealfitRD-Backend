@@ -63,7 +63,6 @@ _INVENTARIO = {
         "_consolidate_duplicate_gram_lines":       (4, "antes de los appenders"),
         "_day_sodium_autofix":                     (1, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
         "_cap_cheese_dumps_final":                 (1, "0 activaciones 08-sep · no dispara"),
-        "_single_trip_fresh_substitute":           (1, "0 medido 07-sep · sobreescribe entera (sonda ruidosa aplica)"),
         "_cap_daily_whole_eggs":                   (2, "resuelto"),
         "_apply_budget_cheapen_pass":              (1, "resuelto"),
         "_apply_budget_driver_aware_pass":         (1, "resuelto"),
@@ -93,6 +92,14 @@ _INVENTARIO = {
     # línea de `raw` se localiza por IGUALDAD DE TEXTO con la vieja (0 o >1 coincidencias ⇒ raw no se toca), como el huevo.
     "avena_liquido.py": {
         "completar":                               (1, "resuelto por texto (igualdad exacta de la línea)"),
+    },
+    # [P1-PLAN-LOTE-461 · 2026-09-27] `_single_trip_fresh_substitute` llevaba el sello «0 medido 07-sep · sobreescribe
+    # entera (sonda ruidosa aplica)» y escribía `raw[idx]` POR ÍNDICE: la sustitución de la compra única sólo corre desde el
+    # día 4 de un ciclo largo, así que la sonda del 07-sep nunca la vio activarse. En el plan vivo del dueño (6594aae1)
+    # escribió las sardinas encima de otra línea y dejó «1¼ filetes de pescado» en la lista. Se muda aquí y resuelve la
+    # pareja por ALIMENTO (clase de la tabla de sustitutos): la primera se reescribe, los duplicados salen.
+    "sustitucion_fresca.py": {
+        "parear_raw":                              (2, "resuelto (por alimento: clase de la tabla de sustitutos, sin duraderos ni la pareja exacta de otra línea visible)"),
     },
 }
 

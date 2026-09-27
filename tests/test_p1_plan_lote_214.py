@@ -63,7 +63,7 @@ def test_la_proteina_rota_por_dia(monkeypatch):
     go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced", contexto={})
     subs = [days[i]["meals"][0]["ingredients"][0] for i in (9, 10, 11)]
     assert len(set(subs)) == 3, subs
-    assert set(subs) == {"150 g de atun en agua", "150 g de sardinas en lata", "150 g de garbanzos cocidos"}
+    assert set(subs) == {"150 g de atún en agua", "150 g de sardinas en lata", "150 g de garbanzos cocidos"}
 
 
 def test_vegetariano_solo_legumbres(monkeypatch):

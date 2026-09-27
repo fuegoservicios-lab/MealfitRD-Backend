@@ -796,7 +796,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # huevos y da a cada proteína su punto (receta_emergencia.py); «aguacate fresca» → «fresco» (concordancia.py); el
 # agua medida de la avena va a la olla; lo que el cerrador sirve no se acompaña otra vez y los «Acompaña…» se juntan;
 # «el pescado» usa la tilapia de la lista y «jitomate» el tomate (alias_receta.py).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-450 · 2026-09-27"
+# [P1-PLAN-LOTE-460..462 · 2026-09-27] (backend) la compra única de 30 días sin congelador cambia el PLATO, no sólo
+# la lista: «Wok de pollo… saltea el pollo» sobre sardinas (plan del dueño) → nombre, descripción y pasos del duradero
+# con su concordancia y sin cocinar lo enlatado como crudo (sustitucion_fresca.py); la pareja en la lista se busca por
+# alimento (el pescado fresco se seguía comprando); «1¼ filetes de pescado» → «190 g de sardinas en lata».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-462 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

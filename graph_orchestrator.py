@@ -32691,7 +32691,7 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
         return 0
     try:
         from pantry_durability import single_trip_requirements
-        from constants import strip_accents as _sa_fs, canonicalize_diet_type as _cdt_fs
+        from constants import canonicalize_diet_type as _cdt_fs
         import compra_unica as _cu_fs
         if db is None:
             from nutrition_db import IngredientNutritionDB
@@ -32716,39 +32716,20 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
                 if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
                     continue
                 ings = m["ingredients"]
-                raw = m.get("ingredients_raw")
                 for idx, line in enumerate(list(ings)):
                     text = str(line)
                     _r_fs = _cu_fs.sustituir_linea(text, i, req, vegetal=_veg, vegano=(_dieta_fs == "vegan"),
                                                    alergias=_alergias_fs, dieta=_dieta_fs,
                                                    contexto=contexto if isinstance(contexto, dict) else None,
-                                                   semilla=i + mi, evitar=_presentes_fs)
+                                                   semilla=i + mi, evitar=_presentes_fs,
+                                                   gramos_de=lambda _t: _resolve_line_food_grams(_t)[1])  # [P1-PLAN-LOTE-462]
                     if not _r_fs:
                         continue
                     new_line, sub, hit_tok = _r_fs
                     _presentes_fs.add(sub)
-                    ings[idx] = new_line
-                    if isinstance(raw, list) and idx < len(raw):
-                        raw[idx] = new_line
-                    m["_fresh_substituted"] = (m.get("_fresh_substituted") or []) + [f"{text[:40]} → {sub}"]
+                    # [P1-PLAN-LOTE-460/461] la lista por ALIMENTO (no por índice) y el plato entero deja de nombrar el fresco
+                    __import__("sustitucion_fresca").sustituir_en_plato(m, idx, text, new_line, sub)
                     changed += 1
-                    # el NOMBRE y los PASOS dejan de nombrar el fresco sustituido («Lechosa en gajos» con manzana)
-                    try:
-                        _rx_tok = _re.compile(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b")
-                        _cap = sub[:1].upper() + sub[1:]
-                        _nm0 = str(m.get("name") or "")
-                        if _rx_tok.search(_sa_fs(_nm0.lower())):
-                            _nm1 = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", lambda mo: _cap if mo.group(0)[:1].isupper() else sub,
-                                           _sa_fs(_nm0) if _rx_tok.search(_nm0) is None else _nm0)
-                            if _nm1 != _nm0:
-                                m["name"] = _nm1
-                        rec = m.get("recipe")
-                        if isinstance(rec, list):
-                            for _ri, _st in enumerate(rec):
-                                if isinstance(_st, str) and _rx_tok.search(_sa_fs(_st.lower())):
-                                    rec[_ri] = _re.sub(r"(?i)\b" + _re.escape(hit_tok) + r"s?\b", sub, _st)
-                    except Exception:
-                        pass
                     logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta → «{sub}» | meal={str(m.get('name'))[:40]}")
                 if m.get("_fresh_substituted"):
                     try:

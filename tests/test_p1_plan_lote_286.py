@@ -51,7 +51,7 @@ def test_la_linea_del_duradero_dice_de_lata_con_nada_de_tiempo():
     r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=1, vegetal=True, contexto={"cookingTime": "none"})
     assert r and r[0] == "200 g de lentejas de lata, escurridas" and r[1] == "lentejas cocidas", r
     r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=0, contexto={"cookingTime": "none"})
-    assert r and r[0] == "200 g de atun en agua", r                         # lo que ya viene listo, igual
+    assert r and r[0] == "200 g de atún en agua", r                         # lo que ya viene listo, igual
 
 
 def test_con_tiempo_nada_cambia():

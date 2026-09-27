@@ -107,6 +107,9 @@ SUSTITUTOS = (
 # tokens que NO se sustituyen aunque no aguanten: sin equivalente duradero coherente
 SIN_SUSTITUTO = ("yogur", "yogurt", "cottage", "ricotta", "requeson", "queso fresco", "queso blanco", "queso de freir",
                  "leche de coco", "leche de almendra")
+# [P1-PLAN-LOTE-460 · 2026-09-27] cómo se ESCRIBE el duradero en la línea que ve el usuario: la identidad (`sub`, la rueda,
+# `evitar`) sigue sin tilde, pero «150 g de atun en agua» y «oregano» llegaban así a su lista de ingredientes.
+_VISIBLE = {"atun en agua": "atún en agua", "oregano": "orégano"}
 # la línea ya dice que es de despensa
 _DURADERO_EN_TEXTO = ("en lata", "enlatad", "congelad", "seco", "secos", "en polvo", "deshidratad")
 
@@ -114,6 +117,10 @@ _RX_CANTIDAD = re.compile(
     r"^\s*([\d.,/½¼¾⅓⅔]+\s*(?:g|gr|gramos|ml|taza|tazas|cda|cdas|cdta|cdtas|unidad|unidades)?)\s+(?:de\s+)?",
     re.IGNORECASE)
 _RX_GRAMOS = re.compile(r"≈\s*(\d+(?:[.,]\d+)?)\s*g\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-462] una MEDIDA (peso o volumen) se conserva tal cual: «2 tazas de lechuga» → «2 tazas de repollo»
+_RX_MEDIDA = re.compile(
+    r"^\s*([\d.,/½¼¾⅓⅔]+)\s+((?:g|gr|gramos|kg|ml|l|litros?|tazas?|cdas?|cdtas?|cucharadas?|cucharaditas?|onzas?|oz|lb|"
+    r"libras?|pizcas?|puñados?|latas?|sobres?)\.?)\s+(?:de\s+)?", re.IGNORECASE)
 
 
 def activo() -> bool:
@@ -195,15 +202,44 @@ def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, di
     return None
 
 
-def cantidad_de(texto: str) -> str:
+def _redondea(gramos: float) -> str:
+    g = float(gramos)
+    return str(int(round(g))) if g < 20 else str(int(5 * round(g / 5.0)))
+
+
+def cantidad_de(texto: str, gramos: Optional[float] = None) -> str:
     """El prefijo de cantidad de la línea para su sustituto. El peso aproximado manda sobre la pieza: «1 pechuga de
-    pollo (≈200 g)» → «200 g de »; sin él, la cantidad inicial con su unidad («150 g de », «1 taza de »)."""
+    pollo (≈200 g)» → «200 g de »; sin él, la medida inicial («150 g de », «1 taza de »).
+    [P1-PLAN-LOTE-462 · 2026-09-27] Una PIEZA sin peso («1¼ filetes de pescado», «2 tomates») no se copia como número
+    suelto: «1¼ de sardinas en lata» no dice cuánto, la receta lo leía como UNA sardina y la lista compraba por unidad
+    de lata. Con `gramos` (el peso de la pieza, del resolvedor del catálogo) sale «190 g de »; sin él, como antes."""
     t = str(texto or "")
     mg = _RX_GRAMOS.search(t)
     if mg:
         return f"{mg.group(1).replace(',', '.')} g de "
+    md = _RX_MEDIDA.match(t)
+    if md:
+        return f"{md.group(1)} {md.group(2)} de "
+    try:
+        if gramos and float(gramos) > 0:
+            return f"{_redondea(gramos)} g de "
+    except (TypeError, ValueError):
+        pass
     mm = _RX_CANTIDAD.match(t)
     return (mm.group(1).strip() + " de ") if mm else ""
+
+
+def _gramos_de_linea(texto: str) -> Optional[float]:
+    """Peso de la línea según el resolvedor del catálogo del grafo, si está cargado (el proceso del backend); None si
+    no. Sin red nueva: el grafo memoiza por línea y la lista hace el mismo parseo justo después."""
+    try:
+        go = sys.modules.get("graph_orchestrator")
+        if go is None or not hasattr(go, "_resolve_line_food_grams"):
+            return None
+        g = go._resolve_line_food_grams(str(texto))[1]
+        return float(g) if g else None
+    except Exception:
+        return None
 
 
 def _aguanta(texto: str, dia_abs: int, req: dict) -> bool:
@@ -222,7 +258,7 @@ def _aguanta(texto: str, dia_abs: int, req: dict) -> bool:
 
 def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool = False, vegano: bool = False,
                     alergias=None, dieta=None, contexto=None, semilla: Optional[int] = None, evitar=(),
-                    listo: Optional[bool] = None):
+                    listo: Optional[bool] = None, gramos_de=None):
     """(línea nueva, sustituto, token que casó) si `texto` no aguanta hasta el día `dia_abs` (0-based) de la compra
     única y tiene un duradero seguro; None si aguanta, no tiene equivalente o ninguno es seguro.
     tooltip-anchor: P1-PLAN-LOTE-214-SUSTITUIR-LINEA"""
@@ -252,7 +288,14 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
         return None
     if listo is None:
         listo = sin_tiempo(contexto)
-    nueva = f"{cantidad_de(text)}{_LISTO_SIN_TIEMPO.get(sub, sub) if listo else sub}"  # [P1-PLAN-LOTE-286]
+    gramos = None
+    if gramos_de is not None and not _RX_GRAMOS.search(text) and not _RX_MEDIDA.match(text):   # [P1-PLAN-LOTE-462]
+        try:
+            gramos = gramos_de(text)
+        except Exception:
+            gramos = None
+    visible = (_LISTO_SIN_TIEMPO.get(sub) if listo else None) or _VISIBLE.get(sub, sub)     # [P1-PLAN-LOTE-460]
+    nueva = f"{cantidad_de(text, gramos)}{visible}"  # [P1-PLAN-LOTE-286]
     if nueva == text:
         return None
     return nueva, sub, hit
@@ -382,7 +425,8 @@ def _proyectar(reales: list, ciclo: int, eff: dict, listo: bool = False) -> list
             for t in _lineas(m):
                 if req:
                     r = sustituir_linea(t, j, req, vegetal=vegetal, vegano=vegano, alergias=alergias,
-                                        dieta=dieta, semilla=rueda, evitar=presentes, listo=listo)
+                                        dieta=dieta, semilla=rueda, evitar=presentes, listo=listo,
+                                        gramos_de=_gramos_de_linea)  # [P1-PLAN-LOTE-462]
                     if r:
                         t = r[0]
                         cambios += 1

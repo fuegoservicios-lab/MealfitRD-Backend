@@ -67,7 +67,7 @@ def test_fresh_beyond_horizon_is_substituted_not_only_warned(monkeypatch):
     n = go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced")
     assert n >= 3, n
     ings = days[-1]["meals"][0]["ingredients"]
-    assert "2 tazas de repollo" in ings and "140 g de manzana" in ings and "150 g de atun en agua" in ings, ings
+    assert "2 tazas de repollo" in ings and "140 g de manzana" in ings and "150 g de atún en agua" in ings, ings
     assert "1 taza de arroz" in ings
     assert days[-1]["meals"][0]["ingredients_raw"] == ings
     assert days[-1]["meals"][0].get("_fresh_substituted")
@@ -137,5 +137,5 @@ def test_substitution_renames_dish_and_steps(monkeypatch):
     m["name"] = "Lechosa en gajos con cilantro"
     m["recipe"] = ["Mise en place: corta la lechosa y pica el cilantro.", "Montaje: sirve la lechosa."]
     go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced")
-    assert m["name"] == "Manzana en gajos con oregano", m["name"]
+    assert m["name"] == "Manzana en gajos con orégano", m["name"]
     assert "lechosa" not in " ".join(m["recipe"]).lower() and "manzana" in m["recipe"][0]

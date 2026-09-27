@@ -722,6 +722,12 @@ def huevo_sustituido(meal) -> int:
         rec = meal.get("recipe") if isinstance(meal, dict) else None
         if not lab or not isinstance(rec, list) or not rec:
             return 0
+        # [P1-PLAN-LOTE-460] la marca «huevo->pollo» es de CUANDO se cambió el huevo; si después la compra única cambió
+        # esa pechuga por atún, la lista ya no la trae y este reparador la devolvía al plato («Cocina la pechuga… 74 °C»
+        # y «Acompaña con la pechuga de pollo en tiras» sobre una lista con atún). Sin el sustituto en la lista, nada.
+        if not re.search(_SUST_426[lab], " ".join(_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str)),
+                         re.IGNORECASE):
+            return 0
         s_rx = re.compile(_CANT_426 + "(?:" + _SUST_426[lab] + ")", re.IGNORECASE)
         estado = {"embarazo": any("embarazo" in _sa(x) for x in rec if isinstance(x, str))}
         servir = (_SERVIR_QUESO_EMBARAZO_426 if lab == "queso" and estado["embarazo"]
