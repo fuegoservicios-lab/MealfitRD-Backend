@@ -857,7 +857,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # fuera «Yogur con manzana, queso cottage y yogurt».
 # [P1-PLAN-LOTE-529 · 2026-09-27] (backend) «Maní tostado, 20 g» → «20 g de maní tostado» al entrar en assemble, antes
 # del motor de macros (que anteponía su cantidad: «15 g de maní tostado, 20 g»; 23 de 862 días de las baterías).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-529 · 2026-09-27"
+# [P1-PLAN-LOTE-540 · 2026-09-27] (backend) La verdura de la lista que ningún paso cocina (vainitas, berenjena,
+# tayota, molondrones, brócoli/coliflor fuera de ensalada) recibe su «💡 Cocción previa»; las espinacas de un guiso, al final.
+# [P1-PLAN-LOTE-541 · 2026-09-27] (backend) «½ unidad de tomate» → «½ tomate» en la lista (la unidad ES la pieza).
+# [P1-PLAN-LOTE-542 · 2026-09-27] (backend) «30 g de quinoa» sin «seca» y el paso «85 g de quinoa cocida»: también trae su
+# «💡 Cocción previa» (la fila del catálogo está en seco — el criterio del 343).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-542 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

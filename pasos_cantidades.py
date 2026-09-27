@@ -2533,7 +2533,29 @@ _MIN_393_RE = re.compile(r"(\d{1,3})\s*(?:-\s*(\d{1,3})\s*)?min")
 _COCCION_393_RE = re.compile(r"\b(?:hierv\w*|cuec\w*|cuece|cocin\w*|sancoch\w*)")
 
 
-def seco_usado_cocido(meal) -> int:
+def _fila_seca_542(linea, db) -> bool:
+    """[P1-PLAN-LOTE-542 · 2026-09-27] «30 g de quinoa» sin «seca»: la fila del catálogo está en seco — el MISMO criterio
+    con el que el 343 convierte el paso a «85 g de quinoa cocida» (kcal de la fila ≥ 1,5 × kcal del cocido de su
+    familia). Batería real del 27-sep (DM2 con insulina, día 1): el 343 escribía «mide 85 g de quinoa cocida», nadie la
+    cocía y el 375/393 no avisaban porque la línea no decía «seca». tooltip-anchor: P1-PLAN-LOTE-542"""
+    if db is None:
+        return False
+    try:
+        import cocido_en_catalogo as _cc
+        from nutrition_db import _split_qty_unit_name
+        t = _cc._norm(str(linea))
+        if _cc._COCIDO_RX.search(t) or _cc._LISTO_RX.search(t):
+            return False
+        _q, _u, nombre = _split_qty_unit_name(str(linea))
+        info = db.lookup(nombre)
+        fam = _cc.familia(getattr(info, "name", "")) if info else None
+        kcal = float(getattr(info, "kcal", 0) or 0)
+        return bool(fam) and kcal > 0 and kcal / fam[0] >= 1.5
+    except Exception:
+        return False
+
+
+def seco_usado_cocido(meal, db=None) -> int:
     """Nº de notas añadidas; 0 ante cualquier error."""
     try:
         rec = meal.get("recipe") if isinstance(meal, dict) else None
@@ -2545,7 +2567,8 @@ def seco_usado_cocido(meal) -> int:
         for linea in (meal.get("ingredients") or []):
             ln = _sa(str(linea).lower())
             mm = _SECO_393_RE.search(ln)
-            if not mm or not re.search(r"\b(?:sec[oa]s?|crud[oa]s?)\b", mm.group("resto")):
+            if not mm or not (re.search(r"\b(?:sec[oa]s?|crud[oa]s?)\b", mm.group("resto"))
+                              or _fila_seca_542(linea, db)):                  # [P1-PLAN-LOTE-542]
                 continue
             food = mm.group("f")
             raiz = re.sub(r"(?:es|s)$", "", food.split()[0]) if food.split()[0] not in ("arroz", "bulgur") else food.split()[0]

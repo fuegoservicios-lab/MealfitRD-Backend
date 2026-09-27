@@ -66,6 +66,21 @@ _SINGULAR = {
     "tallos": "tallo", "hojas": "hoja", "ramas": "rama", "dientes": "diente", "piezas": "pieza", "bolsitas": "bolsita",
 }
 _UNO_PLURAL = re.compile(r"^(\s*(?:1|[½¼¾⅓⅔⅛]))\s+(" + "|".join(_SINGULAR) + r")\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-541 · 2026-09-27] «½ unidad de tomate», «½ unidad de mandarina», «2 unidades de tomate» (batería real del
+# 27-sep, DM2 con insulina: seis líneas de un mismo día) → «½ tomate», «½ mandarina», «2 tomates»: la «unidad» ES la pieza.
+# tooltip-anchor: P1-PLAN-LOTE-541
+_UNIDAD_DE_541 = re.compile(rf"^(\s*{_LEAD})\s*unidad(?:es)?\s+de\s+(?=\S)", re.IGNORECASE)
+# sólo lo que se cuenta por piezas: «2 unidades de casabe» NO es «2 casabe» (el casabe va en tortas; replay del corpus)
+_CONTABLES_541 = ("tomate", "cebolla", "mandarina", "pimenton", "chinola", "naranja", "limon", "aji", "papa", "zanahoria",
+                  "pepino", "guineo", "platano", "huevo", "manzana", "aguacate", "berenjena", "batata", "mango", "pera",
+                  "toronja", "remolacha", "tayota", "rabano", "nabo", "kiwi", "durazno", "ciruela")
+
+
+def _cabeza_541(resto: str) -> str:
+    import unicodedata
+    cab = "".join(c for c in unicodedata.normalize("NFD", (resto.split() or [""])[0].lower())
+                  if unicodedata.category(c) != "Mn").strip(",.;")
+    return cab[:-2] if cab.endswith("es") and cab[:-2] in _CONTABLES_541 else cab.rstrip("s")
 
 
 def enabled() -> bool:
@@ -157,6 +172,9 @@ def pulir_linea(s: str) -> str:
         cuerpo = m.group(1).strip()
         cuerpo = cuerpo[:1].upper() + cuerpo[1:]
         out = cuerpo if re.search(r"\bal gusto\b", cuerpo, re.IGNORECASE) else f"{cuerpo} al gusto"
+    m = _UNIDAD_DE_541.match(out)                                          # [P1-PLAN-LOTE-541]
+    if m and _cabeza_541(out[m.end():]) in _CONTABLES_541:
+        out = m.group(1).rstrip() + " " + out[m.end():]
     m = _UNO_PLURAL.match(out)
     if m:
         sing = _SINGULAR[m.group(2).lower()]

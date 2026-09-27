@@ -943,6 +943,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").lo_que_se_desgrana(meal)  # [P1-PLAN-LOTE-391] se desgrana la granada
         __import__("pasos_cantidades").ave_a_74(meal)  # [P1-PLAN-LOTE-392] el ave, a 74 °C
         __import__("pasos_cantidades").seco_usado_cocido(meal)  # [P1-PLAN-LOTE-393] secos usados cocidos
+        __import__("pasos_cantidades").seco_usado_cocido(meal, db)  # [P1-PLAN-LOTE-542] también sin «seca» (fila en seco)
         __import__("pasos_cantidades").hervor_con_su_tiempo(meal)  # [P1-PLAN-LOTE-394] el hervor, con su tiempo
         __import__("pasos_cantidades").yogur_sin_forma(meal)  # [P1-PLAN-LOTE-395] el yogur, sin cubos
         __import__("pasos_cantidades").no_se_hierve(meal)  # [P1-PLAN-LOTE-396] el queso no se hierve
@@ -953,6 +954,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").pescado_del_guiso(meal)  # [P1-PLAN-LOTE-402] el pescado del guiso, 5-7 min
         __import__("pasos_cerrador").guiso_sin_proteina(meal)  # [P1-PLAN-LOTE-498] la frase de guiso, sólo para proteína
         __import__("pasos_cerrador").guineo_sin_semillas(meal)  # [P1-PLAN-LOTE-499] el guineo va en rodajas
+        __import__("verdura_sin_coccion").cocer(meal)  # [P1-PLAN-LOTE-540] la verdura que ningún paso cocina
         __import__("queso_de_la_lista").alinear(meal)  # [P1-PLAN-LOTE-520] el queso que el texto nombra es el de la lista
         __import__("pasos_cantidades").articulo_de_uno(meal)  # [P1-PLAN-LOTE-403] «las 1 rebanada» → «la rebanada»
         __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»
