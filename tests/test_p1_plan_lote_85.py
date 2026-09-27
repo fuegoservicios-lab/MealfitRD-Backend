@@ -25,7 +25,9 @@ def test_la_tarjeta_tiene_un_solo_boton():
     tp = _front("src/components/dashboard/TrackingProgress.jsx")
     assert "scanBtnSecondary" not in tp and "t('Escanear comida con la cámara')" not in tp
     assert tp.count("{t('Registrar comida')}") == 1
-    assert "const handleLogToScan = useCallback(() => { setLogOpen(false); setScanOpen(true); }, []);" in tp
+    # [P1-PLAN-LOTE-382] …y le pasa la comida y el día del componedor
+    assert ("const handleLogToScan = useCallback((d) => { setLogOpen(false); setScanOpen(d || true); }, []);" in tp
+            or "const handleLogToScan = useCallback(() => { setLogOpen(false); setScanOpen(true); }, []);" in tp)
     assert "scanBtnSecondary" not in _front("src/components/dashboard/TrackingProgress.module.css")
 
 

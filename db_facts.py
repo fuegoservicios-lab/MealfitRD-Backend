@@ -843,10 +843,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             _dedup_win = 60
         if _dedup_win > 0:
             try:
+                # [P1-PLAN-LOTE-381] la ventana es de cuándo SE ESCRIBIÓ la fila (`created_at`): una comida de
+                # «Ayer» nace con `consumed_at` en el pasado y `consumed_at > NOW() - 60 s` no la veía nunca (un
+                # doble toque o el reintento tras un timeout la duplicaban). Y el mismo día de consumo (±12 h del
+                # que se va a insertar), para no tomar el café de hoy por un doble toque del de ayer.
                 _dup = execute_sql_query(
                     "SELECT id FROM consumed_meals WHERE user_id = %s AND meal_name = %s "
-                    "AND meal_type = %s AND consumed_at > NOW() - make_interval(secs => %s) LIMIT 1",
-                    (user_id, meal_name, meal_type, _dedup_win),
+                    "AND meal_type = %s AND created_at > NOW() - make_interval(secs => %s) "
+                    "AND consumed_at BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours' LIMIT 1",
+                    (user_id, meal_name, meal_type, _dedup_win, now, now),
                     fetch_one=True,
                 )
                 if _dup:

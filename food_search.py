@@ -249,11 +249,19 @@ def resolve_line(line: dict, catalog_rows: list[dict]) -> dict:
         nombre = str(line.get("name") or "").strip()[:120]
         if not nombre:
             raise LineaIrresoluble("un alimento personalizado necesita nombre")
+        # [P1-PLAN-LOTE-383] con GRAMOS (las partes de «Descríbelo»: «Lechosa · 150 g») viaja como en el escáner
+        # («150 g de Lechosa», que la Nevera resuelve por nombre); sin gramos («Macros a mano», un plato entero) no hay
+        # cantidad que restar
+        try:
+            gramos = float(line.get("grams") or 0)
+        except (TypeError, ValueError):
+            gramos = 0.0
+        con_gramos = 0 < gramos <= _MAX_GRAMS
         return {
             "name": nombre,
-            "grams": None,
+            "grams": round(gramos, 1) if con_gramos else None,
             "macros": _clamp_macros(line.get("macros") or {}),
-            "pantry_lines": [],
+            "pantry_lines": [f"{round(gramos):g} g de {nombre}"] if con_gramos else [],
         }
 
     raise LineaIrresoluble(f"ref desconocida: {ref!r}")
