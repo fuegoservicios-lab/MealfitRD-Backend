@@ -1169,6 +1169,33 @@ _DELICATE_FRESH_TOKENS = (
 _DURABLE_HINTS = ("salsa", "pasta de", "pure de", "enlatad", "en lata", "lata de", "congelad", "seco", "secos", "deshidratad", "en polvo")
 
 
+def single_trip_rule_for_swap(form) -> str:
+    """[P1-PLAN-LOTE-561 · 2026-09-27] La compra única al CAMBIAR un plato, en claro para el prompt del swap.
+
+    Auditoría del formulario: `attach_policy_to_swap_form` sabía guardar el día (`_policy_day_index`) pero el router
+    no se lo pasaba y nadie lo leía — «mensual + solo la compra grande + no congelo» → cambiar la cena del día 18 →
+    tilapia fresca y lechuga en el plato y en la lista. Aquí la regla del día (la MISMA de `pantry_durability`).
+    Cadena vacía si el día no tiene exigencia. tooltip-anchor: P1-PLAN-LOTE-561"""
+    try:
+        eff = (form or {}).get(POLICY_EFFECTIVE_KEY)
+        idx = (form or {}).get(POLICY_DAY_INDEX_KEY)
+        if not isinstance(eff, dict) or idx is None:
+            return ""
+        from pantry_durability import single_trip_requirements
+        req = single_trip_requirements(eff, int(idx))
+        if not req:
+            return ""
+        if req.get("allow_frozen"):
+            prot = "la proteína, congelada desde la compra (pollo, pescado o carne congelados) o de lata"
+        else:
+            prot = "nada de pescado, pollo ni carne frescos (sin congelador no aguantan): la proteína, de lata, huevo o seca"
+        return (f"este plato es del día {int(idx) + 1} de una compra ÚNICA: usa solo alimentos que aguanten hasta ese "
+                f"día (enlatados, secos, huevos, raíces y víveres, lácteos de larga duración); {prot}; ni hojas ni "
+                f"frutas delicadas.")
+    except Exception:
+        return ""
+
+
 def single_trip_policy(effective: Optional[dict]) -> bool:
     """True cuando el usuario NO repone frescos entre compras y el ciclo supera la semana."""
     try:

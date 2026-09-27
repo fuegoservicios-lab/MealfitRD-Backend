@@ -1536,6 +1536,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     _sch_rule_swap = __import__("horizon").schedule_rule(form_data)  # [P1-PLAN-LOTE-241]
     if _sch_rule_swap:
         context_extras += f"\n    - 🌙 HORARIO DEL USUARIO (obligatorio): {_sch_rule_swap}"
+    _st_rule_swap = __import__("horizon").single_trip_rule_for_swap(form_data)  # [P1-PLAN-LOTE-561]
+    if _st_rule_swap:
+        context_extras += f"\n    - 🛒 COMPRA ÚNICA (obligatorio): {_st_rule_swap}"
 
 
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---

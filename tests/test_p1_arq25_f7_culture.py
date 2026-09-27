@@ -164,7 +164,8 @@ def test_j_swap_regen_y_coach_cablean_la_puerta_cultural_y_dejan_el_mercado_en_s
     # su proteína sin mirar la dieta y le metía pollo al plato de un vegetariano. Lo que este test vigila es el
     # `country=`, que sigue en su sitio; el `diet=` es de otro P-fix y viaja en la misma llamada.
     for market in ("swap_allergies, swap_dislikes, swap_diet, country=_swap_country",
-                   "_safe_high_density_proteins(allergies, _cl_db, country=_swap_country, diet=diet_type)"):
+                   # [P1-PLAN-LOTE-556] el pool lleva además los rechazos (`_restr556`); el `country=` sigue igual
+                   "_safe_high_density_proteins(_restr556, _cl_db, country=_swap_country, diet=diet_type)"):
         assert market in agent, market
     tools = (_BACKEND / "tools.py").read_text(encoding="utf-8")
     assert "_modify_culture = _ccfp_modify(plan_data, form_data)" in tools

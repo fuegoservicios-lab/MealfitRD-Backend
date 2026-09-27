@@ -955,6 +955,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cerrador").guiso_sin_proteina(meal)  # [P1-PLAN-LOTE-498] la frase de guiso, sólo para proteína
         __import__("pasos_cerrador").guineo_sin_semillas(meal)  # [P1-PLAN-LOTE-499] el guineo va en rodajas
         __import__("verdura_sin_coccion").cocer(meal)  # [P1-PLAN-LOTE-540] la verdura que ningún paso cocina
+        __import__("huevo_que_se_bate").limpiar(meal)  # [P1-PLAN-LOTE-562] el huevo que se bate no está «bien cocido»
         __import__("queso_de_la_lista").alinear(meal)  # [P1-PLAN-LOTE-520] el queso que el texto nombra es el de la lista
         __import__("pasos_cantidades").articulo_de_uno(meal)  # [P1-PLAN-LOTE-403] «las 1 rebanada» → «la rebanada»
         __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»

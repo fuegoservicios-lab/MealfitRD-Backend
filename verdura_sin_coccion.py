@@ -34,7 +34,13 @@ _VERDURAS_540 = (
      "hierve el brócoli 4-5 minutos (o cocínalo al vapor), hasta que esté tierno, y escúrrelo"),
     ("coliflor", r"\bcoliflor(?:es)?\b", "la coliflor", "hierve la coliflor 6-8 minutos, hasta que esté tierna, y escúrrela"),
 )
-_CRUDO_OK_540 = ("brocoli", "coliflor")          # en una ensalada sí se comen crudos
+# en una ensalada sí se comen crudos. [P1-PLAN-LOTE-560 · 2026-09-27] + tayota: batería real con «Nada» de tiempo,
+# «Pollo cítrico a la plancha con maíz y ensalada fresca de tayota» («corta la tayota en láminas finas… combina la
+# tayota, el tomate y los rábanos en una ensalada») recibía «💡 hierve la tayota 10-12 minutos» y el plato pasaba
+# de 10 a 20 min contra lo que respondió el usuario. La tayota cruda en láminas es comestible (vainitas, berenjena y
+# molondrones no). tooltip-anchor: P1-PLAN-LOTE-560
+_CRUDO_OK_540 = ("brocoli", "coliflor", "tayota")
+_ENSALADA_560 = re.compile(r"\bensalada\b|\bcrud[oa]s?\b|\bfresc[oa]s?\b")
 _ESPINACA_540 = re.compile(r"\bespinacas?\b")
 _COCCION_540 = re.compile(
     r"\b(?:hierv\w*|herv\w*|cocin\w*|coce\w*|cuec\w*|salte\w*|sofri\w*|sofre\w*|asa|asal\w*|asad\w*|horne\w*|dora|dor[ae]n?"
@@ -85,7 +91,9 @@ def cocer(meal) -> int:
         for clave, pat, con_art, texto in _VERDURAS_540:
             if not any(re.search(pat, x) for x in ings):
                 continue
-            if clave in _CRUDO_OK_540 and ensalada:
+            # [P1-PLAN-LOTE-560] la ensalada también la dicen los PASOS («combina la tayota… en una ensalada»)
+            if clave in _CRUDO_OK_540 and (ensalada or any(re.search(pat, f) and _ENSALADA_560.search(f)
+                                                           for f in frases)):
                 continue
             # la receta tiene que usarla (el Mise la corta, un paso la nombra): una línea que ningún paso nombra es otra
             # clase —un añadido huérfano—, no una cocción que falta

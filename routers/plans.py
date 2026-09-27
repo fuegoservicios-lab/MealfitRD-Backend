@@ -7269,7 +7269,8 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P1-ARQ25-F3-HORIZON · 2026-09-02] el swap lee la política del plan vivo (server-side).
         try:
             from horizon import attach_policy_to_swap_form as _attach_policy_f3
-            _attach_policy_f3(data, user_id, plan_id=data.get("plan_id"))
+            _attach_policy_f3(data, user_id, plan_id=data.get("plan_id"),
+                              day_index=data.get("day_index"))   # [P1-PLAN-LOTE-561] el día cuenta en la compra única
         except Exception as _ap_e:
             logger.debug(f"[P1-ARQ25-F3-HORIZON] política no adjunta al swap: {_ap_e}")
         _mri_ctx = _swap_meal_regen_flag_set(data, verified_user_id) \
@@ -8192,6 +8193,17 @@ def api_swap_meal_persist(
             # inline de las listas (post closer/requantize/qty-sync → reflejan los
             # ingredientes finales). El strip de arriba queda como estado de FALLBACK si
             # este rebuild falla (contrato legacy: el frontend recalcula).
+            # [P1-PLAN-LOTE-561] compra única: el día del plato cambiado con sus equivalentes duraderos, la MISMA
+            # sustitución del escudo del generador (backstop de la regla que ya lleva el prompt del swap).
+            try:
+                _pol561 = plan_data.get("_plan_policy") if isinstance(plan_data.get("_plan_policy"), dict) else {}
+                _eff561 = (_pol561 or {}).get("effective")
+                if isinstance(_eff561, dict) and (_eff561.get("shopping") or {}).get("main_cycle_days"):
+                    from graph_orchestrator import _single_trip_fresh_substitute as _stfs561
+                    _stfs561([plan_data["days"][day_index]], days_offset=int(day_index), contexto=_micro_form,
+                             effective=_eff561, diet=((_eff561.get("diet") or {}).get("type")))
+            except Exception as _stfs561_e:
+                logger.debug(f"[P1-PLAN-LOTE-561] compra única (swap) no-op: {type(_stfs561_e).__name__}: {_stfs561_e}")
             # [P1-PLAN-LOTE-558] los topes de plan ENTERO (pescado del embarazo, casabe DM2, yemas) con el plato dentro
             __import__("topes_plan_entero").aplicar(plan_data, _micro_form)
             # [P1-PLAN-LOTE-553] La última palabra (alergia/dieta/rechazo) sobre el plato que se guarda, tras TODO lo que
@@ -10122,6 +10134,16 @@ def api_regenerate_day(
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas del plan con el día regenerado (el strip de arriba queda
             # como fallback si falla — contrato legacy con recalc del frontend).
+            # [P1-PLAN-LOTE-561] compra única: el día regenerado con sus equivalentes duraderos (como el escudo)
+            try:
+                _pol561 = pd.get("_plan_policy") if isinstance(pd.get("_plan_policy"), dict) else {}
+                _eff561 = (_pol561 or {}).get("effective")
+                if isinstance(_eff561, dict) and (_eff561.get("shopping") or {}).get("main_cycle_days"):
+                    from graph_orchestrator import _single_trip_fresh_substitute as _stfs561
+                    _stfs561([_days[day_index]], db=_db, days_offset=int(day_index), contexto=_rp_ctx554,
+                             effective=_eff561, diet=((_eff561.get("diet") or {}).get("type")))
+            except Exception as _stfs561_e:
+                logger.debug(f"[P1-PLAN-LOTE-561] compra única (regen-day) no-op: {type(_stfs561_e).__name__}: {_stfs561_e}")
             # [P1-PLAN-LOTE-558] los topes de plan ENTERO (pescado del embarazo, casabe DM2, yemas) con el día dentro
             __import__("topes_plan_entero").aplicar(pd, _rp_ctx554, _db)
             # [P1-PLAN-LOTE-554] La última palabra (alergia/dieta/rechazo) sobre el día que se guarda: en «Actualizar

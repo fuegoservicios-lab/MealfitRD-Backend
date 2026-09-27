@@ -896,7 +896,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # yemas con colesterol) corren también al cambiar un plato, actualizar un día o modificar con el coach.
 # [P1-PLAN-LOTE-559 · 2026-09-27] (backend) Cambiar/actualizar platos con el horario (turno nocturno), «Tus básicos» y el
 # país sellado en el plan: el swap no recibía `scheduleType` y «Actualizar platos» descartaba los básicos y usaba el país vivo.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-559 · 2026-09-27"
+# [P1-PLAN-LOTE-560 · 2026-09-27] (backend) La tayota de una ensalada fresca no se hierve: el 540 le añadía «hierve la
+# tayota 10-12 min» y un plato de «Nada» de tiempo pasaba a 20 min.
+# [P1-PLAN-LOTE-561 · 2026-09-27] (backend) La compra única sin congelador también al cambiar un plato o actualizar un
+# día: el día llega a la política del swap, el prompt lo sabe y al guardar se aplica la sustitución duradera del generador.
+# [P1-PLAN-LOTE-562 · 2026-09-27] (backend) «bate 1 huevo bien cocido» (masas y revoltillos de embarazo) → «bate 1
+# huevo»: un huevo cocido no se bate; la seguridad queda en el punto de cocción y en la nota.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-562 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
