@@ -2574,6 +2574,8 @@ app.include_router(auth_session_router)
 # (/supermercado) y editable con gate admin (Bearer CRON_SECRET).
 from routers.supermarket import router as supermarket_router
 app.include_router(supermarket_router)
+from routers.admin import router as admin_router  # [P1-PLAN-LOTE-577] panel de administración (capa 1)
+app.include_router(admin_router)
 # [P2-HELP-CHATBOT · 2026-07-04] Chatbot de ayuda del menú "Obtener ayuda":
 # Q&A de producto sin acceso a datos del usuario (cero tools/DB), fail-cheap
 # (flash), quota-exempt (RateLimiter, NO verify_api_quota/log_api_usage).
