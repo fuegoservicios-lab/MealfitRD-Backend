@@ -80,6 +80,18 @@ def openai_model_only_default_temperature(model) -> bool:
     return str(model or "").strip().lower().startswith(_OPENAI_DEFAULT_TEMPERATURE_ONLY_PREFIXES)
 
 
+# [P1-PLAN-LOTE-600 · 2026-09-27] Medido en la batería del coach contra la API real: `gpt-6-luna` en
+# /v1/chat/completions rechaza tools + `reasoning_effort` (400 «Function tools with reasoning_effort are not
+# supported ... set reasoning_effort to 'none'»), y sin el campo aplica un esfuerzo suyo que tampoco los admite. El
+# coach usa tools en cada turno y la salida estructurada va por function_calling: con tools, 'none' explícito.
+_OPENAI_TOOLS_SIN_RAZONAR_PREFIXES = ("gpt-6",)
+
+
+def openai_model_tools_sin_razonar(model) -> bool:
+    """¿Este modelo solo acepta tools en chat completions con `reasoning_effort='none'`?"""
+    return str(model or "").strip().lower().startswith(_OPENAI_TOOLS_SIN_RAZONAR_PREFIXES)
+
+
 class ChatOpenAI(_LangChainChatOpenAI):
     """`ChatOpenAI` de LangChain + el filtro de temperatura que su versión aún no aplica a la familia gpt-6.
 
@@ -92,6 +104,8 @@ class ChatOpenAI(_LangChainChatOpenAI):
         if openai_model_only_default_temperature(payload.get("model") or self.model_name):
             if payload.get("temperature") not in (None, 1, 1.0):
                 payload.pop("temperature", None)
+        if payload.get("tools") and openai_model_tools_sin_razonar(payload.get("model") or self.model_name):
+            payload["reasoning_effort"] = "none"   # [P1-PLAN-LOTE-600] tools + esfuerzo ⇒ 400 en chat completions
         return payload
 
 # [P0-GLM-MIGRATION · 2026-09-02] IDs oficiales del API Z.ai (docs.z.ai, verificados

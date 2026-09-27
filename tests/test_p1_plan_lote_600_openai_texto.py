@@ -85,3 +85,50 @@ def test_la_key_de_openai_solo_del_entorno_con_placeholder(openai, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     llm = openai.ChatGLM(model=openai.GLM_FLASH)                                      # el boot no cae
     assert llm.openai_api_key.get_secret_value() == "MISSING_OPENAI_API_KEY"
+
+
+# Medido en la batería del coach contra la API real (27-sep): gpt-6-luna en /v1/chat/completions rechaza tools +
+# reasoning_effort con 400 «Function tools with reasoning_effort are not supported ... set reasoning_effort to 'none'».
+# El coach usa tools en cada turno y la salida estructurada va por function_calling (tools): las dos caían.
+_TOOL = {"type": "function", "function": {"name": "f", "description": "d",
+                                          "parameters": {"type": "object", "properties": {}}}}
+
+
+def test_gpt6_con_tools_va_sin_razonar(openai):
+    llm = openai.ChatGLM(model=openai.GLM_FLASH, reasoning_effort="medium")
+    con_tools = llm._get_request_payload("hola", tools=[_TOOL])
+    assert con_tools["tools"] and con_tools["reasoning_effort"] == "none"
+    assert llm._get_request_payload("hola")["reasoning_effort"] == "medium"            # sin tools, razona
+
+
+def test_gpt6_con_tools_y_sin_esfuerzo_lo_pide_en_none(openai):
+    # sin esfuerzo en el payload la API aplica el suyo, que tampoco admite tools: se pide 'none' explícito
+    llm = openai.ChatOpenAI(model="gpt-6-luna", api_key="sk-fake", base_url="https://api.openai.com/v1")
+    assert llm._get_request_payload("hola", tools=[_TOOL])["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in llm._get_request_payload("hola")
+
+
+def test_la_salida_estructurada_de_gpt6_tampoco_razona(openai):
+    from pydantic import BaseModel
+
+    class Veredicto(BaseModel):
+        ok: bool
+
+    llm = openai.ChatGLM(model=openai.GLM_FLASH)
+    capturado = {}
+
+    def _falso(self, input_, *, stop=None, **kwargs):
+        capturado.update(openai.ChatOpenAI._get_request_payload(self, input_, stop=stop, **kwargs))
+        raise RuntimeError("sin red")
+
+    import unittest.mock as um
+    with um.patch.object(type(llm), "_get_request_payload", _falso):
+        with pytest.raises(RuntimeError):
+            llm.with_structured_output(Veredicto).invoke("hola")
+    assert capturado["tools"] and capturado["reasoning_effort"] == "none"
+
+
+def test_otros_modelos_con_tools_conservan_su_esfuerzo(lp):
+    llm = lp.ChatOpenAI(model="gpt-5.6-luna", api_key="sk-fake", base_url="https://api.openai.com/v1",
+                        reasoning_effort="low")
+    assert lp.ChatOpenAI._get_request_payload(llm, "hola", tools=[_TOOL])["reasoning_effort"] == "low"
