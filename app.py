@@ -791,7 +791,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-444 · 2026-09-26] (backend) el víver que ningún paso cuece: sin falsos «crudo» (bandeja al
 # horno, microondas tapado, sartén que sigue, casabe de yuca, «guineítos»: 7 de 19 en 322 planes) y su cocción
 # al guiso sólo si hay guiso; si no, «💡 Cocción previa» tras el Mise en place (coccion_viver.py).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-444 · 2026-09-26"
+# [P1-PLAN-LOTE-445..450 · 2026-09-27] (backend) la proteína que la lista compra cruda y ningún paso cuece: la
+# cocción previa ya puesta se busca en SU nota (la del arroz tapaba la del pollo); el plan de EMERGENCIA cocina sus
+# huevos y da a cada proteína su punto (receta_emergencia.py); «aguacate fresca» → «fresco» (concordancia.py); el
+# agua medida de la avena va a la olla; lo que el cerrador sirve no se acompaña otra vez y los «Acompaña…» se juntan;
+# «el pescado» usa la tilapia de la lista y «jitomate» el tomate (alias_receta.py).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-450 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

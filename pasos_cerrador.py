@@ -841,3 +841,114 @@ def notas_de_otro_plato(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-449 · 2026-09-27] Lo que el cerrador ya sirve no se acompaña otra vez; los «Acompaña…» van en una frase ──
+# Replay de la cola sobre 322 planes: (1) 119 comidas con «Cocina filete de pescado blanco a la plancha o hervido y sírvelo
+# como proteína del plato.» Y, en el Montaje, «Acompaña con filete de pescado blanco.»: el mismo alimento servido dos veces
+# (el 425 cubría «ablanden e incorpóralo», «escurre e incorpora», la licuadora y «sírvelo al lado», no esta frase). (2) 176
+# montajes con dos o tres «Acompaña…» seguidos («Acompaña la cena con agua. Acompaña con edamame.»): una sola frase
+# («Acompaña la cena con edamame y agua.»). tooltip-anchor: P1-PLAN-LOTE-449
+_SIRVE_PROT_449_RE = re.compile(r"Cocina (?P<x>[^.;]+?) a la plancha o hervid[oa]s? y sírvel[oa]s? como proteína del plato\."
+                                r"|Escurre e incorpora (?P<y>[^.;(]+?) \(ya viene[n]? cocid[oa]s?\) al guiso")
+#: «sardinas en lata (ya viene cocido)» → «(ya vienen cocidas)»: el paréntesis concuerda con el alimento (89 frases)
+_YA_VIENE_449_RE = re.compile(r"(?P<x>\b[a-záéíóúñ]+)(?P<resto>(?: (?:en|de) [a-záéíóúñ]+)?) \(ya viene cocido\)")
+_ACOMPANA_449_RE = re.compile(r"(?P<cab>Acompaña(?: (?:la cena|el almuerzo|el desayuno|la merienda|el plato))?) con "
+                              r"(?P<obj>[^.]+?)\.(?=\s|$)")
+
+
+def proteina_servida_una_vez(meal) -> int:
+    """Nº de «Acompaña con X.» quitados porque un paso ya sirve X como proteína del plato; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list):
+            return 0
+        servidas = {_sa(m.group("x") or m.group("y")).strip() for p in rec if isinstance(p, str) and not _es_nota(p)
+                    for m in _SIRVE_PROT_449_RE.finditer(p)}
+        if not servidas:
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _pilar(p) != "montaje":
+                continue
+            q = p
+            for m in list(_ACOMPANA_449_RE.finditer(p)):
+                if m.group("cab") == "Acompaña" and _sa(m.group("obj")).strip() in servidas:
+                    q = q.replace(m.group(0), "", 1)
+                    n += 1
+            if q != p and re.sub(r"^Montaje:\s*", "", q).strip():      # un Montaje nunca se queda vacío
+                rec[i] = re.sub(r"\s{2,}", " ", q).rstrip()
+            elif q != p:
+                n -= 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+def ya_viene_concordado(meal) -> int:
+    """«sardinas en lata (ya viene cocido)» → «(ya vienen cocidas)». Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list):
+            return 0
+        n = 0
+
+        def _conc(m):
+            pl, fem = _genero_numero(m.group("x"))
+            if not pl and not fem:
+                return m.group(0)
+            return f"{m.group('x')}{m.group('resto')} (ya viene{'n' if pl else ''} cocid{'a' if fem else 'o'}{'s' if pl else ''})"
+
+        for i, p in enumerate(rec):
+            if isinstance(p, str) and "(ya viene cocido)" in p:
+                q = _YA_VIENE_449_RE.sub(_conc, p)
+                if q != p:
+                    rec[i] = q
+                    n += 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+def _y_449(ultimo: str) -> str:
+    t = _sa(ultimo)
+    return "e" if re.match(r"(?:i|hi)(?!e)", t) else "y"
+
+
+def acompanamientos_en_una_frase(meal) -> int:
+    """Nº de montajes cuyos «Acompaña…» seguidos pasaron a una frase; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list):
+            return 0
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _pilar(p) != "montaje":
+                continue
+            ms = list(_ACOMPANA_449_RE.finditer(p))
+            if len(ms) < 2:
+                continue
+            # sólo frases SEGUIDAS (entre una y otra, nada más que espacio)
+            grupo = [ms[0]]
+            for a, b in zip(ms, ms[1:]):
+                if p[a.end():b.start()].strip():
+                    break
+                grupo.append(b)
+            if len(grupo) < 2:
+                continue
+            cab = next((m.group("cab") for m in grupo if m.group("cab") != "Acompaña"), "Acompaña")
+            agua = [m.group("obj") for m in grupo if re.search(r"\bagua\b", _sa(m.group("obj")))]
+            resto = [m.group("obj") for m in grupo if m.group("obj") not in agua]
+            objs = resto + agua                            # el agua, al final: «con edamame y agua»
+            lista = objs[0] if len(objs) == 1 else ", ".join(objs[:-1]) + f" {_y_449(objs[-1])} " + objs[-1]
+            rec[i] = p[:grupo[0].start()] + f"{cab} con {lista}." + p[grupo[-1].end():]
+            n += 1
+        if n:
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0

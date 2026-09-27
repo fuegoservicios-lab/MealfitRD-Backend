@@ -1857,6 +1857,27 @@ _V7F_MICRO_VAPOR_RE = re.compile(r"\bmicroondas\b[^.;]*?\b(?:tap|agua|cubiert|fi
                                  r"[^.;]*?\bmicroondas\b")
 _V7F_MICRO_MIN_MINUTOS = 5
 _V7F_RETIRA_RE = re.compile(r"\b(?:retira|reserva|saca|aparta)\w*")
+# [P1-PLAN-LOTE-445 · 2026-09-27] Dos cocciones de PROTEÍNA que V7f no veía (replay de 322 planes): «Sazona el pescado…;
+# cúbrelo con el pan rallado…; Cocínalo en el airfryer 10-14 minutos, hasta que el centro alcance 63 °C» — el pronombre
+# viene de dos cláusulas atrás, pero el PUNTO de cocción es el del pescado (63 °C; ave 74, carne 71); y «Añade pechuga de
+# pavo, el cundeamor y el maíz; cocina 8-10 min» con la sartén ya al fuego: lo añadido se cuece con lo que sigue (como el
+# recipiente del 444). Sin verlas, el reparador del lote 68 les ponía un segundo paso de cocción. tooltip-anchor: P1-PLAN-LOTE-445
+_V7F_PUNTO_445 = ((re.compile(r"\b(?:pollo|pechuga|muslo|pavo|gallina)\b"), re.compile(r"\b7[3-5]\s*°")),
+                  (re.compile(r"\b(?:pescado|filete|tilapia|salmon|mero|bacalao|chillo|dorado|merluza|atun|camaron\w*|"
+                              r"langost\w*|pulpo|calamar\w*)\b"), re.compile(r"\b6[3-5]\s*°")),
+                  (re.compile(r"\b(?:carne|res|cerdo|chuleta|chivo|cordero|conejo|higado)\b"),
+                   re.compile(r"\b(?:6[3-9]|7[01])\s*°")))
+_V7F_ANADE_445_RE = re.compile(r"\b(?:anad|agreg|ech)\w*\b")
+
+
+def _v7f_punto(food: str, clausula: str) -> bool:
+    """[P1-PLAN-LOTE-445] ¿La cláusula dice el punto de cocción de la clase de `food` (ave 74 °C, pescado 63, carne 71)
+    sin nombrar ninguna proteína animal? Entonces cuece `food` aunque sólo lo nombre un pronombre («Cocínalo…»)."""
+    nf = _norm(food)
+    for clase_rx, punto_rx in _V7F_PUNTO_445:
+        if clase_rx.search(nf):
+            return bool(punto_rx.search(clausula)) and not _V7F_ANIMAL_RE.search(clausula)
+    return False
 
 
 def _v7f_enabled() -> bool:
@@ -1975,7 +1996,7 @@ def _v7f_cuece(clausula: str, clase: str, desde: int = 0, ctx: str = "") -> bool
     return True
 
 
-def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
+def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict, food: str = "") -> str:
     """`cocido` · `usado_cocido` (un paso lo trata como cocido antes de cocerlo) · `sin_coccion` · `no_mencionado`.
 
     Recorre las cláusulas EN ORDEN. En la del alimento: si la cuece, cocido; si lo usa como ya cocido, usado_cocido; si
@@ -1985,8 +2006,10 @@ def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
     mencionado = mezclado = previa_lo_nombra = False
     for pn in pasos_norm:
         recipiente = ""                              # [P1-PLAN-LOTE-444] el recipiente vale dentro de SU paso
+        fuego_paso = False                           # [P1-PLAN-LOTE-445] ¿ya hubo fuego en este paso?
         for a, b in clause_bounds(pn):
             cl = pn[a:b]
+            fuego_previo, fuego_paso = fuego_paso, fuego_paso or _v7f_evidencia(cl) or bool(_V7F_FUEGO_RE.search(cl))
             mf = rx.search(cl)
             nombra = bool(mf)
             if nombra:
@@ -1997,13 +2020,15 @@ def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict) -> str:
                     return "usado_cocido"
                 if _V7F_MEZCLA_RE.search(cl):
                     mezclado = True
-                if _V7F_RECIPIENTE_RE.search(cl):
-                    recipiente = cl
+                if _V7F_RECIPIENTE_RE.search(cl) or (fuego_previo and _V7F_ANADE_445_RE.search(cl)):
+                    recipiente = cl                  # [P1-PLAN-LOTE-445] «Añade el pavo…; cocina 8-10 min», al fuego
             elif mencionado and _v7f_cuece(cl, clase, ctx=recipiente):
                 if mezclado:
                     return "cocido"                  # lo que cuece la preparación cuece lo que lleva
                 if recipiente and _v7f_propios(cl, index) <= _v7f_propios(recipiente, index):
                     return "cocido"                  # [P1-PLAN-LOTE-444] «…en una bandeja; Hornea 18-22 min»
+                if clase == "proteina" and food and _v7f_punto(food, cl):
+                    return "cocido"                  # [P1-PLAN-LOTE-445] «Cocínalo… hasta que el centro alcance 63 °C»
                 if _V7F_ENCLITICO_RE.search(cl):
                     if previa_lo_nombra:
                         return "cocido"              # «córtalos…; hornéalas 10-12 minutos»
@@ -2062,7 +2087,7 @@ def alimentos_sin_coccion(meal: dict, index: dict) -> list:
             return []
         pasos_norm = [_norm(x) for x in pasos]
         for food, clase, rx in _v7f_candidatos(meal, index):     # [P1-PLAN-LOTE-444] los mismos que V7f
-            if _v7f_estado(pasos_norm, rx, clase, index) == "sin_coccion":
+            if _v7f_estado(pasos_norm, rx, clase, index, food) == "sin_coccion":
                 out.append((food, clase))
     except Exception:
         return []
@@ -2081,7 +2106,7 @@ def _v7f_coccion_faltante(day, meal, index) -> list:
         pasos_norm = [_norm(p) for p in pasos]
         usados, sin = [], []
         for food, clase, rx in _v7f_candidatos(meal, index):     # [P1-PLAN-LOTE-444] los mismos que el reparador
-            estado = _v7f_estado(pasos_norm, rx, clase, index)
+            estado = _v7f_estado(pasos_norm, rx, clase, index, food)
             if estado == "usado_cocido":
                 usados.append(food)
             elif estado == "sin_coccion":

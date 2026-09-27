@@ -22940,7 +22940,8 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             # [P2-STEM-BOUNDED · 2026-07-06] límite de palabra al FINAL también (solo plural
             # opcional): el prefijo abierto hacía "agua"⊂"aguacate" → "atún en agua" contaba
             # como usado porque el Montaje decía "cubos de aguacate" (vivo, plan 6a078619).
-            if any(_re2.search(r"\b" + _re2.escape(st) + r"(?:s|es)?\b", recipe_low) for st in _stems):
+            if any(_re2.search(r"\b" + _re2.escape(st) + r"(?:s|es)?\b", recipe_low) for st in _stems) \
+                    or __import__("alias_receta").usado_por_alias(_stems, recipe_low):  # [P1-PLAN-LOTE-450] «el pescado»
                 continue  # algún token del ingrediente SÍ aparece en los pasos (singular o plural)
             missing.append(str(bare).strip())
         if not missing:
@@ -47672,32 +47673,10 @@ _BARIATRIC_FALLBACK_RATIOS = {
 
 
 def _fallback_recipe_steps(meal_type: str, ingredients: list) -> list:
-    """[P2-FALLBACK-RECIPE-SLOT-TEMPLATE · 2026-07-01] (audit recetas P2-5) El fallback shippeaba la receta
-    template "Cocinar la proteína" (sin técnica/tiempo real) — honesto pero no cocinable. Pasos deterministas
-    por CATEGORÍA de ingredientes (detección por token), respetando el contrato de 3 prefijos con tiempo
-    concreto. Fail-safe → template genérico. tooltip-anchor: P2-FALLBACK-RECIPE-SLOT-TEMPLATE"""
-    try:
-        from constants import strip_accents as _sa_fb
-        _txt = _sa_fb(" ".join(str(i) for i in (ingredients or [])).lower())
-        _mise = "Mise en place: lava, pica y pesa cada ingrediente según las cantidades listadas."
-        # avena ANTES del heurístico de batido: avena+leche es AVENA COCIDA, no un licuado.
-        if "avena" in _txt:
-            return [_mise, "El Toque de Fuego: cocina la avena con el líquido a fuego medio 5 minutos, removiendo hasta cremosa.",
-                    "Montaje: sirve en bowl y corona con el resto de ingredientes."]
-        if any(t in _txt for t in ("batido", "licuado")) or (
-                any(t in _txt for t in ("yogur", "leche")) and any(t in _txt for t in ("guineo", "fruta", "fresa", "mango"))):
-            return [_mise, "El Toque de Fuego: licúa todos los ingredientes 1 minuto a velocidad alta hasta quedar homogéneo.",
-                    "Montaje: sirve frío de inmediato."]
-        if "huevo" in _txt:
-            return [_mise, "El Toque de Fuego: bate los huevos y cuájalos a fuego medio 3-4 minutos junto a los vegetales (yema y clara firmes).",
-                    "Montaje: sirve caliente con el acompañante."]
-        if any(t in _txt for t in ("pollo", "res", "cerdo", "pescado", "tilapia", "mero", "atun", "pavo", "camaron")):
-            return [_mise, "El Toque de Fuego: sazona la proteína con sal, ajo y orégano; cocina a la plancha a fuego medio-alto 6-8 minutos por lado hasta dorar; hierve el víver/carbohidrato 15-20 minutos hasta ablandar.",
-                    "Montaje: sirve la proteína con el carbohidrato y la ensalada/vegetales."]
-        return [_mise, "El Toque de Fuego: cocina los ingredientes principales a fuego medio 10-12 minutos hasta que estén tiernos.",
-                "Montaje: sirve y ajusta sal al gusto."]
-    except Exception:
-        return ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar la proteína", "Montaje: Servir"]
+    """[P2-FALLBACK-RECIPE-SLOT-TEMPLATE · 2026-07-01] Pasos deterministas del plan de emergencia. [P1-PLAN-LOTE-446] Viven
+    en `receta_emergencia.pasos`: los huevos de «Huevos y Avena» se cocinan, cada proteína con su punto, lo enlatado se
+    escurre y lo listo para comer no pasa por el fuego. tooltip-anchor: P2-FALLBACK-RECIPE-SLOT-TEMPLATE"""
+    return __import__("receta_emergencia").pasos(meal_type, ingredients)
 
 
 def _build_fallback_day(nutr: dict, day_number: int,

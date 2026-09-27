@@ -2510,7 +2510,7 @@ def seco_usado_cocido(meal) -> int:
                 continue
             food = mm.group("f")
             raiz = re.sub(r"(?:es|s)$", "", food.split()[0]) if food.split()[0] not in ("arroz", "bulgur") else food.split()[0]
-            if "coccion previa" in notas_txt and raiz in notas_txt[notas_txt.find("coccion previa"):]:
+            if _en_coccion_previa(rec, raiz):                      # [P1-PLAN-LOTE-445]
                 continue
             usa_cocido = any(re.search(r"\b" + re.escape(raiz) + r"\w*\s+(?:\w+\s+){0,2}cocid[oa]s?\b", p) for p in pasos)
             if not usa_cocido:
@@ -3182,7 +3182,8 @@ def masa_con_su_agua(meal) -> int:
 # previa» tras el Mise en place, con el punto seguro de cada proteína (ave 74 °C, pescado 63 °C, carne y cerdo 71 °C).
 # Nunca si la lista ya la compra cocida, en lata o ahumada, ni si algún paso la cocina. tooltip-anchor: P1-PLAN-LOTE-407
 _PROT_COCIDA_407_RE = re.compile(
-    r"(?:ten\s+list[oa]s?|usa|desmenuza|mide|agrega|anade|incorpora|coloca|reparte|mezcla|pesa)\b[^.;]{0,40}\b"
+    r"(?:ten\s+list[oa]s?|usa|desmenuza|mide|agrega|anade|incorpora|coloca|reparte|mezcla|pesa|prepara|corta|pica|trocea|"
+    r"sirve|calienta|recalienta)\b[^.;]{0,40}\b"  # [P1-PLAN-LOTE-445] prepara/corta/calienta
     r"(?P<k>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}?(?:ya\s+)?cocid[oa]s?|"
     r"\b(?P<k2>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}\bya\s+cocid[oa]s?")
 #: la cocción de verdad rige a la proteína («sella la pechuga», «hierve el pollo») o dice su punto («… hasta 74 °C»);
@@ -3199,6 +3200,58 @@ _NOTA_PROT_407 = {
            "(63 °C al centro).",
     "carne": "💡 Cocción previa: cocina {n} a la plancha o guisada hasta que no quede rosada por dentro (71 °C al centro).",
 }
+
+
+def _en_coccion_previa(rec, palabra: str) -> bool:
+    """[P1-PLAN-LOTE-445] ¿Alguna nota «💡 Cocción previa» nombra `palabra`? Cinco reparadores lo preguntaban con
+    `palabra in todo[todo.find("coccion previa"):]` — el texto ENTERO desde la primera nota: con la del arroz o la de
+    las habichuelas delante, el «pollo» del Toque de Fuego contaba como «ya tiene su cocción previa» y la pechuga cruda
+    se quedaba sin ella (replay de 322 planes: «desmenuza 300 g de pechuga de pollo ya cocida», «añade el pollo cocido
+    y calienta 2 minutos», «añade filete de pescado blanco ya cocido»). tooltip-anchor: P1-PLAN-LOTE-445"""
+    return any(isinstance(p, str) and "coccion previa" in _sa(p.lower())[:24] and palabra in _sa(p.lower()) for p in rec)
+
+
+_FUERTE_445_RE = re.compile(r"\b(?:cocin|horne|guis|hierv|herv|asa\b|asal|asar|salte|sofri|dor[aeo]|fri[eo]|frei|sell|cuec|coce)\w*")
+_PUNTO_445 = {"ave": re.compile(r"\b7[3-5]\s*°"), "pez": re.compile(r"\b6[3-5]\s*°"),
+              "carne": re.compile(r"\b(?:6[3-9]|7[01])\s*°")}
+_HECHO_445_RE = re.compile(r"completamente cocid|bien cocid|cocid[oa]s? por dentro|se desmenuce|centro (?:este|quede|cuaje)"
+                           r"|cuaje firme")
+_HECHO_VIVER_445_RE = re.compile(r"tiern|blanda|blandit|cuchillo entre|se deshaga|ablande")
+#: el punto como META («hasta que el pollo alcance 74 °C», «verifica que alcance 74 °C»), no como condición
+_META_445_RE = re.compile(r"(?:hasta que|verifica que|comprueba que)[^.;]{0,50}\b(?:alcance|llegue)\b[^.;]{0,25}")
+
+
+def _ya_se_cuece_445(rec, sin: str, clase: str) -> bool:
+    """[P1-PLAN-LOTE-445] ¿Un paso que nombra el alimento lo COCINA de verdad? Una cláusula con verbo de cocción (no
+    «calienta») y el punto de su clase («hasta que el pollo alcance 74 °C»), o que lo nombra —o lo retoma con un
+    pronombre («hornéalas»)— y dice que quedó hecho («hasta que el centro esté completamente cocido»; en un víver «hasta
+    que la auyama esté tierna») o lo cocina ≥ 8 min; o que fija su punto como META aunque el verbo sea «calienta»
+    («calienta la pechuga hasta que el pollo alcance 74 °C»). Sin esto, «desmenuza el pollo» o «corta la pechuga cocida»
+    ponían la cocción previa a un pollo que el paso siguiente hornea hasta 74 °C (8 de 25 notas nuevas en el replay)."""
+    from culinary_coherence import _V7F_ENCLITICO_RE, _duracion_max_min
+    hecho_rx = _HECHO_VIVER_445_RE if clase == "viver" else _HECHO_445_RE
+    punto = _PUNTO_445.get(clase)
+    for p in rec:
+        if not isinstance(p, str) or _es_nota(p):
+            continue
+        t = _sa(p.lower())
+        if not re.search(sin, t):
+            continue
+        for cl in re.split(r"[.;](?!\d)", t):
+            if punto:
+                meta = _META_445_RE.search(cl)
+                if meta and punto.search(cl, meta.start()):
+                    return True
+            if not _FUERTE_445_RE.search(cl):
+                continue
+            if punto and punto.search(cl):
+                return True
+            nombra = re.search(sin, cl)
+            if (nombra or _V7F_ENCLITICO_RE.search(cl)) and hecho_rx.search(cl):
+                return True
+            if nombra and (_duracion_max_min(cl) or 0) >= 8:
+                return True
+    return False
 
 
 def _clase_407(k: str, linea: str) -> tuple:
@@ -3237,7 +3290,7 @@ def proteina_cocida_de_la_lista(meal) -> int:
                     or re.search(sin + r"\b[^.;]{0,50}hasta\s+(?:que|alcanzar)[^.;]{0,40}(?:7[1-4]|6[3-9])\s*°?\s*c\b", resto)):
                 continue
             clase, nombre = _clase_407(k, lin[0])
-            if "coccion previa" in todo and nombre.split()[-1] in todo[todo.find("coccion previa"):]:
+            if _en_coccion_previa(rec, nombre.split()[-1]) or _ya_se_cuece_445(rec, sin, clase):  # [P1-PLAN-LOTE-445]
                 continue
             nota = _NOTA_PROT_407[clase].format(n=nombre)
             if nota not in rec and nota not in notas:
@@ -3262,7 +3315,8 @@ def proteina_cocida_de_la_lista(meal) -> int:
 # con el tiempo de hervor del 394 y, para la yuca, «desecha el agua». Nunca si la lista lo compra cocido o precocido, ni si
 # un paso lo hierve, lo cuece, lo asa o lo hace al microondas. tooltip-anchor: P1-PLAN-LOTE-408
 _VIVER_408 = r"(platano|yuca|yautia|batata|papa|name|mapuey|auyama|guineo|guineito)"
-_VIVER_COCIDO_408_RE = re.compile(r"\b" + _VIVER_408 + r"s?\b(?P<mid>[^.;()]{0,25}?)\b(?:ya\s+)?(?:hervid|cocid|sancochad)[oa]s?\b")
+_VIVER_COCIDO_408_RE = re.compile(r"\b" + _VIVER_408 + r"s?\b(?P<mid>(?:\s+(?!(?:con|y|e|de|la|las|el|los|en|a|al)\b)"
+                                  r"[a-z]+){0,2}?)\s+(?:ya\s+)?(?:hervid|cocid|sancochad)[oa]s?\b")  # [P1-PLAN-LOTE-445]
 _NOMBRE_VIVER_408 = {"platano": "el plátano", "yuca": "la yuca", "yautia": "la yautía", "batata": "la batata", "papa": "la papa",
                      "name": "el ñame", "mapuey": "el mapuey", "auyama": "la auyama", "guineo": "el guineo",
                      "guineito": "los guineítos"}
@@ -3303,7 +3357,7 @@ def viver_cocido_de_la_lista(meal) -> int:
                     or re.search(k + r"[^.;]{0,50}(?:microondas|hasta que (?:el|un) cuchillo|en agua (?:con sal )?(?:hirviendo)?\s*\d)",
                                  texto)):
                 continue
-            if "coccion previa" in todo and k in todo[todo.find("coccion previa"):]:
+            if _en_coccion_previa(rec, k) or _ya_se_cuece_445(rec, r"\b" + k, "viver"):  # [P1-PLAN-LOTE-445]
                 continue
             nota = nota_hervor_viver(k)                     # [P1-PLAN-LOTE-444] el texto, en un solo sitio
             if nota not in rec and nota not in notas:
@@ -3327,10 +3381,14 @@ def viver_cocido_de_la_lista(meal) -> int:
 # comidas, perfiles sin tiempo, embarazo y lactancia). Como el 407: «💡 Cocción previa» con el hervor del huevo y, si la
 # lista trae claras, un huevo más por cada clara sin su yema (390, 405). Nunca si la lista los compra cocidos ni si un paso
 # los hierve. tooltip-anchor: P1-PLAN-LOTE-409
-_HUEVO_DURO_409_RE = re.compile(r"(?:pela|corta|agrega|anade|incorpora|coloca|reparte|mide|ten\s+list[oa]s?)\b[^.;]{0,40}"
-                                r"\bhuevos?\b[^.;]{0,20}\b(?:ya\s+)?(?:bien\s+)?(?:cocid|hervid|dur)[oa]s?\b")
+_HUEVO_DURO_409_RE = re.compile(r"(?:pela|corta|agrega|anade|incorpora|coloca|reparte|mide|ten\s+list[oa]s?|prepara|"
+                                r"sirve|acompan\w*|pica)\b[^.;]{0,40}"  # [P1-PLAN-LOTE-445] prepara/sirve/acompaña
+                                r"\bhuevos?\b(?:\s+(?!(?:con|y|e|de|al|a|en|sobre)\b)[a-z]+)?\s+(?:ya\s+)?(?:bien\s+)?"
+                                r"(?:cocid|hervid|dur)[oa]s?\b")
 _HIERVE_HUEVO_409_RE = re.compile(r"\b(?:hierve|hiervel\w*|cuece|cocina|pon\s+a\s+hervir|sumerge)\w*[^.;]{0,40}\bhuevos?\b|"
-                                  r"\bhuevos?\b[^.;]{0,40}(?:agua hirviendo|a hervir|\d+\s*-\s*\d+\s*min)")
+                                  r"\bhuevos?\b[^.;]{0,40}(?:agua hirviendo|a hervir|\d+\s*-\s*\d+\s*min)|"
+                                  r"\b(?:cuaj|revuelv|revolt|estrellad|escalf|poch)\w*|"  # [P1-PLAN-LOTE-445]
+                                  r"\bhuevos?\b[^.;]{0,80}\b(?:hierv|herv)\w*")  # «el huevo en agua… hiérvelo / lleva a hervor»
 
 
 def huevo_duro_de_la_lista(meal) -> int:
@@ -3347,7 +3405,7 @@ def huevo_duro_de_la_lista(meal) -> int:
         todo = " . ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str))
         if not _HUEVO_DURO_409_RE.search(texto) or _HIERVE_HUEVO_409_RE.search(texto):
             return 0
-        if "coccion previa" in todo and "huevo" in todo[todo.find("coccion previa"):]:
+        if _en_coccion_previa(rec, "huevo"):                     # [P1-PLAN-LOTE-445]
             return 0
         nota = "💡 Cocción previa: hierve los huevos 10-12 min, pásalos a agua fría y pélalos"
         if re.search(r"\bclaras? de huevos?\b", lista):
@@ -3608,7 +3666,9 @@ def minuscula_tras_articulo(meal) -> int:
 # el pollo alcance 74 °C por dentro» con al menos 8-10 minutos. Nunca con el ave cocida, enlatada o ahumada en la lista.
 # tooltip-anchor: P1-PLAN-LOTE-441
 _DESMENUZADA_441_RE = re.compile(
-    r"\b(?P<k>pollo|pechuga|pavo|carne|res|cerdo)\b(?:\s+de\s+(?:pollo|pavo|res|cerdo))?\s+desmenuzad[oa]s?\b")
+    r"\b(?P<k>pollo|pechuga|pavo|carne|res|cerdo)\b(?:\s+de\s+(?:pollo|pavo|res|cerdo))?\s+desmenuzad[oa]s?\b|"
+    r"\bdesmenuza\s+(?:(?:el|la|los|las|\d+(?:[.,]\d+)?\s*g\s+de|[\d½¼¾⅓⅔]+(?:\s+de)?)\s+)*"  # [P1-PLAN-LOTE-445]
+    r"(?P<k2>pollo|pechuga|pavo|carne|res|cerdo|pescado|filetes?|tilapia)\b")
 _AVE_CALIENTE_441_RE = re.compile(
     r"(?P<pre>(?:,\s*|\s+y\s+)?(?:hasta\s+que|comprueba\s+que|comprobando\s+que)\s+(?:(?:todo|el\s+pollo|la\s+pechuga|"
     r"pechuga\s+de\s+pollo)\s+)?(?:est[eé]|quede)?\s*bien\s+caliente|\s+y\s+pechuga\s+de\s+pollo\s+bien\s+caliente)",
@@ -3628,7 +3688,7 @@ def ave_desmenuzada_cruda(meal) -> int:
         texto = " . ".join(_sa(str(p).lower()) for p in rec if isinstance(p, str) and not _es_nota(p))
         notas = []
         for mm in _DESMENUZADA_441_RE.finditer(texto):
-            k = mm.group("k")
+            k = mm.group("k") or re.sub(r"s$", "", mm.group("k2"))     # [P1-PLAN-LOTE-445] «desmenuza 1½ filetes»
             lin = [l for l in lineas if re.search(r"\b" + k, l)]
             if not lin or any(re.search(r"cocid|\blata\b|enlatad|ahumad|\ben\s+agua\b|rostizad|desmenuzad", l) for l in lin):
                 continue
@@ -3640,7 +3700,7 @@ def ave_desmenuzada_cruda(meal) -> int:
                                  texto)):
                 continue
             clase, nombre = _clase_407(k, lin[0])
-            if "coccion previa" in todo and nombre.split()[-1] in todo[todo.find("coccion previa"):]:
+            if _en_coccion_previa(rec, nombre.split()[-1]) or _ya_se_cuece_445(rec, sin, clase):  # [P1-PLAN-LOTE-445]
                 continue
             nota = _NOTA_PROT_407[clase].format(n=nombre)
             if nota not in rec and nota not in notas:

@@ -308,3 +308,64 @@ def ubicar_agua(meal) -> int:
         return 0
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-448 · 2026-09-27] El agua que el Mise en place mide, la cocción también la usa ─────────────────────────
+# Replay de la cola sobre 322 planes: 92 avenas con «mide 1 taza de avena (50 g), 5 ml de leche descremada y 455 ml de
+# agua» y luego «cocina la avena con la leche descremada y la canela… 7-9 min»: el agua (la que el lote 311 completa para
+# que la avena se cocine, o la que el modelo puso en la lista) se mide y ningún paso la echa a la olla — la avena se
+# cocinaría con 5 ml de leche. `_anadir_agua_al_paso` la escribe en el paso que MIDE la leche y ahí termina. Aquí el paso
+# que cocina la avena la nombra junto a la leche («con la leche descremada, el agua y la canela») o, sin leche nombrada,
+# tras la avena («cocina la avena con el agua a fuego medio»). tooltip-anchor: P1-PLAN-LOTE-448
+_AGUA_LINEA_448_RE = re.compile(r"^\s*[\d.,½¼¾⅓⅔\s]+(?:ml|l|litros?|tazas?|cdas?|cucharadas?)\.?\s+de\s+agua\b")
+_TRAS_AVENA_448_RE = re.compile(r"\b(?:la|las)\s+avena\b(?:\s+(?:cocida|en\s+hojuelas|integral|instantanea))?")
+_ADJ_LECHE_448 = r"(?:\s+(?!(?:y|e|o|a|al|en|con|durante|hasta|de|del|la|el|los|las|por|sin|sobre|removiendo)\b)[a-z]+)*"
+
+
+def agua_en_la_coccion(meal) -> int:
+    """1 si el paso que cocina la avena pasó a nombrar el agua de la lista; 0 si no, o ante cualquier error."""
+    try:
+        if not activo() or not isinstance(meal, dict):
+            return 0
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            return 0
+        lista = [_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str)]
+        if not any(_AGUA_LINEA_448_RE.match(x) for x in lista) or not any(_AVENA_RE.search(x) for x in lista):
+            return 0
+        pasos = [p for p in rec if isinstance(p, str) and not any(e in p for e in _NOTA)]
+        texto = _sa(" ".join(pasos) + " " + str(meal.get("name") or ""))
+        if _FRIO_RE.search(texto) or _NOMBRE_BATIDO_RE.search(_sa(meal.get("name"))):
+            return 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or any(e in p for e in _NOTA) or _pilar_448(p) == "mise en place":
+                continue
+            base = _sa(p)
+            if len(base) != len(p) or not _COCCION_RE.search(base) or not _AVENA_RE.search(base):
+                continue
+            if "agua" in base:
+                return 0                                   # ya la nombra (o una frase del 311/428 la dice)
+            ml = _LECHE_NOMBRADA_428_RE.search(base)
+            if ml:
+                # la leche con TODOS sus adjetivos («la leche pasteurizada»), no sólo los que conoce el 428
+                fin = ml.end() + re.match(_ADJ_LECHE_448, base[ml.end():]).end()
+                despues = base[fin:]
+                rec[i] = p[:fin] + (", el agua" if re.match(r"\s*,|\s+y\s", despues) else " y el agua") + p[fin:]
+            else:
+                ta = _TRAS_AVENA_448_RE.search(base)
+                if not ta:
+                    return 0
+                if base[ta.end():].startswith(" con "):      # «la avena con la canela» → «con el agua y la canela»
+                    rec[i] = p[:ta.end() + 5] + "el agua y " + p[ta.end() + 5:]
+                else:
+                    rec[i] = p[:ta.end()] + " con el agua" + p[ta.end():]
+            meal.pop("_display", None)
+            return 1
+        return 0
+    except Exception:
+        return 0
+
+
+def _pilar_448(p: str) -> str:
+    t = _sa(p).lstrip()
+    return "mise en place" if t.startswith("mise en place") else ""
