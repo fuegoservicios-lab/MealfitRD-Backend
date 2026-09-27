@@ -104,3 +104,38 @@ def test_verificar_cache_detecta_el_distinto():
     datos = {"a": b"A", "b": b"otro"}
     assert ba.verificar_cache(man, datos.get) == ["b"]
     assert ba.verificar_cache(man, {"a": b"A"}.get) == ["b"]      # ausente = distinto
+
+
+def test_clase_de_con_plurales_y_lexico_dominicano():
+    # Revisión final: el vocabulario en español no cubría lo que sí cubre el inglés, y un «other» del ANALIZADOR cuenta
+    # como fallo suyo: el recall habría medido el diccionario, no el analizador.
+    es = {"Batata asada": "potato", "Tocineta": "pork", "Ají morrón": "vegetable", "Pepinos": "vegetable",
+          "Cebollas": "vegetable", "Churrasco": "beef", "Moras": "fruit", "Alitas": "chicken"}
+    en = {"sweet potato": "potato", "bell peppers": "vegetable", "tomatoes": "vegetable", "turkey": "chicken"}
+    for nombre, clase in es.items():
+        assert ba.clase_de(nombre, "es") == clase, nombre
+    for nombre, clase in en.items():
+        assert ba.clase_de(nombre, "en") == clase, nombre
+
+
+def test_se_mide_lo_que_el_analizador_dice_y_no_se_clasifica():
+    v = _plato("a", 400, proteina=30, carbs=40, grasa=13.8,
+               ingredientes=[{"nombre": "white rice", "gramos": 200}])
+    est = {"is_food": True, "calories": 400, "protein": 30, "carbs": 40, "healthy_fats": 14,
+           "items": [{"name": "Arroz"}, {"name": "Cosa rarísima"}]}
+    f = ba.evaluar_plato(v, est)
+    assert f["componentes"]["otros_estimado_pct"] == 0.5
+    assert ba.agregar([f])["otros_estimado_pct_medio"] == 0.5
+
+
+def test_clases_para_lo_que_el_banco_real_dejaba_fuera():
+    # Medido sobre el manifiesto congelado: 66 de 323 componentes principales caían en «other» (almendras ×18,
+    # pizza ×8, ensalada César ×8, coles de Bruselas, yogur, leche, quinoa, tofu, aguacate, ñame…).
+    pares = [("almonds", "Almendras", "nuts"), ("pizza", "Pizza de queso", "pizza"),
+             ("caesar salad", "Ensalada César", "leafy"), ("brussels sprouts", "Coles de Bruselas", "leafy"),
+             ("greek yogurt", "Yogur griego", "dairy"), ("milk", "Leche", "dairy"), ("quinoa", "Quinoa", "grain"),
+             ("tofu", "Tofu", "beans"), ("avocado", "Aguacate", "avocado"), ("yam", "Ñame", "potato"),
+             ("hash browns", "Papas", "potato")]
+    for en, es, clase in pares:
+        assert ba.clase_de(en, "en") == clase, en
+        assert ba.clase_de(es, "es") == clase, es

@@ -14,7 +14,10 @@ from admin_acceso import registrar_acceso, require_admin
 from admin_metricas import metricas
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+# Revisión final: `require_admin` en el PROPIO router — toda ruta que se le añada (la capa 2 traerá contenido de
+# usuarios) lo hereda aunque su autor lo olvide. Las rutas lo repiten para recibir el id del admin (FastAPI lo resuelve
+# una sola vez por petición).
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 @router.get("/yo")

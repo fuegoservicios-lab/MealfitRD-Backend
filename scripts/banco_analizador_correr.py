@@ -46,18 +46,21 @@ def a_jpeg(png: bytes, lado_max: int = 1024, calidad: int = 85) -> bytes:
 async def _uno(va, plato: dict, png: bytes, sem: asyncio.Semaphore) -> dict:
     async with sem:
         jpeg = a_jpeg(png)
-        res, lat, uso = None, None, {}
+        res, lat, entrada, salida = None, None, 0, 0
         for intento in (1, 2):
             va._reset_last_vision_usage()
             t0 = time.perf_counter()
             res = await va.process_image_with_vision(jpeg)
             lat = round(time.perf_counter() - t0, 3)
             uso = va.get_last_vision_usage() or {}
+            # los DOS intentos cuestan: el coste de la corrida no puede salir bajo (revisión final)
+            entrada += int(uso.get("input_tokens") or 0)
+            salida += int(uso.get("output_tokens") or 0)
             if not (isinstance(res, dict) and res.get("analysis_failed")) or intento == 2:
                 break
             await asyncio.sleep(ESPERA_REINTENTO_S)
     fila = ba.evaluar_plato(plato, res, lat)
-    fila["tokens"] = {"input": int(uso.get("input_tokens") or 0), "output": int(uso.get("output_tokens") or 0)}
+    fila["tokens"] = {"input": entrada, "output": salida}
     if isinstance(res, dict):
         fila["respuesta"] = {"meal_name": res.get("meal_name"), "photo_kind": res.get("photo_kind"),
                              "items": [it.get("name") for it in (res.get("items") or []) if isinstance(it, dict)]}
@@ -70,14 +73,23 @@ async def correr(man: dict, leer, concurrencia: int = 4, va=None) -> list[dict]:
     return list(await asyncio.gather(*[_uno(va, p, leer(p["dish_id"]), sem) for p in man["platos"]]))
 
 
+def _codigo_sha(va) -> str:
+    """Huella del CÓDIGO del analizador (vision_agent.py entero: prompt + post-proceso). prompt_sha solo veía el prompt:
+    un cambio en _coerce_meal_scan dejaba la misma huella y dos corridas distintas parecían la misma."""
+    try:
+        return hashlib.sha256(Path(va.__file__).read_bytes()).hexdigest()[:12]
+    except (AttributeError, OSError, TypeError):
+        return "desconocido"
+
+
 def _guardar(corrida: dict) -> None:
     import psycopg
     with psycopg.connect(os.environ["NEON_DATABASE_URL"]) as c, c.cursor() as cur:
         cur.execute(
             "INSERT INTO public.analyzer_benchmark_runs "
-            "(model, prompt_sha, manifest_sha, n, ok, failed, metrics, per_dish, tokens, notes) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)",
-            (corrida["model"], corrida["prompt_sha"], corrida["manifest_sha"], corrida["metrics"]["n"],
+            "(model, prompt_sha, codigo_sha, manifest_sha, n, ok, failed, metrics, per_dish, tokens, notes) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)",
+            (corrida["model"], corrida["prompt_sha"], corrida["codigo_sha"], corrida["manifest_sha"], corrida["metrics"]["n"],
              corrida["metrics"]["ok"], corrida["metrics"]["n"] - corrida["metrics"]["ok"],
              json.dumps(corrida["metrics"]), json.dumps(corrida["per_dish"]), json.dumps(corrida["tokens"]),
              corrida["notes"]),
@@ -120,6 +132,7 @@ def main(argv=None) -> int:
     corrida = {
         "ran_at": datetime.now(timezone.utc).isoformat(), "model": modelo,
         "prompt_sha": hashlib.sha256(str(getattr(va, "_MEAL_VISION_PROMPT", "")).encode()).hexdigest()[:12],
+        "codigo_sha": _codigo_sha(va),
         "manifest_sha": hashlib.sha256(texto_man.encode()).hexdigest()[:12],
         "metrics": metricas, "per_dish": filas, "tokens": tokens, "notes": args.notas,
     }

@@ -9,6 +9,7 @@ nombre de un plato. Un bloque que falla no tumba a los demás: sale como `error`
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from db import execute_sql_query
@@ -16,6 +17,38 @@ from db import execute_sql_query
 logger = logging.getLogger(__name__)
 
 _VENTANA = "now() - make_interval(days => %s)"
+
+# Revisión final: `generation_status` vive dentro de plan_data, que `/restore-local` deja escribir al cliente — un correo
+# o un mensaje acabaría como fila del panel. Solo se pintan los estados que escribe el backend; el resto, «otro».
+_ESTADOS_PLAN = frozenset({
+    "complete", "complete_partial", "partial", "partial_no_shopping", "active", "generating", "generating_next",
+    "in_progress", "paused_by_user", "failed", "abandoned", "degraded_pending_engagement", "expired_pending_pantry",
+    "sin estado",
+})
+# Las etiquetas de código (estado de la cola, función del gasto) las escribe el servidor, pero se pintan igual de
+# acotadas: solo [a-z0-9_].
+_ETIQUETA_DE_CODIGO = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+def _estado_plan(v) -> str:
+    v = str(v or "")
+    return v if v in _ESTADOS_PLAN else "otro"
+
+
+def _etiqueta_de_codigo(v) -> str:
+    v = str(v or "")
+    return v if _ETIQUETA_DE_CODIGO.match(v) else "otro"
+
+
+def _agrupar(filas: list, clave: str, etiqueta, *sumas: str) -> list:
+    """Suma las filas cuya etiqueta segura coincide (dos «otro» son UNA fila), de mayor a menor por la 1.ª suma."""
+    grupos: dict = {}
+    for r in filas:
+        k = etiqueta(r.get(clave))
+        g = grupos.setdefault(k, dict.fromkeys(sumas, 0))
+        for campo in sumas:
+            g[campo] += int(r.get(campo) or 0)
+    return sorted(grupos.items(), key=lambda kv: -kv[1][sumas[0]])
 
 
 def _entero(n) -> str:
@@ -60,10 +93,15 @@ def bloque_uso(dias: int) -> dict:
 
 
 def bloque_escaner(dias: int) -> dict:
-    v = _uno("SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE metadata->>'resultado' <> 'ok') AS fallidos, "
+    # Revisión final: «fallido» es solo `error` (no_comida y una compra sin totales son respuestas legítimas), y solo
+    # las fotos del ESCÁNER (`purpose='diary'`): las del chat no son este bloque.
+    v = _uno("SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE metadata->>'resultado' = 'error') AS fallidos, "
+             "COUNT(*) FILTER (WHERE metadata->>'resultado' = 'no_comida') AS no_comida, "
+             "COUNT(*) FILTER (WHERE metadata->>'resultado' = 'sin_totales') AS sin_totales, "
              "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50, "
              "percentile_cont(0.9) WITHIN GROUP (ORDER BY duration_ms) AS p90 "
-             f"FROM public.pipeline_metrics WHERE node = 'vision_scan_resultado' AND created_at >= {_VENTANA}", (dias,))
+             "FROM public.pipeline_metrics WHERE node = 'vision_scan_resultado' AND metadata->>'purpose' = 'diary' "
+             f"AND created_at >= {_VENTANA}", (dias,))
     s = _uno("SELECT COUNT(*) AS n, "
              "COUNT(*) FILTER (WHERE (metadata->>'corregido')::boolean) AS corregidos, "
              "COUNT(*) FILTER (WHERE (metadata->>'cambiados')::int > 0) AS cambiar, "
@@ -81,6 +119,8 @@ def bloque_escaner(dias: int) -> dict:
     return _kpis("escaner", "Escáner", [
         ("Fotos analizadas", _entero(n_v)),
         ("Análisis fallidos", _pct(int(v.get("fallidos") or 0) / n_v if n_v else None)),
+        ("No era comida", _pct(int(v.get("no_comida") or 0) / n_v if n_v else None)),
+        ("Sin totales (compra o etiqueta)", _pct(int(v.get("sin_totales") or 0) / n_v if n_v else None)),
         ("Tiempo de análisis (mediana / p90)", f"{_seg(v.get('p50'))} / {_seg(v.get('p90'))}"),
         ("Platos registrados con el escáner", _entero(n_s)),
         ("Corregidos por el usuario", _pct(frac("corregidos"))),
@@ -112,8 +152,8 @@ def bloque_planes(dias: int) -> dict:
                   f"WHERE created_at >= {_VENTANA} GROUP BY 1 ORDER BY 2 DESC", (dias,))
     alertas = _uno("SELECT COUNT(*) AS n FROM public.system_alerts WHERE resolved_at IS NULL")
     filas = [("Planes creados", _entero(sum(int(r.get("n") or 0) for r in planes)))]
-    filas += [(f"· {r['estado']}", _entero(r["n"])) for r in planes]
-    filas += [(f"Bloques en cola: {r['status']}", _entero(r["n"])) for r in cola]
+    filas += [(f"· {k}", _entero(g["n"])) for k, g in _agrupar(planes, "estado", _estado_plan, "n")]
+    filas += [(f"Bloques en cola: {k}", _entero(g["n"])) for k, g in _agrupar(cola, "status", _etiqueta_de_codigo, "n")]
     filas.append(("Alertas del sistema abiertas", _entero(alertas.get("n"))))
     return _kpis("planes", "Planes", filas)
 
@@ -126,7 +166,8 @@ def bloque_gasto(dias: int) -> dict:
                  f"WHERE created_at >= {_VENTANA}", (dias,))
     return {"id": "gasto", "titulo": f"Gasto de IA ({dias} días): {_usd(total.get('micros'))}", "tipo": "tabla",
             "columnas": ["Función", "Llamadas", "Coste"],
-            "filas": [[str(r["funcion"]), _entero(r["llamadas"]), _usd(r["micros"])] for r in por_funcion]}
+            "filas": [[k, _entero(g["llamadas"]), _usd(g["micros"])]
+                      for k, g in _agrupar(por_funcion, "funcion", _etiqueta_de_codigo, "micros", "llamadas")]}
 
 
 def bloque_analizador(_dias: int) -> dict:

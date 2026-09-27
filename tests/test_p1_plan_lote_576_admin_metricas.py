@@ -83,3 +83,39 @@ def test_un_bloque_roto_no_tumba_los_demas(monkeypatch):
 def test_los_dias_se_acotan(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake)
     assert am.metricas(0)["dias"] == 1 and am.metricas(999)["dias"] == 90
+
+
+def test_planes_y_gasto_no_pintan_texto_libre(monkeypatch):
+    # Revisión final: /restore-local deja al cliente escribir plan_data (y con él generation_status): un correo o un
+    # mensaje acabaría como fila del panel. Lista blanca de estados; etiquetas de código solo [a-z0-9_].
+    def _fake2(query, params=None, **kw):
+        if "FROM public.meal_plans" in query:
+            return [{"estado": "juan@correo.com mi mensaje", "n": 1}, {"estado": "complete", "n": 2},
+                    {"estado": "otra cosa", "n": 4}]
+        if "FROM public.plan_chunk_queue" in query:
+            return [{"status": "raro con espacios", "n": 1}]
+        if "SUM(cost_usd_micros)" in query and "GROUP BY" in query:
+            return [{"funcion": "Nodo Raro@x", "llamadas": 1, "micros": 10000}]
+        return _fake(query, params, **kw)
+    monkeypatch.setattr(am, "execute_sql_query", _fake2)
+    r = am.metricas(7)
+    planes = {f["etiqueta"]: f["valor"] for f in _bloque(r, "planes")["filas"]}
+    assert planes["· otro"] == "5" and planes["· complete"] == "2" and planes["Bloques en cola: otro"] == "1"
+    assert _bloque(r, "gasto")["filas"] == [["otro", "1", "US$0.01"]]
+    assert "@" not in json.dumps(r, ensure_ascii=False)
+
+
+def test_escaner_cuenta_solo_fallos_reales_y_solo_del_escaner(monkeypatch):
+    capturadas = []
+
+    def _fake3(query, params=None, **kw):
+        capturadas.append(" ".join(query.split()))
+        if "vision_scan_resultado" in query:
+            return {"n": 20, "fallidos": 2, "no_comida": 3, "sin_totales": 1, "p50": 4200.0, "p90": 9100.0}
+        return _fake(query, params, **kw)
+    monkeypatch.setattr(am, "execute_sql_query", _fake3)
+    esc = {f["etiqueta"]: f["valor"] for f in _bloque(am.metricas(7), "escaner")["filas"]}
+    assert esc["Análisis fallidos"] == "10 %" and esc["No era comida"] == "15 %"
+    assert esc["Sin totales (compra o etiqueta)"] == "5 %"
+    q = next(c for c in capturadas if "vision_scan_resultado" in c)
+    assert "metadata->>'resultado' = 'error'" in q and "metadata->>'purpose' = 'diary'" in q

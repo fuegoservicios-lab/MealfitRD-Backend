@@ -84,3 +84,27 @@ def test_scan_meta_basura_no_rompe_el_registro(monkeypatch):
     r = diary.api_log_consumed_meal(_payload(scan_meta="no-es-un-dict"), background_tasks=diary.BackgroundTasks(),
                                     verified_user_id="u1")
     assert r["success"] is True
+
+
+def test_resumen_no_lanza_con_numeros_enormes():
+    # Revisión final: float(10**400) lanza OverflowError, que no es ValueError: la comida quedaba guardada y la
+    # respuesta era 500.
+    r = te.resumen_de_correcciones({"cambiados": 10**400, "porcion": 10**400, "kcal_ia": -10**400})
+    assert r["cambiados"] == 40 and r["porcion"] == 1.0 and r["kcal_ia"] == 0
+
+
+def test_scan_meta_enorme_no_rompe_el_registro(monkeypatch):
+    monkeypatch.setattr(diary, "_persist_consumed_meal", lambda **kw: {"success": True, "already_logged": False,
+                                                                       "meal_id": "m1"})
+    r = diary.api_log_consumed_meal(_payload(scan_meta={"cambiados": 10**400, "porcion": 10**400}),
+                                    background_tasks=diary.BackgroundTasks(), verified_user_id="u1")
+    assert r["success"] is True
+
+
+def test_la_senal_del_upload_no_retrasa_el_escaneo():
+    # Revisión final: esperarla en línea con el pool saturado podía sumar hasta 15 s de espera + el statement_timeout
+    # al escaneo de cualquier usuario. Va en segundo plano, después de responder.
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "routers" / "diary.py").read_text(encoding="utf-8")
+    assert "background_tasks.add_task(registrar_vision_scan, actual_user_id," in src
+    assert "await asyncio.to_thread(registrar_vision_scan" not in src

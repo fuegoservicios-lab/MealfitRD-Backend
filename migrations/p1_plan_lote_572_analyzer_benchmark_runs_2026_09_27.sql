@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS public.analyzer_benchmark_runs (
     ran_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     model TEXT NOT NULL,
     prompt_sha TEXT NOT NULL,
+    codigo_sha TEXT NOT NULL DEFAULT '',
     manifest_sha TEXT NOT NULL,
     n INTEGER NOT NULL,
     ok INTEGER NOT NULL,

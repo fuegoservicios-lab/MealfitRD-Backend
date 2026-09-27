@@ -60,3 +60,10 @@ def test_yo_anota_el_acceso_y_falla_cerrado(cliente, monkeypatch):
 def test_la_app_registra_el_router():
     src = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     assert "from routers.admin import router as admin_router" in src and "app.include_router(admin_router)" in src
+
+
+def test_todo_el_router_exige_admin_por_construccion():
+    # Revisión final: con require_admin ruta por ruta, una ruta nueva de la capa 2 (contenido de usuarios) que lo
+    # olvide quedaría abierta. Va en el propio router: toda ruta que se le añada lo hereda.
+    from admin_acceso import require_admin
+    assert any(getattr(d, "dependency", None) is require_admin for d in ra.router.dependencies)

@@ -100,3 +100,37 @@ def test_migracion_idempotente_en_los_dos_directorios():
     assert a == b
     assert "CREATE TABLE IF NOT EXISTS public.analyzer_benchmark_runs" in a
     assert "RAISE EXCEPTION" in a and "auth." not in a
+
+
+def test_los_tokens_suman_los_dos_intentos(monkeypatch):
+    # Revisión final: el reintento descartaba los tokens del primer intento (el coste de la corrida salía bajo).
+    monkeypatch.setattr(corrida, "ESPERA_REINTENTO_S", 0)
+    man, fotos = _man_y_fotos()
+    clave = {d: ba.sha256_de(corrida.a_jpeg(b)) for d, b in fotos.items()}
+    va = _VisionFalsa(fallar_primero=[clave["d0"]])
+    filas = {f["dish_id"]: f for f in asyncio.run(corrida.correr(man, fotos.get, concurrencia=1, va=va))}
+    assert filas["d0"]["tokens"] == {"input": 2000, "output": 400}
+    assert filas["d1"]["tokens"] == {"input": 1000, "output": 200}
+
+
+def test_la_huella_cambia_si_cambia_el_codigo_del_analizador(tmp_path, monkeypatch):
+    # Revisión final: prompt_sha solo hasheaba el prompt; un cambio en _coerce_meal_scan (la 1.ª mejora candidata)
+    # dejaba la misma huella y dos corridas distintas parecían la misma.
+    man, fotos = _man_y_fotos()
+    (tmp_path / "manifest.json").write_text(json.dumps(man), encoding="utf-8")
+    monkeypatch.setattr(ba, "MANIFIESTO", tmp_path / "manifest.json")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    for d, b in fotos.items():
+        (cache / f"{d}.png").write_bytes(b)
+    fuente = tmp_path / "vision_agent.py"
+    fuente.write_text("# version A", encoding="utf-8")
+    va = _VisionFalsa()
+    va.__file__ = str(fuente)
+    monkeypatch.setattr(corrida, "_vision", lambda: va)
+    corrida.main(["--cache", str(cache), "--salida", str(tmp_path / "a.json")])
+    fuente.write_text("# version B", encoding="utf-8")
+    corrida.main(["--cache", str(cache), "--salida", str(tmp_path / "b.json")])
+    a = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
+    b = json.loads((tmp_path / "b.json").read_text(encoding="utf-8"))
+    assert a["codigo_sha"] == ba.sha256_de(b"# version A")[:12] and a["codigo_sha"] != b["codigo_sha"]

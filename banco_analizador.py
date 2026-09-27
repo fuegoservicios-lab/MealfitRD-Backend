@@ -29,48 +29,67 @@ MACROS = (("kcal", "calories", PISO_KCAL), ("proteina_g", "protein", PISO_MACRO_
 
 # Orden = prioridad: la primera clase cuyo vocabulario aparezca como PALABRA en el nombre gana.
 _CLASES = (
-    ("chicken", {"en": {"chicken"}, "es": {"pollo", "pechuga", "muslo", "muslos"}}),
+    ("pizza", {"en": {"pizza"}, "es": {"pizza"}}),
+    ("chicken", {"en": {"chicken", "turkey"}, "es": {"pollo", "pechuga", "muslo", "alitas", "gallina", "pavo"}}),
     ("fish", {"en": {"fish", "salmon", "tuna", "cod", "tilapia", "shrimp", "halibut", "trout", "seafood", "crab"},
-              "es": {"pescado", "salmon", "atun", "bacalao", "tilapia", "camaron", "camarones", "mariscos",
-                     "merluza", "dorado", "chillo", "trucha"}}),
+              "es": {"pescado", "salmon", "atun", "bacalao", "tilapia", "camaron", "mariscos", "merluza",
+                     "dorado", "chillo", "trucha", "sardina", "pulpo", "calamar", "langosta", "cangrejo", "jaiba"}}),
     ("pork", {"en": {"pork", "bacon", "ham", "sausage", "prosciutto", "chorizo", "pepperoni"},
-              "es": {"cerdo", "puerco", "tocino", "jamon", "chuleta", "chuletas", "salchicha", "salchichas",
-                     "longaniza", "chorizo", "pernil"}}),
+              "es": {"cerdo", "puerco", "tocino", "tocineta", "jamon", "chuleta", "salchicha", "longaniza",
+                     "chorizo", "pernil", "chicharron"}}),
     ("beef", {"en": {"beef", "steak", "burger", "meatball", "meatballs", "brisket"},
-              "es": {"res", "carne", "bistec", "hamburguesa", "albondiga", "albondigas", "picadillo", "filete"}}),
+              "es": {"res", "carne", "bistec", "churrasco", "entrana", "hamburguesa", "albondiga", "picadillo",
+                     "filete"}}),
     ("egg", {"en": {"egg", "eggs", "omelet", "omelette"}, "es": {"huevo", "huevos", "omelet", "omelette", "revoltillo"}}),
     ("cheese", {"en": {"cheese", "mozzarella", "parmesan", "cheddar", "feta", "ricotta"},
                 "es": {"queso", "quesos", "mozzarella", "parmesano", "cheddar", "ricotta"}}),
-    ("beans", {"en": {"beans", "bean", "lentils", "lentil", "chickpeas", "chickpea", "hummus", "edamame"},
+    ("dairy", {"en": {"yogurt", "milk"}, "es": {"yogur", "yogurt", "leche"}}),
+    ("beans", {"en": {"beans", "bean", "lentils", "lentil", "chickpeas", "chickpea", "hummus", "edamame", "tofu"},
                "es": {"habichuela", "habichuelas", "frijol", "frijoles", "lenteja", "lentejas", "garbanzo",
-                      "garbanzos", "hummus", "gandules", "guandules"}}),
+                      "garbanzos", "hummus", "gandules", "guandules", "tofu"}}),
+    ("nuts", {"en": {"almond", "walnut", "peanut", "cashew", "pecan", "pistachio", "nuts", "nut"},
+              "es": {"almendra", "nuez", "nueces", "mani", "cacahuate", "maranon", "pistacho"}}),
     ("rice", {"en": {"rice", "risotto"}, "es": {"arroz", "moro", "locrio", "risotto"}}),
     ("pasta", {"en": {"pasta", "spaghetti", "noodles", "macaroni", "penne", "lasagna"},
                "es": {"pasta", "espagueti", "espaguetis", "spaghetti", "fideos", "macarrones", "lasana"}}),
-    ("potato", {"en": {"potato", "potatoes", "fries"}, "es": {"papa", "papas", "patata", "patatas"}}),
+    ("grain", {"en": {"quinoa", "bulgur", "wheat", "pilaf", "couscous", "oats", "oatmeal", "granola"},
+               "es": {"quinoa", "bulgur", "trigo", "cuscus", "avena", "granola"}}),
+    ("potato", {"en": {"potato", "potatoes", "fries", "yam", "hash"}, "es": {"papa", "patata", "batata", "name", "yuca"}}),
     ("bread", {"en": {"bread", "toast", "bagel", "bun", "roll", "pita", "croissant", "tortilla"},
                "es": {"pan", "tostada", "tostadas", "bagel", "arepa", "casabe", "croissant", "pita"}}),
-    ("leafy", {"en": {"lettuce", "greens", "spinach", "arugula", "kale", "cabbage", "chard"},
+    ("leafy", {"en": {"lettuce", "greens", "spinach", "arugula", "kale", "cabbage", "chard", "salad", "brussels",
+                      "sprouts", "bok", "choy"},
                "es": {"lechuga", "espinaca", "espinacas", "rucula", "repollo", "col", "kale", "acelga", "berro",
-                      "hojas", "ensalada"}}),
+                      "hojas", "ensalada", "bruselas"}}),
     ("vegetable", {"en": {"broccoli", "carrot", "carrots", "cauliflower", "zucchini", "squash", "pepper", "peppers",
                           "tomato", "tomatoes", "cucumber", "cucumbers", "corn", "asparagus", "beets", "celery",
                           "mushroom", "mushrooms", "eggplant", "peas", "onion", "onions"},
-                   "es": {"brocoli", "zanahoria", "zanahorias", "coliflor", "calabacin", "auyama", "pimiento",
-                          "pimientos", "tomate", "tomates", "pepino", "maiz", "esparragos", "remolacha", "apio",
-                          "champinones", "hongos", "berenjena", "guisantes", "cebolla", "vegetales", "verduras"}}),
+                   "es": {"brocoli", "zanahoria", "coliflor", "calabacin", "auyama", "pimiento", "aji", "morron",
+                          "tomate", "pepino", "maiz", "esparrago", "remolacha", "apio", "champinon", "hongo",
+                          "berenjena", "guisante", "cebolla", "cebollin", "puerro", "vainita", "ajo", "vegetal",
+                          "verdura"}}),
+    ("avocado", {"en": {"avocado", "guacamole"}, "es": {"aguacate", "guacamole"}}),
     ("fruit", {"en": {"apple", "apples", "banana", "bananas", "berries", "strawberries", "strawberry", "blueberries",
                       "raspberries", "grapes", "melon", "cantaloupe", "honeydew", "pineapple", "orange", "oranges",
-                      "watermelon", "fruit", "mango", "pear", "kiwi"},
-               "es": {"manzana", "guineo", "banana", "fresa", "fresas", "uva", "uvas", "melon", "pina", "naranja",
-                      "sandia", "arandanos", "mango", "lechosa", "pera", "kiwi", "fruta", "frutas"}}),
+                      "watermelon", "fruit", "mango", "pear", "kiwi", "peach", "cherry", "cherries", "papaya"},
+               "es": {"manzana", "guineo", "banana", "fresa", "uva", "melon", "pina", "naranja", "sandia",
+                      "arandano", "mango", "lechosa", "pera", "kiwi", "fruta", "mora", "frambuesa", "cereza",
+                      "durazno", "melocoton", "papaya", "chinola"}}),
 )
 
 
 def _palabras(texto: str) -> set[str]:
+    """Las palabras del nombre, sin acentos, y también en singular («pepinos» → pepino, «tomatoes» → tomato): el
+    vocabulario va en singular y el analizador dice plurales (revisión final: el recall medía el diccionario)."""
     t = unicodedata.normalize("NFKD", str(texto or "").lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
-    return set(re.findall(r"[a-z]+", t))
+    palabras = set(re.findall(r"[a-z]+", t))
+    for w in list(palabras):
+        if len(w) > 4 and w.endswith("es"):
+            palabras.add(w[:-2])
+        if len(w) > 3 and w.endswith("s"):
+            palabras.add(w[:-1])
+    return palabras
 
 
 def clase_de(nombre: str, idioma: str) -> str:
@@ -159,9 +178,11 @@ def _componentes(verdad: dict, estimado: dict) -> dict:
             masa_otros += ing["gramos"]
         else:
             esperadas.add(c)
-    vistas = {clase_de(it.get("name", ""), "es") for it in (estimado.get("items") or []) if isinstance(it, dict)}
+    clases_dichas = [clase_de(it.get("name", ""), "es") for it in (estimado.get("items") or []) if isinstance(it, dict)]
+    vistas = set(clases_dichas)
     return {"esperadas": sorted(esperadas), "acertadas": sorted(esperadas & vistas),
-            "otros_pct": round(masa_otros / masa_principal, 3) if masa_principal else 0.0}
+            "otros_pct": round(masa_otros / masa_principal, 3) if masa_principal else 0.0,
+            "otros_estimado_pct": round(clases_dichas.count("other") / len(clases_dichas), 3) if clases_dichas else 0.0}
 
 
 def evaluar_plato(verdad: dict, estimado: Optional[dict], latencia_s: Optional[float] = None) -> dict:
@@ -201,6 +222,8 @@ def agregar(filas: list[dict]) -> dict:
     acertadas = sum(len(f["componentes"]["acertadas"]) for f in ok)
     r["recall_componentes"] = round(acertadas / esperadas, 4) if esperadas else None
     r["otros_pct_medio"] = round(statistics.mean([f["componentes"]["otros_pct"] for f in ok]), 4) if ok else None
+    r["otros_estimado_pct_medio"] = (round(statistics.mean([f["componentes"].get("otros_estimado_pct", 0.0) for f in ok]), 4)
+                                     if ok else None)
     lat = [f["latencia_s"] for f in filas if f.get("latencia_s") is not None]
     r["latencia_s"] = {"p50": percentil(lat, 0.5), "p90": percentil(lat, 0.9)}
     r["valida"] = bool(n) and r["tasa_fallos"] <= UMBRAL_FALLOS_VALIDA

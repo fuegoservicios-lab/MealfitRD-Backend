@@ -24,9 +24,13 @@ _BANDERAS = ("redescrito", "nombre_editado", "macros_tecleadas")
 
 
 def _entero(v, tope: int) -> int:
+    if isinstance(v, bool):
+        v = int(v)
+    if isinstance(v, int):                       # sin pasar por float: float(10**400) lanza OverflowError
+        return max(0, min(tope, v))
     try:
         n = float(v or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     if not math.isfinite(n):
         return 0
@@ -50,7 +54,7 @@ def resumen_de_correcciones(crudo) -> Optional[dict]:
     r = {k: _entero(crudo.get(k), tope) for k, tope in _TOPES.items()}
     try:
         porcion = float(crudo.get("porcion", 1) or 1)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         porcion = 1.0
     r["porcion"] = max(0.0, min(4.0, porcion)) if math.isfinite(porcion) else 1.0
     for k in _BANDERAS:

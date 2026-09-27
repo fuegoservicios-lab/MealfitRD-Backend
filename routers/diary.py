@@ -611,11 +611,12 @@ async def api_diary_upload(
         logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
         _t_vision = time.perf_counter()
         vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion)
-        # [P1-PLAN-LOTE-575] cuánto tardó y si sirvió, para el panel (ni la foto ni su texto)
+        # [P1-PLAN-LOTE-575] cuánto tardó y si sirvió, para el panel (ni la foto ni su texto). En SEGUNDO PLANO: esperarla
+        # aquí con el pool saturado podía sumar segundos al escaneo de cualquier usuario (revisión final).
         try:
-            await asyncio.to_thread(registrar_vision_scan, actual_user_id,
-                                    duracion_ms=(time.perf_counter() - _t_vision) * 1000.0,
-                                    resultado=vision_result, purpose=purpose)
+            background_tasks.add_task(registrar_vision_scan, actual_user_id,
+                                      duracion_ms=(time.perf_counter() - _t_vision) * 1000.0,
+                                      resultado=vision_result, purpose=purpose)
         except Exception:
             pass
         
@@ -1027,10 +1028,14 @@ def api_log_consumed_meal(
             # [P1-PLAN-LOTE-224] solo un `False` explícito apaga la resta; ausente = la conducta de siempre
             deduct=payload.deduct_pantry is not False,
         )
-        # [P1-PLAN-LOTE-575] la corrección del escáner, una vez por comida guardada (un repetido no cuenta dos veces)
-        _resumen = resumen_de_correcciones(payload.scan_meta)
-        if _resumen is not None and isinstance(resp, dict) and not resp.get("already_logged"):
-            background_tasks.add_task(registrar_scan_outcome, user_id, _resumen)
+        # [P1-PLAN-LOTE-575] la corrección del escáner, una vez por comida guardada (un repetido no cuenta dos veces).
+        # La comida YA está guardada: nada de la señal puede convertir eso en un 500.
+        try:
+            _resumen = resumen_de_correcciones(payload.scan_meta)
+            if _resumen is not None and isinstance(resp, dict) and not resp.get("already_logged"):
+                background_tasks.add_task(registrar_scan_outcome, user_id, _resumen)
+        except Exception as _scan_e:
+            logger.debug(f"[P1-PLAN-LOTE-575] scan_meta ignorado: {_scan_e!r}")
         return resp
     except HTTPException as he:
         raise he
