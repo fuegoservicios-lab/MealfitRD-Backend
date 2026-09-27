@@ -32715,20 +32715,22 @@ def _single_trip_fresh_substitute(days, db=None, *, effective=None, diet=None, d
             for mi, m in enumerate(d.get("meals") or []):
                 if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
                     continue
-                ings = m["ingredients"]
+                ings, _forzar_fs = m["ingredients"], None      # [P1-PLAN-LOTE-496] un duradero de proteína por plato
                 for idx, line in enumerate(list(ings)):
                     text = str(line)
                     _r_fs = _cu_fs.sustituir_linea(text, i, req, vegetal=_veg, vegano=(_dieta_fs == "vegan"),
                                                    alergias=_alergias_fs, dieta=_dieta_fs,
                                                    contexto=contexto if isinstance(contexto, dict) else None,
                                                    semilla=i + mi, evitar=_presentes_fs,
-                                                   gramos_de=lambda _t: _resolve_line_food_grams(_t)[1])  # [P1-PLAN-LOTE-462]
+                                                   gramos_de=lambda _t: _resolve_line_food_grams(_t)[1],  # [P1-PLAN-LOTE-462]
+                                                   plato=_cu_fs.texto_plato(m), forzar=_forzar_fs)  # [P1-PLAN-LOTE-466]
                     if not _r_fs:
                         continue
                     new_line, sub, hit_tok = _r_fs
                     _presentes_fs.add(sub)
+                    _forzar_fs = sub if sub in _cu_fs.PROTEINAS_DURADERAS else _forzar_fs
                     # [P1-PLAN-LOTE-460/461] la lista por ALIMENTO (no por índice) y el plato entero deja de nombrar el fresco
-                    __import__("sustitucion_fresca").sustituir_en_plato(m, idx, text, new_line, sub)
+                    __import__("sustitucion_fresca").sustituir_en_plato(m, idx, text, new_line, sub, db=db)  # [P1-PLAN-LOTE-468]
                     changed += 1
                     logger.info(f"🧳 [P1-STEP14-SHOPPING-COOKING] día {i + 1}: «{text[:40]}» no aguanta → «{sub}» | meal={str(m.get('name'))[:40]}")
                 if m.get("_fresh_substituted"):
@@ -36968,6 +36970,7 @@ def _reconcile_display_missing_in_raw(days) -> int:
     tooltip-anchor: P2-RAW-DISPLAY-RECONCILE"""
     try:
         from constants import strip_accents as _sa_rr
+        import reconcilia_alimento as _ra469   # [P1-PLAN-LOTE-469] «falta» se confirma por ALIMENTO del catálogo
         added = 0
         for _d in days or []:
             for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
@@ -37002,7 +37005,7 @@ def _reconcile_display_missing_in_raw(days) -> int:
                     if len(_t0) > 5 and _t0.endswith("es"):
                         _cands.add(_t0[:-2])
                     if not any(_re.search(r"\b" + _re.escape(_c) + r"(?:es|e|s)?\b", _raw_blob)
-                               for _c in _cands):
+                               for _c in _cands) and not _ra469.ya_esta(s, raw):
                         raw.append(s)
                         _raw_blob += " " + _sa_rr(s.lower())
                         added += 1
@@ -37035,6 +37038,7 @@ def _reconcile_raw_missing_in_display(days) -> int:
         return 0
     try:
         from constants import strip_accents as _sa_rd
+        import reconcilia_alimento as _ra469   # [P1-PLAN-LOTE-469] «carne de Filete de pescado» ES «1 filete de pescado»
         added = 0
         for _d in days or []:
             for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
@@ -37059,7 +37063,7 @@ def _reconcile_raw_missing_in_display(days) -> int:
                     if len(_t0) > 5 and _t0.endswith("es"):
                         _cands.add(_t0[:-2])
                     if not any(_re.search(r"\b" + _re.escape(_c) + r"(?:es|e|s)?\b", _disp_blob)
-                               for _c in _cands):
+                               for _c in _cands) and not _ra469.ya_esta(s, ings):
                         ings.append(s)
                         _disp_blob += " " + _sa_rd(s.lower())
                         added += 1

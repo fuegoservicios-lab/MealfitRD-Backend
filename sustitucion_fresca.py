@@ -47,7 +47,14 @@ _DURADERO = {
     "leche UHT": ("leche UHT", "f", "s", False),
     "batata": ("batata", "f", "s", False),
     "casabe": ("casabe", "m", "s", False),
+    "salsa de tomate": ("salsa de tomate", "f", "s", False),     # [P1-PLAN-LOTE-466] el tomate de un guiso
+    "claras de huevo": ("claras", "f", "p", False),              # [P1-PLAN-LOTE-495] se cocinan: no vienen listas
 }
+#: [P1-PLAN-LOTE-466] duraderos que se MIDEN, no se cortan: «pica 2 tomates» → «mide 60 g de salsa de tomate»
+# [P1-PLAN-LOTE-490 · 2026-09-27] el orégano SECO tampoco se pica: «pica 2 cdas de cilantro» → «mide 2 cdtas de orégano»,
+# «termina con el cilantro picado» → «termina con el orégano». tooltip-anchor: P1-PLAN-LOTE-490-OREGANO-SE-MIDE
+_LIQUIDOS = ("salsa de tomate", "orégano")
+_ADJ_CORTE = re.compile(r"^(?:picad|cortad|trocead|rallad|rebanad|laminad|fresc)$", re.IGNORECASE)
 
 # género de la palabra NÚCLEO de la frase del fresco (sin acentos)
 _GENERO = {
@@ -63,16 +70,23 @@ _GENERO = {
     "arandano": "m", "uva": "f", "lechosa": "f", "papaya": "f", "mango": "m", "pina": "f", "melon": "m", "sandia": "f",
     "guineo": "m", "banana": "f", "durazno": "m", "melocoton": "m", "pera": "f", "kiwi": "m", "cereza": "f",
     "mamey": "m", "nispero": "m", "aguacate": "m", "leche": "f", "platano": "m", "rulo": "m", "yuca": "f", "pan": "m",
-    "panecillo": "m", "bagel": "m",
+    "panecillo": "m", "bagel": "m", "edamame": "m",
 }
 _CABEZAS = ("pechuga", "muslo", "filete", "chuleta", "bistec", "lomo", "carne")
 #: tokens de la tabla que en el texto suelen ser OTRA palabra: sólo cuentan si la línea vieja los nombra
 _HOMONIMOS = ("dorado", "mora", "lomo", "pan")
-_CORTES = r"(?:cubos|trozos|tiras|dados|lascas|piezas?|pedazos?|filetes?|pechugas?|muslos?|lomos?|chuletas?|medallones|porci[oó]n(?:es)?)"
+# [P1-PLAN-LOTE-469 · 2026-09-27] «la carne de filete de pescado blanco cocida» (el raw de la IA): la «carne de» se va con
+# el fresco —«escurre el atún», no «escurre la carne de atún»—. tooltip-anchor: P1-PLAN-LOTE-469-CARNE-DE
+_CORTES = (r"(?:cubos|trozos|tiras|dados|lascas|piezas?|pedazos?|filetes?|pechugas?|muslos?|lomos?|chuletas?|medallones|"
+           r"porci[oó]n(?:es)?|carne)")
 _NOTA = ("⚠", "💡", "🤰", "⚕", "🧊", "🛒", "🍽", "❄", "⏱")
 _VOCAL = {"a": "[aá]", "e": "[eé]", "i": "[ií]", "o": "[oó]", "u": "[uúü]", "n": "[nñ]"}
+# [P1-PLAN-LOTE-469] «ten listas 1 rebanada de pan integral familiar» → la medida del pan se va con él
 _UNIDADES = (r"(?:g|gr|gramos|kg|oz|onzas?|lb|libras?|tazas?|unidad(?:es)?|porci[oó]n(?:es)?|piezas?|cdas?|cdtas?|"
-             r"cucharadas?|cucharaditas?)")
+             r"cucharadas?|cucharaditas?|rebanadas?|"
+             # [P1-PLAN-LOTE-497] «escurre 2 latas de filete de pescado blanco» (la IA lo pensó enlatado) → la medida de la
+             # lista, no «escurre 2 latas de sardinas» con 80 g comprados
+             r"latas?)")
 _NUM = r"(?:\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|[½¼¾⅓⅔])"
 
 # adjetivos que concuerdan con el alimento (raíz + o/a/os/as)
@@ -115,9 +129,10 @@ _TEMP_SEGURA = re.compile(
     r"(?:,\s*|\s+)?(?:\(\s*)?(?:\b(?:o|y)\s+)?"
     r"(?:(?:verifica(?:ndo)?|comprueba|comprobando|aseg[uú]rate\s+de|asegur[aá]ndote\s+de|revisa(?:ndo)?|midiendo)\s+"
     r"(?:con\s+(?:un\s+)?term[oó]metro\s+)?que\s+"
-    r"(?:[^,;.()]{0,60}?\s+)?(?:alcance|llegue\s+a|marque|est[eé]\s+a)\s+"
-    r"|hasta\s+(?:(?:alcanzar|llegar\s+a)\s+|que\s+(?:[^,;.()]{0,60}?\s+)?(?:alcance|llegue\s+a|marque)\s+)?"
-    r"|(?:la\s+parte\s+m[aá]s\s+gruesa|el\s+centro|el\s+interior)[^,;.()]{0,40}?\s+(?:alcance|llegue\s+a)\s+)?"
+    # [P1-PLAN-LOTE-495] también en plural: «sella los filetes… hasta que alcancen 74 °C» dejaba «hasta que alcancen»
+    r"(?:[^,;.()]{0,60}?\s+)?(?:alcancen?|lleguen?\s+a|marquen?|est[eé]n?\s+a)\s+"
+    r"|hasta\s+(?:(?:alcanzar|llegar\s+a)\s+|que\s+(?:[^,;.()]{0,60}?\s+)?(?:alcancen?|lleguen?\s+a|marquen?)\s+)?"
+    r"|(?:la\s+parte\s+m[aá]s\s+gruesa|el\s+centro|el\s+interior)[^,;.()]{0,40}?\s+(?:alcancen?|lleguen?\s+a)\s+)?"
     r"(?:6[0-9]|7[0-9])\s*°\s*C"
     r"(?:\s+(?:en\s+(?:el\s+centro|la\s+parte\s+m[aá]s\s+gruesa|el\s+interior|su\s+interior)|internos?|"
     r"de\s+temperatura\s+interna))?(?:\s+si\s+no\s+estaba\s+previamente\s+cocid[oa]s?)?(?:\s*\))?",
@@ -127,6 +142,9 @@ _HASTA_COCIDO = re.compile(
     r"(?:[^,;.()]{0,50}?\s+)?(?:est[eé]n?|queden?|se\s+vean?|luzcan?|tengan?)\s+"
     r"(?:bien\s+|completamente\s+|totalmente\s+|ligeramente\s+)?"
     r"(?:opac[oa]s?|cocid[oa]s?|dorad[oa]s?|firmes?|blanc[oa]s?|hech[oa]s?|sellad[oa]s?|cocinad[oa]s?)"
+    # [P1-PLAN-LOTE-466] «opaco y firme», «dorado y completamente cocido»: la cadena entera se va
+    r"(?:\s*(?:,|y)\s+(?:bien\s+|completamente\s+|totalmente\s+)?(?:opac[oa]s?|cocid[oa]s?|dorad[oa]s?|firmes?|"
+    r"blanc[oa]s?|hech[oa]s?|tiern[oa]s?|crujientes?))*"
     r"(?:\s+(?:por\s+dentro|en\s+el\s+centro|por\s+completo|por\s+ambos\s+lados))?"
     r"(?:\s+y\s+(?:se\s+desmenucen?|se\s+separen?\s+en\s+lascas|suelten?\s+sus\s+jugos|"
     r"el\s+(?:centro|interior)\s+(?:a[uú]n\s+|siga\s+|quede\s+)?(?:suave|jugoso|tierno)))?"
@@ -220,13 +238,15 @@ def _regex_frase(tokens) -> re.Pattern:
         r"(?P<nucleo>\b(?:" + nucleos + r"))\b"
         r"(?P<cola>(?:\s+(?:blanc[oa]s?|fresc[oa]s?|magr[oa]s?|molid[oa]s?|deshuesad[oa]s?|limpi[oa]s?|"
         r"sin\s+piel|sin\s+hueso|de\s+pollo|de\s+pavo|de\s+res|de\s+cerdo|de\s+pescado(?:\s+blanco)?|"
-        r"(?:ya\s+)?cocid[oa]s?|(?:ya\s+)?desmenuzad[oa]s?|enter[oa]s?))*)"
+        r"(?:ya\s+)?cocid[oa]s?|(?:ya\s+)?desmenuzad[oa]s?|enter[oa]s?|verdes?|madur[oa]s?|familiar(?:es)?|"
+        # [P1-PLAN-LOTE-493] el tamaño es del fresco: «mide 1 tomate mediano» → «mide 60 g de salsa de tomate», sin «mediano»
+        r"median[oa]s?|grandes?|pequeñ[oa]s?))*)"
         r"(?P<cant2>\s+de\s+" + _NUM + r"\s*(?:g|gr|gramos)\b)?"
         r"(?P<par>(?:\s*\((?:porci[oó]n|≈?\s*\d[^)]{0,20}|[a-záéíóúñ ]{2,20})\))*)",
         re.IGNORECASE)
 
 
-def _cadena(texto: str, pos: int, g: str, n: str, listo: bool):
+def _cadena(texto: str, pos: int, g: str, n: str, listo: bool, liquido: bool = False):
     """Adjetivos y frases de método pegados al alimento desde `pos`: (texto nuevo de la cadena, fin)."""
     partes, j, primero = [], pos, True
     while True:
@@ -235,6 +255,8 @@ def _cadena(texto: str, pos: int, g: str, n: str, listo: bool):
             break
         adj, frase = m.group("adj"), m.group("frase")
         fuera = listo and (frase is not None or (adj is not None and _METODO_RAIZ.match(adj)))
+        # [P1-PLAN-LOTE-466] una salsa no va «picada» ni «fresca»
+        fuera = fuera or (liquido and adj is not None and bool(_ADJ_CORTE.match(adj)))
         if frase is not None and not fuera:
             break                       # «de pollo», «sin piel» que no se quitan: la cadena termina aquí
         if not fuera:
@@ -288,8 +310,12 @@ def _clausulas(texto: str):
 
 
 def _es_split(resto: str) -> bool:
-    """¿Lo que sigue a «con» son vegetales que se cocinan con su tiempo? (entonces el duradero entra al final)"""
+    """¿Lo que sigue a «con» son vegetales que se cocinan con su tiempo? (entonces el duradero entra al final)
+    [P1-PLAN-LOTE-466] Sólo cuenta lo que va CON el duradero, hasta el siguiente verbo: en «saltea el pescado con el ajo
+    en polvo 3 minutos, añade la cebolla…» los vegetales entran después y el ajo solo se quemaba 3 minutos."""
     cl = re.split(r"[;.]", resto, maxsplit=1)[0]
+    cl = re.split(r",?\s+(?:y\s+)?(?:añade|agrega|incorpora|luego|después|despues|retira|sirve|reserva)\b", cl,
+                  maxsplit=1, flags=re.IGNORECASE)[0]
     return bool(_VEGETAL.search(cl))
 
 
@@ -314,9 +340,30 @@ def _fin_ambito(texto: str, desde: int) -> int:
     return m.start() if m else len(texto)
 
 
-def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: str, listo: bool, *, paso: bool):
+def _es_producto(texto: str, m, productos, salsa_tomate: bool) -> bool:
+    """¿La mención es un PRODUCTO hecho del alimento, no el fresco sustituido?
+    [P1-PLAN-LOTE-466] «salsa de tomate», «caldo de pollo» no se reescriben.
+    [P1-PLAN-LOTE-492 · 2026-09-27] …pero «el puré de plátano verde», «la salsa de pechuga de pavo» o «la salsa de
+    espinacas» se HACEN en esta receta con el fresco: el nombre y el montaje seguían diciendo «plátano verde» con batata en
+    la lista (replay forzado de los días 21+). Un caldo es despensa siempre; con la salsa de tomate de sustituto, toda
+    preparación «de tomate» lo sigue siendo («salsa ligera de tomate», no «… de salsa de tomate»); lo demás, sólo si el
+    producto es otra línea de la lista del plato. tooltip-anchor: P1-PLAN-LOTE-492-PRODUCTO-O-RECETA"""
+    antes = texto[max(0, m.start() - 30):m.start()]
+    if re.search(r"\b(?:caldo|consom[eé]|fondo|cubitos?)\s+(?:[a-záéíóúñ]+\s+)?de\s+$", antes, re.IGNORECASE):
+        return True
+    mp = re.search(r"\b(salsa|pasta|pur[eé]|jugo|sopa|crema)\s+(?:[a-záéíóúñ]+\s+)?de\s+$", antes, re.IGNORECASE)
+    if not mp:
+        return False
+    if salsa_tomate:
+        return True
+    frase = _sa(mp.group(1)) + " de " + _sa(m.group("nucleo"))
+    return any(frase in o for o in (productos or ()))
+
+
+def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: str, listo: bool, *, paso: bool,
+               productos=()):
     """Reescribe cada frase del fresco en `texto`. Devuelve (texto, hubo_cambio, pronombres del fresco)."""
-    hits = list(rx.finditer(texto))
+    hits = [m for m in rx.finditer(texto) if not _es_producto(texto, m, productos, corto == "salsa de tomate")]
     if not hits:
         return texto, False, set()
     out = texto
@@ -331,9 +378,23 @@ def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: st
             frase = _articulo(art.strip(), g, n) + " " + frase
         elif (art and art.strip()[:1].isupper()) or m.group(0)[:1].isupper() or (m.start() == 0 and not paso):
             frase = frase[:1].upper() + frase[1:]
-        cadena, fin = _cadena(out, m.end(), g, n, listo)
+        liquido = corto in _LIQUIDOS
+        cadena, fin = _cadena(out, m.end(), g, n, listo, liquido)
         ini = m.start()
         viejos = {_pron(g0, n0)}
+        if paso and liquido:
+            # [P1-PLAN-LOTE-466] «pica 2 tomates en cubos» → «mide 60 g de salsa de tomate»
+            antes = out[:ini]
+            mv = re.search(r"(\b[\wáéíóúñ]+)(\s+)$", antes)
+            if mv and re.match(r"^(?:pica|corta|trocea|rebana|lava|lamina|ralla)$", mv.group(1), re.IGNORECASE):
+                verbo = "Mide" if mv.group(1)[:1].isupper() else "mide"
+                out = antes[:mv.start()] + verbo + mv.group(2) + out[ini:]
+                delta = len(verbo) - len(mv.group(1))
+                ini += delta
+                fin += delta
+            fin, viejos = _sin_corte(out, fin, viejos)
+            out = out[:fin[0]] + out[fin[1]:]
+            fin = fin[0]
         if paso and listo:
             antes = out[:ini]
             mv = re.search(r"(\b[\wáéíóúñ]+)(\s+)$", antes)
@@ -353,7 +414,8 @@ def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: st
                 if mo:
                     out = out[:fin] + "; " + verbo_orig.lower() + " " + out[mo.end():]
             else:
-                if mv and _VERBOS_CALIENTA.match(mv.group(1)) and not (
+                _lista466 = bool(_OBJETO_SIGUE.match(out, fin)) and _es_split(out[fin:])   # «la carne, el tomate y…»
+                if mv and _VERBOS_CALIENTA.match(mv.group(1)) and not _lista466 and not (
                         re.match(r"\s+con\s+", out[fin:], re.IGNORECASE) and _es_split(out[fin:])):
                     verbo = "Calienta" if mv.group(1)[:1].isupper() else "calienta"
                     out = antes[:mv.start()] + verbo + mv.group(2) + out[ini:]
@@ -436,7 +498,9 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
         if not nombra and previa:
             for mc in _RX_CLITICO.finditer(cl):
                 if mc.group(2).lower() in viejos:
-                    retoma = mc
+                    # [P1-PLAN-LOTE-466] «Estira la masa en una tortilla fina y cocínala»: la «la» es de la tortilla
+                    if not _FIN_AMBITO.search(cl[:mc.start()].replace(";", " ").replace(".", " ")):
+                        retoma = mc
                     break
         if not nombra and retoma is None:
             # la temperatura segura de una cláusula sin otra proteína cruda también era del fresco sustituido
@@ -467,12 +531,25 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
             previa = True
             continue
         cl = _limpia_coccion(cl)
+        # [P1-PLAN-LOTE-469] «verifica que la carne de pescado esté cocida y lista para consumir» → «escurre las sardinas»:
+        # lo que viene en lata o en su paquete ya está listo; no hay nada que verificar (y el participio no concordaba)
+        mver = re.search(r"\b(?P<v>verifica|comprueba|confirma|aseg[uú]rate\s+de)\s+que\s+(?P<obj>(?:(?:el|la|los|las)\s+)?"
+                         + _tolerante(_sa(corto)) + r")\s+est[eé]n?\s+(?:bien\s+|completamente\s+)?cocid[oa]s?"
+                         r"(?:\s+y\s+list[oa]s?(?:\s+para\s+(?:consumir|comer))?)?", cl, re.IGNORECASE)
+        if mver:
+            verbo = "Escurre" if mver.group("v")[:1].isupper() else "escurre"
+            cl = cl[:mver.start()] + verbo + " " + mver.group("obj") + cl[mver.end():]
         # sin la temperatura de por medio, el pronombre que la seguía ya está al alcance («…a fuego medio y déjala»)
         mn = rx_corto.search(cl)
         if mn:
             cl = _clitico(cl, mn.end(), _fin_ambito(cl, mn.end()), viejos, g, n)
         mv = re.search(r"\b(?P<v>saltea|sofr[ií]e|cocina|guisa|calienta|sella|dora|asa)\s+(?:(?:el|la|los|las)\s+)?"
                        + _tolerante(_sa(corto)) + r"\b[^,;.]*?\s+con\s+(?P<resto>[^;.]+)", cl, re.IGNORECASE)
+        if not (mv and _es_split(mv.group("resto"))):
+            # [P1-PLAN-LOTE-466] la misma cocción en LISTA: «cocina la carne, el tomate y la cebolla… 4-5 minutos»
+            mv = re.search(r"\b(?P<v>saltea|sofr[ií]e|cocina|guisa|calienta|sella|dora|asa)\s+(?:(?:el|la|los|las)\s+)?"
+                           + _tolerante(_sa(corto)) + r"\b(?:\s+en\s+lata|\s+en\s+agua|\s+cocid[oa]s)?\s*,\s+"
+                           r"(?P<resto>[^;.]+)", cl, re.IGNORECASE)
         if mv and _es_split(mv.group("resto")):
             v = mv.group("v")
             if _sa(v) in ("sella", "dora", "asa"):
@@ -485,7 +562,8 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
             # [P1-PLAN-LOTE-463] el tiempo baja sólo si el verbo es DEL duradero («calienta las sardinas 8-10 min»,
             # «hornéalas»); «Hornea 20-25 minutos» a una bandeja con vegetales es el tiempo de los vegetales
             obj = r"\s+(?:(?:el|la|los|las)\s+)?(?:\d[^;.,]{0,20}?\s+de\s+)?" + _tolerante(_sa(corto)) + r"\b"
-            mcal = re.search(r"\b(?:calienta|saltea|sofr[ií]e)" + obj + r"|\bcali[eé]ntal(?:o|a|os|as)\b", cl,
+            mcal = re.search(r"\b(?:calienta|saltea|sofr[ií]e)" + obj + r"|\bcali[eé]ntal(?:o|a|os|as)\b"
+                             r"|\bsalt[eé]al(?:o|a|os|as)\b|\bsofr[ií]el(?:o|a|os|as)\b", cl,     # [P1-PLAN-LOTE-466]
                              re.IGNORECASE)
             mhor = re.search(r"\b(?:hornea|gratina)" + obj + r"|\bhorn[eé]al(?:o|a|os|as)\b|\bgrat[ií]nal(?:o|a|os|as)\b",
                              cl, re.IGNORECASE)
@@ -516,6 +594,124 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
     return _limpia_puntuacion("".join(partes)) if partes else texto
 
 
+_ESTADO = re.compile(r"\b(?P<v>est[eé]n?|queden?)(?P<adv>\s+(?:(?:bien|completamente|muy|ligeramente)\s+)?)"
+                     r"(?P<raiz>tiern|cocid|bland|dorad|hech|list)(?P<fin>os|as|o|a)\b", re.IGNORECASE)
+
+
+def _concuerda_estado(resto: str, g: str, n: str, viejos: set) -> str:
+    """[P1-PLAN-LOTE-494 · 2026-09-27] «hierve la batata… hasta que esté tierno» (el participio era del plátano): el
+    estado que la cláusula pide al alimento concuerda con el nuevo —«tierna»— y el verbo con su número («estén» →
+    «esté»). Sólo si concordaba con el viejo. tooltip-anchor: P1-PLAN-LOTE-494-CONCORDANCIA"""
+    gv = {"lo": ("m", "s"), "la": ("f", "s"), "los": ("m", "p"), "las": ("f", "p")}
+    olds = {gv[v] for v in viejos if v in gv}
+    if not olds or (g, n) in olds:
+        return resto
+    fin_cl = _fin_ambito(resto, 0)
+
+    def _f(mm):
+        fv = mm.group("fin").lower()
+        if ("m" if fv.startswith("o") else "f", "p" if fv.endswith("s") else "s") not in olds:
+            return mm.group(0)
+        v = mm.group("v")
+        tiene_n = v.lower().endswith("n")
+        v2 = (v[:-1] if tiene_n else v) if n == "s" else (v if tiene_n else v + "n")
+        return v2 + mm.group("adv") + mm.group("raiz") + _inflexion(mm.group("fin"), g, n)
+    return _ESTADO.sub(_f, resto[:fin_cl]) + resto[fin_cl:]
+
+
+def _sigue_pronombre(texto: str, corto: str, g: str, n: str, viejos: set) -> str:
+    """[P1-PLAN-LOTE-466] Lo que no viene cocinado (batata, zanahoria…) no cambia su cocción, pero la cláusula que lo
+    retoma con un pronombre sí cambia de género: «hierve la batata…; escúrrelo y májalo» → «escúrrela y májala»."""
+    rx_corto = re.compile(r"\b" + _tolerante(_sa(corto)) + r"\b", re.IGNORECASE)
+    partes, previa = [], False
+    for a, b in _clausulas(texto):
+        cl = texto[a:b]
+        mc0 = rx_corto.search(cl)
+        if mc0:
+            partes.append(cl[:mc0.end()] + _concuerda_estado(cl[mc0.end():], g, n, viejos))
+            previa = True
+            continue
+        if previa and any(mc.group(2).lower() in viejos for mc in _RX_CLITICO.finditer(cl)):
+            cl = _clitico(cl, 0, len(cl), viejos, g, n)      # la cláusula entera retoma al alimento de la anterior
+        partes.append(cl)
+        previa = False
+    return "".join(partes)
+
+
+# [P1-PLAN-LOTE-495 · 2026-09-27] Las claras pasteurizadas (botella del súper) son la reserva de proteína de quien no come
+# pescado en la compra única: se BATEN y se CUAJAN; no se cortan en filetes ni se sellan 6 minutos por lado hasta 74 °C.
+_CLARAS_OBJ = re.compile(r"(?P<v>\b[a-záéíóúñ]+)(?P<sep>\s+)(?P<obj>(?:(?:las|unas)\s+)?(?:\d+\s+)?claras"
+                         r"(?:\s+de\s+huevo)?)\b", re.IGNORECASE)
+_V_CORTE_CLARAS = re.compile(r"^(?:corta|filetea|trocea|pica|limpia|lava|seca|deshuesa|aplana|porciona|prepara)$",
+                             re.IGNORECASE)
+_V_COCCION_CLARAS = re.compile(r"^(?:sella|dora|asa|grilla|hierve|fr[ií]e|cocina|saltea|sofr[ií]e|guisa)$", re.IGNORECASE)
+
+
+def _claras_en_paso(texto: str) -> str:
+    """«corta 90 g de pechuga de pollo en filetes finos» → «bate 3 claras de huevo»; «sella el pollo 6-7 minutos por lado
+    hasta 74 °C» → «cocina las claras 2-3 minutos por lado, hasta que cuajen». tooltip-anchor: P1-PLAN-LOTE-495-CLARAS"""
+    partes = []
+    for a, b in _clausulas(texto):
+        cl = texto[a:b]
+        m = _CLARAS_OBJ.search(cl)
+        if not m:
+            partes.append(cl)
+            continue
+        v = m.group("v")
+        if _V_CORTE_CLARAS.match(v):
+            verbo = "Bate" if v[:1].isupper() else "bate"
+            # el corte se va y el pronombre que lo retomaba («en filetes finos y sazónalos») pasa a las claras
+            (c0, c1), viejos_c = _sin_corte(cl, m.end("obj"), set())
+            if c1 > c0:
+                cl = cl[:c0] + cl[c1:]
+                cl = _clitico(cl, c0, _fin_ambito(cl, c0), viejos_c, "f", "p")
+            # el verbo repartía una lista («corta el pollo, ½ ají morrón en tiras y ½ cebolla»): el resto conserva el suyo
+            mo = _OBJETO_SIGUE.match(cl, c0)
+            if mo:
+                cl = cl[:c0] + "; " + v.lower() + " " + cl[mo.end():]
+            cl = cl[:m.start("v")] + verbo + cl[m.end("v"):]
+        elif _V_COCCION_CLARAS.match(v):
+            verbo = "Cocina" if v[:1].isupper() else "cocina"
+            cl = cl[:m.start("v")] + verbo + cl[m.end("v"):]
+            cl = _limpia_coccion(cl)       # fuera la temperatura y «hasta que esté dorado/cocido»; «por lado» 2-3 min
+            if "cuaj" not in _sa(cl):
+                k = m.start("v") + len(verbo) + len(m.group("sep")) + len(m.group("obj"))
+                # [P1-PLAN-LOTE-498] la plantilla del cerrador «Cocina X a la plancha o hervida y sírvela…»: unas claras
+                # no se hierven sueltas — «Cocina claras, hasta que cuajen a la plancha o hervida» no se leía
+                mp = re.match(r"\s+a\s+la\s+plancha(?:\s+o\s+hervid[oa]s?)?", cl[k:], re.IGNORECASE)
+                if mp:
+                    cl = cl[:k] + cl[k + mp.end():]
+                mt = _TIEMPO.match(cl, k) or re.match(r"\s+" + _TIEMPO.pattern, cl[k:], re.IGNORECASE)
+                if mt is not None and mt.re is _TIEMPO:
+                    k = mt.end()
+                elif mt is not None:
+                    k = k + mt.end()
+                cl = cl[:k] + ", hasta que cuajen" + cl[k:]
+        partes.append(cl)
+    return _limpia_puntuacion("".join(partes))
+
+
+# [P1-PLAN-LOTE-497 · 2026-09-27] La IA escribió «extrae las semillas de 1 guineo… añade las semillas de guineo por
+# encima» (batería real, perfil del dueño, día 13) y la sustitución lo volvió «añade las semillas de manzana»: servir las
+# pepitas de una manzana. Lo que se extrae pasa a cortarse sin semillas y lo que se sirve es la manzana; descorazonarla
+# («retira las semillas») sigue igual. tooltip-anchor: P1-PLAN-LOTE-497-SEMILLAS
+_SEMILLAS_MANZANA = re.compile(
+    r"\b(?:(?P<v>extrae|saca|separa|retira|quita|desecha|elimina)\s+)?(?:las\s+)?(?:semillas|pepitas|pulpa)\s+de\s+"
+    r"(?P<obj>(?:\d+(?:[.,]\d+)?\s*g\s+de\s+|la\s+|una\s+|[\d½¼¾]+\s+)?manzanas?)\b", re.IGNORECASE)
+
+
+def _manzana_sin_semillas(texto: str) -> str:
+    def _f(m):
+        v = (m.group("v") or "").lower()
+        if v in ("retira", "quita", "desecha", "elimina"):
+            return m.group(0)
+        obj = m.group("obj")
+        if v:
+            return ("Corta" if m.group("v")[:1].isupper() else "corta") + f" {obj} en cubos, sin semillas"
+        return obj if re.match(r"(?:\d|[½¼¾]|la\s|una\s)", obj, re.IGNORECASE) else "la " + obj
+    return _SEMILLAS_MANZANA.sub(_f, texto)
+
+
 def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
     """Nombre, descripción y pasos dejan de nombrar el fresco de `viejo` y de cocinar como crudo lo que ya viene
     listo. Devuelve cuántos textos cambió; 0 ante cualquier error (fail-open: la lista ya cambió)."""
@@ -529,14 +725,19 @@ def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
         if not toks:
             return 0
         otras = [_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str) and _sa(x) != _sa(nueva)]
+        productos = [_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str)]      # [P1-PLAN-LOTE-492]
         cand = [t for t in toks if re.search(r"\b" + re.escape(t) + r"s?\b", viejo_low)]
-        if listo:
+        proteina = listo or corto == "claras"                                               # [P1-PLAN-LOTE-495]
+        if proteina:
             # la proteína: toda la clase que el plato nombra sin tener línea propia en la lista (menos los homónimos:
             # «dorado a la plancha» es un participio, no el pez — P1-REWRITE-DORADO-HOMONYM)
             cand += [t for t in toks if t not in _HOMONIMOS
                      and not any(re.search(r"\b" + re.escape(t) + r"s?\b", o) for o in otras)]
             cand += [h for h in _CABEZAS if re.search(r"\b" + h + r"s?\b", viejo_low)]
-        cand = [t for t in dict.fromkeys(cand) if t and not re.search(r"\b" + re.escape(t) + r"s?\b", _sa(nueva))]
+        # el sustituto que CONTIENE el token es el mismo alimento («leche» → «leche UHT»: nada que reescribir), salvo
+        # un producto hecho de él («tomate» → «salsa de tomate»: el fresco sí se reescribe) [P1-PLAN-LOTE-466]
+        cand = [t for t in dict.fromkeys(cand)
+                if t and (corto in _LIQUIDOS or not re.search(r"\b" + re.escape(t) + r"s?\b", _sa(nueva)))]
         if not cand:
             return 0
         rx = _regex_frase(cand)
@@ -547,7 +748,7 @@ def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
         for k in ("name", "desc", "description"):
             t = meal.get(k)
             if isinstance(t, str):
-                q, hubo, _v = _reescribe(t, rx, nueva, corto, g, n, listo, paso=False)
+                q, hubo, _v = _reescribe(t, rx, nueva, corto, g, n, listo, paso=False, productos=productos)
                 q = _limpia_puntuacion(q)
                 if hubo and q != t:
                     meal[k] = q
@@ -556,7 +757,7 @@ def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
         if isinstance(rec, list):
             # «⚠️ Seguridad alimentaria: cocina pechuga de pollo por completo…» sobre un atún en agua: sin crudo no hay
             # riesgo que advertir (las notas 🤰 generales del embarazo no nombran el plato y se quedan)
-            if listo:
+            if proteina:
                 quedan = [p for p in rec if not (isinstance(p, str) and p.lstrip().startswith("⚠")
                                                  and "seguridad alimentaria" in _sa(p) and rx.search(p))]
                 if len(quedan) != len(rec):
@@ -565,11 +766,17 @@ def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
             for i, p in enumerate(rec):
                 if not isinstance(p, str) or p.lstrip().startswith(_NOTA):
                     continue
-                q, hubo, viejos = _reescribe(p, rx, nueva, corto, g, n, listo, paso=True)
+                q, hubo, viejos = _reescribe(p, rx, nueva, corto, g, n, listo, paso=True, productos=productos)
                 if not hubo:
                     continue
                 if listo:
                     q = _listo_en_paso(q, corto, g, n, viejos, rx_otra)
+                else:
+                    q = _sigue_pronombre(q, corto, g, n, viejos)                 # [P1-PLAN-LOTE-466]
+                    if corto == "claras":
+                        q = _claras_en_paso(q)                                   # [P1-PLAN-LOTE-495]
+                    elif corto == "manzana":
+                        q = _manzana_sin_semillas(q)                             # [P1-PLAN-LOTE-497]
                 q = _limpia_puntuacion(q)
                 if q != p:
                     rec[i] = q
@@ -628,13 +835,82 @@ def parear_raw(meal: dict, viejo: str, nueva: str) -> str:
         return "error"
 
 
-def sustituir_en_plato(meal: dict, idx: int, viejo: str, nueva: str, sub: str) -> None:
+def _num(v) -> float:
+    try:
+        return float(re.sub(r"[^\d.]", "", str(v)) or 0)
+    except ValueError:
+        return 0.0
+
+
+def ajustar_macros(meal: dict, viejo: str, nueva: str, db) -> bool:
+    """[P1-PLAN-LOTE-468 · 2026-09-27] Las macros del plato cambian con la línea sustituida: plato − vieja + nueva.
+    El recálculo completo desde las líneas (`_truth_up_meal_macros_from_strings`) se NIEGA si una línea con nombre no
+    trae cantidad sumable («Ajo, 1 diente picado», «Orégano dominicano, ½ cdta»), y el plato se quedaba con las macros
+    del fresco: batería real del 27-sep (alérgico al pescado), «Bowl de garbanzos» con 286 g de garbanzos declaraba
+    98 g de proteína — la de 1¾ pechugas. Si después el recálculo completo sí corre, manda él."""
+    try:
+        if db is None:
+            return False
+        a = db.macros_from_ingredient_string(str(viejo))
+        b = db.macros_from_ingredient_string(str(nueva))
+        if not a or not b:
+            return False
+        for k_plato, k_mc in (("protein", "protein"), ("carbs", "carbs"), ("fats", "fats"), ("cals", "kcal")):
+            meal[k_plato] = max(0, round(_num(meal.get(k_plato)) - float(a.get(k_mc) or 0) + float(b.get(k_mc) or 0)))
+        meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+        return True
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-468] macros por diferencia no-op: {type(e).__name__}: {e}")
+        return False
+
+
+# [P1-PLAN-LOTE-496 · 2026-09-27] Dos líneas de proteína del MISMO plato («1 filete de pescado» + «75 g de camarones
+# cocidos») recibían dos duraderos distintos —la rueda aparta lo que el día ya lleva— y el plato quedaba «Atún con
+# zanahoria… Calienta atún y sírvela… Acompaña con atún y sardinas en lata» (8 de 1.240 comidas del replay forzado). Ahora
+# la segunda recibe el MISMO duradero (`compra_unica.sustituir_linea(forzar=…)`) y su cantidad se suma a la línea que ya
+# existe, en la lista y en `ingredients_raw`. tooltip-anchor: P1-PLAN-LOTE-496-UN-DURADERO-POR-PLATO
+_CANT_LINEA = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(g|claras)\s+(?:de\s+)?(.+?)\s*$", re.IGNORECASE)
+
+
+def _suma_lineas(a: str, b: str):
+    """«150 g de atún en agua» + «75 g de atún en agua» → «225 g de atún en agua»; None si no son la misma medida."""
+    ma, mb = _CANT_LINEA.match(str(a or "")), _CANT_LINEA.match(str(b or ""))
+    if not (ma and mb) or ma.group(2).lower() != mb.group(2).lower() or _sa(ma.group(3)) != _sa(mb.group(3)):
+        return None
+    total = float(ma.group(1).replace(",", ".")) + float(mb.group(1).replace(",", "."))
+    cifra = str(int(round(total))) if abs(total - round(total)) < 1e-6 or ma.group(2).lower() == "claras" \
+        else f"{total:g}"
+    return f"{cifra} {ma.group(2)} de {ma.group(3)}"
+
+
+def _fusiona(lista, nueva: str) -> bool:
+    """Si `nueva` está dos veces por medida en `lista` (la vieja duradera y la recién escrita), queda una con la suma."""
+    if not isinstance(lista, list):
+        return False
+    pos = [j for j, x in enumerate(lista) if isinstance(x, str) and _suma_lineas(x, nueva) is not None]
+    if len(pos) < 2:
+        return False
+    k = next((j for j in pos if str(lista[j]) == str(nueva)), pos[-1])
+    j = next(j for j in pos if j != k)
+    lista[j] = _suma_lineas(lista[j], lista[k])
+    del lista[k]
+    return True
+
+
+def sustituir_en_plato(meal: dict, idx: int, viejo: str, nueva: str, sub: str, db=None) -> None:
     """La línea visible `idx` pasa a `nueva`; su pareja en `ingredients_raw` también (por alimento); el plato deja de
-    nombrar el fresco. Marca `_fresh_substituted`."""
+    nombrar el fresco y sus macros cambian con la línea (lote 468). Marca `_fresh_substituted`."""
     ings = meal.get("ingredients")
-    if isinstance(ings, list) and 0 <= idx < len(ings):
-        ings[idx] = nueva
+    if isinstance(ings, list):
+        # [P1-PLAN-LOTE-496] la fusión de abajo acorta la lista: el índice del bucle del llamador puede haber corrido
+        if not (0 <= idx < len(ings)) or str(ings[idx]) != str(viejo):
+            idx = next((k for k, x in enumerate(ings) if str(x) == str(viejo)), -1)
+        if 0 <= idx < len(ings):
+            ings[idx] = nueva
+    ajustar_macros(meal, viejo, nueva, db)                                            # [P1-PLAN-LOTE-468]
     parear_raw(meal, viejo, nueva)                                                     # [P1-PLAN-LOTE-461]
+    if _fusiona(ings, nueva):                                                          # [P1-PLAN-LOTE-496]
+        _fusiona(meal.get("ingredients_raw"), nueva)
     meal["_fresh_substituted"] = (meal.get("_fresh_substituted") or []) + [f"{str(viejo)[:40]} → {sub}"]
     reescribir_plato(meal, viejo, nueva, sub)                                          # [P1-PLAN-LOTE-460]
 

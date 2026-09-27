@@ -53,7 +53,7 @@ def test_alergico_al_pescado_no_recibe_atun_ni_sardinas(monkeypatch):
     for i in (9, 10, 11):
         linea = days[i]["meals"][0]["ingredients"][0]
         assert "atun" not in linea and "sardina" not in linea, linea
-        assert linea == "150 g de garbanzos cocidos", linea
+        assert linea == "5 claras de huevo", linea                  # [P1-PLAN-LOTE-495] la reserva son las claras
         assert days[i]["meals"][0]["ingredients_raw"] == [linea]
 
 

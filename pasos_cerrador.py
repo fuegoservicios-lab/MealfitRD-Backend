@@ -958,3 +958,80 @@ def acompanamientos_en_una_frase(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-498 · 2026-09-27] La frase de guiso del cerrador es para la PROTEÍNA ──────────────────────────────────────
+# «Añade X al guiso y cocínalo a fuego medio 12-15 minutos, hasta que esté cocido por dentro; incorpóralo con cuidado para
+# no deshacer el resto» (`_closer_protein_step_text`, stewy) salía también para lo que no es proteína: «Añade arroz blanco
+# crudo al guiso y cocínala… cocida por dentro», «Añade repollo rallado al guiso y cocínala…», «Añade agua o caldo bajo en
+# sodio al guiso…», auyama, tayota, tomate (5 de 116 planes re-encadenados + la batería real del 27-sep, alérgico al
+# pescado); y tras la compra única, «Añade claras al guiso y cocínala 12-15 minutos». Aquí la frase pasa a la cocción real
+# de lo que quedó: el grano con su agua y su tiempo, el víver y la verdura hasta que estén tiernos, el líquido hierve, las
+# claras cuajan en 2-3 minutos. Las legumbres son del 425; la proteína se queda como está. tooltip-anchor: P1-PLAN-LOTE-498
+_GUISO_498_RE = re.compile(
+    r"(?P<v>Añade|Agrega|Incorpora)\s+(?P<obj>[^.;:]{2,60}?)\s+al\s+guiso\s+y\s+coc[ií]nal[oa]s?\s+a\s+fuego\s+medio\s+"
+    r"12-15\s+minutos,\s+hasta\s+que\s+est[eé]n?\s+cocid[oa]s?\s+por\s+dentro;\s*incorp[oó]ral[oa]s?\s+con\s+cuidado\s+"
+    r"para\s+no\s+deshacer\s+el\s+resto\.?", re.IGNORECASE)
+_PROTEINA_498_RE = re.compile(r"\b(?:pollo|pechugas?|muslos?|pavo|cerdo|res|carnes?|lomo|chuletas?|bistec|chivo|conejo|"
+                              r"higado|pescados?|filetes?|tilapia|merluza|dorado|mero|chillo|corvina|pargo|salmon|bacalao|"
+                              r"atun|sardinas?|camarones?|langostinos?|calamar(?:es)?|mariscos?|huevos?|longaniza|salami|"
+                              r"jamon|salchichas?|tofu|tempeh|seitan|queso)\b")
+_LIQUIDO_498_RE = re.compile(r"^(?:agua|caldo|consome|fondo|leche)\b")
+
+
+def guiso_sin_proteina(meal) -> int:
+    """Nº de frases corregidas; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+
+        def _sub(m):
+            nonlocal n
+            obj = m.group("obj").strip()
+            nombre = _limpio_425(obj) or obj
+            nsa = _sa(nombre)
+            v = m.group("v")
+            if re.match(r"^(?:las\s+|unas\s+)?(?:\d+\s+)?claras\b", nsa):
+                n += 1
+                return f"{v} las claras batidas al guiso y remueve 2-3 minutos, hasta que cuajen."
+            if _PROTEINA_498_RE.search(nsa):
+                return m.group(0)
+            cab = _cabeza_425(nombre)
+            clase = _clase_425(cab)
+            if clase in ("legumbre", "edamame", "soya"):
+                return m.group(0)                       # las legumbres las prepara el 425
+            if _LIQUIDO_498_RE.match(nsa):
+                n += 1
+                return f"{v} {obj} al guiso y deja que hierva a fuego medio 12-15 minutos."
+            x = f"{_art(nombre)} {nombre}"
+            s = _suf(nombre)
+            if clase == "grano":
+                k = next((g for g in _GRANOS_425 if cab.startswith(g)), "")
+                t = (_GRANOS_425.get(k) or ("8-10 minutos", ""))[0]
+                if k == "arroz" and "integral" in nsa:
+                    t = "25-30 minutos"
+                n += 1
+                return (f"{v} {x} al guiso con el doble de su volumen en agua, tapa y cocina a fuego bajo {t}, hasta que "
+                        f"{_este(nombre)} {_adj(nombre, 'tiern')} y el agua se absorba.")
+            if clase == "tuberculo":
+                k = next((t for t in _TUBERCULOS_425 if cab.startswith(t)), "papa")
+                t = _TUBERCULOS_425[k] + " minutos"
+            else:
+                t = "8-10 minutos"
+            n += 1
+            return f"{v} {x} al guiso y cocínal{s} a fuego medio {t}, hasta que {_este(nombre)} {_adj(nombre, 'tiern')}."
+
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            q = _GUISO_498_RE.sub(_sub, p)
+            if q != p:
+                rec[i] = q
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0

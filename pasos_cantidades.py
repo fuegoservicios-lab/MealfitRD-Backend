@@ -1103,8 +1103,19 @@ _PIEZAS = {
     "limon": ("limón", "limones"), "cebolla": ("cebolla", "cebollas"), "pepino": ("pepino", "pepinos"),
     "zanahoria": ("zanahoria", "zanahorias"), "tortilla": ("tortilla", "tortillas"), "arepita": ("arepita", "arepitas"),
     "pechuga": ("pechuga", "pechugas"), "berenjena": ("berenjena", "berenjenas"), "papa": ("papa", "papas"),
+    # [P1-PLAN-LOTE-467 · 2026-09-27] frutas, víveres y el pan también se cuentan por pieza: el band-closer subió «¼ lechosa»
+    # a «½ lechosa (395g)» en la lista y el paso seguía «pela y corta ¼ lechosa» (batería real del 27-sep, perfil del
+    # dueño); en el replay de 322 planes, 19 comidas (lechosa 10, aguacate 5, rebanada 2, mango 1). Además «2 rebanada»
+    # con la misma cuenta que la lista pasa a plural. tooltip-anchor: P1-PLAN-LOTE-467
+    "lechosa": ("lechosa", "lechosas"), "aguacate": ("aguacate", "aguacates"), "mango": ("mango", "mangos"),
+    "rebanada": ("rebanada", "rebanadas"), "platano": ("plátano", "plátanos"), "guineo": ("guineo", "guineos"),
+    "batata": ("batata", "batatas"), "manzana": ("manzana", "manzanas"), "naranja": ("naranja", "naranjas"),
+    "mandarina": ("mandarina", "mandarinas"), "kiwi": ("kiwi", "kiwis"), "pera": ("pera", "peras"),
+    "chinola": ("chinola", "chinolas"),
 }
-_PIEZA_NOMBRE_RE = r"(?P<pieza>dientes?|aj[ií](?:es)?|tomates?|lim[oó]n(?:es)?|cebollas?|pepinos?|zanahorias?|tortillas?|arepitas?|pechugas?|berenjenas?|papas?)"
+_PIEZA_NOMBRE_RE = (r"(?P<pieza>dientes?|aj[ií](?:es)?|tomates?|lim[oó]n(?:es)?|cebollas?|pepinos?|zanahorias?|tortillas?|"
+                    r"arepitas?|pechugas?|berenjenas?|papas?|lechosas?|aguacates?|mangos?|rebanadas?|pl[aá]tanos?|guineos?|"
+                    r"batatas?|manzanas?|naranjas?|mandarinas?|kiwis?|peras?|chinolas?)")
 _CUENTA = r"(?P<q>\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔])"
 _PIEZA_EN_LISTA_RE = re.compile(r"^\s*" + _CUENTA + r"\s+" + _PIEZA_NOMBRE_RE + r"\b", re.IGNORECASE)
 _PIEZA_EN_PASO_RE = re.compile(r"(?<![\w.,/½¼¾⅓⅔])" + _CUENTA + r"\s+" + _PIEZA_NOMBRE_RE + r"\b", re.IGNORECASE)
@@ -1167,12 +1178,24 @@ def conteos_de_la_lista(meal) -> int:
             p = rec[i]
             q_lista = lista[k]
             try:
-                if abs(_valor_cuenta(mm.group("q")) - _valor_cuenta(q_lista)) < 1e-6:
-                    continue
                 plural = _valor_cuenta(q_lista) > 1
+                if abs(_valor_cuenta(mm.group("q")) - _valor_cuenta(q_lista)) < 1e-6:
+                    # [P1-PLAN-LOTE-467] la cuenta coincide: sólo el número del nombre («2 rebanada» → «2 rebanadas»)
+                    w = _sa(mm.group("pieza").lower())
+                    if (w != k) != plural:
+                        sing, plur = _PIEZAS[k]
+                        nombre = plur if plural else sing
+                        if mm.group("pieza")[:1].isupper():
+                            nombre = nombre[:1].upper() + nombre[1:]
+                        cambios.setdefault(i, []).append((mm.start("pieza"), mm.end("pieza"), nombre))
+                    continue
             except Exception:
                 continue
             if _REPARTO_ANTES_RE.search(p[:mm.start()]) or _REPARTO_DESPUES_RE.search(p[mm.end():]):
+                continue
+            # [P1-PLAN-LOTE-467] «corta el pan integral en 2 rebanadas»: lo que sale de un corte no es la cuenta de la lista
+            # («… en 1 rebanada» no se lee). tooltip-anchor: P1-PLAN-LOTE-467-CORTE-Y-PISTA
+            if re.search(r"\ben\s+$", p[:mm.start()], re.IGNORECASE):
                 continue
             sing, plur = _PIEZAS[k]
             nombre = plur if plural else sing
@@ -1192,6 +1215,16 @@ def conteos_de_la_lista(meal) -> int:
                 w2 = _ADJ_PIEZA.get(w, w) if plural else _ADJ_SING.get(w, w)
                 if w2 != w:
                     fin, texto = mm.end() + adj.end(), texto + adj.group(1) + w2
+            # [P1-PLAN-LOTE-467] la pista de peso de la pieza escala con la cuenta: «ten lista 1 rebanada (30 g)» con «2
+            # rebanadas de pan integral (60 g)» en la lista salía «2 rebanadas (30 g)»
+            pg = re.match(r"(\s*\(\s*(?:≈\s*)?)(\d+(?:[.,]\d+)?)(\s*g\s*\))", p[fin:])
+            if pg:
+                try:
+                    g2 = float(pg.group(2).replace(",", ".")) * _valor_cuenta(q_lista) / _valor_cuenta(mm.group("q"))
+                    g2s = str(int(round(g2))) if g2 < 20 else str(int(5 * round(g2 / 5.0)))
+                    fin, texto = fin + pg.end(), texto + pg.group(1) + g2s + pg.group(3)
+                except Exception:
+                    pass
             cambios.setdefault(i, []).append((ini, fin, texto))
         n = 0
         for i, cs in cambios.items():

@@ -808,7 +808,34 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-464..465 · 2026-09-27] (backend) la sustitución de la compra única corre ANTES del band-closer
 # (contenido → porciones → caps) y el omnívoro recibe pescado en lata antes que garbanzos (reserva): replay del chain
 # completo forzando la compra única, días con los 4 macros en banda 14 % → 57 %, proteína < 0,90 en 13 → 6 de 28.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-465 · 2026-09-27"
+# [P1-PLAN-LOTE-466 · 2026-09-27] (backend) el tomate que el plato cocina pasa a salsa de tomate (no a «salsa de
+# zanahoria», 95 de 252 en el replay de los días 21+) y el pronombre que retoma lo sustituido concuerda («hierve la
+# batata…; escúrrela y májala»).
+# [P1-PLAN-LOTE-467 · 2026-09-27] (backend) las piezas de fruta, víver y pan también siguen a la lista en el paso
+# («pela y corta ¼ lechosa» con «½ lechosa» tras el band-closer; 19 comidas en 322 planes) y «2 rebanada» → plural.
+# [P1-PLAN-LOTE-468 · 2026-09-27] (backend) batería real del bloque 2 (alérgico al pescado): «chuleta» a secas es cerdo
+# fresco (3 días, no 7), el edamame congelado sin congelador pasa a garbanzos, y las macros del plato cambian con la línea
+# sustituida (el «Bowl de garbanzos» declaraba los 98 g de proteína de las pechugas).
+# [P1-PLAN-LOTE-469 · 2026-09-27] (backend) batería real del bloque 3 (días 8-11 de 30): los reconciliadores
+# display↔raw decidían «falta» por la primera palabra —«carne de Filete de pescado» no era «1 filete de pescado»— y el
+# plato llevaba el pescado DOS veces, cada copia sustituida por otro («escurre las sardinas de atún»). Ahora se confirma
+# por alimento del catálogo; «la carne de» se va con el fresco; lo listo no se «verifica cocido»; casabe en tortas.
+# [P1-PLAN-LOTE-490..494 · 2026-09-27] (backend) replay forzado de los días 21+ de la compra única (322 planes): la
+# hierba fresca pasa a orégano seco en su medida («¼ taza de cilantro» → «1 cda de orégano», no «¼ taza»); un caldo de
+# pescado no es pescado (salía atún); «el puré de plátano verde» hecho en la receta sí se reescribe; «tomate mediano» no
+# deja el «mediano»; y «hasta que esté tierno» concuerda con la batata.
+# [P1-PLAN-LOTE-495 · 2026-09-27] (backend) con alergia al pescado, la proteína que no aguanta 30 días sin congelador
+# caía en garbanzos y el band-closer los recortaba (un día al 43 % de su proteína): las claras pasteurizadas del súper
+# van antes, y el paso las bate y las cuaja.
+# [P1-PLAN-LOTE-496 · 2026-09-27] (backend) un plato con dos proteínas frescas recibe UN duradero (la segunda suma su
+# cantidad a la primera) — no «Atún con zanahoria… Acompaña con atún y sardinas en lata».
+# [P1-PLAN-LOTE-497 · 2026-09-27] (backend) batería real del dueño, días 12-15: «escurre 2 latas de sardinas» con 80 g
+# en la lista, «añade las semillas de manzana» (la IA escribió «semillas de guineo»), el bok choy del día 15 sin
+# sustituir y «rellena la casabe con lo que cierra» en un wrap de tortilla.
+# [P1-PLAN-LOTE-498 · 2026-09-27] (backend) la frase de guiso del cerrador («… cocínalo 12-15 minutos, hasta que esté
+# cocido por dentro») salía para arroz crudo, repollo, auyama o agua, y tras la compra única para las claras: cada una
+# con su cocción real.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-498 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

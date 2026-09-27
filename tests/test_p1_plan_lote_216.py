@@ -124,7 +124,10 @@ def test_la_rueda_salta_lo_que_el_dia_ya_lleva(monkeypatch):
     cena = days[9]["meals"][0]["ingredients"][0]
     assert "atun" not in cena and cena.startswith("150 g de "), cena
     assert cu.duraderos_del_dia(["160 g de atún en agua", "1 lata de sardinas"]) == {"atun en agua", "sardinas en lata"}
-    # sin otra opción segura, el que ya está vale antes que dejar el fresco
+    # [P1-PLAN-LOTE-495] con todo en el día, las claras (su proteína manda sobre la variedad); sin ellas, el que ya está
     assert cu.sustituto_seguro(cu.PROTEINA_TABLA, 0, False, evitar={"atun en agua", "sardinas en lata",
-                                                                      "garbanzos cocidos"}) == "atun en agua"
+                                                                      "garbanzos cocidos"}) == "claras de huevo"
+    assert cu.sustituto_seguro(cu.PROTEINA_TABLA, 0, False, evitar={"atun en agua", "sardinas en lata",
+                                                                      "garbanzos cocidos"},
+                               excluir=("claras de huevo",)) == "atun en agua"
 

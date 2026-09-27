@@ -26,9 +26,12 @@ def test_el_omnivoro_recibe_pescado_en_lata():
 
 
 def test_los_garbanzos_son_la_reserva():
+    # [P1-PLAN-LOTE-495] antes van las claras pasteurizadas; los garbanzos, si no se pueden cocinar o no son seguras
     assert cu.sustituto_seguro(cu.PROTEINA_TABLA, 0, False, evitar={"atun en agua", "sardinas en lata"}) \
+        == "claras de huevo"
+    assert cu.sustituto_seguro(cu.PROTEINA_TABLA, 3, False, alergias=["Pescado"]) == "claras de huevo"
+    assert cu.sustituto_seguro(cu.PROTEINA_TABLA, 3, False, alergias=["Pescado"], excluir=("claras de huevo",)) \
         == "garbanzos cocidos"
-    assert cu.sustituto_seguro(cu.PROTEINA_TABLA, 3, False, alergias=["Pescado"]) == "garbanzos cocidos"
 
 
 def test_el_vegetariano_sigue_con_legumbres():

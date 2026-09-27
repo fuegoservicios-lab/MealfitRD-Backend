@@ -55,11 +55,21 @@ PROTEINA_VEGETAL = "garbanzos cocidos"
 # pescado en lata (atún en agua, sardinas) y los garbanzos quedan de RESERVA: sólo si los dos pescados ya están en el día
 # o no son seguros (alergia al pescado, embarazo con el tope de mercurio, rechazo). tooltip-anchor: P1-PLAN-LOTE-465
 _ROTACION_OMNIVORA = ("atun en agua", "sardinas en lata")
-_RESERVA_OMNIVORA = ("garbanzos cocidos",)
+# [P1-PLAN-LOTE-495 · 2026-09-27] …y con alergia al pescado la rueda entera caía en garbanzos: el band-closer los trata
+# como carbohidrato y los recorta. Batería real del 27-sep (alérgico al pescado, días 4-7 de 30 sin congelador): la cena
+# «1¾ pechugas de pollo» (71 g de proteína) salió con 70 g de garbanzos (6 g); el día, al 43 % de su proteína. Las claras
+# pasteurizadas (botella de 400 g del súper, 35 días en nevera) van ANTES: proteína casi pura que el piso sí puede subir.
+# Hasta MAX_EGG_WHITES_PER_MEAL por comida; con «Nada» de tiempo no (se cocinan). tooltip-anchor: P1-PLAN-LOTE-495
+CLARAS = "claras de huevo"
+_RESERVA_OMNIVORA = (CLARAS, "garbanzos cocidos")
+_RESERVA_SIN_ROTAR = (CLARAS,)        # su proteína manda sobre la variedad del día: no se aparta por `evitar`
+_G_CLARA = 33.0
 _ROTACION_VEGETAL = ("garbanzos cocidos", "lentejas cocidas")
+# [P1-PLAN-LOTE-496] los duraderos que sustituyen una PROTEÍNA: dentro de un plato, todas sus proteínas van al mismo
+PROTEINAS_DURADERAS = frozenset(_ROTACION_OMNIVORA + _RESERVA_OMNIVORA + _ROTACION_VEGETAL)
 # [P1-PLAN-LOTE-216] cómo se reconoce en una línea que el día YA lleva ese duradero
 _CLAVE_ROTACION = {"atun en agua": "atun", "sardinas en lata": "sardina", "garbanzos cocidos": "garbanzo",
-                   "lentejas cocidas": "lenteja"}
+                   "lentejas cocidas": "lenteja", CLARAS: "clara"}
 # [P1-PLAN-LOTE-286 · 2026-09-25] Con «Nada» de tiempo la legumbre duradera se compra LISTA. «200 g de garbanzos
 # cocidos» dejaba en la lista del dueño (30 días, sin congelador, «Nada») 1 funda de garbanzos SECOS: remojo de una noche
 # y una hora de olla para quien declaró 5 minutos. La línea dice «de lata, escurridos» y la lista (lote 285) compra la
@@ -96,7 +106,9 @@ def duraderos_del_dia(lineas) -> set:
 # (tokens, duradero). Primer match gana; los tokens se buscan como palabra (singular/plural) en la línea sin acentos.
 # Era `graph_orchestrator._FRESH_SUBSTITUTES` (P1-STEP14-SHOPPING-COOKING); allí queda un alias.
 SUSTITUTOS = (
-    (("lechuga", "berro", "rucula", "arugula", "espinaca", "acelga", "kale", "col rizada"), "repollo"),
+    # [P1-PLAN-LOTE-497 · 2026-09-27] el bok choy aguanta ~10 días: el día 15 de la batería real seguía en la lista
+    (("lechuga", "berro", "rucula", "arugula", "espinaca", "acelga", "kale", "col rizada", "bok choy", "pak choi"),
+     "repollo"),
     (("tomate cherry", "tomate"), "zanahoria"),
     (("pepino", "calabacin", "zucchini", "brocoli", "coliflor", "vainitas", "habichuelas verdes", "esparrago", "champinon", "hongos", "setas"), "zanahoria"),
     (("cilantro", "perejil", "albahaca", "menta", "cebollin", "cebollino"), "oregano"),
@@ -109,6 +121,9 @@ SUSTITUTOS = (
     # [P1-PLAN-LOTE-215] víveres y pan que no llegan al fin de una compra única (plátano 7-10 días, yuca 21, pan 7)
     (("platano verde", "platano maduro", "platano", "rulo"), "batata"),
     (("yuca",), "batata"),
+    # [P1-PLAN-LOTE-468 · 2026-09-27] el edamame del súper es congelado de fábrica: sin congelador no llega al día 4
+    # (batería real del 27-sep, alérgico al pescado: 300 g tres días seguidos). La legumbre de despensa lo sustituye.
+    (("edamame",), "garbanzos cocidos"),
     (("pan de agua", "pan sobao", "pan integral", "pan de molde", "pan", "panecillo", "bagel"), "casabe"),
 )
 # tokens que NO se sustituyen aunque no aguanten: sin equivalente duradero coherente
@@ -117,6 +132,30 @@ SIN_SUSTITUTO = ("yogur", "yogurt", "cottage", "ricotta", "requeson", "queso fre
 # [P1-PLAN-LOTE-460 · 2026-09-27] cómo se ESCRIBE el duradero en la línea que ve el usuario: la identidad (`sub`, la rueda,
 # `evitar`) sigue sin tilde, pero «150 g de atun en agua» y «oregano» llegaban así a su lista de ingredientes.
 _VISIBLE = {"atun en agua": "atún en agua", "oregano": "orégano"}
+# [P1-PLAN-LOTE-466 · 2026-09-27] El tomate que el plato COCINA (guiso, salsa, sofrito) pasa a salsa de tomate de
+# despensa —«Salsa de tomate» vive en el catálogo—, no a zanahoria: replay forzado de los días 21+ (88 planes), 95 de 252
+# tomates sustituidos iban dentro de un guiso o una salsa y salían «salsa de zanahoria». La salsa es ~2,5 veces más
+# concentrada: 150 g de tomate fresco → 60 g de salsa. El tomate crudo (ensalada) sigue a zanahoria.
+# tooltip-anchor: P1-PLAN-LOTE-466-TOMATE-COCINADO
+SALSA_TOMATE = "salsa de tomate"
+_FACTOR_SALSA = 0.4
+_TOMATE_COCINADO = re.compile(
+    r"\b(?:sofr[ií]\w*|sofrito|guis\w*|salsa|estofad\w*|sancocho|locrio|moro)\b"
+    r"|\bcocina[^.;]{0,60}\btomate|\btomate[^.;]{0,60}\b(?:cocina\w*|sofr\w*|guis\w*|hierv\w*|cuece|salte\w*|reduc\w*)",
+    re.IGNORECASE)
+
+
+def texto_plato(meal) -> str:
+    """Nombre + pasos del plato: el contexto con el que el tomate decide si va a salsa."""
+    try:
+        if not isinstance(meal, dict):
+            return ""
+        pasos = [str(p) for p in (meal.get("recipe") or []) if isinstance(p, str)]
+        return " ".join([str(meal.get("name") or "")] + pasos)
+    except Exception:
+        return ""
+
+
 # la línea ya dice que es de despensa
 _DURADERO_EN_TEXTO = ("en lata", "enlatad", "congelad", "seco", "secos", "en polvo", "deshidratad")
 
@@ -189,7 +228,7 @@ def es_seguro(nombre: str, alergias=None, *, dieta=None, contexto=None) -> bool:
 
 
 def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, dieta=None, contexto=None,
-                     evitar=()) -> Optional[str]:
+                     evitar=(), excluir=()) -> Optional[str]:
     """El duradero para `sub`: la proteína rota por `semilla` (día absoluto + comida) y salta lo que choca con una
     alergia o la dieta; lo que el día ya lleva (`evitar`) va al final de la rueda. El resto de la tabla solo se
     comprueba. None si ninguno es seguro."""
@@ -199,7 +238,10 @@ def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, di
         rot = _ROTACION_VEGETAL if vegetal else _ROTACION_OMNIVORA
         candidatos = [rot[(int(semilla) + k) % len(rot)] for k in range(len(rot))]
         reserva = [] if vegetal else [c for c in _RESERVA_OMNIVORA if c not in candidatos]   # [P1-PLAN-LOTE-465]
-        candidatos = ([c for c in candidatos if c not in evitar] + [c for c in reserva if c not in evitar]
+        reserva = [c for c in reserva if c not in (excluir or ())]                          # [P1-PLAN-LOTE-495]
+        fijas = [c for c in reserva if c in _RESERVA_SIN_ROTAR]
+        reserva = [c for c in reserva if c not in _RESERVA_SIN_ROTAR]
+        candidatos = ([c for c in candidatos if c not in evitar] + fijas + [c for c in reserva if c not in evitar]
                       + [c for c in candidatos if c in evitar] + [c for c in reserva if c in evitar])
     else:
         candidatos = [sub]
@@ -209,6 +251,94 @@ def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, di
     logger.info(f"🧳 [P1-PLAN-LOTE-214] sin duradero seguro para «{sub}» (alergias {list(alergias or [])}): "
                 f"se deja el fresco con su aviso de durabilidad")
     return None
+
+
+# [P1-PLAN-LOTE-469 · 2026-09-27] «1 rebanada de pan integral familiar» → «1 torta pequeña de casabe». La «rebanada» no es
+# una unidad que el catálogo pese: sin gramos, la línea salía «1 de casabe» (display «1 casabe») y el paso «ten listas
+# 1 rebanada de casabe familiar» (batería real del 27-sep). La torta pequeña (≈30 g) pesa lo que una rebanada.
+# tooltip-anchor: P1-PLAN-LOTE-469-CASABE-EN-TORTAS
+_FRACCION = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
+
+
+def _cuenta(num: str) -> Optional[float]:
+    m = re.fullmatch(r"(\d+(?:[.,]\d+)?)?\s*([½¼¾⅓⅔])?", str(num or "").strip())
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    return float((m.group(1) or "0").replace(",", ".")) + _FRACCION.get(m.group(2) or "", 0.0)
+
+
+def casabe_en_tortas(texto: str) -> Optional[str]:
+    """«N piezas» de pan sin peso conocido → «N torta(s) pequeña(s) de casabe»; None si la línea trae peso o medida."""
+    t = str(texto or "")
+    if _RX_GRAMOS.search(t) or _RX_MEDIDA.match(t):
+        return None
+    mm = _RX_CANTIDAD.match(t)
+    if not mm:
+        return None
+    num = mm.group(1).strip()
+    val = _cuenta(num)
+    if not val or val <= 0:
+        return None
+    return f"{num} {'torta pequeña' if val <= 1 else 'tortas pequeñas'} de casabe"
+
+
+# [P1-PLAN-LOTE-490 · 2026-09-27] La hierba fresca pasa a orégano SECO, unas tres veces más fuerte: «¼ taza de cilantro
+# picado» salía «¼ taza de orégano», «75 g de cilantro» «75 g de orégano» y «½ ramita de cilantro» «½ de orégano», sin
+# unidad (replay forzado de los días 21+, 322 planes: 1.061 hierbas sustituidas; 45 en tazas, 18 en gramos, 94 en
+# ramitas). Regla de cocina: 1 cda de hierba fresca = 1 cdta de seca; tope 1 cda por línea.
+# tooltip-anchor: P1-PLAN-LOTE-490-OREGANO-SECO
+_CDTAS_FRESCA = {"taza": 48.0, "tazas": 48.0, "cda": 3.0, "cdas": 3.0, "cucharada": 3.0, "cucharadas": 3.0,
+                 "cdta": 1.0, "cdtas": 1.0, "cucharadita": 1.0, "cucharaditas": 1.0, "ramita": 1.5, "ramitas": 1.5,
+                 "tallo": 6.0, "tallos": 6.0, "hoja": 0.25, "hojas": 0.25, "punado": 12.0, "punados": 12.0,
+                 "g": 3.0, "gr": 3.0, "gramos": 3.0}
+_CDTAS_PIEZA_HIERBA = 6.0      # «2½ cebollín picado»: la pieza entera, ≈ 2 cdas picada
+_QUEBRADO = {0.0: "", 0.25: "¼", 0.5: "½", 0.75: "¾"}
+
+
+def oregano_seco(texto: str) -> Optional[str]:
+    """«2 cdas de cilantro picado» → «2 cdtas de orégano»; None si la línea no dice cuánto («Cilantro fresco»)."""
+    m = re.match(r"^\s*([\d.,]*\s*[½¼¾⅓⅔]?)\s*([a-záéíóúñ]+)?", str(texto or ""), re.IGNORECASE)
+    if not m or not m.group(1).strip():
+        return None
+    val = _cuenta(m.group(1))
+    if not val or val <= 0:
+        return None
+    unidad = _sa(m.group(2) or "")
+    frescas = val * _CDTAS_FRESCA.get(unidad, _CDTAS_PIEZA_HIERBA)
+    secas = min(3.0, max(0.25, round(frescas / 3.0 * 4) / 4))
+    if secas >= 3.0:
+        return "1 cda de orégano"
+    entero = int(secas)
+    cifra = (str(entero) if entero else "") + _QUEBRADO.get(round(secas - entero, 2), "")
+    return f"{cifra} {'cdta' if secas <= 1 else 'cdtas'} de orégano"
+
+
+def _max_claras() -> int:
+    go = sys.modules.get("graph_orchestrator")
+    try:
+        return max(1, int(getattr(go, "MAX_EGG_WHITES_PER_MEAL", 6)))
+    except Exception:
+        return 6
+
+
+def claras_de(texto: str, gramos: Optional[float] = None) -> str:
+    """[P1-PLAN-LOTE-495] «1¾ pechugas de pollo (≈279 g)» → «6 claras de huevo»: una clara por cada ~33 g de la
+    proteína que sustituye, entre 3 y el tope por comida (sin peso conocido, 4)."""
+    t = str(texto or "")
+    g = None
+    mg = _RX_GRAMOS.search(t)
+    md = _RX_MEDIDA.match(t)
+    try:
+        if mg:
+            g = float(mg.group(1).replace(",", "."))
+        elif md and md.group(2).lower().rstrip(".") in ("g", "gr", "gramos"):
+            g = float(md.group(1).replace(",", "."))
+        elif gramos:
+            g = float(gramos)
+    except (TypeError, ValueError):
+        g = None
+    n = int(round(g / _G_CLARA)) if g and g > 0 else 4
+    return f"{max(3, min(_max_claras(), n))} {CLARAS}"
 
 
 def _redondea(gramos: float) -> str:
@@ -267,7 +397,7 @@ def _aguanta(texto: str, dia_abs: int, req: dict) -> bool:
 
 def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool = False, vegano: bool = False,
                     alergias=None, dieta=None, contexto=None, semilla: Optional[int] = None, evitar=(),
-                    listo: Optional[bool] = None, gramos_de=None):
+                    listo: Optional[bool] = None, gramos_de=None, plato: str = "", forzar: Optional[str] = None):
     """(línea nueva, sustituto, token que casó) si `texto` no aguanta hasta el día `dia_abs` (0-based) de la compra
     única y tiene un duradero seguro; None si aguanta, no tiene equivalente o ninguno es seguro.
     tooltip-anchor: P1-PLAN-LOTE-214-SUSTITUIR-LINEA"""
@@ -289,14 +419,31 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
             break
     if not sub:
         return None
+    # [P1-PLAN-LOTE-491 · 2026-09-27] «½ taza de caldo de pescado o agua» no es pescado: el caldo (cubito, tetrabrik) es
+    # despensa. Salía «½ taza de atún en agua» y el guiso «incorpora las sardinas y el caldo… hasta que el atún se
+    # impregne» (replay forzado de los días 21+). Igual una crema de leche o un jugo hechos DEL alimento.
+    # tooltip-anchor: P1-PLAN-LOTE-491-PRODUCTO-DE
+    if re.search(r"\b(?:caldo|consome|fondo|cubitos?|crema|jugo|zumo|pasta|pure|salsa|sopa|polvo|harina|esencia|"
+                 r"extracto)\s+(?:[a-z]+\s+)?de\s+(?:[a-z]+\s+)?" + re.escape(hit) + r"(?:s|es)?\b", low):
+        return None
     if sub == "queso parmesano" and vegano:
         sub = PROTEINA_VEGETAL
-    sub = sustituto_seguro(sub, int(dia_abs if semilla is None else semilla), vegetal, alergias,
-                           dieta=dieta, contexto=contexto, evitar=evitar)
-    if not sub:
-        return None
+    if hit in ("tomate", "tomate cherry") and plato and _TOMATE_COCINADO.search(_sa(plato)):   # [P1-PLAN-LOTE-466]
+        sub = SALSA_TOMATE
     if listo is None:
         listo = sin_tiempo(contexto)
+    # [P1-PLAN-LOTE-496 · 2026-09-27] la segunda proteína de un plato recibe el duradero de la primera (`forzar`): antes la
+    # rueda le daba otro y el plato quedaba «Atún con zanahoria… Acompaña con atún y sardinas en lata».
+    # tooltip-anchor: P1-PLAN-LOTE-496-FORZAR
+    if (sub == PROTEINA_TABLA and forzar in PROTEINAS_DURADERAS and not (listo and forzar == CLARAS)
+            and es_seguro(forzar, alergias, dieta=dieta, contexto=contexto)):
+        sub = forzar
+    else:
+        sub = sustituto_seguro(sub, int(dia_abs if semilla is None else semilla), vegetal, alergias,
+                               dieta=dieta, contexto=contexto, evitar=evitar,
+                               excluir=(CLARAS,) if listo else ())                            # [P1-PLAN-LOTE-495]
+    if not sub:
+        return None
     gramos = None
     if gramos_de is not None and not _RX_GRAMOS.search(text) and not _RX_MEDIDA.match(text):   # [P1-PLAN-LOTE-462]
         try:
@@ -305,6 +452,30 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
             gramos = None
     visible = (_LISTO_SIN_TIEMPO.get(sub) if listo else None) or _VISIBLE.get(sub, sub)     # [P1-PLAN-LOTE-460]
     nueva = f"{cantidad_de(text, gramos)}{visible}"  # [P1-PLAN-LOTE-286]
+    if sub == "casabe" and not gramos:                                                        # [P1-PLAN-LOTE-469]
+        nueva = casabe_en_tortas(text) or nueva
+    if sub == "oregano":                                                                      # [P1-PLAN-LOTE-490]
+        nueva = oregano_seco(text) or nueva
+    if sub == CLARAS:                                                                         # [P1-PLAN-LOTE-495]
+        nueva = claras_de(text, gramos)
+    if sub == SALSA_TOMATE:                                                                    # [P1-PLAN-LOTE-466]
+        g = None
+        mg = _RX_GRAMOS.search(text)
+        md = _RX_MEDIDA.match(text)
+        if mg:
+            g = float(mg.group(1).replace(",", "."))
+        elif md and md.group(2).lower().rstrip(".") in ("g", "gr", "gramos"):
+            try:
+                g = float(md.group(1).replace(",", "."))
+            except ValueError:
+                g = None
+        if g is None and gramos_de is not None:
+            try:
+                g = gramos_de(text)
+            except Exception:
+                g = None
+        nueva = (f"{_redondea(g * _FACTOR_SALSA)} g de {SALSA_TOMATE}" if g and g > 0
+                 else f"¼ taza de {SALSA_TOMATE}")
     if nueva == text:
         return None
     return nueva, sub, hit
@@ -435,7 +606,8 @@ def _proyectar(reales: list, ciclo: int, eff: dict, listo: bool = False) -> list
                 if req:
                     r = sustituir_linea(t, j, req, vegetal=vegetal, vegano=vegano, alergias=alergias,
                                         dieta=dieta, semilla=rueda, evitar=presentes, listo=listo,
-                                        gramos_de=_gramos_de_linea)  # [P1-PLAN-LOTE-462]
+                                        gramos_de=_gramos_de_linea,  # [P1-PLAN-LOTE-462]
+                                        plato=str(m.get("name") or ""))  # [P1-PLAN-LOTE-466]
                     if r:
                         t = r[0]
                         cambios += 1

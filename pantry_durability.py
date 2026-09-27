@@ -64,7 +64,7 @@ _RULES: tuple[tuple[tuple[str, ...], str, int], ...] = (
     (("jamon serrano", "jamon iberico", "lomo embuchado", "chorizo espanol", "salami", "pepperoni", "cecina",
       "sobrasada", "panceta iberica", "chistorra", "butifarra"), "cold", 30),
     (("chorizo mexicano", "chorizo verde", "chorizo santarrosano", "longaniza", "salchicha italiana", "morcilla"), "freezable", 5),
-    (("chuleta ahumada", "tocineta", "jamon de cocinar", "jamon de sandwich", "jamon de pavo", "salchichas",
+    (("chuleta ahumada", "chuletas ahumadas", "tocineta", "jamon de cocinar", "jamon de sandwich", "jamon de pavo", "salchichas",
       "chicharron", "pavochon", "tofu"), "cold", 14),
     (("ajo", "cebolla", "jengibre"), "cold", 60),
     (("papa", "auyama", "repollo", "zanahoria", "remolacha", "manzana"), "cold", 45),
@@ -76,8 +76,11 @@ _RULES: tuple[tuple[tuple[str, ...], str, int], ...] = (
       "berenjena", "alcachofa", "plátano verde", "platano verde", "calabacin", "nopal", "aji morron", "aji cubanela",
       "coliflor", "brocoli", "bok choy", "uva", "arandanos", "sandia", "melon"), "cold", 10),
     # ── proteína congelable ──────────────────────────────────────────────────────────────
+    # [P1-PLAN-LOTE-468 · 2026-09-27] «chuleta» a secas es la de cerdo FRESCA (la ahumada, arriba, es curada): caía en el
+    # default de categoría (7 días) y un plan de 30 días sin congelador la servía el día 7 sin sustituir (batería real
+    # del 27-sep, alérgico al pescado). tooltip-anchor: P1-PLAN-LOTE-468-CHULETA
     (("pollo", "pechuga", "muslo", "gallina", "pavo", "carne de res", "res molida", "carne molida", "bistec",
-      "cerdo", "pernil", "costilla", "chivo", "cordero", "conejo", "higado", "tilapia", "salmon", "trucha", "mero",
+      "cerdo", "chuleta", "pernil", "costilla", "chivo", "cordero", "conejo", "higado", "tilapia", "salmon", "trucha", "mero",
       "filete de pescado", "pescado", "camaron", "gambas", "almejas", "mejillones", "calamar", "pulpo", "cangrejo",
       "vieira", "percebes", "boquerones"), "freezable", 3),
     # ── fresco ───────────────────────────────────────────────────────────────────────────

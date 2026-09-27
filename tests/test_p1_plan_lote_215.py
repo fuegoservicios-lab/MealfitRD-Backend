@@ -117,7 +117,7 @@ def test_alergia_de_la_politica_llega_a_la_proyeccion():
     pol = {**SINGLE, "diet": {"type": "balanced", "allergies": ["Pescado"]}}
     resto = _todas(sc.shopping_source_days(_plan(pol))[7:])
     assert not any("atun" in x or "sardina" in x for x in resto), [x for x in resto if "atun" in x or "sardina" in x]
-    assert any("garbanzos cocidos" in x for x in resto)
+    assert any("claras de huevo" in x for x in resto)                   # [P1-PLAN-LOTE-495]
 
 
 def test_el_guard_y_la_lista_leen_el_mismo_mes():

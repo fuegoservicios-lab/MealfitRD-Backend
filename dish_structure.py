@@ -303,6 +303,14 @@ def _es_pan_378(nm: str) -> bool:
 def _soporte_del_nombre_378(n: str, soporte: str) -> bool:
     """Si el nombre dice su pan, el soporte ES ese pan; sin nombrar pan («Wrap de pollo»), vale cualquiera."""
     nombrados = {w[:-1] if w.endswith("s") else w for w in _PAN_NOMBRE_378_RE.findall(str(n or ""))}
-    if not nombrados and _WRAP_NOMBRE_420_RE.search(str(n or "")):    # [P1-PLAN-LOTE-420] su pan es la tortilla
-        return bool(re.search(r"\b(?:tortillas?|wraps?|pitas?)\b", str(soporte or "")))
+    # [P1-PLAN-LOTE-420] su pan es la tortilla. [P1-PLAN-LOTE-497 · 2026-09-27] …también cuando el nombre sólo nombra
+    # OTRO pan de guarnición: «Wrap fresco de yogurt, lechuga y tomate con casabe crujiente» recibía «rellena la casabe
+    # con lo que cierra». El pan tras «con/y/sobre» acompaña; el de «Wrap … de casabe» sí es la vasija que el plato dice.
+    # tooltip-anchor: P1-PLAN-LOTE-497-WRAP
+    if _WRAP_NOMBRE_420_RE.search(str(n or "")):
+        vasija = {w for w in nombrados
+                  if not re.search(r"\b(?:con|y|sobre)\s+(?:[a-z]+\s+){0,2}?" + re.escape(w), str(n or ""))}
+        if not vasija:
+            return bool(re.search(r"\b(?:tortillas?|wraps?|pitas?)\b", str(soporte or "")))
+        return any(re.search(r"\b" + re.escape(w), str(soporte or "")) for w in vasija)
     return not nombrados or any(re.search(r"\b" + re.escape(w), str(soporte or "")) for w in nombrados)

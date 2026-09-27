@@ -62,7 +62,7 @@ def test_con_tiempo_nada_cambia():
     for ctx in ({"cookingTime": "30min"}, {}, None):
         r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=2, contexto=ctx,
                                evitar={"atun en agua", "sardinas en lata"})  # [P1-PLAN-LOTE-465] la reserva
-        assert r and r[0] == "200 g de garbanzos cocidos", (ctx, r)
+        assert r and r[0] == "6 claras de huevo", (ctx, r)             # [P1-PLAN-LOTE-495] con tiempo, claras
 
 
 def test_la_proyeccion_del_mes_lee_el_sello_del_plan():
@@ -70,4 +70,4 @@ def test_la_proyeccion_del_mes_lee_el_sello_del_plan():
     assert any("garbanzos de lata, escurridos" in x for x in resto), resto[:20]
     assert not any("garbanzos cocidos" in x for x in resto)
     resto30 = _todas(sc.shopping_source_days(_plan("30min"))[7:])
-    assert any("garbanzos cocidos" in x for x in resto30) and not any("de lata" in x for x in resto30)
+    assert any("claras de huevo" in x for x in resto30) and not any("de lata" in x for x in resto30)  # [495]

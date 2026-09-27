@@ -187,5 +187,5 @@ def test_el_grafo_delega_en_el_modulo():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def _single_trip_fresh_substitute(")
     cuerpo = src[i:src.index("\ndef ", i + 10)]
-    assert '__import__("sustitucion_fresca").sustituir_en_plato(m, idx, text, new_line, sub)' in cuerpo
+    assert '__import__("sustitucion_fresca").sustituir_en_plato(m, idx, text, new_line, sub' in cuerpo
     assert "hit_tok) +" not in cuerpo, "el reemplazo de UN token no vuelve"
