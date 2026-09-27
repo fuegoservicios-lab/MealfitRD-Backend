@@ -1536,6 +1536,14 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     _sch_rule_swap = __import__("horizon").schedule_rule(form_data)  # [P1-PLAN-LOTE-241]
     if _sch_rule_swap:
         context_extras += f"\n    - 🌙 HORARIO DEL USUARIO (obligatorio): {_sch_rule_swap}"
+    # [P1-PLAN-LOTE-563] el presupuesto del usuario (la misma guía que recibe el generador)
+    try:
+        from prompts.plan_generator import build_budget_context as _bbc563
+        _bud_swap = _bbc563(form_data or {})
+        if _bud_swap:
+            context_extras += "\n    - 💰 PRESUPUESTO DEL USUARIO (obligatorio):" + _bud_swap.replace("\n", "\n      ")
+    except Exception as _bbc563_e:
+        logger.debug(f"[P1-PLAN-LOTE-563] presupuesto del swap no-op: {_bbc563_e}")
     _st_rule_swap = __import__("horizon").single_trip_rule_for_swap(form_data)  # [P1-PLAN-LOTE-561]
     if _st_rule_swap:
         context_extras += f"\n    - 🛒 COMPRA ÚNICA (obligatorio): {_st_rule_swap}"

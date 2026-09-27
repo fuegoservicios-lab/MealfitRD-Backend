@@ -6744,6 +6744,12 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> dict:
         # al cambiar un plato (auditoría del formulario). Fill-si-falta, crudo. tooltip-anchor: P1-PLAN-LOTE-559
         if not data.get("scheduleType") and hp.get("scheduleType"):
             data["scheduleType"] = hp.get("scheduleType")
+        # [P1-PLAN-LOTE-563 · 2026-09-27] El presupuesto: el swap y «Actualizar platos» no lo veían (auditoría del
+        # formulario) y, con la Nevera apagada o vacía (lote 550), eligen del catálogo entero. Fill-si-falta, crudo.
+        # tooltip-anchor: P1-PLAN-LOTE-563
+        for _bk563 in ("budget", "budgetAmount", "budgetCurrency", "groceryDuration"):
+            if data.get(_bk563) in (None, "") and hp.get(_bk563) not in (None, ""):
+                data[_bk563] = hp.get(_bk563)
         # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Adjuntar condiciones/medicamentos
         # del perfil → los updates inyectan directivas de condición + pisos de micro (paridad con S1).
         # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] (audit micros P1-2) + otherConditions/otherMedications:
@@ -9428,6 +9434,9 @@ def api_regenerate_day(
                 # (arriba) es el SELLO del plan, como en el swap y los bloques: plan dominicano + país cambiado a España
                 # ya no «actualiza» con el catálogo español; el perfil vivo sólo manda en planes legacy sin sello.
                 "scheduleType": data.get("scheduleType"),
+                # [P1-PLAN-LOTE-563] el presupuesto (el swap lo inyecta al prompt)
+                "budget": data.get("budget"), "budgetAmount": data.get("budgetAmount"),
+                "budgetCurrency": data.get("budgetCurrency"), "groceryDuration": data.get("groceryDuration"),
                 "staple_foods": data.get("staple_foods") or data.get("stapleFoods"),
                 "otherConditions": data.get("otherConditions"),
                 "otherMedications": data.get("otherMedications"),

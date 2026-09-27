@@ -22099,7 +22099,7 @@ def _raw_staple_foods(form_data: dict) -> list:
     if not MEALFIT_STAPLE_FOODS_ENABLED or not isinstance(form_data, dict):
         return []
     try:
-        staples = form_data.get("staple_foods") or form_data.get("stapleFoods")
+        staples = __import__("plan_policy").staples_de(form_data)   # [P1-PLAN-LOTE-566] clave canónica, por presencia
         if not staples or not isinstance(staples, list):
             return []
         return [str(s).strip() for s in staples if str(s or "").strip()]

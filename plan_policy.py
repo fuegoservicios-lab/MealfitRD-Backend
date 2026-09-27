@@ -258,6 +258,17 @@ def template_id_coverage() -> dict:
 
 
 # ═══════════════════════════════════════════════════════ adapters (formulario V1 → requested)
+def staples_de(form) -> Any:
+    """[P1-PLAN-LOTE-566 · 2026-09-27] «Tus básicos» con UNA clave canónica: `staple_foods` (la que `/analyze` deja tras
+    `_sanitize_staple_foods_for_generation` y la que escribe Configuración); `stapleFoods` sólo si la canónica no está.
+    La política prefería `stapleFoods` aunque fuera `[]` y el motor (`_raw_staple_foods`) `staple_foods` aunque fuera
+    `[]`: con las dos en el perfil (4 de 12 perfiles reales las tienen) un básico añadido en Configuración lo veía el
+    motor y no la política de los bloques siguientes, y uno borrado seguía vivo en el otro lado (auditoría del
+    formulario). Presencia, no verdad: `[]` en la canónica es «sin básicos». tooltip-anchor: P1-PLAN-LOTE-566"""
+    f = form if isinstance(form, dict) else {}
+    return f.get("staple_foods") if f.get("staple_foods") is not None else f.get("stapleFoods")
+
+
 def _clean_list(v: Any) -> list[str]:
     if v is None:
         return []
@@ -338,7 +349,7 @@ def policy_from_form(form_data: dict, *, country: Optional[str] = None) -> dict:
     allergies = _clean_list(form.get("allergies")) + _clean_list(form.get("otherAllergies"))
     conditions = _clean_list(form.get("medicalConditions")) + _clean_list(form.get("otherConditions"))
     dislikes = _clean_list(form.get("dislikes")) + _clean_list(form.get("otherDislikes"))
-    staples = _clean_list(form.get("stapleFoods") if form.get("stapleFoods") is not None else form.get("staple_foods"))
+    staples = _clean_list(staples_de(form))   # [P1-PLAN-LOTE-566] clave canónica
     gm = str(form.get("mealOrganization") or "balanced").strip().lower()
     if gm not in RECURRENCE_MODES:
         gm = "balanced"
@@ -549,7 +560,7 @@ def egg_staple_forms(form: Optional[dict]) -> set:
     out: set = set()
     try:
         f = form or {}
-        nombres = _clean_list(f.get("stapleFoods") if f.get("stapleFoods") is not None else f.get("staple_foods"))
+        nombres = _clean_list(staples_de(f))   # [P1-PLAN-LOTE-566] clave canónica
         for item in (f.get("stapleAnchors") or []) if isinstance(f.get("stapleAnchors"), list) else []:
             if isinstance(item, dict) and item.get("name"):
                 nombres.append(str(item["name"]))

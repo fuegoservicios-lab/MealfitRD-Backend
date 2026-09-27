@@ -902,7 +902,15 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # día: el día llega a la política del swap, el prompt lo sabe y al guardar se aplica la sustitución duradera del generador.
 # [P1-PLAN-LOTE-562 · 2026-09-27] (backend) «bate 1 huevo bien cocido» (masas y revoltillos de embarazo) → «bate 1
 # huevo»: un huevo cocido no se bate; la seguridad queda en el punto de cocción y en la nota.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-562 · 2026-09-27"
+# [P1-PLAN-LOTE-563 · 2026-09-27] (backend) El presupuesto también al cambiar un plato o actualizar un día: el swap no lo
+# veía y, con la Nevera apagada o vacía, elige del catálogo entero.
+# [P1-PLAN-LOTE-564 · 2026-09-27] (backend) El nombre del plato no repite un alimento: «Pescado blanco a la plancha…,
+# casabe y pescado blanco», «…queso blanco y queso blanco» (9 de 4.710 comidas del corpus).
+# [P1-PLAN-LOTE-565 · 2026-09-27] (backend) El paso no pide «yema líquida» cuando la nota de seguridad del mismo plato
+# exige «yema y clara firmes»: se alinea el paso (la nota es la política).
+# [P1-PLAN-LOTE-566 · 2026-09-27] (backend) «Tus básicos» con una clave canónica (`staple_foods`) para la política y el
+# motor: preferían claves opuestas y un básico de Configuración no llegaba a la política de los bloques siguientes.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-566 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
