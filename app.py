@@ -941,7 +941,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # sin razonar (la API rechaza tools + reasoning_effort).
 # [P1-PLAN-LOTE-601 · 2026-09-27] (backend) Banco del analizador: regla de aceptación PAREADA contra >= 2 corridas de la
 # base (una corrida sola varía ±2-4 puntos); dos variantes del prompt y el modelo Gemini pro, medidos y rechazados.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-601 · 2026-09-27"
+# [P1-PLAN-LOTE-610 · 2026-09-27] (backend) La proteína nueva del 592 es magra de verdad: el «pavo molido» (más grasa
+# que proteína por kcal) lo recortaba el reequilibrio de grasa del escudo y el día quedaba bajo el piso.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-610 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

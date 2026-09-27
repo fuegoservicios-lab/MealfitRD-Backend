@@ -29,7 +29,7 @@ MIN_ADD_G = 40
 TECHO_KCAL = 1.07
 _FUERA = re.compile(r"\b(huevos?|claras?|yemas?|queso|ricotta|cottage|requeson|leche|yogur\w*|edamame|soya|soja|tofu|"
                     r"tempeh|seitan|lentejas?|garbanzos?|habichuelas?|frijol\w*|guisantes?|gandul\w*|jamon|salami|"
-                    r"salchich\w*|chorizo|bacalao|arenque|sardinas?|atun|higado|mariscos?|camarones?)\b")
+                    r"salchich\w*|chorizo|bacalao|arenque|sardinas?|atun|higado|mariscos?|camarones?|habas?|cangrejo|jaiba|langost\w*|pulpo|calamar\w*|lambi)\b")  # [P1-PLAN-LOTE-610] ni legumbre ni marisco
 _PREFERIDAS = ("pechuga de pollo", "pollo", "pechuga de pavo", "pavo", "pescado", "tilapia", "res", "cerdo")
 _EMBARAZO = re.compile(r"embaraz|lactan", re.IGNORECASE)
 _PESCADO = re.compile(r"\b(pescado|tilapia|mero|dorado|chillo|salmon|merluza|corvina)\b")
@@ -91,11 +91,28 @@ def _candidatas(form_data, db, go, day) -> list:
                       nombre)
         if re.search(r"\b" + re.escape(cabeza), texto_dia):
             continue                                   # el día ya la usa: no se repite la misma proteína
+        if not _magra(c):
+            continue                                   # [P1-PLAN-LOTE-610] «pavo molido»: más grasa que proteína por kcal
         out.append(c)
-    out.sort(key=lambda c: next((i for i, p in enumerate(_PREFERIDAS) if p in _sa(getattr(c[2], "name", c[1])
-                                                                                  if len(c) > 2 else c[1])),
-                                len(_PREFERIDAS)))
+    # [P1-PLAN-LOTE-610] la preferida primero y, entre iguales, la más magra (el orden de `_safe_high_density_proteins`)
+    out.sort(key=lambda c: (next((i for i, p in enumerate(_PREFERIDAS) if p in _sa(getattr(c[2], "name", c[1])
+                                                                                   if len(c) > 2 else c[1])),
+                                 len(_PREFERIDAS)), -float(c[0] or 0)))
     return out
+
+
+# [P1-PLAN-LOTE-610 · 2026-09-27] La proteína NUEVA es magra de verdad. Validación del 592 en producción (estudiante, día
+# 2): con el pollo ya en el almuerzo, el 592 eligió «pavo molido» —la preferencia «pavo» casaba— y el recorte de GRASA del
+# escudo lo bajó de 45 a 25 g: por kcal es más grasa que proteína (≈17 g de proteína y 10 de grasa por 100 g), así que
+# para el reequilibrio del día es una fuente de grasa. El día quedó a 3,5 g del piso. Magra = la proteína aporta más kcal
+# que la grasa… con margen: el pavo molido del catálogo (18,7 g / 8,3 g) empata (74,8 vs 74,7 kcal), así que la proteína tiene que
+# ser al menos el 60 % de las kcal de proteína+grasa (pollo, pavo, pescado, res, chivo, conejo sí; cerdo, chuleta y molidos no).
+# tooltip-anchor: P1-PLAN-LOTE-610
+def _magra(c) -> bool:
+    info = c[2] if len(c) > 2 else None
+    p = float(getattr(info, "protein", 0) or 0)
+    f = float(getattr(info, "fats", 0) or 0)
+    return p > 0 and 4 * p >= 1.5 * 9 * f      # la proteína, al menos 60 % de las kcal de proteína+grasa
 
 
 def _comida(day, go):
