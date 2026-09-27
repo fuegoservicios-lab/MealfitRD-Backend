@@ -936,7 +936,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «hasta que la yema quede cremosa»: cuaja las claras.
 # [P1-PLAN-LOTE-592 · 2026-09-27] (backend) Con los topes atando la proteína del día (huevos, edamame, lácteos), entra
 # una proteína magra NUEVA en la comida principal: 4 de 6 días cortos de las baterías vuelven sobre el piso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-592 · 2026-09-27"
+# [P1-PLAN-LOTE-600 · 2026-09-27] (backend) GPT-6 como proveedor de texto por knob (`MEALFIT_LLM_PROVIDER=openai`),
+# DORMIDO: a ciegas puntuó 9,71 frente a 11,14 de DeepSeek y el tope de 200k TPM de la cuenta lo satura; con tools va
+# sin razonar (la API rechaza tools + reasoning_effort).
+# [P1-PLAN-LOTE-601 · 2026-09-27] (backend) Banco del analizador: regla de aceptación PAREADA contra >= 2 corridas de la
+# base (una corrida sola varía ±2-4 puntos); dos variantes del prompt y el modelo Gemini pro, medidos y rechazados.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-601 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
