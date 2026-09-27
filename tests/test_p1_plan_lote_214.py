@@ -62,8 +62,8 @@ def test_la_proteina_rota_por_dia(monkeypatch):
     days = _plan({9: ["150 g de pechuga de pollo"], 10: ["150 g de pechuga de pollo"], 11: ["150 g de pechuga de pollo"]})
     go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced", contexto={})
     subs = [days[i]["meals"][0]["ingredients"][0] for i in (9, 10, 11)]
-    assert len(set(subs)) == 3, subs
-    assert set(subs) == {"150 g de atún en agua", "150 g de sardinas en lata", "150 g de garbanzos cocidos"}
+    # [P1-PLAN-LOTE-465] el omnívoro rota por pescado en lata; los garbanzos quedan de reserva (menos proteína)
+    assert set(subs) == {"150 g de atún en agua", "150 g de sardinas en lata"}, subs
 
 
 def test_vegetariano_solo_legumbres(monkeypatch):

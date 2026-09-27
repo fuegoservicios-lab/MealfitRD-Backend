@@ -1207,6 +1207,26 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # assemble re-encuadra. Re-escala porciones proteína-dominantes EXISTENTES (sin ingredientes
                 # nuevos → sin riesgo de alérgeno). Corre ANTES de _csd/_rbs para que el band re-medido refleje
                 # el estado corregido. Fail-safe. Import LAZY (mismo ciclo que finalize).
+                # [P1-PLAN-LOTE-464 · 2026-09-27] La sustitución de la compra única (días 4+ sin congelador) cambia el
+                # CONTENIDO del plato —pechuga → sardinas, filete → garbanzos— y el band-closer de abajo decide las
+                # PORCIONES. Sólo corría dentro del bucle de caps, DESPUÉS del closer, y en el merge de un bloque
+                # (días 4+, los únicos que sustituye) el chain corre UNA vez: el día quedaba con el contenido nuevo y
+                # las porciones del viejo. Replay del chain completo forzando la compra única (40 planes): ver la
+                # memoria del lote. Aquí va primero —contenido, luego porciones, luego caps (última palabra)—; la
+                # llamada del bucle de caps se queda como red para lo que añada el closer. Idempotente: lo ya duradero
+                # no se vuelve a sustituir. tooltip-anchor: P1-PLAN-LOTE-464-SUSTITUIR-ANTES-DEL-CLOSER
+                try:
+                    from graph_orchestrator import _single_trip_fresh_substitute as _stfs0
+                    _pol464 = _pd.get("_plan_policy") if isinstance(_pd.get("_plan_policy"), dict) else {}
+                    _eff464 = (_pol464 or {}).get("effective")
+                    if isinstance(_eff464, dict) and (_eff464.get("shopping") or {}).get("main_cycle_days"):
+                        _clin_ctx = (_pd.get("form_data") or data.get("form_data")
+                                     or _build_clinical_form(data.get("user_id")) or {})
+                        _stfs0(_pd.get("days") or [], db=_db_ins, days_offset=int(_pd.get("_days_offset") or 0),
+                               contexto=_clin_ctx, effective=_eff464,
+                               diet=((_eff464.get("diet") or {}).get("type")))
+                except Exception as _stfs0_e:
+                    logger.debug(f"[P1-PLAN-LOTE-464] pre-closer no-op: {type(_stfs0_e).__name__}: {_stfs0_e}")
                 try:
                     from graph_orchestrator import reconcile_protein_band_post_finalize as _rpb
                     _rpb(_pd)
@@ -1250,8 +1270,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                     # warning de arriba lo delató en producción. El contexto se deriva del PERFIL
                     # por `user_id`, que sí viaja. Se resuelve UNA vez: abajo lo reusa el panel de
                     # micros, que sufría el mismo dict vacío.
-                    _clin_ctx = (_pd.get("form_data") or data.get("form_data")
-                                 or _build_clinical_form(data.get("user_id")) or {})
+                    _clin_ctx = (locals().get("_clin_ctx") or _pd.get("form_data") or data.get("form_data")
+                                 or _build_clinical_form(data.get("user_id")) or {})  # [P1-PLAN-LOTE-464] una query
                     _ramb(_pd, form_data=_clin_ctx)
                 except Exception as _ramb_e:
                     logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")

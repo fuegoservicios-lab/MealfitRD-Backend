@@ -65,7 +65,7 @@ _GENERO = {
     "mamey": "m", "nispero": "m", "aguacate": "m", "leche": "f", "platano": "m", "rulo": "m", "yuca": "f", "pan": "m",
     "panecillo": "m", "bagel": "m",
 }
-_CABEZAS = ("pechuga", "muslo", "filete", "chuleta", "bistec", "lomo")
+_CABEZAS = ("pechuga", "muslo", "filete", "chuleta", "bistec", "lomo", "carne")
 #: tokens de la tabla que en el texto suelen ser OTRA palabra: sólo cuentan si la línea vieja los nombra
 _HOMONIMOS = ("dorado", "mora", "lomo", "pan")
 _CORTES = r"(?:cubos|trozos|tiras|dados|lascas|piezas?|pedazos?|filetes?|pechugas?|muslos?|lomos?|chuletas?|medallones|porci[oó]n(?:es)?)"
@@ -84,6 +84,8 @@ _ADJ_RAIZ = (r"guisad|saltead|desmenuzad|sazonad|marinad|aliñad|adobad|especiad
 #: métodos que sólo tienen sentido para un crudo: salen del nombre, la descripción y la cadena del paso
 _METODO_RAIZ = re.compile(r"^(?:asad|hornead|dorad|frit|grillad|sellad|empanizad|rebozad|cocid|hervid|blanc|magr|molid|"
                           r"deshuesad|cocinad)$", re.IGNORECASE)
+#: participios de cocción de un crudo que, en la descripción, se van con él («…, horneada junto a la berenjena»)
+_METODO_DESC = re.compile(r"^(?:marcad|dorad|asad|sellad|hornead|grillad|cocid|cocinad)$", re.IGNORECASE)
 _FRASE_METODO = (r"(?:a\s+la\s+plancha|a\s+la\s+parrilla|al\s+horno|a\s+la\s+brasa|al\s+vapor|al\s+carb[oó]n|al\s+punto|"
                  r"por\s+completo|por\s+dentro|a\s+fuego\s+lento|en\s+su\s+punto|sin\s+piel|sin\s+hueso|de\s+pollo|"
                  r"de\s+pavo|de\s+res|de\s+cerdo)")
@@ -97,14 +99,22 @@ _VERBOS_ESCURRE = re.compile(r"^(?:corta|trocea|filetea|seca|limpia|lava|deshues
 #: raíces (sin tilde) de los verbos que llevan el pronombre del crudo: «ásalo», «cocínala», «séllalos»
 _COCCION_CLITICO = ("asa", "cocina", "sella", "dora", "frie", "grilla", "cuece", "hierve")
 _CORTE_TRAS = re.compile(r"\s+en\s+(?:tiras|cubos|cubitos|dados|trozos|piezas|una\s+pieza|filetes|lascas|l[aá]minas|"
-                         r"porciones|medallones|mitades|rodajas)(?:\s+(?:finas?|finos?|gruesas?|gruesos?|pequeñ[oa]s|"
-                         r"medianos?|medianas?|grandes|parejas?|parejos|uniformes?|de\s+\d+\s*cm))*", re.IGNORECASE)
+                         r"porciones|medallones|mitades|rodajas|rebanadas)(?:\s+(?:finas?|finos?|gruesas?|gruesos?|"
+                         r"pequeñ[oa]s|medianos?|medianas?|grandes|parejas?|parejos|uniformes?|de\s+\d+\s*cm))*"
+                         r"(?:\s+(?:de|para)\s+(?:la\s+)?(?:parrilla|plancha|guisar|asar|fre[ií]r|horno|sart[eé]n))?",
+                         re.IGNORECASE)
+#: lo que lleva artículo y NO es un alimento: no corta el alcance de un pronombre («…a fuego medio-alto y déjala»)
+_NO_ALIMENTO = (r"(?:centro|parte|fuego|sart[eé]n|olla|horno|plato|bowl|temperatura|mitad|resto|punto|tapa|caldero|"
+                r"bandeja|molde|taz[oó]n|recipiente|superficie|lado|borde|medio|minuto|airfryer|freidora|plancha|"
+                r"parrilla|calor|vapor|wok|grill|cocci[oó]n|term[oó]metro)")
+_FIN_AMBITO = re.compile(r"[;.]|\b(?:el|la|los|las|al|del)\s+(?!" + _NO_ALIMENTO + r"\b)[a-záéíóúñ]", re.IGNORECASE)
 _OBJETO_SIGUE = re.compile(r"(?:,\s+|\s+y\s+)(?=(?:\d|[½¼¾⅓⅔]|(?:el|la|los|las|un|una|unos|unas)\s))", re.IGNORECASE)
 _TIEMPO = re.compile(r"(?P<pre>(?:durante\s+|unos\s+|por\s+|aproximadamente\s+)?)(?P<a>\d+)(?:\s*(?:-|–|a)\s*(?P<b>\d+))?\s*"
                      r"(?P<u>min(?:utos?)?\b)(?:\s+por\s+(?:cada\s+)?lado)?", re.IGNORECASE)
 _TEMP_SEGURA = re.compile(
     r"(?:,\s*|\s+)?(?:\(\s*)?(?:\b(?:o|y)\s+)?"
-    r"(?:(?:verifica(?:ndo)?|comprueba|aseg[uú]rate\s+de|revisa)\s+(?:con\s+(?:un\s+)?term[oó]metro\s+)?que\s+"
+    r"(?:(?:verifica(?:ndo)?|comprueba|comprobando|aseg[uú]rate\s+de|asegur[aá]ndote\s+de|revisa(?:ndo)?|midiendo)\s+"
+    r"(?:con\s+(?:un\s+)?term[oó]metro\s+)?que\s+"
     r"(?:[^,;.()]{0,60}?\s+)?(?:alcance|llegue\s+a|marque|est[eé]\s+a)\s+"
     r"|hasta\s+(?:(?:alcanzar|llegar\s+a)\s+|que\s+(?:[^,;.()]{0,60}?\s+)?(?:alcance|llegue\s+a|marque)\s+)?"
     r"|(?:la\s+parte\s+m[aá]s\s+gruesa|el\s+centro|el\s+interior)[^,;.()]{0,40}?\s+(?:alcance|llegue\s+a)\s+)?"
@@ -116,9 +126,10 @@ _HASTA_COCIDO = re.compile(
     r"(?:,\s*|\s+)(?:(?:o|y)\s+)?hasta\s+que\s+(?:"
     r"(?:[^,;.()]{0,50}?\s+)?(?:est[eé]n?|queden?|se\s+vean?|luzcan?|tengan?)\s+"
     r"(?:bien\s+|completamente\s+|totalmente\s+|ligeramente\s+)?"
-    r"(?:opac|cocid|dorad|firme|blanc|hech|sellad|cocinad)[oa]s?"
+    r"(?:opac[oa]s?|cocid[oa]s?|dorad[oa]s?|firmes?|blanc[oa]s?|hech[oa]s?|sellad[oa]s?|cocinad[oa]s?)"
     r"(?:\s+(?:por\s+dentro|en\s+el\s+centro|por\s+completo|por\s+ambos\s+lados))?"
-    r"(?:\s+y\s+(?:se\s+desmenucen?|se\s+separen?\s+en\s+lascas|suelten?\s+sus\s+jugos))?"
+    r"(?:\s+y\s+(?:se\s+desmenucen?|se\s+separen?\s+en\s+lascas|suelten?\s+sus\s+jugos|"
+    r"el\s+(?:centro|interior)\s+(?:a[uú]n\s+|siga\s+|quede\s+)?(?:suave|jugoso|tierno)))?"
     r"|se\s+desmenucen?)"
     r"(?:\s+(?:f[aá]cilmente|f[aá]cil|con\s+facilidad|con\s+un\s+tenedor|en\s+lascas))?",
     re.IGNORECASE)
@@ -205,7 +216,7 @@ def _regex_frase(tokens) -> re.Pattern:
     return re.compile(
         r"(?P<art>\b(?:el|la|los|las|un|una|unos|unas|del|al)\s+)?"
         r"(?P<cant>" + _NUM + r"\s*(?:" + _UNIDADES + r"\.?\s+)?(?:de\s+)?)?"
-        r"(?P<corte>" + _CORTES + r"\s+de\s+)?"
+        r"(?P<corte>" + _CORTES + r"(?:\s+(?:blanc|fresc|magr|enter)[oa]s?)?\s+de\s+)?"
         r"(?P<nucleo>\b(?:" + nucleos + r"))\b"
         r"(?P<cola>(?:\s+(?:blanc[oa]s?|fresc[oa]s?|magr[oa]s?|molid[oa]s?|deshuesad[oa]s?|limpi[oa]s?|"
         r"sin\s+piel|sin\s+hueso|de\s+pollo|de\s+pavo|de\s+res|de\s+cerdo|de\s+pescado(?:\s+blanco)?|"
@@ -282,6 +293,27 @@ def _es_split(resto: str) -> bool:
     return bool(_VEGETAL.search(cl))
 
 
+_CORTE_GENERO = (("tiras", "f"), ("lascas", "f"), ("piezas", "f"), ("laminas", "f"), ("porciones", "f"),
+                 ("mitades", "f"), ("rodajas", "f"), ("rebanadas", "f"), ("cubos", "m"), ("cubitos", "m"),
+                 ("dados", "m"), ("trozos", "m"), ("filetes", "m"), ("medallones", "m"))
+
+
+def _sin_corte(out: str, fin: int, viejos: set):
+    """((inicio, fin) del corte que sigue al alimento o vacío, pronombres del fresco + el del corte: «en tiras y
+    sazónalas» hablaba de las tiras)."""
+    mc = _CORTE_TRAS.match(out, fin)
+    if not mc:
+        return (fin, fin), viejos
+    corte_txt = _sa(mc.group(0))
+    viejos = set(viejos) | {("los" if gc == "m" else "las") for w, gc in _CORTE_GENERO if w in corte_txt}
+    return (fin, mc.end()), viejos
+
+
+def _fin_ambito(texto: str, desde: int) -> int:
+    m = _FIN_AMBITO.search(texto, desde)
+    return m.start() if m else len(texto)
+
+
 def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: str, listo: bool, *, paso: bool):
     """Reescribe cada frase del fresco en `texto`. Devuelve (texto, hubo_cambio, pronombres del fresco)."""
     hits = list(rx.finditer(texto))
@@ -312,28 +344,26 @@ def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: st
                 delta = len(verbo) - len(verbo_orig)
                 ini += delta
                 fin += delta
-                mc = _CORTE_TRAS.match(out, fin)
-                if mc:
-                    corte_txt = _sa(mc.group(0))
-                    for w, gc in (("tiras", "f"), ("lascas", "f"), ("piezas", "f"), ("laminas", "f"),
-                                  ("porciones", "f"), ("mitades", "f"), ("rodajas", "f"), ("cubos", "m"),
-                                  ("cubitos", "m"), ("dados", "m"), ("trozos", "m"), ("filetes", "m"),
-                                  ("medallones", "m")):
-                        if w in corte_txt:
-                            viejos.add("los" if gc == "m" else "las")
-                    out = out[:fin] + out[mc.end():]
+                fin, viejos = _sin_corte(out, fin, viejos)
+                out = out[:fin[0]] + out[fin[1]:]
+                fin = fin[0]
                 # el verbo repartía una lista («corta el pollo en cubos, la berenjena en dados…»): el resto conserva
                 # su verbo y el duradero se escurre aparte
                 mo = _OBJETO_SIGUE.match(out, fin)
                 if mo:
                     out = out[:fin] + "; " + verbo_orig.lower() + " " + out[mo.end():]
-            elif mv and _VERBOS_CALIENTA.match(mv.group(1)) and not (
-                    re.match(r"\s+con\s+", out[fin:], re.IGNORECASE) and _es_split(out[fin:])):
-                verbo = "Calienta" if mv.group(1)[:1].isupper() else "calienta"
-                out = antes[:mv.start()] + verbo + mv.group(2) + out[ini:]
-                delta = len(verbo) - len(mv.group(1))
-                ini += delta
-                fin += delta
+            else:
+                if mv and _VERBOS_CALIENTA.match(mv.group(1)) and not (
+                        re.match(r"\s+con\s+", out[fin:], re.IGNORECASE) and _es_split(out[fin:])):
+                    verbo = "Calienta" if mv.group(1)[:1].isupper() else "calienta"
+                    out = antes[:mv.start()] + verbo + mv.group(2) + out[ini:]
+                    delta = len(verbo) - len(mv.group(1))
+                    ini += delta
+                    fin += delta
+                # «sirve el pollo en rebanadas», «corta la carne en piezas de parrilla»: lo listo no se corta así
+                fin, viejos = _sin_corte(out, fin, viejos)
+                out = out[:fin[0]] + out[fin[1]:]
+                fin = fin[0]
         out = out[:ini] + frase + cadena + out[fin:]
         tocadas.append((ini, ini + len(frase + cadena), viejos))
         viejos_total |= viejos
@@ -341,9 +371,7 @@ def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: st
         # pronombres pegados al verbo en la misma cláusula, hasta que otro sustantivo con artículo tome el relevo
         # («…el tomate…; añade el atún y caliéntalo»: el «lo» ya es del atún)
         for ini, fin_r, viejos in tocadas:
-            corte = re.search(r"[;.]|\b(?:el|la|los|las|al|del)\s+[a-záéíóúñ]", out[fin_r:], re.IGNORECASE)
-            fin_or = fin_r + corte.start() if corte else len(out)
-            out = _clitico(out, fin_r, fin_or, viejos, g, n)
+            out = _clitico(out, fin_r, _fin_ambito(out, fin_r), viejos, g, n)
     else:
         # la descripción: «Pechuga desmenuzada en un guiso…, acompañada de» → el participio tras la coma concuerda
         for ini, fin_r, viejos in tocadas:
@@ -355,11 +383,18 @@ def _reescribe(texto: str, rx: re.Pattern, nueva: str, corto: str, g: str, n: st
             def _conc(mm):
                 fin_v = mm.group(3).lower()
                 gn = ("m" if fin_v.startswith("o") else "f", "p" if fin_v.endswith("s") else "s")
-                if gn in olds and gn != (g, n):
-                    return mm.group(1) + mm.group(2) + _inflexion(mm.group(3), g, n)
+                if gn not in olds:
+                    return mm.group(0)                     # habla de otro sustantivo («arepitas horneadas»)
+                if listo and _METODO_DESC.match(mm.group(2)):
+                    return ""                              # «…, horneada junto a», «y marcada a la plancha»: fuera
+                if gn != (g, n):
+                    return mm.group(1) + mm.group(2) + _inflexion(mm.group(3), g, n) + (mm.group(4) or "")
                 return mm.group(0)
-            trozo = re.sub(r"(,\s+)(acompañad|servid|terminad|cubiert|bañad|preparad|cocinad|aderezad|aliñad|"
-                           r"combinad|mezclad)(os|as|o|a)\b", _conc, out[fin_r:fin_or], flags=re.IGNORECASE)
+            trozo = re.sub(r"(,\s+|\s+y\s+)(acompañad|servid|terminad|cubiert|bañad|preparad|cocinad|aderezad|aliñad|"
+                           r"combinad|mezclad|sazonad|marinad|estofad|guisad|marcad|dorad|asad|sellad|hornead|grillad|"
+                           r"cocid)(os|as|o|a)\b((?:\s+(?:a\s+la\s+plancha|a\s+la\s+parrilla|al\s+horno|al\s+vapor|"
+                           r"al\s+carb[oó]n|al\s+punto|a\s+fuego\s+lento|suavemente|lentamente))?)",
+                           _conc, out[fin_r:fin_or], flags=re.IGNORECASE)
             out = out[:fin_r] + trozo + out[fin_or:]
     return out, True, viejos_total
 
@@ -393,7 +428,7 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
     rx_corto = re.compile(r"\b" + _tolerante(_sa(corto)) + r"\b", re.IGNORECASE)
     pron = _pron(g, n)
     art = {("m", "s"): "el", ("f", "s"): "la", ("m", "p"): "los", ("f", "p"): "las"}[(g, n)]
-    partes, previa = [], False
+    partes, previa, bandeja = [], False, False
     for a, b in _clausulas(texto):
         cl = texto[a:b]
         nombra = bool(rx_corto.search(cl))
@@ -421,6 +456,9 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
                     k = retoma.start() + len(verbo + pron)
                     cl = cl[:k] + mp.group(1) + mp.group(2) + _inflexion(mp.group(3), g, n) + cl[k + mp.end():]
                 cl = _cap_tiempo(_limpia_coccion(cl), retoma.start())
+            elif raiz in ("hornea", "gratina"):                                 # «hornéalo… 12-15 min» → 5-8
+                cl = cl[:retoma.start()] + retoma.group(1) + pron + cl[retoma.end():]
+                cl = _cap_tiempo(_limpia_coccion(cl), retoma.start(), "5-8")
             else:
                 cl = cl[:retoma.start()] + retoma.group(1) + pron + cl[retoma.end():]
                 cl = _limpia_coccion(cl)
@@ -429,6 +467,10 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
             previa = True
             continue
         cl = _limpia_coccion(cl)
+        # sin la temperatura de por medio, el pronombre que la seguía ya está al alcance («…a fuego medio y déjala»)
+        mn = rx_corto.search(cl)
+        if mn:
+            cl = _clitico(cl, mn.end(), _fin_ambito(cl, mn.end()), viejos, g, n)
         mv = re.search(r"\b(?P<v>saltea|sofr[ií]e|cocina|guisa|calienta|sella|dora|asa)\s+(?:(?:el|la|los|las)\s+)?"
                        + _tolerante(_sa(corto)) + r"\b[^,;.]*?\s+con\s+(?P<resto>[^;.]+)", cl, re.IGNORECASE)
         if mv and _es_split(mv.group("resto")):
@@ -440,14 +482,37 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
             cl = (cl[:mv.start()] + v + " " + resto + f"; añade {art} {corto} al final y caliénta{pron} 1-2 min"
                   + (cola.group(0).strip() if cola else ""))
         else:
-            mcal = re.search(r"\b(?:calienta|saltea|sofr[ií]e)\b", cl, re.IGNORECASE)
-            mhor = re.search(r"\b(?:hornea|horn[eé]al[oa]s?|gratina|gratínal[oa]s?)\b", cl, re.IGNORECASE)
+            # [P1-PLAN-LOTE-463] el tiempo baja sólo si el verbo es DEL duradero («calienta las sardinas 8-10 min»,
+            # «hornéalas»); «Hornea 20-25 minutos» a una bandeja con vegetales es el tiempo de los vegetales
+            obj = r"\s+(?:(?:el|la|los|las)\s+)?(?:\d[^;.,]{0,20}?\s+de\s+)?" + _tolerante(_sa(corto)) + r"\b"
+            mcal = re.search(r"\b(?:calienta|saltea|sofr[ií]e)" + obj + r"|\bcali[eé]ntal(?:o|a|os|as)\b", cl,
+                             re.IGNORECASE)
+            mhor = re.search(r"\b(?:hornea|gratina)" + obj + r"|\bhorn[eé]al(?:o|a|os|as)\b|\bgrat[ií]nal(?:o|a|os|as)\b",
+                             cl, re.IGNORECASE)
             if mcal:
                 cl = _cap_tiempo(cl, mcal.end())
             elif mhor:
                 cl = _cap_tiempo(cl, mhor.end(), "5-8")      # al horno, sólo hasta que se caliente
+            # «Coloca las sardinas, el brócoli y la cebolla en una bandeja»: los vegetales hacen su horno completo y el
+            # duradero entra al final (antes salía horneado 20-25 min, o la bandeja entera a 5-8)
+            mb = re.search(r"(?:(?:el|la|los|las)\s+)?" + _tolerante(_sa(corto)) + r"\b(?:\s+en\s+lata|\s+en\s+agua|"
+                           r"\s+cocid[oa]s)?\s*,\s+(?=[^;.]*\b(?:bandeja|fuente|molde|refractario)\b)", cl, re.IGNORECASE)
+            if mb and _VEGETAL.search(cl[mb.end():]):
+                cl = cl[:mb.start()] + cl[mb.end():]
+                bandeja = len(partes)
         partes.append(cl)
         previa = True
+    if bandeja is not False:
+        frase_b = f" Añade {art} {corto} los últimos 5 minutos, solo para calentarl{pron[1:]}."
+        # justo después del horno de la bandeja; si no se encuentra, al final del paso
+        k = next((j for j in range(bandeja, len(partes)) if re.search(r"\bhorn(?:ea|éa|ea\w+)\b|\bhornea\b", partes[j],
+                                                                          re.IGNORECASE)
+                  and partes[j].rstrip().endswith(".")), None)
+        if k is not None:
+            partes[k] = partes[k].rstrip() + frase_b
+        else:
+            ult = "".join(partes).rstrip()
+            partes = [(ult if ult.endswith(".") else ult + ".") + frase_b]
     return _limpia_puntuacion("".join(partes)) if partes else texto
 
 
@@ -543,7 +608,10 @@ def parear_raw(meal: dict, viejo: str, nueva: str) -> str:
             if not isinstance(r, str):
                 continue
             low = _sa(r)
-            if not rx.search(low) or any(h in low for h in _DURADERO_EN_TEXTO) or any(c in low for c in claves):
+            # [P1-PLAN-LOTE-463] «previamente congelado»/«descongelado» ya no es despensa (lote 289): su pareja sí sale
+            duradero = [h for h in _DURADERO_EN_TEXTO if h in low
+                        and not (h == "congelad" and re.search(r"previamente congelad|descongelad", low))]
+            if not rx.search(low) or duradero or any(c in low for c in claves):
                 continue
             if low.strip() in visibles and low.strip() != _sa(viejo).strip():
                 continue                  # es la pareja exacta de OTRA línea visible

@@ -48,7 +48,14 @@ logger = logging.getLogger(__name__)
 
 PROTEINA_TABLA = "atun en agua"          # el sustituto genérico de la proteína fresca (tabla de abajo)
 PROTEINA_VEGETAL = "garbanzos cocidos"
-_ROTACION_OMNIVORA = ("atun en agua", "sardinas en lata", "garbanzos cocidos")
+# [P1-PLAN-LOTE-465 · 2026-09-27] Los garbanzos cocidos tienen ~9 g de proteína por 100 g; la pechuga que sustituyen,
+# ~23 crudos. En la rueda de tres, un tercio de las sustituciones de un omnívoro caía en garbanzos y el día perdía
+# proteína que ningún pase podía devolver (los topes de realismo cortan la legumbre antes): replay del chain completo
+# forzando la compra única, días con garbanzos a 0,57-0,71 del objetivo de proteína. Para un omnívoro la rueda es de
+# pescado en lata (atún en agua, sardinas) y los garbanzos quedan de RESERVA: sólo si los dos pescados ya están en el día
+# o no son seguros (alergia al pescado, embarazo con el tope de mercurio, rechazo). tooltip-anchor: P1-PLAN-LOTE-465
+_ROTACION_OMNIVORA = ("atun en agua", "sardinas en lata")
+_RESERVA_OMNIVORA = ("garbanzos cocidos",)
 _ROTACION_VEGETAL = ("garbanzos cocidos", "lentejas cocidas")
 # [P1-PLAN-LOTE-216] cómo se reconoce en una línea que el día YA lleva ese duradero
 _CLAVE_ROTACION = {"atun en agua": "atun", "sardinas en lata": "sardina", "garbanzos cocidos": "garbanzo",
@@ -191,7 +198,9 @@ def sustituto_seguro(sub: str, semilla: int, vegetal: bool, alergias=None, *, di
     if sub == PROTEINA_TABLA:
         rot = _ROTACION_VEGETAL if vegetal else _ROTACION_OMNIVORA
         candidatos = [rot[(int(semilla) + k) % len(rot)] for k in range(len(rot))]
-        candidatos = [c for c in candidatos if c not in evitar] + [c for c in candidatos if c in evitar]
+        reserva = [] if vegetal else [c for c in _RESERVA_OMNIVORA if c not in candidatos]   # [P1-PLAN-LOTE-465]
+        candidatos = ([c for c in candidatos if c not in evitar] + [c for c in reserva if c not in evitar]
+                      + [c for c in candidatos if c in evitar] + [c for c in reserva if c in evitar])
     else:
         candidatos = [sub]
     for c in candidatos:
@@ -431,7 +440,7 @@ def _proyectar(reales: list, ciclo: int, eff: dict, listo: bool = False) -> list
                         t = r[0]
                         cambios += 1
                         presentes.add(r[1])
-                        if r[1] in _ROTACION_OMNIVORA or r[1] in _ROTACION_VEGETAL:
+                        if r[1] in _ROTACION_OMNIVORA or r[1] in _ROTACION_VEGETAL or r[1] in _RESERVA_OMNIVORA:
                             rueda += 1
                     elif not _aguanta(t, j, req):
                         fuera += 1

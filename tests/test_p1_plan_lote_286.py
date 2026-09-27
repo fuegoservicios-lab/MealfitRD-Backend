@@ -17,8 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import compra_unica as cu  # noqa: E402
 import shopping_calculator as sc  # noqa: E402
 
+# [P1-PLAN-LOTE-465] alérgico al pescado: la proyección del omnívoro ya no compra garbanzos por la rueda, y este
+# test mide cómo se escribe la LEGUMBRE con «Nada» de tiempo
 SINGLE = {"shopping": {"main_cycle_days": 30, "fresh_topup_days": None, "freezer_mode": "none", "batch_cooking": "never"},
-          "diet": {"type": "balanced", "allergies": []}}
+          "diet": {"type": "balanced", "allergies": ["Pescado"]}}
 _REQ = {"need_days": 11, "allow_frozen": False, "freezer_mode": "none"}
 
 
@@ -46,7 +48,9 @@ def _todas(dias):
 
 
 def test_la_linea_del_duradero_dice_de_lata_con_nada_de_tiempo():
-    r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=2, contexto={"cookingTime": "none"})
+    # [P1-PLAN-LOTE-465] los garbanzos son la reserva del omnívoro: con los dos pescados ya en el día
+    r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=2, contexto={"cookingTime": "none"},
+                           evitar={"atun en agua", "sardinas en lata"})
     assert r and r[0] == "200 g de garbanzos de lata, escurridos" and r[1] == "garbanzos cocidos", r
     r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=1, vegetal=True, contexto={"cookingTime": "none"})
     assert r and r[0] == "200 g de lentejas de lata, escurridas" and r[1] == "lentejas cocidas", r
@@ -56,7 +60,8 @@ def test_la_linea_del_duradero_dice_de_lata_con_nada_de_tiempo():
 
 def test_con_tiempo_nada_cambia():
     for ctx in ({"cookingTime": "30min"}, {}, None):
-        r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=2, contexto=ctx)
+        r = cu.sustituir_linea("200 g de pechuga de pollo", 10, _REQ, semilla=2, contexto=ctx,
+                               evitar={"atun en agua", "sardinas en lata"})  # [P1-PLAN-LOTE-465] la reserva
         assert r and r[0] == "200 g de garbanzos cocidos", (ctx, r)
 
 

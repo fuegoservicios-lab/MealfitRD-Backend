@@ -800,7 +800,15 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # la lista: «Wok de pollo… saltea el pollo» sobre sardinas (plan del dueño) → nombre, descripción y pasos del duradero
 # con su concordancia y sin cocinar lo enlatado como crudo (sustitucion_fresca.py); la pareja en la lista se busca por
 # alimento (el pescado fresco se seguía comprando); «1¼ filetes de pescado» → «190 g de sardinas en lata».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-462 · 2026-09-27"
+# [P1-PLAN-LOTE-463 · 2026-09-27] (backend) la sustitución de la compra única, leída plato a plato en el replay: la
+# bandeja al horno conserva el tiempo de sus vegetales y el duradero entra los últimos 5 minutos; el tiempo sólo baja
+# si el verbo es del duradero; «la carne», el corte que sigue («en rebanadas», «de parrilla») y el pronombre que la
+# temperatura escondía; «comprobando con termómetro que alcance» no queda colgando; la descripción pierde la cocción
+# del crudo («marcada a la plancha», «horneada junto a»).
+# [P1-PLAN-LOTE-464..465 · 2026-09-27] (backend) la sustitución de la compra única corre ANTES del band-closer
+# (contenido → porciones → caps) y el omnívoro recibe pescado en lata antes que garbanzos (reserva): replay del chain
+# completo forzando la compra única, días con los 4 macros en banda 14 % → 57 %, proteína < 0,90 en 13 → 6 de 28.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-465 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

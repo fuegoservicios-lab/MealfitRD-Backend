@@ -67,7 +67,9 @@ def test_fresh_beyond_horizon_is_substituted_not_only_warned(monkeypatch):
     n = go._single_trip_fresh_substitute(days, db=_NoopDB(), effective=SINGLE, diet="balanced")
     assert n >= 3, n
     ings = days[-1]["meals"][0]["ingredients"]
-    assert "2 tazas de repollo" in ings and "140 g de manzana" in ings and "150 g de atún en agua" in ings, ings
+    assert "2 tazas de repollo" in ings and "140 g de manzana" in ings, ings
+    # [P1-PLAN-LOTE-465] la rueda del omnívoro es de pescado en lata (día 10 ⇒ sardinas)
+    assert "150 g de atún en agua" in ings or "150 g de sardinas en lata" in ings, ings
     assert "1 taza de arroz" in ings
     assert days[-1]["meals"][0]["ingredients_raw"] == ings
     assert days[-1]["meals"][0].get("_fresh_substituted")

@@ -78,7 +78,7 @@ def test_proyecta_el_ciclo_entero_con_duraderos_despues_de_la_semana_de_frescos(
     assert not any("platano" in cu._sa(x) for x in _todas(dias[10:]))
     # la rueda de la proteína reparte los tres duraderos (con «día + comida» cada día copiado recibía siempre el mismo)
     assert any("atun en agua" in cu._sa(x) for x in resto) and any("sardinas en lata" in x for x in resto)
-    assert any("garbanzos cocidos" in x for x in resto)
+    assert not any("garbanzos cocidos" in x for x in resto), "[P1-PLAN-LOTE-465] garbanzos sólo de reserva"
     assert any("batata" in x for x in resto) and any("manzana" in x for x in resto)
     # la yuca aguanta hasta el día 21 y después pasa a batata
     assert any("yuca" in x for x in _todas(dias[7:21])) and not any("yuca" in x for x in _todas(dias[21:]))
