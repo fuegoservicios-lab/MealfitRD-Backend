@@ -1,0 +1,7354 @@
+{
+ "version": 1,
+ "fuente": "https://storage.googleapis.com/nutrition5k_dataset/nutrition5k_dataset",
+ "semilla": 20260927,
+ "n": 150,
+ "platos": [
+  {
+   "dish_id": "dish_1557862738",
+   "kcal": 319.779999,
+   "masa_g": 118.0,
+   "grasa_g": 22.42,
+   "carbs_g": 0.0,
+   "proteina_g": 29.5,
+   "ingredientes": [
+    {
+     "nombre": "steak",
+     "gramos": 118.0
+    }
+   ],
+   "sha256_png": "1f9331d6ae9051da3b1520ec76a3378ab0fe4fb1c82f86cb4bcc2d5a650e9931"
+  },
+  {
+   "dish_id": "dish_1557937157",
+   "kcal": 355.25,
+   "masa_g": 271.0,
+   "grasa_g": 22.122999,
+   "carbs_g": 14.700001,
+   "proteina_g": 24.341999,
+   "ingredientes": [
+    {
+     "nombre": "strawberries",
+     "gramos": 36.0
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 63.0
+    },
+    {
+     "nombre": "raspberries",
+     "gramos": 49.0
+    },
+    {
+     "nombre": "eggs",
+     "gramos": 96.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 27.0
+    }
+   ],
+   "sha256_png": "ebeb8ee3a4390dd9bf4ee9d1ef9adfa037e163cc5f2d3c0a404b157cc553bcb3"
+  },
+  {
+   "dish_id": "dish_1558030435",
+   "kcal": 246.940002,
+   "masa_g": 221.0,
+   "grasa_g": 11.115,
+   "carbs_g": 24.954,
+   "proteina_g": 11.915,
+   "ingredientes": [
+    {
+     "nombre": "honeydew melons",
+     "gramos": 107.0
+    },
+    {
+     "nombre": "potatoes",
+     "gramos": 88.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 26.0
+    }
+   ],
+   "sha256_png": "7e8eb093a29f90a7f8b10c6bf423cdde15fd13720e7fbc7c8a56c61b0458784c"
+  },
+  {
+   "dish_id": "dish_1558372948",
+   "kcal": 687.939026,
+   "masa_g": 119.0,
+   "grasa_g": 58.904999,
+   "carbs_g": 27.013,
+   "proteina_g": 26.656,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 119.0
+    }
+   ],
+   "sha256_png": "4181a90b0f03fea066f8495105a8a1daf062d6f19a3545830b9c9d76b3c6b878"
+  },
+  {
+   "dish_id": "dish_1558373159",
+   "kcal": 1013.337036,
+   "masa_g": 334.0,
+   "grasa_g": 79.117996,
+   "carbs_g": 30.505001,
+   "proteina_g": 60.625,
+   "ingredientes": [
+    {
+     "nombre": "sausage",
+     "gramos": 73.0
+    },
+    {
+     "nombre": "deprecated",
+     "gramos": 142.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 119.0
+    }
+   ],
+   "sha256_png": "b227185874bd812883ddb2641a3cd354dd1a566fd93190589151a9d5a4476103"
+  },
+  {
+   "dish_id": "dish_1558375667",
+   "kcal": 687.939026,
+   "masa_g": 119.0,
+   "grasa_g": 58.904999,
+   "carbs_g": 27.013,
+   "proteina_g": 26.656,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 119.0
+    }
+   ],
+   "sha256_png": "5ccbc7b46369827e5fad8f2bd3b1244d5f40a6e27cb00b1c0d049e13e9c4a7f0"
+  },
+  {
+   "dish_id": "dish_1558375886",
+   "kcal": 1050.511108,
+   "masa_g": 277.0,
+   "grasa_g": 84.153,
+   "carbs_g": 42.757,
+   "proteina_g": 44.874004,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 119.0
+    },
+    {
+     "nombre": "sausage",
+     "gramos": 92.0
+    },
+    {
+     "nombre": "grapes",
+     "gramos": 66.0
+    }
+   ],
+   "sha256_png": "5c61a439d7367c37ab9a7c794ed0a2961d25fb90f700e66188826d182b5b54a1"
+  },
+  {
+   "dish_id": "dish_1558376306",
+   "kcal": 372.167999,
+   "masa_g": 108.0,
+   "grasa_g": 29.484001,
+   "carbs_g": 4.536,
+   "proteina_g": 20.844,
+   "ingredientes": [
+    {
+     "nombre": "sausage",
+     "gramos": 108.0
+    }
+   ],
+   "sha256_png": "93e757e4a272a4e03cae8f6458cd9603f02ff8b5bb42ba56cb640035571ae1c9"
+  },
+  {
+   "dish_id": "dish_1558376483",
+   "kcal": 735.030029,
+   "masa_g": 270.0,
+   "grasa_g": 55.444,
+   "carbs_g": 32.240002,
+   "proteina_g": 33.301003,
+   "ingredientes": [
+    {
+     "nombre": "cantaloupe",
+     "gramos": 39.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 52.0
+    },
+    {
+     "nombre": "grapes",
+     "gramos": 71.0
+    },
+    {
+     "nombre": "sausage",
+     "gramos": 108.0
+    }
+   ],
+   "sha256_png": "9a0211d8bc2d20552ccd25af1b364f3ef72f7cadd245bed4110b784fc6d89404"
+  },
+  {
+   "dish_id": "dish_1558376984",
+   "kcal": 671.67804,
+   "masa_g": 350.0,
+   "grasa_g": 45.584,
+   "carbs_g": 30.23,
+   "proteina_g": 45.440006,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 58.0
+    },
+    {
+     "nombre": "deprecated",
+     "gramos": 143.0
+    },
+    {
+     "nombre": "sausage",
+     "gramos": 60.0
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 15.0
+    },
+    {
+     "nombre": "grapes",
+     "gramos": 74.0
+    }
+   ],
+   "sha256_png": "938ae5a917cfd056299193ec6d7f3e48f2570d016b97093ccdcc5ed4cd8009a2"
+  },
+  {
+   "dish_id": "dish_1558461792",
+   "kcal": 331.0,
+   "masa_g": 233.0,
+   "grasa_g": 20.195999,
+   "carbs_g": 34.499001,
+   "proteina_g": 10.543,
+   "ingredientes": [
+    {
+     "nombre": "grapes",
+     "gramos": 127.0
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 5.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 61.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 40.0
+    }
+   ],
+   "sha256_png": "32854ee894b564183099e9d75e11909c9791720d63e1c84f49701884acaa980a"
+  },
+  {
+   "dish_id": "dish_1558549413",
+   "kcal": 682.15802,
+   "masa_g": 118.0,
+   "grasa_g": 58.41,
+   "carbs_g": 26.785999,
+   "proteina_g": 26.432001,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 118.0
+    }
+   ],
+   "sha256_png": "1117f6753af328342c8020f19f3caec52b7b6fe02bf280da32d759e038767331"
+  },
+  {
+   "dish_id": "dish_1558549806",
+   "kcal": 781.958008,
+   "masa_g": 203.0,
+   "grasa_g": 58.674999,
+   "carbs_g": 48.146,
+   "proteina_g": 28.747002,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 118.0
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 75.0
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 10.0
+    }
+   ],
+   "sha256_png": "95c008edb3dad0340d4fd2ab85af16bd344affa1b847f55b236a8c14bfcbd2bc"
+  },
+  {
+   "dish_id": "dish_1558630207",
+   "kcal": 670.596008,
+   "masa_g": 116.0,
+   "grasa_g": 57.420002,
+   "carbs_g": 26.332001,
+   "proteina_g": 25.984001,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 116.0
+    }
+   ],
+   "sha256_png": "323f7b10715e660db8fae946232dc4bb8c83afe3d8371379654b402803831568"
+  },
+  {
+   "dish_id": "dish_1558630325",
+   "kcal": 751.541992,
+   "masa_g": 269.0,
+   "grasa_g": 58.078003,
+   "carbs_g": 46.563999,
+   "proteina_g": 27.081001,
+   "ingredientes": [
+    {
+     "nombre": "apple",
+     "gramos": 142.0
+    },
+    {
+     "nombre": "garden salad",
+     "gramos": 11.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 116.0
+    }
+   ],
+   "sha256_png": "93ae3fc7acccf045af421c45a3c328b43ddbaeae706801ee8227229f57424f32"
+  },
+  {
+   "dish_id": "dish_1558641320",
+   "kcal": 211.589996,
+   "masa_g": 336.0,
+   "grasa_g": 3.092,
+   "carbs_g": 49.055996,
+   "proteina_g": 4.52,
+   "ingredientes": [
+    {
+     "nombre": "apple",
+     "gramos": 154.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 8.0
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 110.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 64.0
+    }
+   ],
+   "sha256_png": "f7c3f0fc45767264dfec06617379e8848db59b5fc9c8c123e40b1a37bfc34179"
+  },
+  {
+   "dish_id": "dish_1558719994",
+   "kcal": 768.873047,
+   "masa_g": 133.0,
+   "grasa_g": 65.834999,
+   "carbs_g": 30.191,
+   "proteina_g": 29.792002,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 133.0
+    }
+   ],
+   "sha256_png": "26f4f624ef2f269af7612139c2a25919fd1dd8e771b45fc8576a850b81c8b528"
+  },
+  {
+   "dish_id": "dish_1558720236",
+   "kcal": 887.823059,
+   "masa_g": 407.0,
+   "grasa_g": 66.440002,
+   "carbs_g": 60.460999,
+   "proteina_g": 31.913002,
+   "ingredientes": [
+    {
+     "nombre": "apple",
+     "gramos": 143.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 74.0
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 57.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 133.0
+    }
+   ],
+   "sha256_png": "89c190213bbacfc5c6839ca4bc60e40781f77e3c0c317e1a8fa97fdecd3598a4"
+  },
+  {
+   "dish_id": "dish_1558722247",
+   "kcal": 604.616028,
+   "masa_g": 343.0,
+   "grasa_g": 43.181,
+   "carbs_g": 46.771999,
+   "proteina_g": 21.49,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 86.0
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 97.0
+    },
+    {
+     "nombre": "apple",
+     "gramos": 160.0
+    }
+   ],
+   "sha256_png": "be001ab5a2d1241fc78b402888967ece08e31c25214d0c3e402874d7d765edc9"
+  },
+  {
+   "dish_id": "dish_1559842047",
+   "kcal": 153.690002,
+   "masa_g": 285.0,
+   "grasa_g": 0.487,
+   "carbs_g": 39.529999,
+   "proteina_g": 1.992,
+   "ingredientes": [
+    {
+     "nombre": "broccoli",
+     "gramos": 32.0
+    },
+    {
+     "nombre": "pears",
+     "gramos": 200.0
+    },
+    {
+     "nombre": "mandarin oranges",
+     "gramos": 53.0
+    }
+   ],
+   "sha256_png": "482603ff0e38bc06f49e5e4ae709711e9177a14bf90d82b790b46cc6eb77f010"
+  },
+  {
+   "dish_id": "dish_1559844323",
+   "kcal": 518.369995,
+   "masa_g": 161.0,
+   "grasa_g": 39.761997,
+   "carbs_g": 32.740002,
+   "proteina_g": 18.487,
+   "ingredientes": [
+    {
+     "nombre": "grapes",
+     "gramos": 81.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 80.0
+    }
+   ],
+   "sha256_png": "9646f7e071d8597f9e64d7175415168058fec2a75b736274a123cb966e31ed03"
+  },
+  {
+   "dish_id": "dish_1559849097",
+   "kcal": 495.928009,
+   "masa_g": 325.0,
+   "grasa_g": 29.044003,
+   "carbs_g": 55.626003,
+   "proteina_g": 14.261001,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 58.0
+    },
+    {
+     "nombre": "pears",
+     "gramos": 200.0
+    },
+    {
+     "nombre": "grapes",
+     "gramos": 67.0
+    }
+   ],
+   "sha256_png": "cd9ab89e16b268c53e1cbf5db6d0160ac4742dfe3947ead876bb9913fed81e4f"
+  },
+  {
+   "dish_id": "dish_1559849497",
+   "kcal": 521.433044,
+   "masa_g": 340.0,
+   "grasa_g": 30.552,
+   "carbs_g": 58.438999,
+   "proteina_g": 15.014,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 61.0
+    },
+    {
+     "nombre": "pears",
+     "gramos": 201.0
+    },
+    {
+     "nombre": "grapes",
+     "gramos": 78.0
+    }
+   ],
+   "sha256_png": "570f8fa6675b70a1455a06ae2c6474465e4625a5aebf595b2c7a474c4abd032d"
+  },
+  {
+   "dish_id": "dish_1559850338",
+   "kcal": 307.117004,
+   "masa_g": 130.0,
+   "grasa_g": 23.438,
+   "carbs_g": 19.129,
+   "proteina_g": 11.725,
+   "ingredientes": [
+    {
+     "nombre": "almonds",
+     "gramos": 47.0
+    },
+    {
+     "nombre": "orange",
+     "gramos": 53.0
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 30.0
+    }
+   ],
+   "sha256_png": "c247f677eea98cc2215ab6567b3ed0afa4b5d98a887cadf6c7dc2c66668590b0"
+  },
+  {
+   "dish_id": "dish_1560367952",
+   "kcal": 414.733154,
+   "masa_g": 221.0,
+   "grasa_g": 21.073912,
+   "carbs_g": 45.956913,
+   "proteina_g": 24.938904,
+   "ingredientes": [
+    {
+     "nombre": "fish",
+     "gramos": 54.011742
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 27.0
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 125.0
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.16047
+    },
+    {
+     "nombre": "country rice",
+     "gramos": 10.802348
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.080235
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.135029
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.270059
+    },
+    {
+     "nombre": "green onions",
+     "gramos": 0.540117
+    }
+   ],
+   "sha256_png": "ffd1690cc6b41154ff04da6878d58d8bdb5acc3f53a5a30b22078aedc1e26a86"
+  },
+  {
+   "dish_id": "dish_1560444931",
+   "kcal": 112.660004,
+   "masa_g": 200.0,
+   "grasa_g": 3.982,
+   "carbs_g": 16.460001,
+   "proteina_g": 4.306,
+   "ingredientes": [
+    {
+     "nombre": "watermelon",
+     "gramos": 76.0
+    },
+    {
+     "nombre": "honeydew melons",
+     "gramos": 39.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 51.0
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 34.0
+    }
+   ],
+   "sha256_png": "886d6aa4de2a20b15031da38220f41f9774e60102b40eb6764be636a5b228e17"
+  },
+  {
+   "dish_id": "dish_1560444948",
+   "kcal": 171.316879,
+   "masa_g": 231.0,
+   "grasa_g": 10.029442,
+   "carbs_g": 17.637623,
+   "proteina_g": 4.611491,
+   "ingredientes": [
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.515152
+    },
+    {
+     "nombre": "watermelon",
+     "gramos": 76.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 51.0
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 34.0
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.187879
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "honeydew melons",
+     "gramos": 39.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 7.515152
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.006061
+    }
+   ],
+   "sha256_png": "09e3dd009b98e4983a4fbd161057441d77242bf264555d4910a23c940ad226f0"
+  },
+  {
+   "dish_id": "dish_1560444985",
+   "kcal": 198.937866,
+   "masa_g": 264.0,
+   "grasa_g": 10.095443,
+   "carbs_g": 24.075623,
+   "proteina_g": 5.127491,
+   "ingredientes": [
+    {
+     "nombre": "honeydew melons",
+     "gramos": 39.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 51.0
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 12.0
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.006061
+    },
+    {
+     "nombre": "watermelon",
+     "gramos": 76.0
+    },
+    {
+     "nombre": "yam",
+     "gramos": 21.0
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.515152
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 7.515152
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.187879
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 34.0
+    }
+   ],
+   "sha256_png": "c9df126ef667f65c2275ff83ad1b116b61ee7500466ecbbe53747627699b9d57"
+  },
+  {
+   "dish_id": "dish_1560445004",
+   "kcal": 339.5979,
+   "masa_g": 290.0,
+   "grasa_g": 21.015444,
+   "carbs_g": 24.439625,
+   "proteina_g": 14.747491,
+   "ingredientes": [
+    {
+     "nombre": "bell peppers",
+     "gramos": 7.515152
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.515152
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.006061
+    },
+    {
+     "nombre": "watermelon",
+     "gramos": 76.0
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 34.0
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 12.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 26.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.187879
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "honeydew melons",
+     "gramos": 39.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 51.0
+    },
+    {
+     "nombre": "yam",
+     "gramos": 21.0
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 6.012121
+    }
+   ],
+   "sha256_png": "65333906c3b357a7504473bda559adfe558405605b8814cc98eef2a916d6e352"
+  },
+  {
+   "dish_id": "dish_1560526472",
+   "kcal": 113.672775,
+   "masa_g": 114.0,
+   "grasa_g": 8.28813,
+   "carbs_g": 9.571251,
+   "proteina_g": 2.058025,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.22714
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 2.640777
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 1.24183
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 7.268482
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 1.320388
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.45428
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.330097
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 2.48366
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.313853
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 6.601942
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 42.944351
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 1.986928
+    },
+    {
+     "nombre": "berries",
+     "gramos": 44.0
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.186275
+    }
+   ],
+   "sha256_png": "f8fec9086ceef57fbf6e7f5b8bd3188312a8d0521b992f9ef372c722de423036"
+  },
+  {
+   "dish_id": "dish_1560526530",
+   "kcal": 245.280746,
+   "masa_g": 242.0,
+   "grasa_g": 13.31213,
+   "carbs_g": 26.787249,
+   "proteina_g": 6.892025,
+   "ingredientes": [
+    {
+     "nombre": "berries",
+     "gramos": 44.0
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 2.48366
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.330097
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 1.24183
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 1.986928
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.313853
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 1.320388
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 7.268482
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.45428
+    },
+    {
+     "nombre": "sausage",
+     "gramos": 18.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.22714
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 2.640777
+    },
+    {
+     "nombre": "potatoes",
+     "gramos": 54.0
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.186275
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 56.0
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 42.944351
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 6.601942
+    }
+   ],
+   "sha256_png": "591a600c622e55f647ea3d0e202fe00a61dee7bdd6a9a5fe01ea1e3a3337f579"
+  },
+  {
+   "dish_id": "dish_1560526552",
+   "kcal": 359.240814,
+   "masa_g": 319.0,
+   "grasa_g": 21.782129,
+   "carbs_g": 28.019247,
+   "proteina_g": 14.592025,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.22714
+    },
+    {
+     "nombre": "sausage",
+     "gramos": 18.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 56.0
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 6.601942
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 42.944351
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.330097
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 2.48366
+    },
+    {
+     "nombre": "potatoes",
+     "gramos": 54.0
+    },
+    {
+     "nombre": "berries",
+     "gramos": 44.0
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 1.24183
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 77.0
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.313853
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.45428
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 1.986928
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 1.320388
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 7.268482
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.186275
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 2.640777
+    }
+   ],
+   "sha256_png": "53b530e97b5b2a3156197af1e23e4cdf380a5af27c8d90ba75e68235d7d0f73f"
+  },
+  {
+   "dish_id": "dish_1560801041",
+   "kcal": 432.244263,
+   "masa_g": 292.0,
+   "grasa_g": 10.663426,
+   "carbs_g": 63.245892,
+   "proteina_g": 25.670122,
+   "ingredientes": [
+    {
+     "nombre": "pork",
+     "gramos": 32.183907
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 2.145594
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 1.072797
+    },
+    {
+     "nombre": "chicken breast",
+     "gramos": 16.427105
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 0.821355
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.214559
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 1.753425
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.041068
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.78301
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.501916
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 1.64271
+    },
+    {
+     "nombre": "parmesan cheese",
+     "gramos": 0.410678
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 3.506849
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 0.410678
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 128.0
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.37883
+    },
+    {
+     "nombre": "chickpeas",
+     "gramos": 8.767123
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 4.291188
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.183763
+    },
+    {
+     "nombre": "bulgur",
+     "gramos": 66.38356
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.545636
+    },
+    {
+     "nombre": "kale",
+     "gramos": 17.534246
+    }
+   ],
+   "sha256_png": "7b9a82e5588b9a066041301c0d40293e793f80a926442a409049f5e23ba8c4e5"
+  },
+  {
+   "dish_id": "dish_1560801883",
+   "kcal": 512.111267,
+   "masa_g": 315.0,
+   "grasa_g": 22.146605,
+   "carbs_g": 34.629459,
+   "proteina_g": 42.559067,
+   "ingredientes": [
+    {
+     "nombre": "arugula",
+     "gramos": 2.145594
+    },
+    {
+     "nombre": "chicken breast",
+     "gramos": 43.531826
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 2.176591
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 1.088296
+    },
+    {
+     "nombre": "squash",
+     "gramos": 41.430332
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 4.353183
+    },
+    {
+     "nombre": "parmesan cheese",
+     "gramos": 1.088296
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.864437
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.429119
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 4.291188
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.214559
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.317058
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 54.0
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 8.582376
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.10883
+    },
+    {
+     "nombre": "pepperoni pizza",
+     "gramos": 82.0
+    },
+    {
+     "nombre": "pork",
+     "gramos": 64.367813
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.006666
+    },
+    {
+     "nombre": "onions",
+     "gramos": 3.003831
+    }
+   ],
+   "sha256_png": "bf2a7e0e21790cda17a28a35692d9c1e9f9fd2bc30088fe1be0872ef4249a027"
+  },
+  {
+   "dish_id": "dish_1560975628",
+   "kcal": 348.272644,
+   "masa_g": 296.0,
+   "grasa_g": 12.463076,
+   "carbs_g": 32.350925,
+   "proteina_g": 27.610699,
+   "ingredientes": [
+    {
+     "nombre": "broccoli",
+     "gramos": 13.0
+    },
+    {
+     "nombre": "hominy",
+     "gramos": 4.812588
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.264913
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 1.41287
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.353217
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.176609
+    },
+    {
+     "nombre": "caesar salad",
+     "gramos": 86.0
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.176609
+    },
+    {
+     "nombre": "cabbage",
+     "gramos": 7.064349
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 60.0
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 4.812588
+    },
+    {
+     "nombre": "chili",
+     "gramos": 3.885392
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.088304
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.044152
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 43.0
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.264913
+    },
+    {
+     "nombre": "chicken thighs",
+     "gramos": 70.643494
+    }
+   ],
+   "sha256_png": "29a3eeddf59e5081ca4ad7fade4d89fd5b7ff0d28a80fcb7e234f7d522cdc0b3"
+  },
+  {
+   "dish_id": "dish_1561147997",
+   "kcal": 185.180023,
+   "masa_g": 133.0,
+   "grasa_g": 8.629007,
+   "carbs_g": 20.639935,
+   "proteina_g": 7.060393,
+   "ingredientes": [
+    {
+     "nombre": "chard",
+     "gramos": 7.028424
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.405685
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 10.542636
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 3.514212
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.81137
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 51.0
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 1.405685
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.087855
+    },
+    {
+     "nombre": "raspberries",
+     "gramos": 3.514212
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.175711
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 48.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 3.514212
+    }
+   ],
+   "sha256_png": "fa4b2d983e407a9932ce865194e4d9cc19eb12d6cc5fd89f12e7cb11a71774be"
+  },
+  {
+   "dish_id": "dish_1561148021",
+   "kcal": 361.765411,
+   "masa_g": 216.0,
+   "grasa_g": 19.948797,
+   "carbs_g": 23.611561,
+   "proteina_g": 22.204132,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 0.095183
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 7.614679
+    },
+    {
+     "nombre": "chard",
+     "gramos": 7.028424
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.190367
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.572838
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.90367
+    },
+    {
+     "nombre": "raspberries",
+     "gramos": 3.514212
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.175711
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.278222
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 51.0
+    },
+    {
+     "nombre": "kale",
+     "gramos": 1.90367
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 7.614679
+    },
+    {
+     "nombre": "eggs",
+     "gramos": 2.141629
+    },
+    {
+     "nombre": "cream",
+     "gramos": 1.522936
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.405685
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 10.542636
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.047592
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 3.514212
+    },
+    {
+     "nombre": "almonds",
+     "gramos": 1.405685
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 48.0
+    },
+    {
+     "nombre": "ground turkey",
+     "gramos": 57.110092
+    },
+    {
+     "nombre": "celery",
+     "gramos": 0.951835
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 4.466047
+    }
+   ],
+   "sha256_png": "9b8306c5bacf10c561f6042e7b8d1a61e4fc9a440e432cb5643fbfad54532e6a"
+  },
+  {
+   "dish_id": "dish_1561405356",
+   "kcal": 206.645203,
+   "masa_g": 176.0,
+   "grasa_g": 4.198396,
+   "carbs_g": 7.496847,
+   "proteina_g": 33.413628,
+   "ingredientes": [
+    {
+     "nombre": "ginger",
+     "gramos": 0.509053
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.509053
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.254527
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.018107
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 0.509053
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 55.545265
+    },
+    {
+     "nombre": "green onions",
+     "gramos": 0.509053
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.063632
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 101.810661
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 10.181066
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 2.545266
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 2.545266
+    }
+   ],
+   "sha256_png": "e455626beaa3eede73108e4266c3452286221519c9567940a55877abf532de47"
+  },
+  {
+   "dish_id": "dish_1561577947",
+   "kcal": 623.204285,
+   "masa_g": 424.0,
+   "grasa_g": 33.782948,
+   "carbs_g": 12.882619,
+   "proteina_g": 67.202637,
+   "ingredientes": [
+    {
+     "nombre": "olive oil",
+     "gramos": 18.375505
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.988808
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 119.729271
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 8.198945
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.843255
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 1.281085
+    },
+    {
+     "nombre": "walnuts",
+     "gramos": 4.099473
+    },
+    {
+     "nombre": "white wine",
+     "gramos": 0.494404
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.746267
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.618005
+    },
+    {
+     "nombre": "oregano",
+     "gramos": 0.618005
+    },
+    {
+     "nombre": "cream",
+     "gramos": 7.910462
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 9.888078
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 19.776155
+    },
+    {
+     "nombre": "chard",
+     "gramos": 20.497362
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.116916
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 197.761566
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.988808
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.977615
+    },
+    {
+     "nombre": "butter",
+     "gramos": 1.977615
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.494404
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.618005
+    }
+   ],
+   "sha256_png": "b4b91aa3d8d31efe2ac7b9eca9bae4e9ac7846cdf41584d9fd349ad8d2f19e17"
+  },
+  {
+   "dish_id": "dish_1561578775",
+   "kcal": 295.148987,
+   "masa_g": 111.0,
+   "grasa_g": 10.434,
+   "carbs_g": 37.185001,
+   "proteina_g": 12.432,
+   "ingredientes": [
+    {
+     "nombre": "cheese pizza",
+     "gramos": 111.0
+    }
+   ],
+   "sha256_png": "eac7037783d4ec850abe6147ddc488d6c69c97cc6b6db4bef9cad6ce3cb294df"
+  },
+  {
+   "dish_id": "dish_1561578800",
+   "kcal": 338.354706,
+   "masa_g": 146.0,
+   "grasa_g": 14.539577,
+   "carbs_g": 38.594208,
+   "proteina_g": 13.271948,
+   "ingredientes": [
+    {
+     "nombre": "cheese pizza",
+     "gramos": 111.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.158252
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.263753
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.376036
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 1.688018
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 23.632254
+    },
+    {
+     "nombre": "chard",
+     "gramos": 4.220045
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.791258
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.026375
+    },
+    {
+     "nombre": "walnuts",
+     "gramos": 0.844009
+    }
+   ],
+   "sha256_png": "b28bc3fb21619c5b9757cc9f5796ec5f78fe3daf7d13e850e038eec6f52ac0ea"
+  },
+  {
+   "dish_id": "dish_1561578865",
+   "kcal": 417.185303,
+   "masa_g": 246.0,
+   "grasa_g": 17.301928,
+   "carbs_g": 49.707146,
+   "proteina_g": 16.735947,
+   "ingredientes": [
+    {
+     "nombre": "cheese",
+     "gramos": 0.470588
+    },
+    {
+     "nombre": "pasta",
+     "gramos": 23.529411
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 0.941176
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.376036
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 1.688018
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.158252
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 68.0
+    },
+    {
+     "nombre": "pesto",
+     "gramos": 3.764706
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.791258
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 2.352941
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.026375
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 23.632254
+    },
+    {
+     "nombre": "chard",
+     "gramos": 4.220045
+    },
+    {
+     "nombre": "onions",
+     "gramos": 0.941176
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.263753
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 111.0
+    },
+    {
+     "nombre": "walnuts",
+     "gramos": 0.844009
+    }
+   ],
+   "sha256_png": "116508964c2284761256bc9435622c027c92bafc4067ae05d2bd473f41eff732"
+  },
+  {
+   "dish_id": "dish_1561654392",
+   "kcal": 494.065491,
+   "masa_g": 282.0,
+   "grasa_g": 35.081356,
+   "carbs_g": 13.55521,
+   "proteina_g": 30.914278,
+   "ingredientes": [
+    {
+     "nombre": "olive oil",
+     "gramos": 0.373924
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 31.0
+    },
+    {
+     "nombre": "raspberries",
+     "gramos": 2.967742
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.186962
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 29.677418
+    },
+    {
+     "nombre": "granola",
+     "gramos": 7.419354
+    },
+    {
+     "nombre": "blackberries",
+     "gramos": 2.967742
+    },
+    {
+     "nombre": "vinaigrette",
+     "gramos": 2.967742
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.04674
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 167.0
+    },
+    {
+     "nombre": "brussels sprouts",
+     "gramos": 37.392376
+    }
+   ],
+   "sha256_png": "ef8ccb85edbb7b615e42c2796ada5e559f1863375ba3a4182770acdaaac80a3a"
+  },
+  {
+   "dish_id": "dish_1561661377",
+   "kcal": 306.333679,
+   "masa_g": 294.0,
+   "grasa_g": 8.972795,
+   "carbs_g": 11.854835,
+   "proteina_g": 43.735157,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 0.64095
+    },
+    {
+     "nombre": "chard",
+     "gramos": 3.204748
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 12.818992
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 57.0
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 128.189911
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.64095
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 12.818992
+    },
+    {
+     "nombre": "caesar salad",
+     "gramos": 75.0
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.160237
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.160237
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.160237
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.160237
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.480712
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.563798
+    }
+   ],
+   "sha256_png": "2c2c69316f79c05fd3195603741b5d84b83846abb94ebf67778ce3af91abf9f1"
+  },
+  {
+   "dish_id": "dish_1561662190",
+   "kcal": 117.318321,
+   "masa_g": 104.0,
+   "grasa_g": 3.98708,
+   "carbs_g": 18.392817,
+   "proteina_g": 2.39816,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.106698
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 68.0
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 21.339657
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.243628
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.213397
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.707173
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.853586
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.853586
+    },
+    {
+     "nombre": "millet",
+     "gramos": 3.414345
+    },
+    {
+     "nombre": "apple",
+     "gramos": 4.267931
+    }
+   ],
+   "sha256_png": "dff9077c47c36acbff08c09c993cb6391ed59e449734fc1cf91ed9a9b13659ed"
+  },
+  {
+   "dish_id": "dish_1561662842",
+   "kcal": 263.125488,
+   "masa_g": 172.0,
+   "grasa_g": 8.762704,
+   "carbs_g": 5.882767,
+   "proteina_g": 38.171024,
+   "ingredientes": [
+    {
+     "nombre": "apple",
+     "gramos": 2.371073
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.474215
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.2689
+    },
+    {
+     "nombre": "onions",
+     "gramos": 0.948429
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 12.027696
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.660662
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.150346
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 120.276955
+    },
+    {
+     "nombre": "millet",
+     "gramos": 1.896858
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.601385
+    },
+    {
+     "nombre": "chard",
+     "gramos": 3.006924
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 12.027696
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.925253
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.150346
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.207554
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.150346
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 11.855365
+    }
+   ],
+   "sha256_png": "8b89f539d31873d21c3931e333d2d774298b39e36cecf4ac8cf60f11fd281ce0"
+  },
+  {
+   "dish_id": "dish_1561662869",
+   "kcal": 284.34552,
+   "masa_g": 192.0,
+   "grasa_g": 9.242703,
+   "carbs_g": 10.282766,
+   "proteina_g": 38.791027,
+   "ingredientes": [
+    {
+     "nombre": "basil",
+     "gramos": 0.150346
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 120.276955
+    },
+    {
+     "nombre": "apple",
+     "gramos": 2.371073
+    },
+    {
+     "nombre": "chard",
+     "gramos": 3.006924
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 12.027696
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.925253
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.150346
+    },
+    {
+     "nombre": "onions",
+     "gramos": 0.948429
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.660662
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.150346
+    },
+    {
+     "nombre": "millet",
+     "gramos": 1.896858
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 20.0
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.474215
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.2689
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.601385
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.207554
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 12.027696
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 11.855365
+    }
+   ],
+   "sha256_png": "11d7592005d6032906a330f4c45d9748064368404688b7fcd3739b35e69d0d17"
+  },
+  {
+   "dish_id": "dish_1561663541",
+   "kcal": 124.32,
+   "masa_g": 112.0,
+   "grasa_g": 1.008,
+   "carbs_g": 25.76,
+   "proteina_g": 2.912,
+   "ingredientes": [
+    {
+     "nombre": "brown rice",
+     "gramos": 112.0
+    }
+   ],
+   "sha256_png": "6a5c3e7bad4d4a1df231702f70f6b0e2c8dcd550145295d8727c1ce52324508f"
+  },
+  {
+   "dish_id": "dish_1561663580",
+   "kcal": 432.063416,
+   "masa_g": 307.0,
+   "grasa_g": 9.844143,
+   "carbs_g": 31.344984,
+   "proteina_g": 51.432281,
+   "ingredientes": [
+    {
+     "nombre": "chicken",
+     "gramos": 154.302673
+    },
+    {
+     "nombre": "chard",
+     "gramos": 3.857567
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 127.430267
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.771513
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.192878
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.086053
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.192878
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.192878
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.578635
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.192878
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.771513
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 15.430267
+    }
+   ],
+   "sha256_png": "70b81a49263e9dd88c81974f4725291c1734ddf1cf2f1bc1d0c84f617262c879"
+  },
+  {
+   "dish_id": "dish_1561667207",
+   "kcal": 249.444839,
+   "masa_g": 121.0,
+   "grasa_g": 11.420783,
+   "carbs_g": 13.358226,
+   "proteina_g": 22.073404,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 2.887828
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.577566
+    },
+    {
+     "nombre": "sugar",
+     "gramos": 8.663485
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 11.551312
+    },
+    {
+     "nombre": "pork",
+     "gramos": 80.859192
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.288783
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 11.551312
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 4.620525
+    }
+   ],
+   "sha256_png": "fc856c4a8cfd66c20c8d7db3713c8bbd8814d93ccaef74dab09b9c7e448749f8"
+  },
+  {
+   "dish_id": "dish_1561739212",
+   "kcal": 134.01001,
+   "masa_g": 214.0,
+   "grasa_g": 0.325,
+   "carbs_g": 23.797001,
+   "proteina_g": 8.347,
+   "ingredientes": [
+    {
+     "nombre": "berries",
+     "gramos": 61.0
+    },
+    {
+     "nombre": "egg whites",
+     "gramos": 71.0
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 82.0
+    }
+   ],
+   "sha256_png": "f307d5cfd5adfe7e73549ba497ff7f4642e382913011ad7662aa5b473dc517d9"
+  },
+  {
+   "dish_id": "dish_1561741063",
+   "kcal": 132.300003,
+   "masa_g": 135.0,
+   "grasa_g": 5.805,
+   "carbs_g": 4.59,
+   "proteina_g": 14.85,
+   "ingredientes": [
+    {
+     "nombre": "cottage cheese",
+     "gramos": 135.0
+    }
+   ],
+   "sha256_png": "324963ef777300096c3c612b01447ee1598ccf8d5d3151c2b79e7633e2dae5ad"
+  },
+  {
+   "dish_id": "dish_1562008979",
+   "kcal": 382.936646,
+   "masa_g": 290.0,
+   "grasa_g": 22.224644,
+   "carbs_g": 10.17357,
+   "proteina_g": 35.345387,
+   "ingredientes": [
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.192961
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 1.543689
+    },
+    {
+     "nombre": "pork",
+     "gramos": 115.776695
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 15.436893
+    },
+    {
+     "nombre": "cabbage",
+     "gramos": 15.436893
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.385922
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.192961
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 3.859223
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.543689
+    },
+    {
+     "nombre": "caesar salad",
+     "gramos": 131.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.771845
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.771845
+    },
+    {
+     "nombre": "mayonnaise",
+     "gramos": 3.087379
+    }
+   ],
+   "sha256_png": "bfe934ddb8a0017ac56ec27d385d3d0184410ff6658b9f3608a28efa39ae98b6"
+  },
+  {
+   "dish_id": "dish_1562009006",
+   "kcal": 470.716644,
+   "masa_g": 323.0,
+   "grasa_g": 25.425642,
+   "carbs_g": 21.06357,
+   "proteina_g": 38.975388,
+   "ingredientes": [
+    {
+     "nombre": "wheat berry",
+     "gramos": 15.436893
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.771845
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.192961
+    },
+    {
+     "nombre": "pork",
+     "gramos": 115.776695
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.192961
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 33.0
+    },
+    {
+     "nombre": "cabbage",
+     "gramos": 15.436893
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.543689
+    },
+    {
+     "nombre": "caesar salad",
+     "gramos": 131.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 3.859223
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.771845
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 1.543689
+    },
+    {
+     "nombre": "mayonnaise",
+     "gramos": 3.087379
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.385922
+    }
+   ],
+   "sha256_png": "9ff1bc3604b9fd969299e188685944e8c0e12b80095f0fb7498c03f3587d877a"
+  },
+  {
+   "dish_id": "dish_1562009810",
+   "kcal": 119.880005,
+   "masa_g": 108.0,
+   "grasa_g": 0.972,
+   "carbs_g": 24.84,
+   "proteina_g": 2.808,
+   "ingredientes": [
+    {
+     "nombre": "brown rice",
+     "gramos": 108.0
+    }
+   ],
+   "sha256_png": "2c06305c13f6d47d08e2ed09b6333d28621d4185fbaf682843b162ffa2964753"
+  },
+  {
+   "dish_id": "dish_1562009894",
+   "kcal": 244.80722,
+   "masa_g": 200.0,
+   "grasa_g": 12.012504,
+   "carbs_g": 29.885567,
+   "proteina_g": 5.628496,
+   "ingredientes": [
+    {
+     "nombre": "goat cheese",
+     "gramos": 8.032743
+    },
+    {
+     "nombre": "olives",
+     "gramos": 10.040928
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.502046
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 4.016371
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 108.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 8.032743
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 1.004093
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.125512
+    },
+    {
+     "nombre": "pears",
+     "gramos": 10.040928
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 50.204636
+    }
+   ],
+   "sha256_png": "c1de8032d97cd371dbd18b0f0f46690e53dbd5b2eb6616f957967d013d629e90"
+  },
+  {
+   "dish_id": "dish_1562099157",
+   "kcal": 277.531311,
+   "masa_g": 207.0,
+   "grasa_g": 14.06156,
+   "carbs_g": 19.895029,
+   "proteina_g": 18.076714,
+   "ingredientes": [
+    {
+     "nombre": "cheese pizza",
+     "gramos": 37.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 23.659889
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.253846
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.054484
+    },
+    {
+     "nombre": "quinoa",
+     "gramos": 5.076923
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.507692
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 5.690962
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.845481
+    },
+    {
+     "nombre": "squash",
+     "gramos": 2.538462
+    },
+    {
+     "nombre": "chicken thighs",
+     "gramos": 50.76923
+    },
+    {
+     "nombre": "eggplant",
+     "gramos": 2.538462
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.19263
+    },
+    {
+     "nombre": "lettuce",
+     "gramos": 14.227406
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.71137
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 21.341108
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 19.0
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.845481
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.063462
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.113703
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 2.538462
+    },
+    {
+     "nombre": "wine",
+     "gramos": 0.253846
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.507871
+    },
+    {
+     "nombre": "spinach (cooked)",
+     "gramos": 1.269231
+    }
+   ],
+   "sha256_png": "5045ee4fdbd8084e93aed6c46b6932a15e253addd6f2e10fb6139682f32472e4"
+  },
+  {
+   "dish_id": "dish_1562172561",
+   "kcal": 150.799988,
+   "masa_g": 290.0,
+   "grasa_g": 0.58,
+   "carbs_g": 2.03,
+   "proteina_g": 29.0,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 290.0
+    }
+   ],
+   "sha256_png": "d493f07308582a1d64a05beceb65a1e62d361f6a97f4d2e765ac45eeb909f375"
+  },
+  {
+   "dish_id": "dish_1562172643",
+   "kcal": 734.269958,
+   "masa_g": 457.0,
+   "grasa_g": 42.559998,
+   "carbs_g": 17.648001,
+   "proteina_g": 62.869999,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 290.0
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 80.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 87.0
+    }
+   ],
+   "sha256_png": "064ecc3ccf41d3ac1b866519caa44acfd75a266e8028dd53ae4d073eb7ed4c17"
+  },
+  {
+   "dish_id": "dish_1562617703",
+   "kcal": 179.630005,
+   "masa_g": 110.0,
+   "grasa_g": 6.49,
+   "carbs_g": 26.950001,
+   "proteina_g": 4.51,
+   "ingredientes": [
+    {
+     "nombre": "frozen yogurt",
+     "gramos": 110.0
+    }
+   ],
+   "sha256_png": "c39c2af0ac4134759c77658b8a6f20ee3281865cd951d234a33e432b223e8cac"
+  },
+  {
+   "dish_id": "dish_1562618000",
+   "kcal": 685.993896,
+   "masa_g": 448.0,
+   "grasa_g": 36.103981,
+   "carbs_g": 30.821442,
+   "proteina_g": 59.159676,
+   "ingredientes": [
+    {
+     "nombre": "vinegar",
+     "gramos": 8.730002
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 16.433563
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.516878
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 16.656231
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 6.662492
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.674845
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 4.135021
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.258439
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 1.033755
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 20.675106
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 7.696248
+    },
+    {
+     "nombre": "basil",
+     "gramos": 1.033755
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 21.825008
+    },
+    {
+     "nombre": "chicken thighs",
+     "gramos": 206.751053
+    },
+    {
+     "nombre": "chickpeas",
+     "gramos": 66.624924
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 68.292686
+    }
+   ],
+   "sha256_png": "ad2f0fd1276f116fbb3e92f410f4456f8066354547f6ff0ef684b43300a92f2c"
+  },
+  {
+   "dish_id": "dish_1562691032",
+   "kcal": 419.681702,
+   "masa_g": 415.0,
+   "grasa_g": 22.039829,
+   "carbs_g": 39.058826,
+   "proteina_g": 17.94734,
+   "ingredientes": [
+    {
+     "nombre": "berries",
+     "gramos": 85.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.902439
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 80.0
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 147.0
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 66.0
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 36.097561
+    }
+   ],
+   "sha256_png": "3db9f973fb79d36d060a9c218bd83d3f91c9ab7f55dda87f6ec21faf34f91970"
+  },
+  {
+   "dish_id": "dish_1562700568",
+   "kcal": 246.864426,
+   "masa_g": 318.0,
+   "grasa_g": 21.832207,
+   "carbs_g": 16.653193,
+   "proteina_g": 23.56325,
+   "ingredientes": [
+    {
+     "nombre": "fish",
+     "gramos": 97.297302
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.945946
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 2.918919
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 1.185537
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.539627
+    },
+    {
+     "nombre": "snow peas",
+     "gramos": 3.891892
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 29.638412
+    },
+    {
+     "nombre": "chive",
+     "gramos": 3.891892
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.391435
+    },
+    {
+     "nombre": "corn",
+     "gramos": 4.864865
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 124.0
+    },
+    {
+     "nombre": "apple",
+     "gramos": 5.927682
+    },
+    {
+     "nombre": "millet",
+     "gramos": 4.742146
+    },
+    {
+     "nombre": "lentils",
+     "gramos": 19.459459
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.185537
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 8.396931
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.371073
+    },
+    {
+     "nombre": "artichokes",
+     "gramos": 4.864865
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.486486
+    }
+   ],
+   "sha256_png": "55aecd8a40f90e0cdf4e52f883f388c0fd09bf6b02f7d2ca3b04a36cac095b11"
+  },
+  {
+   "dish_id": "dish_1562700593",
+   "kcal": 385.773926,
+   "masa_g": 384.0,
+   "grasa_g": 29.806803,
+   "carbs_g": 18.611984,
+   "proteina_g": 37.046314,
+   "ingredientes": [
+    {
+     "nombre": "chive",
+     "gramos": 3.891892
+    },
+    {
+     "nombre": "apple",
+     "gramos": 5.927682
+    },
+    {
+     "nombre": "millet",
+     "gramos": 11.461841
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 124.0
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.945946
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.269533
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 3.359847
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.050997
+    },
+    {
+     "nombre": "snow peas",
+     "gramos": 3.891892
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 8.732916
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 1.185537
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 29.638412
+    },
+    {
+     "nombre": "artichokes",
+     "gramos": 4.864865
+    },
+    {
+     "nombre": "spinach (cooked)",
+     "gramos": 1.679924
+    },
+    {
+     "nombre": "fish",
+     "gramos": 97.297302
+    },
+    {
+     "nombre": "corn",
+     "gramos": 4.864865
+    },
+    {
+     "nombre": "lentils",
+     "gramos": 19.459459
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 2.918919
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.539627
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 1.679924
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.486486
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.454432
+    },
+    {
+     "nombre": "beef",
+     "gramos": 50.397709
+    }
+   ],
+   "sha256_png": "198d1eed30af2b27726c845a803ed05de1e09eaf20f57838ef688aeaeac98e65"
+  },
+  {
+   "dish_id": "dish_1562703447",
+   "kcal": 384.426239,
+   "masa_g": 259.0,
+   "grasa_g": 17.95558,
+   "carbs_g": 37.651039,
+   "proteina_g": 18.510515,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.235402
+    },
+    {
+     "nombre": "spinach (cooked)",
+     "gramos": 1.298123
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.558682
+    },
+    {
+     "nombre": "millet",
+     "gramos": 11.167595
+    },
+    {
+     "nombre": "berries",
+     "gramos": 87.0
+    },
+    {
+     "nombre": "beef",
+     "gramos": 38.943684
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 2.596246
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 37.344398
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.285675
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 5.935973
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 58.0
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 1.493776
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.373444
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 1.298123
+    },
+    {
+     "nombre": "apple",
+     "gramos": 7.46888
+    }
+   ],
+   "sha256_png": "f2dba1fcf2acd4021f5b4970b88f3670de1ebc43b9cf031ee1a8980c670211e9"
+  },
+  {
+   "dish_id": "dish_1562774206",
+   "kcal": 298.76355,
+   "masa_g": 272.0,
+   "grasa_g": 16.548098,
+   "carbs_g": 26.31213,
+   "proteina_g": 12.147001,
+   "ingredientes": [
+    {
+     "nombre": "mixed greens",
+     "gramos": 25.80645
+    },
+    {
+     "nombre": "raspberries",
+     "gramos": 2.580645
+    },
+    {
+     "nombre": "berries",
+     "gramos": 37.0
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 91.0
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 52.0
+    },
+    {
+     "nombre": "vinaigrette",
+     "gramos": 2.580645
+    },
+    {
+     "nombre": "cantaloupe",
+     "gramos": 52.0
+    },
+    {
+     "nombre": "blackberries",
+     "gramos": 2.580645
+    },
+    {
+     "nombre": "granola",
+     "gramos": 6.451612
+    }
+   ],
+   "sha256_png": "9f501cbb00ec5a35f1f38cc9a85ff349d88a4359e0f206de59a7a6dfa703d908"
+  },
+  {
+   "dish_id": "dish_1562776465",
+   "kcal": 173.432449,
+   "masa_g": 212.0,
+   "grasa_g": 4.405418,
+   "carbs_g": 31.491592,
+   "proteina_g": 3.634132,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.324723
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.081181
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 142.439026
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.210422
+    },
+    {
+     "nombre": "brussels sprouts",
+     "gramos": 64.944649
+    }
+   ],
+   "sha256_png": "9bca9e0a95261f8f48efba7695ca9bfd84b299b6283c145b9a9ff1fa56a264f6"
+  },
+  {
+   "dish_id": "dish_1562776497",
+   "kcal": 291.832458,
+   "masa_g": 292.0,
+   "grasa_g": 13.205418,
+   "carbs_g": 32.771591,
+   "proteina_g": 11.634132,
+   "ingredientes": [
+    {
+     "nombre": "pepper",
+     "gramos": 0.081181
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.210422
+    },
+    {
+     "nombre": "brussels sprouts",
+     "gramos": 64.944649
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 142.439026
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 80.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.324723
+    }
+   ],
+   "sha256_png": "2887303b29791a414a8a8279d22856b2f2b0754d515a596f5d003d7a9eb24898"
+  },
+  {
+   "dish_id": "dish_1562788506",
+   "kcal": 114.587997,
+   "masa_g": 108.0,
+   "grasa_g": 2.592,
+   "carbs_g": 23.76,
+   "proteina_g": 3.348,
+   "ingredientes": [
+    {
+     "nombre": "corn on the cob",
+     "gramos": 108.0
+    }
+   ],
+   "sha256_png": "3c275361c6fb5e4f5bf9a5dd5f2dcdbfff4ee56eef599b20b77478a276f6dbab"
+  },
+  {
+   "dish_id": "dish_1562788568",
+   "kcal": 289.203369,
+   "masa_g": 230.0,
+   "grasa_g": 11.735167,
+   "carbs_g": 46.917168,
+   "proteina_g": 11.430407,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 0.156556
+    },
+    {
+     "nombre": "pilaf",
+     "gramos": 82.0
+    },
+    {
+     "nombre": "green onions",
+     "gramos": 0.313112
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.252446
+    },
+    {
+     "nombre": "country rice",
+     "gramos": 6.262231
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.626223
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.078278
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 108.0
+    },
+    {
+     "nombre": "fish",
+     "gramos": 31.311153
+    }
+   ],
+   "sha256_png": "f86f343d8a7d22e13fe752ab5466dc18e5fbf5572fed2daec922eae7b13da686"
+  },
+  {
+   "dish_id": "dish_1562790855",
+   "kcal": 739.376465,
+   "masa_g": 507.0,
+   "grasa_g": 67.884842,
+   "carbs_g": 23.783417,
+   "proteina_g": 78.431671,
+   "ingredientes": [
+    {
+     "nombre": "radishes",
+     "gramos": 7.757576
+    },
+    {
+     "nombre": "fish",
+     "gramos": 256.751465
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 3.577863
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.715573
+    },
+    {
+     "nombre": "onions",
+     "gramos": 11.701204
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.484848
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.357786
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 3.199751
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.357786
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.063196
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.431145
+    },
+    {
+     "nombre": "pork",
+     "gramos": 107.335907
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.715573
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 14.311454
+    },
+    {
+     "nombre": "country rice",
+     "gramos": 51.350292
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 9.69697
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 15.754896
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 4.59436
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 9.69697
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 3.577863
+    },
+    {
+     "nombre": "green onions",
+     "gramos": 2.567515
+    }
+   ],
+   "sha256_png": "75bfb058523918424f558f557b263804c2a294293881fa728b11082d6b390dd4"
+  },
+  {
+   "dish_id": "dish_1562963289",
+   "kcal": 349.917969,
+   "masa_g": 180.0,
+   "grasa_g": 12.685999,
+   "carbs_g": 43.364002,
+   "proteina_g": 15.52,
+   "ingredientes": [
+    {
+     "nombre": "caesar salad",
+     "gramos": 58.0
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 122.0
+    }
+   ],
+   "sha256_png": "16b27ddf77305458704f04e39532005177f93ca1675cde790d9b28253f23f6a3"
+  },
+  {
+   "dish_id": "dish_1562963325",
+   "kcal": 760.161926,
+   "masa_g": 379.0,
+   "grasa_g": 31.468941,
+   "carbs_g": 65.333321,
+   "proteina_g": 51.822536,
+   "ingredientes": [
+    {
+     "nombre": "sugar",
+     "gramos": 14.24821
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 4.749403
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.47494
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 18.997614
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 18.997614
+    },
+    {
+     "nombre": "pork",
+     "gramos": 132.983292
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.949881
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 122.0
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 7.599046
+    },
+    {
+     "nombre": "caesar salad",
+     "gramos": 58.0
+    }
+   ],
+   "sha256_png": "139fa96e992812a1540c3b85781beed4eadb6bd265261e7f2b487980976ce67c"
+  },
+  {
+   "dish_id": "dish_1563208459",
+   "kcal": 186.485947,
+   "masa_g": 161.0,
+   "grasa_g": 8.039566,
+   "carbs_g": 22.543018,
+   "proteina_g": 6.94117,
+   "ingredientes": [
+    {
+     "nombre": "raspberries",
+     "gramos": 57.0
+    },
+    {
+     "nombre": "yam",
+     "gramos": 30.660378
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 30.660378
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.679245
+    },
+    {
+     "nombre": "chicken apple sausage",
+     "gramos": 39.0
+    }
+   ],
+   "sha256_png": "fe4263cc540bb7120626f857b133757c42d098b734318f71ab60ad8253bf0ebc"
+  },
+  {
+   "dish_id": "dish_1563305513",
+   "kcal": 606.251953,
+   "masa_g": 228.0,
+   "grasa_g": 21.431999,
+   "carbs_g": 76.380005,
+   "proteina_g": 25.536001,
+   "ingredientes": [
+    {
+     "nombre": "cheese pizza",
+     "gramos": 228.0
+    }
+   ],
+   "sha256_png": "a248f4bd2d79299597d4a60ef5f5a4e983917dd2fa3300bdbed531c858969b16"
+  },
+  {
+   "dish_id": "dish_1563389548",
+   "kcal": 438.828003,
+   "masa_g": 194.0,
+   "grasa_g": 28.906,
+   "carbs_g": 0.194,
+   "proteina_g": 43.843998,
+   "ingredientes": [
+    {
+     "nombre": "grilled chicken",
+     "gramos": 194.0
+    }
+   ],
+   "sha256_png": "bb7971e43076da39b783a637ded5cfc2924e3b34996ffd2c13572c080d5f10af"
+  },
+  {
+   "dish_id": "dish_1563389626",
+   "kcal": 498.620026,
+   "masa_g": 360.0,
+   "grasa_g": 30.181793,
+   "carbs_g": 12.393457,
+   "proteina_g": 45.326939,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.354898
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.05915
+    },
+    {
+     "nombre": "grilled chicken",
+     "gramos": 194.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 94.639557
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.946396
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 70.0
+    }
+   ],
+   "sha256_png": "ac61f72444153008ee0d019e3061106b7322b000e9eaf60eacc8af4ef051cf76"
+  },
+  {
+   "dish_id": "dish_1563478751",
+   "kcal": 950.395081,
+   "masa_g": 545.0,
+   "grasa_g": 45.303986,
+   "carbs_g": 54.133282,
+   "proteina_g": 74.772202,
+   "ingredientes": [
+    {
+     "nombre": "cream",
+     "gramos": 9.556165
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 35.835617
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 23.890411
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.791781
+    },
+    {
+     "nombre": "pasta",
+     "gramos": 191.123291
+    },
+    {
+     "nombre": "beef",
+     "gramos": 238.904114
+    },
+    {
+     "nombre": "wine",
+     "gramos": 4.778082
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 4.778082
+    },
+    {
+     "nombre": "sour cream",
+     "gramos": 9.556165
+    },
+    {
+     "nombre": "onions",
+     "gramos": 23.890411
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.59726
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.29863
+    }
+   ],
+   "sha256_png": "0366e274bbd7c135a371b27c36a83f0819b472f15680fb3daa63867ba3608138"
+  },
+  {
+   "dish_id": "dish_1563565415",
+   "kcal": 303.477142,
+   "masa_g": 284.0,
+   "grasa_g": 18.174141,
+   "carbs_g": 24.998693,
+   "proteina_g": 21.371407,
+   "ingredientes": [
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.575186
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.287593
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 1.150373
+    },
+    {
+     "nombre": "eggs",
+     "gramos": 1.651376
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 88.0
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 5.87156
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.036697
+    },
+    {
+     "nombre": "kale",
+     "gramos": 2.905856
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 0.733945
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.091369
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 88.780487
+    },
+    {
+     "nombre": "fish",
+     "gramos": 28.759315
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.575186
+    },
+    {
+     "nombre": "ground turkey",
+     "gramos": 44.036697
+    },
+    {
+     "nombre": "cream",
+     "gramos": 1.174312
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.46789
+    },
+    {
+     "nombre": "celery",
+     "gramos": 0.733945
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.957041
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 5.751863
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.218687
+    },
+    {
+     "nombre": "chard",
+     "gramos": 1.150373
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.218687
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 5.87156
+    }
+   ],
+   "sha256_png": "cb1c494fd477600bd34df3f176b1ac69ddd2b43d513fdd9044e4eebc3dae5576"
+  },
+  {
+   "dish_id": "dish_1563566909",
+   "kcal": 222.530014,
+   "masa_g": 187.0,
+   "grasa_g": 0.748,
+   "carbs_g": 46.75,
+   "proteina_g": 9.35,
+   "ingredientes": [
+    {
+     "nombre": "wild rice",
+     "gramos": 187.0
+    }
+   ],
+   "sha256_png": "55c8f7a87a7ba1e87e288f8c8acf4fb733a75987767a511de4711edaec5708e7"
+  },
+  {
+   "dish_id": "dish_1563566939",
+   "kcal": 286.027252,
+   "masa_g": 238.0,
+   "grasa_g": 6.804595,
+   "carbs_g": 48.869175,
+   "proteina_g": 10.508528,
+   "ingredientes": [
+    {
+     "nombre": "vinegar",
+     "gramos": 1.148649
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 2.45045
+    },
+    {
+     "nombre": "wild rice",
+     "gramos": 187.0
+    },
+    {
+     "nombre": "pecans",
+     "gramos": 1.225225
+    },
+    {
+     "nombre": "chard",
+     "gramos": 6.126126
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 34.306309
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.382883
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.900901
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.22973
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.22973
+    }
+   ],
+   "sha256_png": "8e2b3eddbcdcaeb35014115f33fcf54f89d742625d02c253cd4abd240caeb2e5"
+  },
+  {
+   "dish_id": "dish_1563566965",
+   "kcal": 370.827026,
+   "masa_g": 286.0,
+   "grasa_g": 12.088502,
+   "carbs_g": 56.243797,
+   "proteina_g": 13.121026,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.380012
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 2.404509
+    },
+    {
+     "nombre": "wild rice",
+     "gramos": 187.0
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 2.45045
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 9.469467
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 40.317581
+    },
+    {
+     "nombre": "chard",
+     "gramos": 6.126126
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.382883
+    },
+    {
+     "nombre": "pecans",
+     "gramos": 1.225225
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.553157
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 6.011271
+    },
+    {
+     "nombre": "chickpeas",
+     "gramos": 24.045084
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.22973
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 2.404509
+    }
+   ],
+   "sha256_png": "33163e75ee8215d6b1a30654148dc326ecc44221ffa02f0d063a246e0ac832ab"
+  },
+  {
+   "dish_id": "dish_1563897087",
+   "kcal": 102.440002,
+   "masa_g": 231.0,
+   "grasa_g": 0.67,
+   "carbs_g": 8.169001,
+   "proteina_g": 15.196,
+   "ingredientes": [
+    {
+     "nombre": "broccoli",
+     "gramos": 104.0
+    },
+    {
+     "nombre": "egg whites",
+     "gramos": 127.0
+    }
+   ],
+   "sha256_png": "25fb43a4aa121708035123c59b984c6b0d43c94d6bd59d6bd3568d2d31b2900d"
+  },
+  {
+   "dish_id": "dish_1563898019",
+   "kcal": 343.977386,
+   "masa_g": 237.0,
+   "grasa_g": 22.634478,
+   "carbs_g": 10.499256,
+   "proteina_g": 24.180925,
+   "ingredientes": [
+    {
+     "nombre": "bacon",
+     "gramos": 10.0
+    },
+    {
+     "nombre": "chia seeds",
+     "gramos": 10.697945
+    },
+    {
+     "nombre": "greek yogurt",
+     "gramos": 42.64159
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 128.0
+    },
+    {
+     "nombre": "milk",
+     "gramos": 45.660465
+    }
+   ],
+   "sha256_png": "3eaeb4d810d4185a65b4fb4654f40fbe76a3f06af09917960a140dcb0f544ba8"
+  },
+  {
+   "dish_id": "dish_1563909550",
+   "kcal": 310.31958,
+   "masa_g": 273.0,
+   "grasa_g": 11.850177,
+   "carbs_g": 44.664116,
+   "proteina_g": 8.625765,
+   "ingredientes": [
+    {
+     "nombre": "cucumbers",
+     "gramos": 6.692811
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.418301
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 8.366014
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 8.86781
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.627451
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 84.825005
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 4.183007
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.20915
+    },
+    {
+     "nombre": "fried rice",
+     "gramos": 122.0
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.346405
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 33.464054
+    }
+   ],
+   "sha256_png": "32a81b85a6321524ceca1983da38c03b0e9f8cdedf4c83cfba1555052265ebf9"
+  },
+  {
+   "dish_id": "dish_1563984199",
+   "kcal": 322.679993,
+   "masa_g": 670.0,
+   "grasa_g": 1.278,
+   "carbs_g": 22.243999,
+   "proteina_g": 48.598003,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 472.0
+    },
+    {
+     "nombre": "cantaloupe",
+     "gramos": 136.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 62.0
+    }
+   ],
+   "sha256_png": "7a1efdf5f78956ceb4e5c13aceceefd2a52d9237b4e15d98426f383a71af4915"
+  },
+  {
+   "dish_id": "dish_1563984242",
+   "kcal": 402.117035,
+   "masa_g": 753.0,
+   "grasa_g": 3.30239,
+   "carbs_g": 36.819611,
+   "proteina_g": 49.407761,
+   "ingredientes": [
+    {
+     "nombre": "sweet potato",
+     "gramos": 80.975609
+    },
+    {
+     "nombre": "egg whites",
+     "gramos": 472.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 62.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.02439
+    },
+    {
+     "nombre": "cantaloupe",
+     "gramos": 136.0
+    }
+   ],
+   "sha256_png": "5318b0f941025652cdf7d538590982c11b0b7d7aa396ba4caac9048597ee230c"
+  },
+  {
+   "dish_id": "dish_1563984296",
+   "kcal": 436.337067,
+   "masa_g": 871.0,
+   "grasa_g": 3.53839,
+   "carbs_g": 44.607613,
+   "proteina_g": 51.177761,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 472.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.02439
+    },
+    {
+     "nombre": "salsa",
+     "gramos": 118.0
+    },
+    {
+     "nombre": "cantaloupe",
+     "gramos": 136.0
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 80.975609
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 62.0
+    }
+   ],
+   "sha256_png": "278e8701ceeb64cb46332c7ca5795484ca71b4966136dce3a68dda47689f5149"
+  },
+  {
+   "dish_id": "dish_1563996485",
+   "kcal": 178.039185,
+   "masa_g": 201.0,
+   "grasa_g": 11.607642,
+   "carbs_g": 16.567097,
+   "proteina_g": 4.172902,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.293896
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.048983
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 3.134891
+    },
+    {
+     "nombre": "chard",
+     "gramos": 7.837227
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 43.888474
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.46948
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.489827
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.269781
+    },
+    {
+     "nombre": "walnuts",
+     "gramos": 1.567445
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 55.0
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 81.0
+    }
+   ],
+   "sha256_png": "d3bfbe61865b1d6557e1357b501bcc6a550c04394236e75244e043ddc1ec3f7c"
+  },
+  {
+   "dish_id": "dish_1563996509",
+   "kcal": 365.184875,
+   "masa_g": 316.0,
+   "grasa_g": 17.874498,
+   "carbs_g": 19.300793,
+   "proteina_g": 32.752163,
+   "ingredientes": [
+    {
+     "nombre": "walnuts",
+     "gramos": 1.567445
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 81.0
+    },
+    {
+     "nombre": "oregano",
+     "gramos": 0.279805
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 46.126915
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 4.476886
+    },
+    {
+     "nombre": "chard",
+     "gramos": 7.837227
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 8.953772
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.895377
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.447689
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.279805
+    },
+    {
+     "nombre": "cream",
+     "gramos": 3.581508
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.489827
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.279805
+    },
+    {
+     "nombre": "white wine",
+     "gramos": 0.223844
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 89.537712
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.496671
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 1.46948
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 7.165158
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 3.134891
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.223844
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.447689
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.189273
+    },
+    {
+     "nombre": "butter",
+     "gramos": 0.895377
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 55.0
+    }
+   ],
+   "sha256_png": "0b63667857ca23483b7392a46f366759dc9624e2c125bd36c6e2a53d4a3e0a1e"
+  },
+  {
+   "dish_id": "dish_1563998323",
+   "kcal": 634.505066,
+   "masa_g": 574.0,
+   "grasa_g": 32.486301,
+   "carbs_g": 35.302532,
+   "proteina_g": 52.964516,
+   "ingredientes": [
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 79.0
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 1.272291
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.380647
+    },
+    {
+     "nombre": "tatsoi",
+     "gramos": 4.590164
+    },
+    {
+     "nombre": "butter",
+     "gramos": 0.708516
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.459016
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 7.085158
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 3.542579
+    },
+    {
+     "nombre": "steak",
+     "gramos": 91.803284
+    },
+    {
+     "nombre": "oregano",
+     "gramos": 0.221411
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 70.851585
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.354258
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.167532
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.626549
+    },
+    {
+     "nombre": "white wine",
+     "gramos": 0.177129
+    },
+    {
+     "nombre": "cilantro",
+     "gramos": 0.918033
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.229508
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.221411
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 2.013195
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.221411
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 1.771289
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.354258
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 18.360655
+    },
+    {
+     "nombre": "cream",
+     "gramos": 2.834063
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 1.836066
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 278.0
+    }
+   ],
+   "sha256_png": "1f3cda35d4522673d277082a51a2c9f40237d5348839763734830725cfaa2e7d"
+  },
+  {
+   "dish_id": "dish_1563998513",
+   "kcal": 757.505066,
+   "masa_g": 599.0,
+   "grasa_g": 38.736301,
+   "carbs_g": 51.552532,
+   "proteina_g": 54.239513,
+   "ingredientes": [
+    {
+     "nombre": "chicken",
+     "gramos": 70.851585
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.354258
+    },
+    {
+     "nombre": "cookies",
+     "gramos": 25.0
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 18.360655
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 1.771289
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.229508
+    },
+    {
+     "nombre": "oregano",
+     "gramos": 0.221411
+    },
+    {
+     "nombre": "tatsoi",
+     "gramos": 4.590164
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.380647
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.354258
+    },
+    {
+     "nombre": "cilantro",
+     "gramos": 0.918033
+    },
+    {
+     "nombre": "white wine",
+     "gramos": 0.177129
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.167532
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 79.0
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.626549
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 1.272291
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 278.0
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 3.542579
+    },
+    {
+     "nombre": "steak",
+     "gramos": 91.803284
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.459016
+    },
+    {
+     "nombre": "cream",
+     "gramos": 2.834063
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 7.085158
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.221411
+    },
+    {
+     "nombre": "butter",
+     "gramos": 0.708516
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.221411
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 2.013195
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 1.836066
+    }
+   ],
+   "sha256_png": "6ee08f797b7367511a4c03882a1676f992ffe04b793d0da5986aa654e6a0ce0c"
+  },
+  {
+   "dish_id": "dish_1564427430",
+   "kcal": 345.620026,
+   "masa_g": 170.0,
+   "grasa_g": 23.860001,
+   "carbs_g": 2.34,
+   "proteina_g": 30.790001,
+   "ingredientes": [
+    {
+     "nombre": "grilled chicken",
+     "gramos": 135.0
+    },
+    {
+     "nombre": "olives",
+     "gramos": 35.0
+    }
+   ],
+   "sha256_png": "1a353b0de279f264bbbf48e613948b83291d99e50d9d19910732d1d7ef02baeb"
+  },
+  {
+   "dish_id": "dish_1564427455",
+   "kcal": 354.26004,
+   "masa_g": 218.0,
+   "grasa_g": 23.956001,
+   "carbs_g": 4.212,
+   "proteina_g": 31.222,
+   "ingredientes": [
+    {
+     "nombre": "grilled chicken",
+     "gramos": 135.0
+    },
+    {
+     "nombre": "olives",
+     "gramos": 35.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 48.0
+    }
+   ],
+   "sha256_png": "2fba0db0e8e5dd9a8598a65d2b0ea9b7cc42bc15724c15ca91788be318c556fe"
+  },
+  {
+   "dish_id": "dish_1564428102",
+   "kcal": 133.219666,
+   "masa_g": 107.0,
+   "grasa_g": 12.706974,
+   "carbs_g": 4.446124,
+   "proteina_g": 2.430635,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.481982
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.481982
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 10.282283
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.803303
+    },
+    {
+     "nombre": "pecans",
+     "gramos": 2.570571
+    },
+    {
+     "nombre": "chard",
+     "gramos": 12.852853
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 71.975975
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.40991
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 5.141141
+    }
+   ],
+   "sha256_png": "53110a5cdb07368aa54de07c5e6f06181072e6810fe19659d0da1a319e57ef12"
+  },
+  {
+   "dish_id": "dish_1564428144",
+   "kcal": 205.212921,
+   "masa_g": 171.0,
+   "grasa_g": 14.074488,
+   "carbs_g": 16.700045,
+   "proteina_g": 5.11141,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 1.845134
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.27263
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 1.090522
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.095401
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.803303
+    },
+    {
+     "nombre": "pecans",
+     "gramos": 2.570571
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.27263
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 10.554914
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 5.141141
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 77.428581
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.40991
+    },
+    {
+     "nombre": "chard",
+     "gramos": 12.852853
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.136315
+    },
+    {
+     "nombre": "quinoa",
+     "gramos": 54.526093
+    }
+   ],
+   "sha256_png": "0acfe6f39f26354fbefc496c9e35d2c712b3e23a0b3d452daad6e8dfa3fdd22d"
+  },
+  {
+   "dish_id": "dish_1564588859",
+   "kcal": 183.586426,
+   "masa_g": 257.0,
+   "grasa_g": 4.754447,
+   "carbs_g": 9.571161,
+   "proteina_g": 23.436096,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 156.0
+    },
+    {
+     "nombre": "greek yogurt",
+     "gramos": 43.503036
+    },
+    {
+     "nombre": "milk",
+     "gramos": 46.582897
+    },
+    {
+     "nombre": "chia seeds",
+     "gramos": 10.914064
+    }
+   ],
+   "sha256_png": "c8af4c342d0305fc037be895c9f5f3fd7f58f98cc8b8eb4283868e9854be4c0c"
+  },
+  {
+   "dish_id": "dish_1564773847",
+   "kcal": 238.027573,
+   "masa_g": 161.0,
+   "grasa_g": 15.737777,
+   "carbs_g": 5.8212,
+   "proteina_g": 17.603327,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.292308
+    },
+    {
+     "nombre": "salmon",
+     "gramos": 64.615387
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 59.23077
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.584615
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.161538
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "pickles",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "mayonnaise",
+     "gramos": 10.338462
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 3.230769
+    },
+    {
+     "nombre": "lentils",
+     "gramos": 12.923077
+    },
+    {
+     "nombre": "kale",
+     "gramos": 3.230769
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.161538
+    }
+   ],
+   "sha256_png": "a96572a57c178c164b24f7e08cf5c1bd8d8b5d4370fbc3269e88cbbc68a6c8e7"
+  },
+  {
+   "dish_id": "dish_1564773976",
+   "kcal": 516.089478,
+   "masa_g": 463.0,
+   "grasa_g": 22.14978,
+   "carbs_g": 26.4142,
+   "proteina_g": 52.714333,
+   "ingredientes": [
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 59.23077
+    },
+    {
+     "nombre": "chicken breast",
+     "gramos": 106.0
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.584615
+    },
+    {
+     "nombre": "mayonnaise",
+     "gramos": 10.338462
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 3.230769
+    },
+    {
+     "nombre": "salmon",
+     "gramos": 64.615387
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.292308
+    },
+    {
+     "nombre": "pickles",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.161538
+    },
+    {
+     "nombre": "olives",
+     "gramos": 21.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.161538
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 58.0
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "kale",
+     "gramos": 3.230769
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.646154
+    },
+    {
+     "nombre": "lentils",
+     "gramos": 12.923077
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 117.0
+    }
+   ],
+   "sha256_png": "caf58950addc1c10178302134878f9cbd37c7fe20c691582d2897409db3ad9e4"
+  },
+  {
+   "dish_id": "dish_1565020822",
+   "kcal": 180.56488,
+   "masa_g": 193.0,
+   "grasa_g": 5.834682,
+   "carbs_g": 17.256317,
+   "proteina_g": 12.977074,
+   "ingredientes": [
+    {
+     "nombre": "olive oil",
+     "gramos": 2.292683
+    },
+    {
+     "nombre": "egg whites",
+     "gramos": 91.0
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 91.707321
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 8.0
+    }
+   ],
+   "sha256_png": "cb0d69d058f849d0874eeb505b930b6a90853a2b45d6624bf593f0e57906626a"
+  },
+  {
+   "dish_id": "dish_1565020867",
+   "kcal": 255.804886,
+   "masa_g": 325.0,
+   "grasa_g": 6.230683,
+   "carbs_g": 35.736317,
+   "proteina_g": 13.901073,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 91.0
+    },
+    {
+     "nombre": "berries",
+     "gramos": 132.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 8.0
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 91.707321
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.292683
+    }
+   ],
+   "sha256_png": "a3cc79ffedbf3eb904b406601a11a00811d6d96db7a1ef4111a85f8515020bde"
+  },
+  {
+   "dish_id": "dish_1565020926",
+   "kcal": 398.496124,
+   "masa_g": 489.0,
+   "grasa_g": 10.379284,
+   "carbs_g": 56.515961,
+   "proteina_g": 21.472317,
+   "ingredientes": [
+    {
+     "nombre": "olive oil",
+     "gramos": 2.292683
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 91.707321
+    },
+    {
+     "nombre": "grapes",
+     "gramos": 73.0
+    },
+    {
+     "nombre": "berries",
+     "gramos": 132.0
+    },
+    {
+     "nombre": "greek yogurt",
+     "gramos": 39.195805
+    },
+    {
+     "nombre": "egg whites",
+     "gramos": 91.0
+    },
+    {
+     "nombre": "chia seeds",
+     "gramos": 9.833465
+    },
+    {
+     "nombre": "milk",
+     "gramos": 41.97073
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 8.0
+    }
+   ],
+   "sha256_png": "9360ec4c10ac85519153a072d4130cbe90d696ff13242b9a6b0a358fe4e77aba"
+  },
+  {
+   "dish_id": "dish_1565030391",
+   "kcal": 609.333923,
+   "masa_g": 313.0,
+   "grasa_g": 37.047943,
+   "carbs_g": 12.058959,
+   "proteina_g": 52.597542,
+   "ingredientes": [
+    {
+     "nombre": "white rice",
+     "gramos": 25.776636
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.288832
+    },
+    {
+     "nombre": "orange juice",
+     "gramos": 1.288832
+    },
+    {
+     "nombre": "onions",
+     "gramos": 5.469792
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.23032
+    },
+    {
+     "nombre": "kale",
+     "gramos": 6.444159
+    },
+    {
+     "nombre": "green onions",
+     "gramos": 1.288832
+    },
+    {
+     "nombre": "lettuce",
+     "gramos": 14.460641
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 1.288832
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.180758
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 5.784257
+    },
+    {
+     "nombre": "beef",
+     "gramos": 193.324783
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 4.18096
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 7.717505
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 12.888318
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.723032
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.683724
+    },
+    {
+     "nombre": "chili",
+     "gramos": 1.288832
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 21.690962
+    }
+   ],
+   "sha256_png": "de9be2ab9b831a515347dd3e3131b73221c7e7bcb4758e0a81711055492664a8"
+  },
+  {
+   "dish_id": "dish_1565034661",
+   "kcal": 219.813263,
+   "masa_g": 146.0,
+   "grasa_g": 15.149511,
+   "carbs_g": 16.317738,
+   "proteina_g": 6.132204,
+   "ingredientes": [
+    {
+     "nombre": "lime",
+     "gramos": 0.606414
+    },
+    {
+     "nombre": "walnuts",
+     "gramos": 1.398643
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.437076
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 10.445887
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 6.06414
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 39.162022
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.195311
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 4.851312
+    },
+    {
+     "nombre": "lettuce",
+     "gramos": 12.12828
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.565453
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 18.192421
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.425656
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 2.797287
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.736884
+    },
+    {
+     "nombre": "chard",
+     "gramos": 6.993218
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 36.0
+    }
+   ],
+   "sha256_png": "2eb064431b124b4ac47c527d0de33dcf4c5a0e32ee6184a2d3b771d38dcf8eef"
+  },
+  {
+   "dish_id": "dish_1565034681",
+   "kcal": 323.553284,
+   "masa_g": 185.0,
+   "grasa_g": 18.93251,
+   "carbs_g": 29.18774,
+   "proteina_g": 10.422204,
+   "ingredientes": [
+    {
+     "nombre": "walnuts",
+     "gramos": 1.398643
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.195311
+    },
+    {
+     "nombre": "chard",
+     "gramos": 6.993218
+    },
+    {
+     "nombre": "blueberries",
+     "gramos": 2.797287
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 6.06414
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.606414
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.565453
+    },
+    {
+     "nombre": "lettuce",
+     "gramos": 12.12828
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.437076
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 36.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 4.851312
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.736884
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 39.162022
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 10.445887
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 39.0
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.425656
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 18.192421
+    }
+   ],
+   "sha256_png": "d64fea672684e18e9f257c2c1ca40b096ee39bc667dd3e8dd2d23fb827fcbd19"
+  },
+  {
+   "dish_id": "dish_1565123881",
+   "kcal": 406.821747,
+   "masa_g": 515.0,
+   "grasa_g": 19.355543,
+   "carbs_g": 31.0019,
+   "proteina_g": 30.063168,
+   "ingredientes": [
+    {
+     "nombre": "caesar salad",
+     "gramos": 314.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.381801
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.909004
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 35.0
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 45.5
+    },
+    {
+     "nombre": "spinach (cooked)",
+     "gramos": 1.909004
+    },
+    {
+     "nombre": "millet",
+     "gramos": 7.636017
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 3.818008
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 1.909004
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.071588
+    },
+    {
+     "nombre": "beef",
+     "gramos": 57.270126
+    },
+    {
+     "nombre": "chayote squash",
+     "gramos": 45.5
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.09545
+    }
+   ],
+   "sha256_png": "db94bb191f94aa57f7a4b5a6e496d4e074668765a2137f73641e6f1f3b1c5bfc"
+  },
+  {
+   "dish_id": "dish_1565638515",
+   "kcal": 198.970978,
+   "masa_g": 165.0,
+   "grasa_g": 10.759086,
+   "carbs_g": 8.950356,
+   "proteina_g": 16.704958,
+   "ingredientes": [
+    {
+     "nombre": "white rice",
+     "gramos": 7.560664
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.378033
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.646232
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 3.780332
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.189017
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.653033
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.378033
+    },
+    {
+     "nombre": "pork",
+     "gramos": 56.704979
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 88.724998
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 1.890166
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.094508
+    }
+   ],
+   "sha256_png": "f0c04b575dbec8fde6626c07cf4466ba69c616030f2496b2163fdb8ccca3e396"
+  },
+  {
+   "dish_id": "dish_1565638550",
+   "kcal": 277.656799,
+   "masa_g": 215.0,
+   "grasa_g": 12.71771,
+   "carbs_g": 10.055079,
+   "proteina_g": 30.124464,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.145843
+    },
+    {
+     "nombre": "pork",
+     "gramos": 56.704979
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 4.106776
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 1.890166
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.189017
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.807037
+    },
+    {
+     "nombre": "chicken breast",
+     "gramos": 41.06776
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 7.560664
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 88.724998
+    },
+    {
+     "nombre": "onions",
+     "gramos": 2.646232
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 1.026694
+    },
+    {
+     "nombre": "zucchini",
+     "gramos": 3.780332
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.378033
+    },
+    {
+     "nombre": "parmesan cheese",
+     "gramos": 1.026694
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.788711
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.102669
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 2.053388
+    }
+   ],
+   "sha256_png": "3c553d34b612a9001f6457d31d4e4c6561e77f026de37fa56483141de52b1a3e"
+  },
+  {
+   "dish_id": "dish_1565711453",
+   "kcal": 198.320007,
+   "masa_g": 134.0,
+   "grasa_g": 14.74,
+   "carbs_g": 2.144,
+   "proteina_g": 13.400001,
+   "ingredientes": [
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 134.0
+    }
+   ],
+   "sha256_png": "43989de2279397d603c1256d99dd42e9155218dd20dfb414880ef2017a68c310"
+  },
+  {
+   "dish_id": "dish_1565711498",
+   "kcal": 246.827271,
+   "masa_g": 229.0,
+   "grasa_g": 15.955486,
+   "carbs_g": 10.568151,
+   "proteina_g": 16.580688,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.467405
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.116851
+    },
+    {
+     "nombre": "brussels sprouts",
+     "gramos": 93.480934
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 134.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.934809
+    }
+   ],
+   "sha256_png": "1a6376fb7d53fab7147b637fe5e817410cad941e6cbeef8c8ff68640b8dc8aa6"
+  },
+  {
+   "dish_id": "dish_1565711570",
+   "kcal": 603.827271,
+   "masa_g": 324.0,
+   "grasa_g": 41.255486,
+   "carbs_g": 34.236149,
+   "proteina_g": 26.61869,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.467405
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.116851
+    },
+    {
+     "nombre": "brussels sprouts",
+     "gramos": 93.480934
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 134.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.934809
+    },
+    {
+     "nombre": "hash browns",
+     "gramos": 73.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 22.0
+    }
+   ],
+   "sha256_png": "6055034d2a6984a82e7b9804f7c8f8e41b551ece635e1cf0b531a2f08cf8b130"
+  },
+  {
+   "dish_id": "dish_1565811139",
+   "kcal": 902.200012,
+   "masa_g": 416.0,
+   "grasa_g": 62.632004,
+   "carbs_g": 9.06,
+   "proteina_g": 74.731003,
+   "ingredientes": [
+    {
+     "nombre": "carrot",
+     "gramos": 47.0
+    },
+    {
+     "nombre": "goat cheese",
+     "gramos": 47.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 45.0
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 52.0
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 20.0
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 205.0
+    }
+   ],
+   "sha256_png": "380e29ea308b6d9bb45597ffb49781b87ff6dded4daeb9f0a59a1d6916a3e7fe"
+  },
+  {
+   "dish_id": "dish_1565896701",
+   "kcal": 294.47345,
+   "masa_g": 184.0,
+   "grasa_g": 18.184381,
+   "carbs_g": 8.322058,
+   "proteina_g": 25.74716,
+   "ingredientes": [
+    {
+     "nombre": "chard",
+     "gramos": 28.5
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.154689
+    },
+    {
+     "nombre": "kale",
+     "gramos": 28.5
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.618758
+    },
+    {
+     "nombre": "lime",
+     "gramos": 1.237515
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.237515
+    },
+    {
+     "nombre": "cauliflower",
+     "gramos": 12.375153
+    },
+    {
+     "nombre": "steak",
+     "gramos": 92.813637
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 18.562727
+    }
+   ],
+   "sha256_png": "9b78d00087b2b8036767bd3bd3d61d613e8ce5c5e7c3be313e19822ece14fd4d"
+  },
+  {
+   "dish_id": "dish_1565898158",
+   "kcal": 240.425751,
+   "masa_g": 194.0,
+   "grasa_g": 10.293161,
+   "carbs_g": 10.249402,
+   "proteina_g": 25.324493,
+   "ingredientes": [
+    {
+     "nombre": "cilantro",
+     "gramos": 0.971895
+    },
+    {
+     "nombre": "ginger",
+     "gramos": 0.485947
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 4.859474
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.971895
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.971895
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.121487
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.242974
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.94379
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 2.915684
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.915684
+    },
+    {
+     "nombre": "salmon",
+     "gramos": 97.189484
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 58.5
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 19.437897
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.228921
+    },
+    {
+     "nombre": "chili",
+     "gramos": 0.242974
+    }
+   ],
+   "sha256_png": "ab4eceecc12d57ae08cd89f73a066e8bf9a301acb5a87b7dbeda72b16fb23f8a"
+  },
+  {
+   "dish_id": "dish_1565898230",
+   "kcal": 780.202026,
+   "masa_g": 500.0,
+   "grasa_g": 42.676907,
+   "carbs_g": 19.73115,
+   "proteina_g": 73.94603,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 2.915684
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 3.148936
+    },
+    {
+     "nombre": "beef",
+     "gramos": 177.155579
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 7.872341
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 19.437897
+    },
+    {
+     "nombre": "ginger",
+     "gramos": 0.485947
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 3.409958
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 0.295259
+    },
+    {
+     "nombre": "spinach (cooked)",
+     "gramos": 5.905186
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.121487
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 14.726057
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 5.905186
+    },
+    {
+     "nombre": "salmon",
+     "gramos": 97.189484
+    },
+    {
+     "nombre": "millet",
+     "gramos": 23.620745
+    },
+    {
+     "nombre": "vinaigrette",
+     "gramos": 6.297872
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.971895
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 4.859474
+    },
+    {
+     "nombre": "green beans",
+     "gramos": 58.5
+    },
+    {
+     "nombre": "feta cheese",
+     "gramos": 3.148936
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 15.744681
+    },
+    {
+     "nombre": "lettuce",
+     "gramos": 31.489363
+    },
+    {
+     "nombre": "cilantro",
+     "gramos": 0.971895
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.971895
+    },
+    {
+     "nombre": "onions",
+     "gramos": 10.997911
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.464418
+    },
+    {
+     "nombre": "chili",
+     "gramos": 0.242974
+    },
+    {
+     "nombre": "olives",
+     "gramos": 3.148936
+    }
+   ],
+   "sha256_png": "3ed30be2497a77ce603354fbddb1784a987ef0e8e405c0ed3fbd16f6d6cec832"
+  },
+  {
+   "dish_id": "dish_1565898331",
+   "kcal": 155.993118,
+   "masa_g": 100.0,
+   "grasa_g": 6.518404,
+   "carbs_g": 4.592838,
+   "proteina_g": 18.113056,
+   "ingredientes": [
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 3.626473
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 0.543971
+    },
+    {
+     "nombre": "lime",
+     "gramos": 0.090662
+    },
+    {
+     "nombre": "cilantro",
+     "gramos": 0.725295
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.175884
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 2.175884
+    },
+    {
+     "nombre": "chili",
+     "gramos": 0.181324
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.181324
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.725295
+    },
+    {
+     "nombre": "ginger",
+     "gramos": 0.362647
+    },
+    {
+     "nombre": "salmon",
+     "gramos": 72.529465
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 14.505893
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.725295
+    },
+    {
+     "nombre": "onions",
+     "gramos": 1.450589
+    }
+   ],
+   "sha256_png": "126a62987f11a2fd53303f132cfd5c601290ddb69918a7918d3dfedd0e107933"
+  },
+  {
+   "dish_id": "dish_1565974409",
+   "kcal": 688.649963,
+   "masa_g": 228.0,
+   "grasa_g": 50.0,
+   "carbs_g": 5.48,
+   "proteina_g": 51.470001,
+   "ingredientes": [
+    {
+     "nombre": "chicken apple sausage",
+     "gramos": 143.0
+    },
+    {
+     "nombre": "bacon",
+     "gramos": 85.0
+    }
+   ],
+   "sha256_png": "01e6745b27bf3142061a30dac1a25bf76913c98600904d608d03d9b0cf70df3e"
+  },
+  {
+   "dish_id": "dish_1566316726",
+   "kcal": 409.522888,
+   "masa_g": 685.0,
+   "grasa_g": 4.10161,
+   "carbs_g": 25.365391,
+   "proteina_g": 57.490242,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 563.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.97561
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 119.024391
+    }
+   ],
+   "sha256_png": "38f3b2223e2aa084028765c83a2fab27fe44b44803bdc738cdf8da7e6f01369e"
+  },
+  {
+   "dish_id": "dish_1566316757",
+   "kcal": 448.382874,
+   "masa_g": 819.0,
+   "grasa_g": 4.36961,
+   "carbs_g": 34.209389,
+   "proteina_g": 59.50024,
+   "ingredientes": [
+    {
+     "nombre": "sweet potato",
+     "gramos": 119.024391
+    },
+    {
+     "nombre": "egg whites",
+     "gramos": 563.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 2.97561
+    },
+    {
+     "nombre": "salsa",
+     "gramos": 134.0
+    }
+   ],
+   "sha256_png": "5f94abacedf22f49114fa4b4092eccf837f0caead452e5ce994f8490e419ce95"
+  },
+  {
+   "dish_id": "dish_1566328724",
+   "kcal": 275.549988,
+   "masa_g": 167.0,
+   "grasa_g": 6.012,
+   "carbs_g": 0.0,
+   "proteina_g": 51.77,
+   "ingredientes": [
+    {
+     "nombre": "chicken",
+     "gramos": 167.0
+    }
+   ],
+   "sha256_png": "d6f1c4eb86cf70b21b10f5c86ccc56cc459154df6a3c24b088a9948dd35dd5c5"
+  },
+  {
+   "dish_id": "dish_1566328776",
+   "kcal": 901.810059,
+   "masa_g": 436.0,
+   "grasa_g": 28.684999,
+   "carbs_g": 78.293999,
+   "proteina_g": 77.723999,
+   "ingredientes": [
+    {
+     "nombre": "chicken",
+     "gramos": 167.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 36.0
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 233.0
+    }
+   ],
+   "sha256_png": "0a6c38b2603bd9b666d53739c24b1b2fc06b410e95dd067e669b034c6922e536"
+  },
+  {
+   "dish_id": "dish_1566328805",
+   "kcal": 927.809998,
+   "masa_g": 488.0,
+   "grasa_g": 28.737,
+   "carbs_g": 85.054001,
+   "proteina_g": 77.984001,
+   "ingredientes": [
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 36.0
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 233.0
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 167.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 52.0
+    }
+   ],
+   "sha256_png": "e8a65e64e76e0bfa08a1630a929ce259702beda1dcf99a5e5a178773a9502e31"
+  },
+  {
+   "dish_id": "dish_1566328831",
+   "kcal": 941.609985,
+   "masa_g": 500.0,
+   "grasa_g": 30.021,
+   "carbs_g": 85.809998,
+   "proteina_g": 78.080002,
+   "ingredientes": [
+    {
+     "nombre": "pizza",
+     "gramos": 233.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 36.0
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 167.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 52.0
+    },
+    {
+     "nombre": "olives",
+     "gramos": 12.0
+    }
+   ],
+   "sha256_png": "db523fb6fcaa06d3540e6acbcc183814a60db02601c157849dad623714e8319d"
+  },
+  {
+   "dish_id": "dish_1566414291",
+   "kcal": 345.14212,
+   "masa_g": 244.0,
+   "grasa_g": 14.794408,
+   "carbs_g": 46.021748,
+   "proteina_g": 7.035223,
+   "ingredientes": [
+    {
+     "nombre": "olive oil",
+     "gramos": 2.563107
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 156.0
+    },
+    {
+     "nombre": "quinoa",
+     "gramos": 85.43689
+    }
+   ],
+   "sha256_png": "ff7ad126f8906b59c7dfe6ac5b830dafd87c7384d9cd350339f8d138c7890a86"
+  },
+  {
+   "dish_id": "dish_1566414342",
+   "kcal": 846.367065,
+   "masa_g": 552.0,
+   "grasa_g": 31.578682,
+   "carbs_g": 53.343304,
+   "proteina_g": 83.57795,
+   "ingredientes": [
+    {
+     "nombre": "garlic",
+     "gramos": 2.398053
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.199027
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 11.990268
+    },
+    {
+     "nombre": "oregano",
+     "gramos": 0.749392
+    },
+    {
+     "nombre": "cream",
+     "gramos": 9.592214
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 23.980536
+    },
+    {
+     "nombre": "butter",
+     "gramos": 2.398053
+    },
+    {
+     "nombre": "basil",
+     "gramos": 1.199027
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.398053
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 1.199027
+    },
+    {
+     "nombre": "white wine",
+     "gramos": 0.599513
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 239.805359
+    },
+    {
+     "nombre": "quinoa",
+     "gramos": 85.43689
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 5.995134
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.749392
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.96116
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.749392
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.599513
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 156.0
+    }
+   ],
+   "sha256_png": "d37a67a015bbf5d9f9545aa7ef11bb1cbf5b410e9f3f783c646d91d9a706da08"
+  },
+  {
+   "dish_id": "dish_1566414412",
+   "kcal": 920.120422,
+   "masa_g": 658.0,
+   "grasa_g": 37.812386,
+   "carbs_g": 57.062336,
+   "proteina_g": 85.334846,
+   "ingredientes": [
+    {
+     "nombre": "shallots",
+     "gramos": 1.199027
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.96116
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.398053
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.599513
+    },
+    {
+     "nombre": "basil",
+     "gramos": 1.199027
+    },
+    {
+     "nombre": "cream",
+     "gramos": 9.592214
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 23.980536
+    },
+    {
+     "nombre": "mushroom",
+     "gramos": 11.990268
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 5.995134
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 11.276596
+    },
+    {
+     "nombre": "quinoa",
+     "gramos": 85.43689
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 239.805359
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 1.199027
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 4.510638
+    },
+    {
+     "nombre": "white wine",
+     "gramos": 0.599513
+    },
+    {
+     "nombre": "lettuce",
+     "gramos": 45.106384
+    },
+    {
+     "nombre": "feta cheese",
+     "gramos": 4.510638
+    },
+    {
+     "nombre": "roasted potatoes",
+     "gramos": 156.0
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.510638
+    },
+    {
+     "nombre": "butter",
+     "gramos": 2.398053
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.749392
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.749392
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 22.553192
+    },
+    {
+     "nombre": "olives",
+     "gramos": 4.510638
+    },
+    {
+     "nombre": "oregano",
+     "gramos": 0.749392
+    },
+    {
+     "nombre": "vinaigrette",
+     "gramos": 9.021276
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.398053
+    }
+   ],
+   "sha256_png": "0683af0ecbcd5fce16ff3d2e1794ace29c68e22757c1539d14325c46b764ab43"
+  },
+  {
+   "dish_id": "dish_1566502472",
+   "kcal": 132.919037,
+   "masa_g": 119.0,
+   "grasa_g": 7.735376,
+   "carbs_g": 15.924625,
+   "proteina_g": 3.416664,
+   "ingredientes": [
+    {
+     "nombre": "sun dried tomatoes",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.384384
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.15015
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.384384
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.687688
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 38.438438
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.612613
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 55.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.192192
+    }
+   ],
+   "sha256_png": "0755e4a63bb9747308fa3e18fff113913957e989c6c0772a691bab87ea1338f4"
+  },
+  {
+   "dish_id": "dish_1566502505",
+   "kcal": 454.517365,
+   "masa_g": 275.0,
+   "grasa_g": 22.45969,
+   "carbs_g": 33.146801,
+   "proteina_g": 31.874937,
+   "ingredientes": [
+    {
+     "nombre": "sun dried tomatoes",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 14.892601
+    },
+    {
+     "nombre": "pork",
+     "gramos": 104.248215
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 55.0
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.687688
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.612613
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.936822
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 5.957041
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 4.107534
+    },
+    {
+     "nombre": "sugar",
+     "gramos": 11.169451
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.372315
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 14.892601
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 38.438438
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.384384
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.15015
+    }
+   ],
+   "sha256_png": "b7bf00bb028640240452e83d2106ee00b8072e1372488c09bf3aed1267c9cf02"
+  },
+  {
+   "dish_id": "dish_1566502537",
+   "kcal": 517.644226,
+   "masa_g": 315.0,
+   "grasa_g": 24.27223,
+   "carbs_g": 34.292435,
+   "proteina_g": 41.827816,
+   "ingredientes": [
+    {
+     "nombre": "corn on the cob",
+     "gramos": 55.0
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 0.039565
+    },
+    {
+     "nombre": "sun dried tomatoes",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.039565
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 3.165183
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.095081
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 4.265793
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.384384
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.687688
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.118694
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 6.783187
+    },
+    {
+     "nombre": "chive",
+     "gramos": 0.039565
+    },
+    {
+     "nombre": "pork",
+     "gramos": 104.248215
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 31.651831
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 38.438438
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.372315
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 14.892601
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 14.892601
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 3.165183
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 5.957041
+    },
+    {
+     "nombre": "chard",
+     "gramos": 0.791296
+    },
+    {
+     "nombre": "sugar",
+     "gramos": 11.169451
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.612613
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.039565
+    }
+   ],
+   "sha256_png": "9b89bb66debf4368ac32d52c2b4cf3956089133b0bcc4a123befc1b2fae2600a"
+  },
+  {
+   "dish_id": "dish_1566502573",
+   "kcal": 821.510193,
+   "masa_g": 487.0,
+   "grasa_g": 43.20623,
+   "carbs_g": 60.718185,
+   "proteina_g": 51.18927,
+   "ingredientes": [
+    {
+     "nombre": "chive",
+     "gramos": 0.039565
+    },
+    {
+     "nombre": "bok choy",
+     "gramos": 14.892601
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 31.651831
+    },
+    {
+     "nombre": "white rice",
+     "gramos": 14.892601
+    },
+    {
+     "nombre": "pork",
+     "gramos": 104.248215
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 21.540388
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 38.438438
+    },
+    {
+     "nombre": "brown rice",
+     "gramos": 3.165183
+    },
+    {
+     "nombre": "chard",
+     "gramos": 0.791296
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.384384
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 23.153881
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 4.265793
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 7.687688
+    },
+    {
+     "nombre": "sugar",
+     "gramos": 11.169451
+    },
+    {
+     "nombre": "rosemary",
+     "gramos": 0.039565
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 8.988471
+    },
+    {
+     "nombre": "sun dried tomatoes",
+     "gramos": 3.075075
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.118694
+    },
+    {
+     "nombre": "mustard greens",
+     "gramos": 21.540388
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 8.655721
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 11.691231
+    },
+    {
+     "nombre": "corn on the cob",
+     "gramos": 55.0
+    },
+    {
+     "nombre": "basil",
+     "gramos": 0.039565
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.612613
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 3.165183
+    },
+    {
+     "nombre": "soy sauce",
+     "gramos": 5.957041
+    },
+    {
+     "nombre": "salt",
+     "gramos": 1.633591
+    },
+    {
+     "nombre": "chickpeas",
+     "gramos": 86.161552
+    }
+   ],
+   "sha256_png": "8a4c84ffb340e44794d0f9af35a037c8e477f7e2f39c36f6e6d6c2d2964b613c"
+  },
+  {
+   "dish_id": "dish_1566587102",
+   "kcal": 213.599411,
+   "masa_g": 146.0,
+   "grasa_g": 7.505935,
+   "carbs_g": 8.090585,
+   "proteina_g": 27.147421,
+   "ingredientes": [
+    {
+     "nombre": "chicken",
+     "gramos": 83.205704
+    },
+    {
+     "nombre": "millet",
+     "gramos": 20.801426
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.390027
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.080142
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.080142
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 10.400713
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 10.400713
+    }
+   ],
+   "sha256_png": "fab073dd23770c5a6730c425fa5c2890e5203effed0ce5ef22e43405f770939d"
+  },
+  {
+   "dish_id": "dish_1566587143",
+   "kcal": 354.399445,
+   "masa_g": 234.0,
+   "grasa_g": 20.705935,
+   "carbs_g": 16.010584,
+   "proteina_g": 28.907421,
+   "ingredientes": [
+    {
+     "nombre": "bell peppers",
+     "gramos": 10.400713
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 83.205704
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 10.400713
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.080142
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "avocado",
+     "gramos": 88.0
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.390027
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.080142
+    },
+    {
+     "nombre": "millet",
+     "gramos": 20.801426
+    }
+   ],
+   "sha256_png": "4c62c61d875d392235964135c48051268a61fb344cd833813f91c0618bdb9de1"
+  },
+  {
+   "dish_id": "dish_1566587182",
+   "kcal": 531.260986,
+   "masa_g": 377.0,
+   "grasa_g": 37.361893,
+   "carbs_g": 22.501673,
+   "proteina_g": 31.371517,
+   "ingredientes": [
+    {
+     "nombre": "pepper",
+     "gramos": 0.390027
+    },
+    {
+     "nombre": "millet",
+     "gramos": 20.801426
+    },
+    {
+     "nombre": "avocado",
+     "gramos": 88.0
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 8.084805
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 20.329895
+    },
+    {
+     "nombre": "onions",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 10.400713
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.332793
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.080142
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 8.084805
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 83.205704
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 4.160285
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 1.263251
+    },
+    {
+     "nombre": "celery root",
+     "gramos": 8.084805
+    },
+    {
+     "nombre": "mixed greens",
+     "gramos": 101.060074
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 10.400713
+    }
+   ],
+   "sha256_png": "a8d7d24dca8b2693c07ca3f52274edba44fce0a41fb3909200b49f2fc6d9744a"
+  },
+  {
+   "dish_id": "dish_1566589967",
+   "kcal": 381.661957,
+   "masa_g": 322.0,
+   "grasa_g": 16.1381,
+   "carbs_g": 13.400992,
+   "proteina_g": 46.94825,
+   "ingredientes": [
+    {
+     "nombre": "onions",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.84951
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 14.247552
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.84951
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 14.247552
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.534283
+    },
+    {
+     "nombre": "millet",
+     "gramos": 28.495104
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 113.980415
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "tofu",
+     "gramos": 122.0
+    }
+   ],
+   "sha256_png": "9d5c7f22de72ccc27eb65698141a3fc6877bba1055d234d2e39c884edf0faee1"
+  },
+  {
+   "dish_id": "dish_1566590007",
+   "kcal": 740.762024,
+   "masa_g": 457.0,
+   "grasa_g": 29.233101,
+   "carbs_g": 57.950996,
+   "proteina_g": 61.798248,
+   "ingredientes": [
+    {
+     "nombre": "bell peppers",
+     "gramos": 14.247552
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.84951
+    },
+    {
+     "nombre": "tomatoes",
+     "gramos": 14.247552
+    },
+    {
+     "nombre": "salt",
+     "gramos": 2.84951
+    },
+    {
+     "nombre": "onions",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 135.0
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.534283
+    },
+    {
+     "nombre": "tofu",
+     "gramos": 122.0
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 113.980415
+    },
+    {
+     "nombre": "millet",
+     "gramos": 28.495104
+    }
+   ],
+   "sha256_png": "9043b14d9aa83825c3873492c1b2f712ad0931e115bfb39ad5e45224ff6095b2"
+  },
+  {
+   "dish_id": "dish_1566590056",
+   "kcal": 815.647644,
+   "masa_g": 519.0,
+   "grasa_g": 34.712166,
+   "carbs_g": 63.927059,
+   "proteina_g": 62.926941,
+   "ingredientes": [
+    {
+     "nombre": "tomatoes",
+     "gramos": 14.247552
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.534283
+    },
+    {
+     "nombre": "millet",
+     "gramos": 28.495104
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 2.673854
+    },
+    {
+     "nombre": "tofu",
+     "gramos": 122.0
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.334232
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 11.046729
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 14.247552
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 6.684636
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 113.980415
+    },
+    {
+     "nombre": "chard",
+     "gramos": 13.369272
+    },
+    {
+     "nombre": "spinach (raw)",
+     "gramos": 25.75293
+    },
+    {
+     "nombre": "pizza",
+     "gramos": 135.0
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 6.684636
+    },
+    {
+     "nombre": "onions",
+     "gramos": 5.69902
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 2.84951
+    },
+    {
+     "nombre": "salt",
+     "gramos": 3.016626
+    },
+    {
+     "nombre": "figs",
+     "gramos": 6.684636
+    }
+   ],
+   "sha256_png": "b7c0c59855b0e7c59ac5b3aef7762b018be47177c6cc0ce6541d5abca03bb813"
+  },
+  {
+   "dish_id": "dish_1566838407",
+   "kcal": 358.947601,
+   "masa_g": 558.0,
+   "grasa_g": 9.825659,
+   "carbs_g": 62.420345,
+   "proteina_g": 9.731463,
+   "ingredientes": [
+    {
+     "nombre": "pineapple",
+     "gramos": 145.0
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 65.0
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 74.146347
+    },
+    {
+     "nombre": "berries",
+     "gramos": 133.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.853658
+    },
+    {
+     "nombre": "watermelon",
+     "gramos": 139.0
+    }
+   ],
+   "sha256_png": "f040af5a2af7dd6f20037cc7dbc1c94ee5ed2d79240381754e71d7f99f33eaa5"
+  },
+  {
+   "dish_id": "dish_1566849895",
+   "kcal": 112.309998,
+   "masa_g": 153.0,
+   "grasa_g": 7.341,
+   "carbs_g": 12.821001,
+   "proteina_g": 1.31,
+   "ingredientes": [
+    {
+     "nombre": "olives",
+     "gramos": 67.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 86.0
+    }
+   ],
+   "sha256_png": "ffaf5ae32c7e2f6e9e2c20741d4f860ab41c984e0959f0da10ad50587efde2c9"
+  },
+  {
+   "dish_id": "dish_1566850031",
+   "kcal": 616.771973,
+   "masa_g": 662.0,
+   "grasa_g": 19.197001,
+   "carbs_g": 25.780001,
+   "proteina_g": 84.644997,
+   "ingredientes": [
+    {
+     "nombre": "olives",
+     "gramos": 67.0
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 86.0
+    },
+    {
+     "nombre": "chicken",
+     "gramos": 252.0
+    },
+    {
+     "nombre": "caesar dressing",
+     "gramos": 122.0
+    },
+    {
+     "nombre": "cherry tomatoes",
+     "gramos": 87.0
+    },
+    {
+     "nombre": "onions",
+     "gramos": 48.0
+    }
+   ],
+   "sha256_png": "8e5112ed8ffd490c64954a6fd1792e05347534db74cd967b2c6a95477fad1dc2"
+  },
+  {
+   "dish_id": "dish_1566851704",
+   "kcal": 461.160156,
+   "masa_g": 348.0,
+   "grasa_g": 18.996983,
+   "carbs_g": 46.817013,
+   "proteina_g": 26.711891,
+   "ingredientes": [
+    {
+     "nombre": "quinoa",
+     "gramos": 40.894569
+    },
+    {
+     "nombre": "cabbage",
+     "gramos": 5.048543
+    },
+    {
+     "nombre": "pork",
+     "gramos": 37.864075
+    },
+    {
+     "nombre": "lemon juice",
+     "gramos": 0.607091
+    },
+    {
+     "nombre": "thyme",
+     "gramos": 0.204473
+    },
+    {
+     "nombre": "broccoli",
+     "gramos": 25.365854
+    },
+    {
+     "nombre": "cheese pizza",
+     "gramos": 85.0
+    },
+    {
+     "nombre": "pepper",
+     "gramos": 0.126214
+    },
+    {
+     "nombre": "wheat berry",
+     "gramos": 5.048543
+    },
+    {
+     "nombre": "mayonnaise",
+     "gramos": 1.009709
+    },
+    {
+     "nombre": "jalapenos",
+     "gramos": 0.063107
+    },
+    {
+     "nombre": "arugula",
+     "gramos": 4.089457
+    },
+    {
+     "nombre": "parsley",
+     "gramos": 1.070319
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.091046
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 1.262136
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.523171
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 1.527219
+    },
+    {
+     "nombre": "caesar salad",
+     "gramos": 137.0
+    },
+    {
+     "nombre": "shallots",
+     "gramos": 0.204473
+    }
+   ],
+   "sha256_png": "49e62ad29ebe0d2f9d95686d2f92e0a682705811345550d0a96ec2c5c4f51545"
+  },
+  {
+   "dish_id": "dish_1566920304",
+   "kcal": 296.399994,
+   "masa_g": 570.0,
+   "grasa_g": 1.14,
+   "carbs_g": 3.99,
+   "proteina_g": 57.0,
+   "ingredientes": [
+    {
+     "nombre": "egg whites",
+     "gramos": 570.0
+    }
+   ],
+   "sha256_png": "cef487275bcff5d368f611cb4c19fcca765d29c6fb3ba37170185dff7e6f5751"
+  },
+  {
+   "dish_id": "dish_1567785709",
+   "kcal": 131.250626,
+   "masa_g": 138.0,
+   "grasa_g": 8.397309,
+   "carbs_g": 14.615491,
+   "proteina_g": 1.001891,
+   "ingredientes": [
+    {
+     "nombre": "radishes",
+     "gramos": 8.145454
+    },
+    {
+     "nombre": "berries",
+     "gramos": 54.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.254545
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.509091
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 8.145454
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 4.072727
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 10.181818
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.509091
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 42.0
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 10.181818
+    }
+   ],
+   "sha256_png": "1bdb918bc1840fde572fd3660efbcdba99ff1c94eb8e3285ae6d5b29ce76dd28"
+  },
+  {
+   "dish_id": "dish_1567785739",
+   "kcal": 168.576462,
+   "masa_g": 177.0,
+   "grasa_g": 9.348528,
+   "carbs_g": 21.464273,
+   "proteina_g": 1.382379,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.254545
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 10.181818
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.509091
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 10.181818
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 9.096674
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.509091
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 38.048782
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 4.072727
+    },
+    {
+     "nombre": "berries",
+     "gramos": 54.0
+    },
+    {
+     "nombre": "pineapple",
+     "gramos": 42.0
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 8.145454
+    }
+   ],
+   "sha256_png": "fd0aa2357384d4ed1546208603c547bcfeeef81c7bcedadd9e684748c01bf434"
+  },
+  {
+   "dish_id": "dish_1567785778",
+   "kcal": 303.507507,
+   "masa_g": 310.0,
+   "grasa_g": 15.198483,
+   "carbs_g": 32.629898,
+   "proteina_g": 11.701199,
+   "ingredientes": [
+    {
+     "nombre": "pineapple",
+     "gramos": 42.0
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 10.181818
+    },
+    {
+     "nombre": "berries",
+     "gramos": 54.0
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 10.181818
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.254545
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.509091
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 9.096674
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.509091
+    },
+    {
+     "nombre": "greek yogurt",
+     "gramos": 57.286175
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 4.072727
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 8.145454
+    },
+    {
+     "nombre": "milk",
+     "gramos": 61.341835
+    },
+    {
+     "nombre": "chia seeds",
+     "gramos": 14.371986
+    },
+    {
+     "nombre": "sweet potato",
+     "gramos": 38.048782
+    }
+   ],
+   "sha256_png": "32f950bf49aa0d3501162fde0e0ca3b0626535b3eebd1106c234f11a3e14cdbd"
+  },
+  {
+   "dish_id": "dish_1568305225",
+   "kcal": 428.667786,
+   "masa_g": 144.0,
+   "grasa_g": 35.136887,
+   "carbs_g": 4.897249,
+   "proteina_g": 24.472982,
+   "ingredientes": [
+    {
+     "nombre": "bell peppers",
+     "gramos": 15.030304
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.751515
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 15.030304
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.751515
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 12.024242
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "turkey bacon",
+     "gramos": 82.0
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 12.024242
+    }
+   ],
+   "sha256_png": "d5a61544f904fa163ed767d6dbd300fbb1933ccef06051b89a6b0901539876ad"
+  },
+  {
+   "dish_id": "dish_1568305257",
+   "kcal": 837.147766,
+   "masa_g": 420.0,
+   "grasa_g": 65.496887,
+   "carbs_g": 9.31325,
+   "proteina_g": 52.072983,
+   "ingredientes": [
+    {
+     "nombre": "turkey bacon",
+     "gramos": 82.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.375758
+    },
+    {
+     "nombre": "bell peppers",
+     "gramos": 15.030304
+    },
+    {
+     "nombre": "mustard",
+     "gramos": 0.751515
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 12.024242
+    },
+    {
+     "nombre": "cucumbers",
+     "gramos": 15.030304
+    },
+    {
+     "nombre": "vinegar",
+     "gramos": 6.012121
+    },
+    {
+     "nombre": "scrambled eggs",
+     "gramos": 276.0
+    },
+    {
+     "nombre": "garlic",
+     "gramos": 0.751515
+    },
+    {
+     "nombre": "radishes",
+     "gramos": 12.024242
+    }
+   ],
+   "sha256_png": "a1c504bf2592630875fcdc05197b87bd9cae1710d5c792b3fe302d3db0324b53"
+  },
+  {
+   "dish_id": "dish_1568401199",
+   "kcal": 459.643372,
+   "masa_g": 343.0,
+   "grasa_g": 22.450722,
+   "carbs_g": 24.832966,
+   "proteina_g": 37.956963,
+   "ingredientes": [
+    {
+     "nombre": "tuna salad",
+     "gramos": 228.0
+    },
+    {
+     "nombre": "squash",
+     "gramos": 113.440193
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.134402
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.425401
+    }
+   ],
+   "sha256_png": "bc589d87369bdffa6f1f7b68f84295499cdde7c6ea91f30395827d6a95e6b1b8"
+  },
+  {
+   "dish_id": "dish_1568401233",
+   "kcal": 490.393372,
+   "masa_g": 418.0,
+   "grasa_g": 22.600721,
+   "carbs_g": 32.332966,
+   "proteina_g": 38.631962,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.425401
+    },
+    {
+     "nombre": "squash",
+     "gramos": 113.440193
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 75.0
+    },
+    {
+     "nombre": "tuna salad",
+     "gramos": 228.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.134402
+    }
+   ],
+   "sha256_png": "8741e911fa8ee45391e1dea23b0ab03fdde52f2d1e0daddf46ed315adf5880c7"
+  },
+  {
+   "dish_id": "dish_1568401261",
+   "kcal": 530.393372,
+   "masa_g": 443.0,
+   "grasa_g": 26.350721,
+   "carbs_g": 34.582966,
+   "proteina_g": 39.131962,
+   "ingredientes": [
+    {
+     "nombre": "salt",
+     "gramos": 0.425401
+    },
+    {
+     "nombre": "squash",
+     "gramos": 113.440193
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 75.0
+    },
+    {
+     "nombre": "avocado",
+     "gramos": 25.0
+    },
+    {
+     "nombre": "tuna salad",
+     "gramos": 228.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.134402
+    }
+   ],
+   "sha256_png": "19e62bdfce4a5c9fe7e052cced21e5dec16a6ed45ab7f69759389355c4b1fb35"
+  },
+  {
+   "dish_id": "dish_1568401302",
+   "kcal": 716.47937,
+   "masa_g": 561.0,
+   "grasa_g": 28.946722,
+   "carbs_g": 69.864967,
+   "proteina_g": 44.677963,
+   "ingredientes": [
+    {
+     "nombre": "fried rice",
+     "gramos": 118.0
+    },
+    {
+     "nombre": "salt",
+     "gramos": 0.425401
+    },
+    {
+     "nombre": "squash",
+     "gramos": 113.440193
+    },
+    {
+     "nombre": "carrot",
+     "gramos": 75.0
+    },
+    {
+     "nombre": "avocado",
+     "gramos": 25.0
+    },
+    {
+     "nombre": "olive oil",
+     "gramos": 1.134402
+    },
+    {
+     "nombre": "tuna salad",
+     "gramos": 228.0
+    }
+   ],
+   "sha256_png": "e2c923886f266844d393dd3bb1f018e842551b04631b64c38d8d2019c45476df"
+  }
+ ]
+}
