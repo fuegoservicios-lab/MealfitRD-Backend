@@ -996,6 +996,9 @@ def guiso_sin_proteina(meal) -> int:
             if re.match(r"^(?:las\s+|unas\s+)?(?:\d+\s+)?claras\b", nsa):
                 n += 1
                 return f"{v} las claras batidas al guiso y remueve 2-3 minutos, hasta que cuajen."
+            if _HUEVO_546_RE.match(nsa):                  # [P1-PLAN-LOTE-546] el huevo cuaja (guiso o sartén)
+                n += 1
+                return _huevo_546(v, obj, nsa, meal)
             if _PROTEINA_498_RE.search(nsa):
                 return m.group(0)
             cab = _cabeza_425(nombre)
@@ -1046,6 +1049,54 @@ def guiso_sin_proteina(meal) -> int:
         return n
     except Exception:
         return 0
+
+
+# ── [P1-PLAN-LOTE-546 · 2026-09-27] El huevo cuaja; y el caldo de hidratar un grano no hace guiso ─────────────────────────
+# Batería real (rechaza pescado y berenjena, «Nada» de tiempo): «Bulgur tibio con queso fresco, pepino al limón y huevo»
+# acabó con «Añade 3 huevos y 2 claras de huevo al guiso y cocínalo a fuego medio 12-15 minutos, hasta que esté cocido
+# por dentro; incorpóralo con cuidado para no deshacer el resto» — y no había guiso: el «agua caliente (o caldo)» con que
+# se hidrata el bulgur bastaba para que `_meal_is_stewy` leyera una olla. Dos arreglos: el caldo alternativo al agua de un
+# grano ya no hace guiso (`sin_caldo_de_grano`, dentro del criterio mismo), y la frase del huevo pasa a su cocción real:
+# en un guiso de verdad, tapado 5-6 minutos hasta que cuaje; sin guiso, revuelto en sartén 3-4 minutos (con «Nada» de
+# tiempo, 12-15 minutos tampoco cabían). tooltip-anchor: P1-PLAN-LOTE-546
+_CALDO_GRANO_546_RE = re.compile(r"\bagua(?:\s+(?:caliente|hirviendo|tibia))?\s*\(?\s*o\s+caldo\b[^).,;]*\)?|"
+                                 r"\bcaldo\s+o\s+agua\b")
+_HUEVO_546_RE = re.compile(r"^(?:\d+\s+|un\s+|una\s+)?huevos?\b")
+_HECHO_546_RE = re.compile(r"\b(?:dur[oa]s?|cocid[oa]s?|hervid[oa]s?|sancochad[oa]s?)\b")
+_VIVER_GUISO_546_RE = re.compile(r"🍠\s*(?:Añade|Agrega|Incorpora)\s+[^.;:]{2,60}?\s+al\s+guiso\b[^.]*\.?", re.IGNORECASE)
+
+
+def sin_caldo_de_grano(blob):
+    """El texto que lee `_meal_is_stewy`, sin el caldo alternativo al agua («agua caliente (o caldo)», «agua o caldo»)."""
+    try:
+        return _CALDO_GRANO_546_RE.sub("agua", str(blob or ""))
+    except Exception:
+        return blob
+
+
+def _guiso_real_546(meal) -> bool:
+    """¿Hay guiso sin contar las frases «al guiso» que escribieron los cerradores? Ante la duda, sí (conducta previa)."""
+    try:
+        import graph_orchestrator as _go
+        pasos = []
+        for p in (meal.get("recipe") or []):
+            if isinstance(p, str):
+                p = _VIVER_GUISO_546_RE.sub("", _GUISO_498_RE.sub("", p))
+            pasos.append(p)
+        return bool(_go._meal_is_stewy({"name": meal.get("name", ""), "recipe": pasos}, _sa))
+    except Exception:
+        return True
+
+
+def _huevo_546(v: str, obj: str, nsa: str, meal) -> str:
+    pl = bool(re.search(r"\bhuevos\b|\bclaras\b|\sy\s", nsa))
+    if _HECHO_546_RE.search(nsa):
+        return f"{v} {obj} al guiso en el último minuto, solo para que se calient{'en' if pl else 'e'}."
+    cuaj = "cuajen" if pl else "cuaje"
+    if _guiso_real_546(meal):
+        return f"{v} {obj} al guiso, tapa y cocina a fuego bajo 5-6 minutos, hasta que {cuaj}."
+    return (f"Cocina {obj} revuelto{'s' if pl else ''} en una sartén antiadherente a fuego medio 3-4 minutos, "
+            f"hasta que {cuaj}.")
 
 
 # ── [P1-PLAN-LOTE-499 · 2026-09-27] El guineo no tiene semillas que separar ──────────────────────────────────────────────

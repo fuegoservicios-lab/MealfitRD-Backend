@@ -301,14 +301,19 @@ def _cycle_days(form: dict) -> int:
 
 
 def _batch_from_cooking_time(v: Any) -> str:
+    """[P1-PLAN-LOTE-548 · 2026-09-27] Cómo cocina quien SALTÓ el paso de compras, deducido de su tiempo de cocina.
+
+    El asistente manda `none|30min|1hour|plenty`; esta tabla buscaba «15/rapid/30/45» y todo lo demás caía en
+    «often»: «Nada» de tiempo acababa en «COCINA POR TANDAS… un guiso» (horizon) junto a «≤10 min», con el catálogo
+    prefiriendo platos de tanda y el panel diciendo «Cocinas por tandas» (auditoría del formulario del 27-sep).
+    Sin tiempo ⇒ al día; con tiempo ⇒ «a veces», que propone sin exigir. Suponer tandas nunca es neutro.
+    tooltip-anchor: P1-PLAN-LOTE-548"""
     s = _norm(v)
     if not s:
         return "sometimes"
-    if "15" in s or "rapid" in s or "quick" in s:
+    if s in ("none", "nada", "0") or "15" in s or "rapid" in s or "quick" in s:
         return "never"
-    if "30" in s or "45" in s:
-        return "sometimes"
-    return "often"
+    return "sometimes"
 
 
 def _country(form: dict, country: Optional[str]) -> str:

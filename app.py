@@ -864,7 +864,19 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «💡 Cocción previa» (la fila del catálogo está en seco — el criterio del 343).
 # [P1-PLAN-LOTE-543 · 2026-09-27] (backend) La hoja verde que ningún paso usa («75g de espinacas» en un yogur con sandía
 # del perfil con levotiroxina): fuera del desayuno y las meriendas; en almuerzo y cena, servida fresca.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-543 · 2026-09-27"
+# [P1-PLAN-LOTE-544 · 2026-09-27] (backend) Un rango en la lista («2–3 guayabas medianas») pasa a su punto medio al
+# entrar en assemble: el recálculo de macros abortaba (merienda de ~190 kcal mostrada con 89).
+# [P1-PLAN-LOTE-545 · 2026-09-27] (backend) Con «Nada» o «30 min» de tiempo (y sin cocinar por tandas), la legumbre lenta
+# llega cocida de lata: antes «remoja 8-12 h y hierve 60-90 min» en 11 perfiles reales contra lo que respondieron.
+# [P1-PLAN-LOTE-546 · 2026-09-27] (backend) El huevo del cerrador cuaja (guiso tapado 5-6 min o revuelto 3-4 min), no
+# «12-15 min hasta que esté cocido por dentro»; y el «agua (o caldo)» de hidratar un grano ya no convierte el plato en guiso.
+# [P1-PLAN-LOTE-547 · 2026-09-27] (backend) La cafeína y el tabaco del asistente llegan al prompt: se comparaba con
+# «diario» y el asistente manda «1-2 tazas/día…» y «ocasional» — directivas muertas para todos.
+# [P1-PLAN-LOTE-548 · 2026-09-27] (backend) Quien salta el paso de compras con «Nada» de tiempo cocina al día, no «por
+# tandas… un guiso»: la tabla del tiempo buscaba «15/30/45» y el asistente manda none|30min|1hour|plenty.
+# [P1-PLAN-LOTE-549 · 2026-09-27] (backend) «Es FIN DE SEMANA… recetas más elaboradas y meal prep dominical» ya no pisa
+# «Nada»/«30 min» de tiempo ni «cocino al día» en el bloque (OBLIGATORIO) del prompt.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-549 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

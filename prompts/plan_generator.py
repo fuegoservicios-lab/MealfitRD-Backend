@@ -804,7 +804,7 @@ def build_medication_context(form_data: dict) -> str:
         return ""
 
 
-def build_time_context(country=None, tz_offset_min=None) -> str:
+def build_time_context(country=None, tz_offset_min=None, cooking_time=None, batch_cooking=None) -> str:
     """Genera el bloque de contexto temporal dinámico (fecha, día, clima y cultura).
 
     [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] Era el ÚNICO bloque del prompt marcado «(OBLIGATORIO)»
@@ -885,8 +885,27 @@ def build_time_context(country=None, tz_offset_min=None) -> str:
     
     # 3. Día laboral vs fin de semana -> complejidad de recetas
     is_weekend = now_local.weekday() >= 5
-    if is_weekend:
-        hints += "- 🗓️ Es FIN DE SEMANA. El usuario tiene más tiempo. Puedes sugerir recetas un poco más elaboradas y meal prep dominical.\n"
+    # [P1-PLAN-LOTE-549 · 2026-09-27] El día de la semana no pisa lo que el usuario declaró: «FIN DE SEMANA… recetas más
+    # elaboradas y meal prep dominical» salía también con «Nada»/«30 min» de tiempo y con «cocino al día», en el ÚNICO
+    # bloque marcado (OBLIGATORIO) (auditoría del formulario del 27-sep). Sin `cooking_time` (tests, landing) ⇒ el texto
+    # de siempre. tooltip-anchor: P1-PLAN-LOTE-549
+    _ct549 = str(cooking_time or "").strip().lower()
+    _bc549 = str(batch_cooking or "").strip().lower()
+    if _ct549 and _bc549 not in ("never", "sometimes", "often"):
+        try:
+            from plan_policy import _batch_from_cooking_time as _bfct549
+            _bc549 = _bfct549(_ct549)
+        except Exception:
+            _bc549 = ""
+    _poco549 = {"none": "NADA de", "30min": "unos 30 minutos de"}.get(_ct549)
+    if is_weekend and _poco549:
+        hints += (f"- 🗓️ Es FIN DE SEMANA, pero el usuario declaró {_poco549} tiempo para cocinar: su tope de tiempo manda "
+                  f"también hoy (nada de recetas elaboradas).\n")
+    elif is_weekend:
+        hints += ("- 🗓️ Es FIN DE SEMANA. El usuario tiene más tiempo. Puedes sugerir recetas un poco más elaboradas"
+                  + ("." if _bc549 == "never" else " y meal prep dominical.") + "\n")
+    elif _poco549 or _bc549 == "never":
+        hints += "- 🗓️ Es DÍA LABORAL. Prioriza comidas rápidas, dentro del tiempo de cocina que declaró.\n"
     else:
         hints += "- 🗓️ Es DÍA LABORAL. Prioriza comidas rápidas (<15 min) o batch-cooking de la noche anterior.\n"
 

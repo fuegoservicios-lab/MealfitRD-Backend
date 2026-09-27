@@ -1118,11 +1118,19 @@ def build_habits_prompt(form_data) -> str:
         elif water.startswith("1-2"):
             lines.append("💧 HIDRATACIÓN JUSTA (1–2 L al día): recuerda el agua en las notas de almuerzo y cena y prefiere frutas ricas en agua.")
         caf = str(fd.get("habitCaffeine") or "").strip().lower()
-        if caf == "diario":
+        # [P1-PLAN-LOTE-547 · 2026-09-27] El asistente manda «1-2 tazas/día», «3-4 tazas/día» o «5+ tazas/día» (y
+        # «ninguna»), nunca «diario»: comparar sólo con «diario» dejaba la directiva muerta para todos (auditoría del
+        # formulario del 27-sep). «diario» se conserva por si lo escribe el coach. tooltip-anchor: P1-PLAN-LOTE-547
+        if caf == "diario" or caf[:1].isdigit():
             lines.append("☕ CAFEÍNA DIARIA DECLARADA: café o té SIN azúcar solo en desayuno y merienda de la mañana; ninguna bebida "
                          "con cafeína en la cena ni en la merienda de la tarde; nada de bebidas energizantes.")
+            if caf.startswith(("3-4", "5")):
+                lines.append("☕ CAFEÍNA ALTA (3 o más tazas al día): el plan NO añade café, té negro ni refrescos de cola; "
+                             "en merienda y cena ofrece infusiones sin cafeína o agua, sin tono moral.")
         smoke = str(fd.get("habitSmoking") or "").strip().lower()
-        if smoke in ("semanal", "diario"):
+        # [P1-PLAN-LOTE-547] «A veces» del asistente es «ocasional» (no hay «semanal»): fumar a veces también sube la
+        # necesidad de vitamina C.
+        if smoke in ("semanal", "diario", "ocasional"):
             lines.append("🚭 TABACO DECLARADO: prioriza vitamina C y antioxidantes (guayaba, naranja, limón, ají morrón, brócoli, "
                          "repollo, tomate) y magnesio (habichuelas, nueces, semillas) a lo largo del día; sin tono moral en las notas.")
         alc = str(fd.get("habitAlcohol") or "").strip().lower()

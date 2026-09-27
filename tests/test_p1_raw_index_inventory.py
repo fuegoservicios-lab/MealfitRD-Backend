@@ -109,6 +109,11 @@ _INVENTARIO = {
     "hoja_huerfana.py": {
         "_quita_raw":                              (1, "resuelto (por alimento: la primera línea de raw con la misma hoja)"),
     },
+    # [P1-PLAN-LOTE-545 · 2026-09-27] la legumbre seca pasa a cocida de lata también en raw, por ALIMENTO (la misma legumbre,
+    # aún seca), nunca por la posición de la línea visible.
+    "legumbre_lista.py": {
+        "a_lata":                                  (1, "resuelto (por alimento: la misma legumbre, aún seca, en raw)"),
+    },
 }
 
 _NOMBRES = {"raw", "_raw"}

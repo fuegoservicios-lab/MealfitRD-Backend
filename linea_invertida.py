@@ -89,6 +89,29 @@ def enderezar(linea) -> str | None:
     return f"{q} {u} de {_minuscula(nombre)}{resto}"
 
 
+# [P1-PLAN-LOTE-544 · 2026-09-27] «2–3 guayabas medianas», «1–2 ciruelas», «4.5–6 fresas frescas» (19 líneas en 4.633
+# comidas guardadas): un rango en la LISTA no se compra ni se cuenta —el recálculo de macros aborta y la merienda queda con
+# 89 kcal teniendo ~190— y el paso ya decía «lava 2½ guayabas». Se queda el punto medio, en cuartos, con el mismo texto
+# en los pasos. tooltip-anchor: P1-PLAN-LOTE-544
+_RANGO_544 = re.compile(r"^\s*(?P<a>\d+(?:[.,]\d+)?)\s*[–-]\s*(?P<b>\d+(?:[.,]\d+)?)\s+(?P<resto>[^\d].*)$")
+
+
+def rango(linea) -> str | None:
+    """«2–3 guayabas medianas» → «2½ guayabas medianas»; None si la línea no empieza por un rango de cantidades."""
+    m = _RANGO_544.match(str(linea or ""))
+    if not m:
+        return None
+    try:
+        a, b = float(m.group("a").replace(",", ".")), float(m.group("b").replace(",", "."))
+    except ValueError:
+        return None
+    if not (0 < a < b) or b > 50 or re.match(r"(?:min|minutos?|horas?|h\b|seg|segundos?|d[ií]as?|veces)", m.group("resto"),
+                                             re.IGNORECASE):
+        return None                                                # un tiempo o una frecuencia no es una cantidad
+    medio = round((a + b) / 2 * 4) / 4
+    return f"{_cantidad(str(medio))} {m.group('resto').strip()}"
+
+
 def normaliza_dias(days) -> int:
     """Endereza en sitio las líneas de `ingredients` (y `ingredients_raw`) y su copia literal en los pasos. Devuelve cuántas
     líneas cambió; 0 ante cualquier error (fail-open: la línea se queda como vino)."""
@@ -111,6 +134,12 @@ def normaliza_dias(days) -> int:
                             lista[i] = nueva
                             partes = _partes(x)
                             cambios[x.strip()] = (nueva, _minuscula(partes[0]) + partes[3])
+                            n += k == "ingredients"
+                            continue
+                        medio = rango(x)                                   # [P1-PLAN-LOTE-544]
+                        if medio and medio != x:
+                            lista[i] = medio
+                            cambios[x.strip()] = (medio, medio)
                             n += k == "ingredients"
                 rec = m.get("recipe")
                 if cambios and isinstance(rec, list):

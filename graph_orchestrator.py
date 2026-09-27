@@ -3406,7 +3406,8 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # más arriba por la única puerta: el bloque temporal era el único de este dict que no lo
         # usaba, y le contaba el clima del Caribe a los 5 países beta en el ÚNICO bloque del
         # prompt marcado «(OBLIGATORIO)».
-        "time_context": build_time_context(country=_shared_ctx_country, tz_offset_min=_shared_ctx_tz),
+        "time_context": build_time_context(country=_shared_ctx_country, tz_offset_min=_shared_ctx_tz,  # [P1-PLAN-LOTE-549]
+                                           cooking_time=form_data.get("cookingTime"), batch_cooking=form_data.get("batchCooking")),
         "variety_prompt": variety_prompt,
         # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] reparto del seeder como DATO (veggie_pairs).
         "seeder_assignment": _seeder_assignment,
@@ -19016,6 +19017,7 @@ def _meal_is_stewy(meal: dict, strip_accents_fn) -> bool:
     try:
         blob = strip_accents_fn((str(meal.get("name", "")) + " " + " ".join(
             str(s) for s in (meal.get("recipe") or []))).lower())
+        blob = __import__("pasos_cerrador").sin_caldo_de_grano(blob)  # [P1-PLAN-LOTE-546] «agua (o caldo)» no es olla
         if any(h in blob for h in _STEWY_DISH_HINT):
             return True
         if "el caldo espese" in blob or "hasta que espese" in blob:
@@ -27533,6 +27535,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             if _n:
                 total += _n; parts.append(f"leaf={_n}")
             total += __import__("hoja_huerfana").limpiar(days, db)  # [P1-PLAN-LOTE-543] la hoja que ningún paso usa
+            total += __import__("legumbre_lista").a_lata(days, {"cookingTime": cooking_time}, db)  # [P1-PLAN-LOTE-545]
     except Exception as _e2:
         logger.warning(f"[P1-COHERENCE-FINALIZE] leaf-cap no-op: {type(_e2).__name__}: {_e2}")
     # [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] DESPUÉS de slice-grams (las "lonjas de queso" ya son
@@ -38157,6 +38160,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         }
 
     __import__("linea_invertida").normaliza_dias(result.get("days") or [])  # [P1-PLAN-LOTE-529] «Maní, 20 g»
+    __import__("legumbre_lista").a_lata(result.get("days") or [], form_data)  # [P1-PLAN-LOTE-545] poco tiempo: de lata
     # Sanitizer de suplementos: el schema `SingleDayPlanModel.supplements` permite
     # al LLM rellenar el campo aunque el usuario no haya activado `includeSupplements`.
     # Como el day_generator prompt no menciona suplementos cuando están apagados,
