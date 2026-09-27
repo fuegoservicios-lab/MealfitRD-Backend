@@ -862,7 +862,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-541 · 2026-09-27] (backend) «½ unidad de tomate» → «½ tomate» en la lista (la unidad ES la pieza).
 # [P1-PLAN-LOTE-542 · 2026-09-27] (backend) «30 g de quinoa» sin «seca» y el paso «85 g de quinoa cocida»: también trae su
 # «💡 Cocción previa» (la fila del catálogo está en seco — el criterio del 343).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-542 · 2026-09-27"
+# [P1-PLAN-LOTE-543 · 2026-09-27] (backend) La hoja verde que ningún paso usa («75g de espinacas» en un yogur con sandía
+# del perfil con levotiroxina): fuera del desayuno y las meriendas; en almuerzo y cena, servida fresca.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-543 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

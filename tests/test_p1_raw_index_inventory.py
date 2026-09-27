@@ -104,6 +104,11 @@ _INVENTARIO = {
         # que había (mismo alimento por `_nucleo_524`, sin cantidad ni adjetivos) recibe la suma.
         "_fusiona_con_existente":                  (2, "resuelto (por alimento: núcleo del nombre; la nueva por su texto exacto)"),
     },
+    # [P1-PLAN-LOTE-543 · 2026-09-27] la hoja verde huérfana sale también de raw, por ALIMENTO (la primera línea con la
+    # misma hoja), nunca por la posición de la línea visible.
+    "hoja_huerfana.py": {
+        "_quita_raw":                              (1, "resuelto (por alimento: la primera línea de raw con la misma hoja)"),
+    },
 }
 
 _NOMBRES = {"raw", "_raw"}

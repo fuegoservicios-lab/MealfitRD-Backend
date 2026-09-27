@@ -27532,6 +27532,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             _n = _cap_leaf_volume_in_meals(days, db)
             if _n:
                 total += _n; parts.append(f"leaf={_n}")
+            total += __import__("hoja_huerfana").limpiar(days, db)  # [P1-PLAN-LOTE-543] la hoja que ningún paso usa
     except Exception as _e2:
         logger.warning(f"[P1-COHERENCE-FINALIZE] leaf-cap no-op: {type(_e2).__name__}: {_e2}")
     # [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] DESPUÉS de slice-grams (las "lonjas de queso" ya son
