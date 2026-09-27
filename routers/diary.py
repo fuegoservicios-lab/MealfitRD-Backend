@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from error_utils import safe_error_detail
-from typing import List, Optional
+from typing import Any, List, Optional
 import json
 import logging
 import math
 import uuid
 import asyncio
+import time
 from pydantic import BaseModel, Field, field_validator
 from db_core import _storage_client
 # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-NO-LOCAL · 2026-07-28]
@@ -37,6 +38,7 @@ from vision_agent import (
 # del handler era frágil: un refactor que renombrara `trigger_incremental_learning`
 # crashearía 500 en runtime en cada POST a `/api/diary/consumed`, no en import-time.
 from cron_tasks import trigger_incremental_learning
+from telemetria_escaner import registrar_scan_outcome, registrar_vision_scan, resumen_de_correcciones  # [P1-PLAN-LOTE-575]
 # [P1-NEVERA-OPCIONAL · 2026-09-23] Import a nivel de módulo (no dentro de la función)
 # para que los tests puedan monkeypatchear `routers.diary.nevera_activa`.
 from nevera_opcional import nevera_activa
@@ -186,6 +188,11 @@ class ConsumedMealRequest(BaseModel):
     # componedor. `None` (clientes anteriores) = descontar, la conducta de siempre. Con `False` los ingredientes se
     # GUARDAN igual (son el detalle de la comida) y quedan marcados como sincronizados, como en `/consumed/manual`.
     deduct_pantry: Optional[bool] = None
+
+    # [P1-PLAN-LOTE-575 · 2026-09-27] Cuánto corrigió el usuario lo que dijo la IA (solo conteos; lo arma
+    # scanMealDishes.resumenDeCorrecciones). `Any` A PROPÓSITO, ni siquiera `dict`: telemetria_escaner lo acota, y una
+    # forma inesperada (un string, una lista) jamás puede tumbar el registro de una comida con un 422.
+    scan_meta: Any = None
 
     model_config = {"extra": "ignore"}
 
@@ -602,7 +609,15 @@ async def api_diary_upload(
         # 3. Procesar imagen con Visión SINCRÓNICAMENTE
         logger.info("\n-------------------------------------------------------------")
         logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
+        _t_vision = time.perf_counter()
         vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion)
+        # [P1-PLAN-LOTE-575] cuánto tardó y si sirvió, para el panel (ni la foto ni su texto)
+        try:
+            await asyncio.to_thread(registrar_vision_scan, actual_user_id,
+                                    duracion_ms=(time.perf_counter() - _t_vision) * 1000.0,
+                                    resultado=vision_result, purpose=purpose)
+        except Exception:
+            pass
         
         description = vision_result.get("description", "No se pudo analizar la imagen.")
         is_food = vision_result.get("is_food", False)
@@ -1003,7 +1018,7 @@ def api_log_consumed_meal(
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
 
-        return _persist_consumed_meal(
+        resp = _persist_consumed_meal(
             user_id=user_id, meal_name=payload.meal_name, meal_type=payload.meal_type,
             calories=payload.calories, protein=payload.protein, carbs=payload.carbs,
             healthy_fats=payload.healthy_fats, ingredients=payload.ingredients,
@@ -1012,6 +1027,11 @@ def api_log_consumed_meal(
             # [P1-PLAN-LOTE-224] solo un `False` explícito apaga la resta; ausente = la conducta de siempre
             deduct=payload.deduct_pantry is not False,
         )
+        # [P1-PLAN-LOTE-575] la corrección del escáner, una vez por comida guardada (un repetido no cuenta dos veces)
+        _resumen = resumen_de_correcciones(payload.scan_meta)
+        if _resumen is not None and isinstance(resp, dict) and not resp.get("already_logged"):
+            background_tasks.add_task(registrar_scan_outcome, user_id, _resumen)
+        return resp
     except HTTPException as he:
         raise he
     except Exception as e:
