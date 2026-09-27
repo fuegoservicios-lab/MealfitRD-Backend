@@ -57,9 +57,9 @@ def test_los_seis_bloques_redactados(monkeypatch):
     coach = {f["etiqueta"]: f["valor"] for f in _bloque(r, "coach")["filas"]}
     assert coach["Tasa de 👎"] == "25 %"
     gasto = _bloque(r, "gasto")
-    assert gasto["tipo"] == "tabla" and gasto["filas"] == [["vision_scan", "14", "US$0.03"]]
+    assert gasto["tipo"] == "tabla" and gasto["filas"] == [["Escáner de fotos", "14", "US$0.03"]]  # lote 620
     assert "US$0.28" in gasto["titulo"]
-    assert _bloque(r, "analizador")["filas"][0][3:] == ["21 %", "26 %", "80 %", "sí"]
+    assert _bloque(r, "analizador")["filas"][0][2:] == ["21 %", "26 %", "80 %"]  # lote 620: sin «Platos»/«Válida»
 
 
 def test_ningun_bloque_filtra_identidad(monkeypatch):
@@ -100,8 +100,9 @@ def test_planes_y_gasto_no_pintan_texto_libre(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake2)
     r = am.metricas(7)
     planes = {f["etiqueta"]: f["valor"] for f in _bloque(r, "planes")["filas"]}
-    assert planes["· otro"] == "5" and planes["· complete"] == "2" and planes["Bloques en cola: otro"] == "1"
-    assert _bloque(r, "gasto")["filas"] == [["otro", "1", "US$0.01"]]
+    # lote 620: en español y sin «· » (la subfila va en `nivel`); lo inseguro sigue siendo «otro»
+    assert planes["Otro estado"] == "5" and planes["Completos"] == "2" and planes["Otro"] == "1"
+    assert _bloque(r, "gasto")["filas"] == [["Otro", "1", "US$0.01"]]
     assert "@" not in json.dumps(r, ensure_ascii=False)
 
 

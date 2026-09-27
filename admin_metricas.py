@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from db import execute_sql_query
 
@@ -28,6 +28,39 @@ _ESTADOS_PLAN = frozenset({
 # Las etiquetas de código (estado de la cola, función del gasto) las escribe el servidor, pero se pintan igual de
 # acotadas: solo [a-z0-9_].
 _ETIQUETA_DE_CODIGO = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+# [P1-PLAN-LOTE-620 · 2026-09-27] Los códigos se pintan en español. Un código seguro sin traducción sale tal cual (una
+# función nueva del gasto se ve igual, solo que sin nombre bonito); el inseguro ya llegó aquí como «otro».
+_ETIQUETA_ESTADO_PLAN = {
+    "complete": "Completos", "complete_partial": "Completos con huecos", "partial": "Parciales",
+    "partial_no_shopping": "Parciales sin lista", "active": "Activos", "generating": "Generándose",
+    "generating_next": "Generando el siguiente bloque", "in_progress": "En curso", "paused_by_user": "Pausados",
+    "failed": "Fallidos", "abandoned": "Abandonados", "degraded_pending_engagement": "Degradados (esperan uso)",
+    "expired_pending_pantry": "Caducados (esperan la Nevera)", "sin estado": "Sin estado", "otro": "Otro estado",
+}
+_ETIQUETA_COLA = {
+    "pending": "Pendientes", "processing": "Procesándose", "completed": "Completados", "failed": "Fallidos",
+    "cancelled": "Cancelados", "pending_user_action": "Esperan al usuario", "otro": "Otro",
+}
+_ETIQUETA_FUNCION = {
+    "day_generator": "Generación de días", "vision_scan": "Escáner de fotos", "planner": "Planificador",
+    "reviewer": "Revisor clínico", "chat_call_model": "Coach (chat)", "plan_display_i18n": "Traducción del plan",
+    "self_critique": "Autocrítica", "self_critique_correction": "Corrección tras la autocrítica",
+    "culinary_judge": "Juez culinario", "surgical_marker": "Corrección puntual", "compressor": "Resumen de la memoria",
+    "fact_extractor_extract_facts": "Extractor de hechos",
+    "fact_extractor_contradiction_merge": "Contradicciones de hechos",
+    "fact_extractor_router": "Clasificador de hechos", "diary_plate_estimate": "Estimación de platos (diario)",
+    "diary_freetext_estimate": "Estimación de texto libre (diario)", "otro": "Otro",
+}
+_GASTO_TOP = 8
+_NOTA_LIBRE_PROHIBIDA = re.compile(r"\S*@\S*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+
+
+def _texto_de_nota(v) -> str:
+    """Las notas del banco las escribe quien corre el banco, no un usuario; aun así, ni correos ni ids."""
+    t = " ".join(_NOTA_LIBRE_PROHIBIDA.sub(" ", str(v or "")).split())
+    return t[:60]
 
 
 def _estado_plan(v) -> str:
@@ -75,8 +108,22 @@ def _todos(sql: str, params: tuple = ()) -> list:
     return execute_sql_query(sql, params, fetch_all=True) or []
 
 
-def _kpis(bid: str, titulo: str, filas: list) -> dict:
-    return {"id": bid, "titulo": titulo, "tipo": "kpis", "filas": [{"etiqueta": e, "valor": v} for e, v in filas]}
+def _kpis(bid: str, titulo: str, filas: list, nota: str | None = None) -> dict:
+    """Cada fila: (etiqueta, valor) o (etiqueta, valor, opciones) con `destacado` (cifra grande) o `nivel` (subfila)."""
+    salida = []
+    for f in filas:
+        fila = {"etiqueta": f[0], "valor": f[1]}
+        if len(f) > 2:
+            fila.update(f[2])
+        salida.append(fila)
+    bloque = {"id": bid, "titulo": titulo, "tipo": "kpis", "filas": salida}
+    if nota:
+        bloque["nota"] = nota
+    return bloque
+
+
+_DESTACADO = {"destacado": True}
+_SUBFILA = {"nivel": 1}
 
 
 def bloque_uso(dias: int) -> dict:
@@ -87,9 +134,9 @@ def bloque_uso(dias: int) -> dict:
         " UNION SELECT user_id::text FROM public.agent_messages WHERE role = 'user' AND user_id IS NOT NULL"
         f" AND created_at >= {_VENTANA}) a", (dias, dias))
     comidas = _uno(f"SELECT COUNT(*) AS n FROM public.consumed_meals WHERE consumed_at >= {_VENTANA}", (dias,))
-    return _kpis("uso", "Uso", [("Cuentas", _entero(cuentas.get("n"))),
-                                (f"Activas en {dias} días", _entero(activas.get("n"))),
-                                ("Comidas registradas", _entero(comidas.get("n")))])
+    return _kpis("uso", "Uso", [(f"Activas en {dias} días", _entero(activas.get("n")), _DESTACADO),
+                                ("Comidas registradas", _entero(comidas.get("n")), _DESTACADO),
+                                ("Cuentas", _entero(cuentas.get("n")))])
 
 
 def bloque_escaner(dias: int) -> dict:
@@ -112,25 +159,31 @@ def bloque_escaner(dias: int) -> dict:
              "percentile_cont(0.5) WITHIN GROUP (ORDER BY (metadata->>'desvio_kcal')::float) AS desvio "
              f"FROM public.pipeline_metrics WHERE node = 'scan_outcome' AND created_at >= {_VENTANA}", (dias,))
     n_v, n_s = int(v.get("n") or 0), int(s.get("n") or 0)
+    # [P1-PLAN-LOTE-620] la señal nació el 27-sep: sin esta nota, «1 foto en 30 días» se lee como que nadie escanea
+    primero = _uno("SELECT MIN(created_at) AS desde FROM public.pipeline_metrics WHERE node = 'vision_scan_resultado'")
+    desde = primero.get("desde")
+    nota = None
+    if desde is not None and desde > datetime.now(timezone.utc) - timedelta(days=dias):
+        nota = f"Se registra desde el {desde:%d-%m-%Y}."
 
     def frac(k):
         return int(s.get(k) or 0) / n_s if n_s else None
 
     return _kpis("escaner", "Escáner", [
-        ("Fotos analizadas", _entero(n_v)),
+        ("Fotos analizadas", _entero(n_v), _DESTACADO),
         ("Análisis fallidos", _pct(int(v.get("fallidos") or 0) / n_v if n_v else None)),
         ("No era comida", _pct(int(v.get("no_comida") or 0) / n_v if n_v else None)),
         ("Sin totales (compra o etiqueta)", _pct(int(v.get("sin_totales") or 0) / n_v if n_v else None)),
         ("Tiempo de análisis (mediana / p90)", f"{_seg(v.get('p50'))} / {_seg(v.get('p90'))}"),
         ("Platos registrados con el escáner", _entero(n_s)),
-        ("Corregidos por el usuario", _pct(frac("corregidos"))),
-        ("· cambió un ingrediente", _pct(frac("cambiar"))),
-        ("· «Descríbelo»", _pct(frac("describelo"))),
-        ("· editó cantidades", _pct(frac("cantidades"))),
-        ("· cambió la respuesta a una duda", _pct(frac("dudas"))),
-        ("· tecleó las macros", _pct(frac("macros"))),
+        ("Corregidos por el usuario", _pct(frac("corregidos")), _DESTACADO),
+        ("Cambió un ingrediente", _pct(frac("cambiar")), _SUBFILA),
+        ("«Descríbelo»", _pct(frac("describelo")), _SUBFILA),
+        ("Editó cantidades", _pct(frac("cantidades")), _SUBFILA),
+        ("Cambió la respuesta a una duda", _pct(frac("dudas")), _SUBFILA),
+        ("Tecleó las macros", _pct(frac("macros")), _SUBFILA),
         ("Desvío mediano de calorías (IA → registrado)", _pct(s.get("desvio"))),
-    ])
+    ], nota)
 
 
 def bloque_coach(dias: int) -> dict:
@@ -139,10 +192,10 @@ def bloque_coach(dias: int) -> dict:
              "COUNT(*) FILTER (WHERE feedback = 'up') AS up, COUNT(*) FILTER (WHERE feedback = 'down') AS down "
              f"FROM public.agent_messages WHERE created_at >= {_VENTANA}", (dias,))
     up, down = int(c.get("up") or 0), int(c.get("down") or 0)
-    return _kpis("coach", "Coach", [("Mensajes del usuario", _entero(c.get("preguntas"))),
+    return _kpis("coach", "Coach", [("Mensajes del usuario", _entero(c.get("preguntas")), _DESTACADO),
+                                    ("Tasa de 👎", _pct(down / (up + down) if up + down else None), _DESTACADO),
                                     ("Respuestas del coach", _entero(c.get("respuestas"))),
-                                    ("👍", _entero(up)), ("👎", _entero(down)),
-                                    ("Tasa de 👎", _pct(down / (up + down) if up + down else None))])
+                                    ("Valoraciones 👍", _entero(up)), ("Valoraciones 👎", _entero(down))])
 
 
 def bloque_planes(dias: int) -> dict:
@@ -151,37 +204,53 @@ def bloque_planes(dias: int) -> dict:
     cola = _todos("SELECT status, COUNT(*) AS n FROM public.plan_chunk_queue "
                   f"WHERE created_at >= {_VENTANA} GROUP BY 1 ORDER BY 2 DESC", (dias,))
     alertas = _uno("SELECT COUNT(*) AS n FROM public.system_alerts WHERE resolved_at IS NULL")
-    filas = [("Planes creados", _entero(sum(int(r.get("n") or 0) for r in planes)))]
-    filas += [(f"· {k}", _entero(g["n"])) for k, g in _agrupar(planes, "estado", _estado_plan, "n")]
-    filas += [(f"Bloques en cola: {k}", _entero(g["n"])) for k, g in _agrupar(cola, "status", _etiqueta_de_codigo, "n")]
-    filas.append(("Alertas del sistema abiertas", _entero(alertas.get("n"))))
+    filas = [("Planes creados", _entero(sum(int(r.get("n") or 0) for r in planes)), _DESTACADO)]
+    filas += [(_ETIQUETA_ESTADO_PLAN.get(k, k), _entero(g["n"]), _SUBFILA)
+              for k, g in _agrupar(planes, "estado", _estado_plan, "n")]
+    filas.append(("Bloques en cola", _entero(sum(int(r.get("n") or 0) for r in cola))))
+    filas += [(_ETIQUETA_COLA.get(k, k), _entero(g["n"]), _SUBFILA)
+              for k, g in _agrupar(cola, "status", _etiqueta_de_codigo, "n")]
+    filas.append(("Alertas del sistema abiertas", _entero(alertas.get("n")), _DESTACADO))
     return _kpis("planes", "Planes", filas)
 
 
 def bloque_gasto(dias: int) -> dict:
     por_funcion = _todos("SELECT COALESCE(node, 'sin atribuir') AS funcion, COUNT(*) AS llamadas, "
                          "COALESCE(SUM(cost_usd_micros), 0) AS micros FROM public.llm_usage_events "
-                         f"WHERE created_at >= {_VENTANA} GROUP BY 1 ORDER BY 3 DESC LIMIT 15", (dias,))
+                         f"WHERE created_at >= {_VENTANA} GROUP BY 1 ORDER BY 3 DESC LIMIT 200", (dias,))
     total = _uno("SELECT COALESCE(SUM(cost_usd_micros), 0) AS micros, COUNT(*) AS n FROM public.llm_usage_events "
                  f"WHERE created_at >= {_VENTANA}", (dias,))
-    return {"id": "gasto", "titulo": f"Gasto de IA ({dias} días): {_usd(total.get('micros'))}", "tipo": "tabla",
+    grupos = _agrupar(por_funcion, "funcion", _etiqueta_de_codigo, "micros", "llamadas")
+    # [P1-PLAN-LOTE-620] las 8 que más gastan con nombre legible; el resto en UNA fila, y la proporción para las barras
+    filas = [(_ETIQUETA_FUNCION.get(k, k), g["llamadas"], g["micros"]) for k, g in grupos[:_GASTO_TOP]]
+    resto = grupos[_GASTO_TOP:]
+    if resto:
+        filas.append((f"Otras ({len(resto)} funciones)", sum(g["llamadas"] for _, g in resto),
+                      sum(g["micros"] for _, g in resto)))
+    total_micros = int(total.get("micros") or 0)
+    return {"id": "gasto", "titulo": f"Gasto de IA ({dias} días): {_usd(total_micros)}", "tipo": "tabla",
             "columnas": ["Función", "Llamadas", "Coste"],
-            "filas": [[k, _entero(g["llamadas"]), _usd(g["micros"])]
-                      for k, g in _agrupar(por_funcion, "funcion", _etiqueta_de_codigo, "micros", "llamadas")]}
+            "filas": [[nombre, _entero(llamadas), _usd(micros)] for nombre, llamadas, micros in filas],
+            "barras": [round(micros / total_micros, 4) if total_micros else 0.0 for _, _, micros in filas]}
 
 
 def bloque_analizador(_dias: int) -> dict:
-    corridas = _todos("SELECT ran_at, model, n, ok, metrics FROM public.analyzer_benchmark_runs "
+    corridas = _todos("SELECT ran_at, model, n, ok, notes, metrics FROM public.analyzer_benchmark_runs "
                       "ORDER BY ran_at DESC LIMIT 10")
     filas = []
     for r in corridas:
         m = r.get("metrics") or {}
-        filas.append([r["ran_at"].strftime("%Y-%m-%d %H:%M"), str(r["model"]), f"{r['ok']}/{r['n']}",
+        # [P1-PLAN-LOTE-620] qué se midió (la nota de la corrida o, sin ella, el modelo) y si la corrida no vale
+        corrida = _texto_de_nota(r.get("notes")) or _texto_de_nota(r.get("model")) or "—"
+        if not m.get("valida"):
+            corrida += " (no válida)"
+        filas.append([r["ran_at"].strftime("%Y-%m-%d %H:%M"), corrida,
                       _pct((m.get("kcal") or {}).get("mediana")), _pct((m.get("proteina_g") or {}).get("mediana")),
-                      _pct(m.get("recall_componentes")), "sí" if m.get("valida") else "no"])
+                      _pct(m.get("recall_componentes"))])
     return {"id": "analizador", "titulo": "Banco del analizador", "tipo": "tabla",
-            "columnas": ["Fecha (UTC)", "Modelo", "Platos", "Error kcal (mediana)", "Error proteína (mediana)",
-                         "Componentes", "Válida"], "filas": filas}
+            "columnas": ["Fecha (UTC)", "Corrida", "kcal", "Proteína", "Componentes"], "filas": filas,
+            "nota": "kcal y Proteína: error mediano frente a lo pesado (Nutrition5k); menos es mejor. Componentes: "
+                    "los que reconoce. Una corrida sola varía ±2-4 puntos: se decide con la regla pareada."}
 
 
 _BLOQUES = (("uso", "Uso", bloque_uso), ("escaner", "Escáner", bloque_escaner), ("coach", "Coach", bloque_coach),
