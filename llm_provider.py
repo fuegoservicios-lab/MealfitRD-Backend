@@ -114,7 +114,10 @@ GLM_PRO = "glm-5.3"
 DEEPSEEK_FLASH = "deepseek-flash"
 DEEPSEEK_PRO = "deepseek-v4-pro"
 _GLM_TO_DEEPSEEK = {GLM_FLASH: DEEPSEEK_FLASH, GLM_PRO: DEEPSEEK_PRO}
-_LLM_PROVIDERS = frozenset({"zai", "deepseek"})
+# [P1-PLAN-LOTE-600 · 2026-09-27] `openai`: GPT-6 como proveedor de TEXTO. Los IDs GLM/DeepSeek de los defaults por
+# feature se traducen a los de OpenAI (flash/pro → `MEALFIT_OPENAI_FLASH_MODEL`/`MEALFIT_OPENAI_PRO_MODEL`, gpt-6-luna
+# por defecto); un ID `deepseek-*` FIJADO sigue yendo a DeepSeek (la red post-fallo en otro proveedor).
+_LLM_PROVIDERS = frozenset({"zai", "deepseek", "openai"})
 
 
 def provider_razona_largo() -> bool:
@@ -128,7 +131,7 @@ def provider_razona_largo() -> bool:
 
 
 def llm_provider_name() -> str:
-    """Proveedor por defecto del wrapper: `MEALFIT_LLM_PROVIDER` (zai|deepseek). Se lee en cada
+    """Proveedor por defecto del wrapper: `MEALFIT_LLM_PROVIDER` (zai|deepseek|openai). Se lee en cada
     llamada, no al importar: el rollback es cambiar el knob y reiniciar, sin redeploy."""
     return _env_str("MEALFIT_LLM_PROVIDER", "zai", choices=set(_LLM_PROVIDERS)) or "zai"
 
@@ -182,7 +185,9 @@ PAID_TIERS = frozenset({"basic", "plus", "ultra"})
 
 _MISSING_KEY_PLACEHOLDER = "MISSING_ZAI_API_KEY"
 _MISSING_DEEPSEEK_KEY_PLACEHOLDER = "MISSING_DEEPSEEK_API_KEY"
+_MISSING_OPENAI_KEY_PLACEHOLDER = "MISSING_OPENAI_API_KEY"
 _warned_missing_deepseek_key = False
+_warned_missing_openai_key = False
 _warned_missing_key = False
 
 
@@ -196,9 +201,25 @@ def _deepseek_base_url() -> str:
     return _env_str("MEALFIT_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 
+def _openai_base_url() -> str:
+    """[P1-PLAN-LOTE-600] Base de OpenAI para el proveedor de texto (knob `MEALFIT_OPENAI_BASE_URL`)."""
+    return _env_str("MEALFIT_OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+
 def _default_base_url() -> str:
     """Base por defecto del wrapper según el proveedor elegido por knob."""
-    return _deepseek_base_url() if llm_provider_name() == "deepseek" else _zai_base_url()
+    proveedor = llm_provider_name()
+    if proveedor == "deepseek":
+        return _deepseek_base_url()
+    if proveedor == "openai":
+        return _openai_base_url()
+    return _zai_base_url()
+
+
+def _is_openai_provider(base_url: Optional[str] = None) -> bool:
+    """[P1-PLAN-LOTE-600] True si el `base_url` efectivo es el de OpenAI (host-based, como sus hermanos)."""
+    resolved = (base_url or _default_base_url() or "").lower()
+    return "api.openai.com" in resolved or resolved.rstrip("/") == _openai_base_url().lower().rstrip("/")
 
 
 def _is_deepseek_provider(base_url: Optional[str] = None) -> bool:
@@ -223,17 +244,67 @@ def _deepseek_api_key() -> str:
     return _MISSING_DEEPSEEK_KEY_PLACEHOLDER
 
 
+def _openai_text_api_key() -> str:
+    """[P1-PLAN-LOTE-600] Key de OpenAI para el proveedor de texto: `OPENAI_API_KEY` o placeholder NO-vacío (misma
+    semántica que `_zai_api_key`/`_deepseek_api_key`: el boot no cae, la invocación falla con 401 y el log lo dice una
+    vez). `_openai_api_key` (abajo) sigue lanzando: es el de las instancias OpenAI explícitas."""
+    global _warned_missing_openai_key
+    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if key:
+        return key
+    if not _warned_missing_openai_key:
+        logger.error(
+            "❌ [LLM-PROVIDER] MEALFIT_LLM_PROVIDER=openai sin OPENAI_API_KEY en el entorno. "
+            "Toda invocación LLM fallará con 401 hasta setearla (.env local / VPS) y reiniciar."
+        )
+        _warned_missing_openai_key = True
+    return _MISSING_OPENAI_KEY_PLACEHOLDER
+
+
 def _default_api_key() -> str:
-    return _deepseek_api_key() if llm_provider_name() == "deepseek" else _zai_api_key()
+    proveedor = llm_provider_name()
+    if proveedor == "deepseek":
+        return _deepseek_api_key()
+    if proveedor == "openai":
+        return _openai_text_api_key()
+    return _zai_api_key()
+
+
+def _openai_text_model(model: str) -> str:
+    """[P1-PLAN-LOTE-600] Un ID GLM/DeepSeek de flash/pro → su par OpenAI por knob; cualquier otro pasa tal cual."""
+    m = str(model or "").strip().lower()
+    if m in (GLM_PRO, DEEPSEEK_PRO):
+        return _env_str("MEALFIT_OPENAI_PRO_MODEL", GPT6_LUNA) or GPT6_LUNA
+    if m in (GLM_FLASH, DEEPSEEK_FLASH):
+        return _env_str("MEALFIT_OPENAI_FLASH_MODEL", GPT6_LUNA) or GPT6_LUNA
+    return model
+
+
+_OPENAI_EFFORT_VALID = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
+
+
+def _openai_reasoning_effort(value) -> str:
+    """[P1-PLAN-LOTE-600] Cualquier vocabulario de effort del pipeline → el de OpenAI (none|low|medium|high|xhigh|max).
+    `off`/`disabled` → `none`; lo desconocido → `low` (lo mismo que hace el wrapper con GLM)."""
+    v = str(value or "").strip().lower()
+    if v in _OPENAI_EFFORT_VALID:
+        return v
+    if v in ("off", "disabled"):
+        return "none"
+    if v in ("very_high", "ultra"):
+        return "xhigh"
+    return "low"
 
 
 def _model_for_provider(model: str, base_url: Optional[str] = None) -> str:
     """[P0-DEEPSEEK-FLASH] Con el proveedor en DeepSeek, un ID GLM se traduce a su par DeepSeek.
     Solo cuando la instancia va a DeepSeek (base por defecto o explícita): una instancia apuntada a
     OpenAI/Gemini conserva su ID. Un ID que ya es de DeepSeek pasa tal cual."""
-    if not _is_deepseek_provider(base_url):
-        return model
-    return _GLM_TO_DEEPSEEK.get(str(model or "").strip().lower(), model)
+    if _is_deepseek_provider(base_url):
+        return _GLM_TO_DEEPSEEK.get(str(model or "").strip().lower(), model)
+    if _is_openai_provider(base_url):
+        return _openai_text_model(model)
+    return model
 
 
 def _is_glm_provider(base_url: Optional[str] = None) -> bool:
@@ -465,6 +536,12 @@ class ChatGLM(ChatOpenAI):
         if max_output_tokens is not None and "max_tokens" not in kwargs:
             kwargs["max_tokens"] = max_output_tokens
         kwargs.setdefault("stream_usage", True)
+        # [P1-PLAN-LOTE-600] Un ID `deepseek-*` FIJADO va a DeepSeek sea cual sea el proveedor por defecto: con el
+        # texto en OpenAI, la red post-fallo (`MEALFIT_PRO_MODEL=deepseek-flash`) sigue en OTRO proveedor.
+        if base_url is None and str(model or "").strip().lower().startswith("deepseek"):
+            base_url = _deepseek_base_url()
+            api_key = api_key or _deepseek_api_key()
+        _openai_por_defecto = base_url is None and llm_provider_name() == "openai"
         # [P0-GLM-MIGRATION · 2026-09-02] GLM razona siempre: aquí se fija el ESFUERZO.
         # Contrato con los callsites heredados: `extra_body.thinking.effort` (vocabulario
         # del proveedor anterior) y `thinking.type=disabled` se TRADUCEN — el primero a
@@ -507,6 +584,24 @@ class ChatGLM(ChatOpenAI):
                 else:
                     kwargs["reasoning_effort"] = _glm_reasoning_effort(kwargs["reasoning_effort"])
             kwargs["extra_body"] = _extra
+        elif _openai_por_defecto:
+            # [P1-PLAN-LOTE-600] OpenAI no conoce `thinking` (400 por campo desconocido): se quita, y el esfuerzo pasa
+            # a su vocabulario. `thinking.type=disabled` ⇒ `none`; el explícito del callsite gana; si no, el default.
+            _extra = dict(kwargs.get("extra_body") or {})
+            _think = _extra.pop("thinking", None)
+            if isinstance(_think, dict) and _think.get("type") == "disabled":
+                kwargs["reasoning_effort"] = "none"
+            elif "reasoning_effort" in kwargs:
+                kwargs["reasoning_effort"] = _openai_reasoning_effort(kwargs["reasoning_effort"])
+            else:
+                _legacy_eff = _think.get("effort") if isinstance(_think, dict) else None
+                kwargs["reasoning_effort"] = _openai_reasoning_effort(
+                    _legacy_eff if _legacy_eff is not None else _GLM_DEFAULT_REASONING_EFFORT
+                )
+            if _extra:
+                kwargs["extra_body"] = _extra
+            else:
+                kwargs.pop("extra_body", None)
         super().__init__(
             model=_model_for_provider(model, base_url),
             api_key=api_key or _default_api_key(),
