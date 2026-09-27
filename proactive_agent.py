@@ -12,6 +12,7 @@ import uuid
 # última conversación es de un día anterior.
 from db_chat import save_message, get_recent_messages, get_or_create_session
 from db import get_consumed_meals_today, get_user_profile, user_tz_offset_min
+from aviso_del_dia import bloque_del_dia  # [P1-PLAN-LOTE-413]
 from fact_extractor import get_embedding
 from knobs import _env_bool, _env_int, _env_float
 
@@ -1203,6 +1204,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 prompt += _ctx_aviso["bloque"]
                 # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Mismo directive que el bloque
                 # "Resumen del día" arriba — ver esa nota para el contrato completo.
+                # [P1-PLAN-LOTE-413] lo que lleva HOY (qué registró y, con perfil suficiente, calorías/proteína contra su
+                # meta): sin esto el aviso no sabía nada del día y sonaba a plantilla
+                prompt += bloque_del_dia(consumed, health)
                 prompt += build_language_directive(_nudge_locale)
                 
             if not session_id:
