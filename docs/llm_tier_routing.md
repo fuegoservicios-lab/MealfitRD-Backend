@@ -20,7 +20,7 @@ quita la temperatura a `gpt-5*`, así que `llm_provider.ChatOpenAI` (base de `bu
 `ChatOpenAIInstrumented`) la quita del payload para la familia `gpt-6` (`openai_model_only_default_temperature`).
 Sin ese filtro, cada llamada con temperatura (la red del planner a 0,95, el reviewer a 0,1…) habría fallado.
 
-## [P1-PLAN-LOTE-600 · 2026-09-27] GPT-6 como proveedor de TEXTO por knob — listo, pero DORMIDO
+## [P1-PLAN-LOTE-600 · 2026-09-27] GPT-6 como proveedor de TEXTO por knob — medido y DORMIDO (se queda DeepSeek)
 
 **Cómo.** `MEALFIT_LLM_PROVIDER=openai` (tercer valor junto a `zai` y `deepseek`; el default no cambia). Los IDs
 GLM/DeepSeek de los ~12 defaults por feature se traducen: flash → `MEALFIT_OPENAI_FLASH_MODEL`, pro →
@@ -42,9 +42,17 @@ quede en otro proveedor. Test ancla: `test_p1_plan_lote_600_openai_texto.py`.
   (platform.openai.com/account/rate-limits).
 - Coste de la batería US$0,13 frente a 0,18 con DeepSeek (−28 %); respuestas más cortas (52 frente a 74 palabras de
   media); más lento (p50 11,7 s frente a 8,7 s).
+- **Calidad, puntuada a ciegas** (tres jueces, X/Y al azar por caso, rúbrica de `docs/coach_bateria_2026_09_15.md`):
+  DeepSeek **11,14**/12 (75 % de casos ≥ 11, 0 fallos duros) frente a GPT-6 **9,71** (33 %, un FD1 en D3 y el caso
+  del 429). DeepSeek gana en 49 casos, GPT-6 en 11, empate en 16. Criterios de GPT-6: precisión 1,36 (DeepSeek 1,71),
+  carisma 1,08 (1,74), proactividad 1,53 (1,96); solo gana en brevedad (1,87 frente a 1,75). Lo más grave: escrituras
+  que nadie pidió (comidas no tomadas registradas, la cena de hoy guardada como de ayer, campos del formulario
+  cambiados). Ojo: GPT-6 corrió SIN razonamiento (lo impone la API con tools) y con los prompts afinados para
+  GLM/DeepSeek; probarlo con razonamiento exigiría la Responses API, que cambia el streaming del chat.
 
-**Activar (cuando el límite lo permita):** `MEALFIT_LLM_PROVIDER=openai` + `MEALFIT_PRO_MODEL=deepseek-flash` en el
-`.env` del VPS y reiniciar. Rollback: `MEALFIT_LLM_PROVIDER=deepseek` y reiniciar.
+**Decisión (27-sep): se queda DeepSeek.** El knob existe para una emergencia (DeepSeek sin saldo o caído), no como
+mejora. Activarlo: `MEALFIT_LLM_PROVIDER=openai` + `MEALFIT_PRO_MODEL=deepseek-flash` en el `.env` del VPS y reiniciar;
+rollback: `MEALFIT_LLM_PROVIDER=deepseek` y reiniciar.
 
 ## [P0-GLM-MIGRATION · 2026-09-02] Provider: Z.ai GLM-5.3 (sustituye al anterior)
 
