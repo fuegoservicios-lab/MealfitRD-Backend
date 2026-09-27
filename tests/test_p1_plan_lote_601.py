@@ -111,11 +111,14 @@ def test_sin_platos_comunes_no_revienta():
 
 
 def test_el_cli_lee_las_corridas_y_sale_segun_la_regla(tmp_path, capsys):
+    import importlib.util
     import json
-    import sys
     from pathlib import Path
-    sys.path.insert(0, str(Path(ba.__file__).resolve().parent / "scripts"))
-    import banco_analizador_comparar as cli
+    # por RUTA: scripts/ en cabeza de sys.path sombrea plan_gym (ratchet de test_p1_plan_lote_13)
+    ruta = Path(ba.__file__).resolve().parent / "scripts" / "banco_analizador_comparar.py"
+    spec = importlib.util.spec_from_file_location("banco_analizador_comparar", ruta)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
 
     b = _base()
     rutas = {}
