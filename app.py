@@ -910,7 +910,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # exige «yema y clara firmes»: se alinea el paso (la nota es la política).
 # [P1-PLAN-LOTE-566 · 2026-09-27] (backend) «Tus básicos» con una clave canónica (`staple_foods`) para la política y el
 # motor: preferían claves opuestas y un básico de Configuración no llegaba a la política de los bloques siguientes.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-566 · 2026-09-27"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-579 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
