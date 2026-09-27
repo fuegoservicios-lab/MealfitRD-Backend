@@ -100,6 +100,9 @@ _INVENTARIO = {
     # pareja por ALIMENTO (clase de la tabla de sustitutos): la primera se reescribe, los duplicados salen.
     "sustitucion_fresca.py": {
         "parear_raw":                              (2, "resuelto (por alimento: clase de la tabla de sustitutos, sin duraderos ni la pareja exacta de otra línea visible)"),
+        # [P1-PLAN-LOTE-524 · 2026-09-27] el duradero que el plato ya traía: la línea nueva sale por su TEXTO exacto y la
+        # que había (mismo alimento por `_nucleo_524`, sin cantidad ni adjetivos) recibe la suma.
+        "_fusiona_con_existente":                  (2, "resuelto (por alimento: núcleo del nombre; la nueva por su texto exacto)"),
     },
 }
 

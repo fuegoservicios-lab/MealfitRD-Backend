@@ -31857,7 +31857,7 @@ def _dup_merge_line_to_grams(qty: float, unit: str, canon: str, *,
     _spoon = allow_spoon and RECONCILE_CDA_DENSITY and per_cup > 0
     if u in ("taza", "tazas"):
         g = per_cup
-    elif u in ("unidad", "unidades", "ud", "uds"):
+    elif u in ("unidad", "unidades", "ud", "uds", "rebanada", "rebanadas"):   # [P1-PLAN-LOTE-522] la rebanada del pan
         g = per_u
     elif _spoon and u in _SPOON_UNITS_CDA:
         g = per_cup / 16.0
@@ -31898,6 +31898,8 @@ def _dup_merge_format(total_g: float, unit: str, canon: str) -> "str | None":
     qty_txt = f"{whole}{glyph}" if whole > 0 else glyph
     if u in ("taza", "tazas"):
         return f"{qty_txt} taza{'s' if whole > 1 else ''} de {canon}"
+    if u in ("rebanada", "rebanadas"):                                         # [P1-PLAN-LOTE-522]
+        return f"{qty_txt} rebanada{'s' if rounded > 1 else ''} de {canon}"
     return f"{qty_txt} {canon}"
 
 
@@ -37594,7 +37596,8 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
                     if _j != _i:
                         _used_others |= _lb
                 _m["_protein_closed"] = False
-                _g = _close_protein_gap_for_meal(_m, _slot_target, db, cands,
+                _c521 = __import__("compra_unica").candidatos_del_dia(cands, _d, form_data)  # [P1-PLAN-LOTE-521]
+                _g = _close_protein_gap_for_meal(_m, _slot_target, db, _c521,
                                                  allergies=__import__("constants").alergias_y_rechazos(form_data),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=120,
                                                  slot_cal_target=_daily_cal * _share,
@@ -37716,7 +37719,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                 for _j, _lb in enumerate(_day_meal_labels):
                     if _j != _i:
                         _used_others |= _lb
-                _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
+                _c521 = __import__("compra_unica").candidatos_del_dia(_cands, _d, form_data)  # [P1-PLAN-LOTE-521]
+                _g = _close_protein_gap_for_meal(_m, _slot_target, db, _c521,
                                                  allergies=__import__("constants").alergias_y_rechazos(form_data),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
@@ -37840,6 +37844,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                         _egg_cands = (_hd_candidates_no_egg
                                       if (CLOSER_EGG_BUDGET_ENABLED and _egg_count >= _egg_cap)
                                       else _hd_candidates)
+                        _egg_cands = __import__("compra_unica").candidatos_del_dia(_egg_cands, _d, form_data)  # [521]
                         _had_egg_pre = _meal_has_egg(_m, _sa_egg) if CLOSER_EGG_BUDGET_ENABLED else True
                         _used_mi = set()
                         for _j2, _lb2 in enumerate(_day_meal_labels):

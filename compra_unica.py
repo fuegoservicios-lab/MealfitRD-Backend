@@ -341,6 +341,36 @@ def claras_de(texto: str, gramos: Optional[float] = None) -> str:
     return f"{max(3, min(_max_claras(), n))} {CLARAS}"
 
 
+def candidatos_del_dia(cands, dia, form_data=None):
+    """[P1-PLAN-LOTE-521 · 2026-09-27] Las proteínas que el cerrador de proteína puede AÑADIR a un plato del día `dia`
+    (el dict del día; su «day» es absoluto también en los bloques): en la compra única sin congelador, desde el día 4 sólo
+    las que aguantan hasta ese día. Batería real del 27-sep (alérgico al pescado, días 8-11): el cerrador añadía «1¼
+    pechugas de pollo (≈255 g)» y «y pechuga de pollo» al nombre del día 8, y la sustitución de la compra única la cambiaba
+    después por claras topadas a 6 (22 g de proteína donde el cerrador había contado 59). Eligiendo aquí lo que dura (atún,
+    sardinas, claras, huevo…), el cerrador cuenta la densidad de lo que de verdad se sirve. Sin política de compra única,
+    antes del día 4 o si nada de la lista aguanta, la lista de siempre. tooltip-anchor: P1-PLAN-LOTE-521"""
+    try:
+        if not cands or not isinstance(dia, dict):
+            return cands
+        n = int(dia.get("day") or 0) - 1
+        if n < 3:
+            return cands
+        fd = form_data if isinstance(form_data, dict) else {}
+        eff = fd.get("_plan_policy_effective") if isinstance(fd.get("_plan_policy_effective"), dict) else None
+        if eff is None:
+            eff, _off = _politica({})
+        if not isinstance(eff, dict):
+            return cands
+        from pantry_durability import single_trip_requirements
+        req = single_trip_requirements(eff, n)
+        if not req:
+            return cands
+        out = [c for c in cands if _aguanta(f"100 g de {c}", n, req)]
+        return out or cands
+    except Exception:
+        return cands
+
+
 def _redondea(gramos: float) -> str:
     g = float(gramos)
     return str(int(round(g))) if g < 20 else str(int(5 * round(g / 5.0)))

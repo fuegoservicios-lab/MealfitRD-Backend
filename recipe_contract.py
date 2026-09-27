@@ -952,6 +952,8 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").guiso_concuerda(meal)  # [P1-PLAN-LOTE-401] «esté cocidos», «; Incorpóralo»
         __import__("pasos_cantidades").pescado_del_guiso(meal)  # [P1-PLAN-LOTE-402] el pescado del guiso, 5-7 min
         __import__("pasos_cerrador").guiso_sin_proteina(meal)  # [P1-PLAN-LOTE-498] la frase de guiso, sólo para proteína
+        __import__("pasos_cerrador").guineo_sin_semillas(meal)  # [P1-PLAN-LOTE-499] el guineo va en rodajas
+        __import__("queso_de_la_lista").alinear(meal)  # [P1-PLAN-LOTE-520] el queso que el texto nombra es el de la lista
         __import__("pasos_cantidades").articulo_de_uno(meal)  # [P1-PLAN-LOTE-403] «las 1 rebanada» → «la rebanada»
         __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»
         __import__("pasos_cantidades").claras_de_la_lista(meal)  # [P1-PLAN-LOTE-405] las claras también se cocinan

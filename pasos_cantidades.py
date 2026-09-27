@@ -2380,6 +2380,12 @@ def claras_en_su_huevo(meal) -> int:
                 # «hierve 1 huevo y 3 claras de huevo 10 minutos» (se pelan en el Montaje): el verbo rige a las claras
                 directo = re.search(r"\b(?:hierv[ea]|cuece)\s+(?:(?:\d+|[½¼¾])\s+huevos?\s+(?:enteros?\s+)?y\s+)?$",
                                     frase[:mm.start()], re.IGNORECASE)
+                # [P1-PLAN-LOTE-523 · 2026-09-27] «Cocina 3 huevos y 2 claras de huevo en agua hirviendo durante 10-12
+                # minutos» (batería real del 27-sep, adulto mayor con HTA): «cocina… en agua hirviendo» también es hervir.
+                # tooltip-anchor: P1-PLAN-LOTE-523
+                directo = directo or (re.search(r"\bcocina\s+(?:(?:\d+|[½¼¾])\s+huevos?\s+(?:enteros?\s+)?y\s+)?$",
+                                                frase[:mm.start()], re.IGNORECASE)
+                                      and re.search(r"\ben\s+agua\s+hirviendo\b", frase[mm.end():], re.IGNORECASE))
                 if not directo and not _PELA_390_RE.search(frase[mm.end():]):
                     continue
                 uno = mm.group("n").lower() == "clara"

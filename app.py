@@ -835,7 +835,21 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-498 · 2026-09-27] (backend) la frase de guiso del cerrador («… cocínalo 12-15 minutos, hasta que esté
 # cocido por dentro») salía para arroz crudo, repollo, auyama o agua, y tras la compra única para las claras: cada una
 # con su cocción real.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-498 · 2026-09-27"
+# [P1-PLAN-LOTE-499 · 2026-09-27] (backend) «separa 60 g de semillas de guineo» (la IA, 4 planes): el guineo va en rodajas.
+# [P1-PLAN-LOTE-520 · 2026-09-27] (backend) el queso que el nombre o un paso nombran es el de la lista: «… y queso
+# cottage» con «40 g de queso bajo en sodio» (HTA) o «queso mozzarella» con «queso pasteurizado» (embarazo); 58 comidas
+# de 173 planes re-encadenados.
+# [P1-PLAN-LOTE-521 · 2026-09-27] (backend) en la compra única sin congelador, el cerrador de proteína añade desde el día
+# 4 lo que dura (atún, sardinas, claras, huevo) y no pechuga fresca que la sustitución cambiaba después por menos proteína.
+# [P1-PLAN-LOTE-522 · 2026-09-27] (backend) la rebanada de pan pesa lo que dice el catálogo (30 g el pan de molde) también
+# para el deduplicador y el reconciliador: «1 rebanada de pan integral» salía DOS veces en la lista (11 de 147 comidas
+# con pan en 173 planes re-encadenados; el motor de macros ya la pesaba, el resolvedor del grafo devolvía «sin gramos»).
+# [P1-PLAN-LOTE-523 · 2026-09-27] (backend) «Cocina 3 huevos y 2 claras de huevo en agua hirviendo» también es hervir:
+# las claras se hierven dentro de su huevo entero (el lote 390 sólo leía «hierve/cuece»).
+# [P1-PLAN-LOTE-524 · 2026-09-27] (backend) Compra única: el duradero que el plato YA traía no se repite — la nueva
+# línea se suma a la que había («½ zanahoria» + «170 g de zanahoria» → «200 g de zanahoria rallada»), una «al gusto»
+# cede su sitio y el paso nombra el alimento una vez (~620 de 3.519 comidas del replay forzado).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-524 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

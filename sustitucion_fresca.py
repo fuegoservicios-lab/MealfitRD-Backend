@@ -744,12 +744,15 @@ def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
         otra = [p for p in _PROTEINA_CRUDA if any(re.search(r"\b" + p + r"(?:s|es)?\b", o) for o in otras)
                 and not any(k in o for o in otras for k in ("en lata", "en agua", "cocid"))]
         rx_otra = re.compile(r"\b(?:" + "|".join(otra) + r")(?:s|es)?\b") if otra else None
+        _cl524 = _CLAVE_524.get(sub)                                                         # [P1-PLAN-LOTE-524]
+        _ls524 = [x for x in (meal.get("ingredients") or []) if isinstance(x, str) and _cl524 and re.search(_cl524, _sa(x))]
+        linea524 = _ls524[0] if len(_ls524) == 1 else None
         cambios = 0
         for k in ("name", "desc", "description"):
             t = meal.get(k)
             if isinstance(t, str):
                 q, hubo, _v = _reescribe(t, rx, nueva, corto, g, n, listo, paso=False, productos=productos)
-                q = _limpia_puntuacion(q)
+                q = _limpia_puntuacion(_sin_repetir(q, corto, linea524))           # [P1-PLAN-LOTE-524]
                 if hubo and q != t:
                     meal[k] = q
                     cambios += 1
@@ -777,7 +780,7 @@ def reescribir_plato(meal: dict, viejo: str, nueva: str, sub: str) -> int:
                         q = _claras_en_paso(q)                                   # [P1-PLAN-LOTE-495]
                     elif corto == "manzana":
                         q = _manzana_sin_semillas(q)                             # [P1-PLAN-LOTE-497]
-                q = _limpia_puntuacion(q)
+                q = _limpia_puntuacion(_sin_repetir(q, corto, linea524))           # [P1-PLAN-LOTE-524]
                 if q != p:
                     rec[i] = q
                     cambios += 1
@@ -897,6 +900,204 @@ def _fusiona(lista, nueva: str) -> bool:
     return True
 
 
+# [P1-PLAN-LOTE-524 · 2026-09-27] El duradero que el plato YA traía. Replay forzado de los días 21+ (322 planes): en ~620
+# de 3.519 comidas con sustitución el duradero quedaba DOS veces —«½ zanahoria» + «170 g de zanahoria» (pepino →
+# zanahoria), «1 cdta de orégano» + «Orégano dominicano al gusto», «65 g de casabe» + «1½ tortas pequeñas de casabe»— y
+# el paso decía «mezcla… el repollo, la zanahoria, la zanahoria» (217). Ahora la nueva se suma a la que había (misma
+# medida, o gramos del catálogo); una «al gusto» cede su sitio a la que dice cuánto; si no se puede sumar, queda la que
+# había. El texto no nombra dos veces el mismo duradero. tooltip-anchor: P1-PLAN-LOTE-524
+_CLAVE_524 = {"zanahoria": r"zanahoria", "repollo": r"repollo", "manzana": r"manzana", "batata": r"batata",
+              "casabe": r"casabe", "oregano": r"or[eé]gano", "salsa de tomate": r"salsa\s+de\s+tomate",
+              "leche UHT": r"\bleche\b", "garbanzos cocidos": r"garbanzo", "lentejas cocidas": r"lenteja",
+              "claras de huevo": r"\bclaras?\b", "atun en agua": r"at[uú]n", "sardinas en lata": r"sardina"}
+_UNIDAD_524 = (r"(?:g|gr|gramos|kg|ml|tazas?|cdas?|cdtas?|cucharadas?|cucharaditas?|rebanadas?|lonjas?|piezas?"
+               r"|porci[oó]n(?:es)?|unidad(?:es)?|latas?|pizcas?|tortas?(?:\s+peque[ñn]as?)?)")
+# sólo una unidad conocida es unidad: «½ zanahoria rallada» se llama «zanahoria rallada», no «rallada»
+_CANT_524 = re.compile(r"^\s*[\d.,/½¼¾⅓⅔]+\s*(?:" + _UNIDAD_524 + r"\.?\s+)?(?:de\s+)?", re.IGNORECASE)
+_Q_524 = r"(?:\d+(?:[.,]\d+)?(?:\s*[½¼¾⅓⅔])?|[½¼¾⅓⅔])"
+_ADJ_524 = (r"(?:\s+(?:en\s+(?:cubos|rodajas|tiras|juliana|trozos|láminas|laminas|bastones)|rallad[oa]s?|picad[oa]s?"
+            r"|cortad[oa]s?|fresc[oa]s?|dominican[oa]s?|median[oa]s?|grandes?|peque[ñn][oa]s?|sec[oa]s?|molid[oa]s?"
+            r"|fin[oa]s?|grues[oa]s?|delgad[oa]s?))*")
+# el tamaño de la pieza no dice nada de una línea en gramos: «280 g de zanahoria», no «280 g de zanahoria mediana»
+_TAMANO_524 = re.compile(r"\s+(?:median[oa]s?|grandes?|peque[ñn][oa]s?)\b", re.IGNORECASE)
+_SINGULAR_524 = ("zanahoria", "manzana", "batata")
+
+
+def _gramos_524(linea: str):
+    try:
+        import compra_unica as _cu
+        return _cu._gramos_de_linea(linea)
+    except Exception:
+        return None
+
+
+def _nombre_524(linea: str) -> str:
+    return re.sub(r"\([^)]*\)", "", _CANT_524.sub("", str(linea or ""), count=1)).strip(" ,.")
+
+
+def _nombre_gramos_524(linea: str) -> str:
+    """«1 zanahoria mediana» → «zanahoria»; «3 zanahorias» → «zanahoria» (una línea en gramos no lleva tamaño ni plural)."""
+    nom = re.sub(r"\s+", " ", _TAMANO_524.sub("", _nombre_524(linea))).strip(" ,.")
+    cab, _, resto = nom.partition(" ")
+    if cab.lower().endswith("s") and _sa(cab[:-1]) in _SINGULAR_524:
+        nom = (cab[:-1] + " " + resto).strip()
+    return nom
+
+
+_FRAC_524 = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
+_MEDIDA_524 = re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([½¼¾⅓⅔])?\s*(cdtas?|cdas?|cucharaditas?|cucharadas?|tazas?|rebanadas?"
+                         r"|latas?|ml)\.?\s+(?:de\s+)?(.+?)\s*$", re.IGNORECASE)
+_UNIDAD_CANON_524 = {"cucharadita": "cdta", "cucharada": "cda"}
+
+
+def _fmt_524(x: float) -> str:
+    ent = int(x + 1e-9)
+    for s, v in _FRAC_524.items():
+        if abs((x - ent) - v) < 0.02:
+            return (str(ent) if ent else "") + s
+    return str(ent) if abs(x - ent) < 0.02 else f"{x:.1f}".rstrip("0").rstrip(".")
+
+
+def _suma_medida_524(vieja: str, nueva: str):
+    """«½ cdta de orégano dominicano» + «1 cdta de orégano» → «1½ cdtas de orégano dominicano»; «1 cda» + «½ cdta» →
+    «3½ cdtas» (1 cda = 3 cdtas; «cucharadita» es cdta); None si no es la misma medida de cuchara/taza/rebanada/lata/ml."""
+    ma, mb = _MEDIDA_524.match(str(vieja or "")), _MEDIDA_524.match(str(nueva or ""))
+    if not (ma and mb) or not (ma.group(1) or ma.group(2)) or not (mb.group(1) or mb.group(2)):
+        return None
+    uni = lambda m: _UNIDAD_CANON_524.get(m.group(3).lower().rstrip("s"), m.group(3).lower().rstrip("s"))
+    q = lambda m: (float(m.group(1).replace(",", ".")) if m.group(1) else 0.0) + _FRAC_524.get(m.group(2) or "", 0.0)
+    ua, ub = uni(ma), uni(mb)
+    qa, qb = q(ma), q(mb)
+    if {ua, ub} == {"cda", "cdta"}:
+        qa, qb, ua, ub = (qa * 3 if ua == "cda" else qa), (qb * 3 if ub == "cda" else qb), "cdta", "cdta"
+    if ua != ub:
+        return None
+    tot = qa + qb
+    return f"{_fmt_524(tot)} {ua + ('s' if tot > 1 and ua != 'ml' else '')} de {ma.group(4)}"
+
+
+def _nucleo_524(linea: str) -> str:
+    """El alimento sin cantidad ni adjetivos: «½ zanahoria rallada» y «170 g de zanahoria» son «zanahoria»; «1 cda de
+    vinagre de manzana» es «vinagre de manzana», no «manzana» (no se suman)."""
+    t = _sa(_nombre_524(linea))
+    t = re.sub(r"\bal\s+gusto\b", " ", t)
+    t = re.sub(_ADJ_524[:-1] + r"+\b", " ", " " + t, flags=re.IGNORECASE)              # «+»: nunca un match vacío
+    t = re.sub(r"\s+", " ", t).strip(" ,.")
+    return re.sub(r"(?<=[a-z])s\b", "", t)
+
+
+def _fusiona_con_existente(meal: dict, nueva: str, sub: str, db=None) -> bool:
+    ings = meal.get("ingredients")
+    clave = _CLAVE_524.get(sub)
+    if not isinstance(ings, list) or not clave:
+        return False
+    try:
+        k = next(j for j, x in enumerate(ings) if isinstance(x, str) and x == nueva)
+    except StopIteration:
+        return False
+    nucleo = _nucleo_524(nueva)
+    otras = [j for j, x in enumerate(ings) if j != k and isinstance(x, str) and re.search(clave, _sa(x))
+             and _nucleo_524(x) == nucleo]
+    if not otras or not nucleo:
+        return False
+    j = otras[0]
+    vieja = str(ings[j])
+    suma = _suma_lineas(vieja, nueva) or _suma_medida_524(vieja, nueva)
+    if suma is None and not re.match(r"^\s*[\d½¼¾⅓⅔]", vieja):
+        suma = nueva                                  # «Orégano dominicano al gusto» cede a la que dice cuánto
+    if suma is None:
+        gv, gn = _gramos_524(vieja), _gramos_524(nueva)
+        if gv and gn and gv > 0 and gn > 0:
+            tot = gv + gn
+            suma = f"{int(round(tot)) if tot < 20 else int(5 * round(tot / 5.0))} g de {_nombre_gramos_524(vieja)}"
+    if suma is not None:
+        ings[j] = suma
+    else:
+        _resta_524(meal, nueva, db)                               # la que sale ya no cuenta
+    del ings[k]
+    raw = meal.get("ingredients_raw")
+    if isinstance(raw, list):
+        rk = [i for i, x in enumerate(raw) if isinstance(x, str) and x == nueva]
+        rj = [i for i, x in enumerate(raw) if isinstance(x, str) and x != nueva and re.search(clave, _sa(x))
+              and _nucleo_524(x) == nucleo]
+        if rk and rj:
+            if suma is not None:
+                raw[rj[0]] = suma
+            del raw[rk[0]]
+    return True
+
+
+def _resta_524(meal: dict, linea: str, db) -> None:
+    try:
+        a = db.macros_from_ingredient_string(str(linea)) if db is not None else None
+        if not a:
+            return
+        for k_plato, k_mc in (("protein", "protein"), ("carbs", "carbs"), ("fats", "fats"), ("cals", "kcal")):
+            meal[k_plato] = max(0, round(_num(meal.get(k_plato)) - float(a.get(k_mc) or 0)))
+        meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+    except Exception:
+        return
+
+
+def _mencion_524(c: str, n: int) -> str:
+    """Una mención del alimento `c` con cantidad («½ zanahoria», «170 g de zanahoria en cubos») o con artículo («la
+    zanahoria»); el grupo `q{n}` sólo existe en la de cantidad y `adj{n}` guarda su preparación."""
+    return (r"(?:(?<![\w½¼¾⅓⅔])(?P<q" + str(n) + r">" + _Q_524 + r")\s*(?:" + _UNIDAD_524 + r"\.?\s+)?(?:de\s+)?" + c
+            + r"s?(?P<adj" + str(n) + r">" + _ADJ_524 + r")\b|\b(?:el|la|los|las)\s+" + c + r"s?(?:\s+dominican[oa])?\b)")
+
+
+def _sin_repetir(texto: str, corto: str, linea=None) -> str:
+    """«el repollo, la zanahoria y la zanahoria» → «el repollo y la zanahoria»; «el orégano y el orégano dominicano» →
+    uno; «½ zanahoria, 170 g de zanahoria en cubos» → la cantidad de la línea que quedó en la lista («200 g de zanahoria
+    en cubos»)."""
+    c = _tolerante(_sa(corto))
+    x = c + r"s?(?:\s+dominican[oa])?"
+    rx = re.compile(r"(?P<pre>,\s+)?\b(?P<a>(?:el|la|los|las)\s+)?(?P<x>" + x + r")(?P<sep>,\s+con\s+|,\s+|\s+y\s+)"
+                    r"(?:(?:el|la|los|las)\s+)?" + x + r"\b", re.IGNORECASE)
+
+    def _art(m):
+        pre = m.group("pre") or ""
+        if pre and m.group("sep").strip() == "y":                  # «A, la X y la X» → «A y la X», no «A, la X»
+            pre = " y "
+        return pre + (m.group("a") or "") + m.group("x")
+
+    texto = rx.sub(_art, texto)
+    linea_txt = re.sub(r"\s*\([^)]*\)", "", str(linea or "")).strip(" ,.")
+    if not re.match(r"^\s*[\d½¼¾⅓⅔]", linea_txt):
+        linea_txt = ""
+    rq = re.compile(r"(?P<m1>" + _mencion_524(c, 1) + r")(?:,\s+|\s+y\s+)(?P<m2>" + _mencion_524(c, 2) + r")",
+                    re.IGNORECASE)
+
+    def _cant(m):
+        if not (m.group("q1") or m.group("q2")):
+            return m.group(0)                                      # dos artículos: ya los colapsó `rx`
+        if not linea_txt:
+            return m.group("m1") if m.group("q1") else m.group("m2")
+        lt = re.sub(r"\s+", " ", _TAMANO_524.sub("", linea_txt)).strip()
+        if re.search(_ADJ_524[:-1] + r"+$", lt, flags=re.IGNORECASE):
+            return lt                                              # la lista ya dice el corte: manda la lista
+        return lt + _TAMANO_524.sub("", (m.group("adj2") or "") or (m.group("adj1") or ""))
+
+    return rq.sub(_cant, texto)
+
+
+def _menciones_524(meal: dict, corto: str) -> int:
+    """Cuántas veces los pasos dan una CANTIDAD del alimento (o «la X restante»): con dos, el plato lo usa en dos
+    preparaciones («ralla ½ zanahoria… corta 75 g de zanahoria») y una sola línea sumada contaría el total dos veces."""
+    c = _tolerante(_sa(corto))
+    rx = re.compile(r"(?<![\w½¼¾⅓⅔])" + _Q_524 + r"\s*(?:" + _UNIDAD_524 + r"\.?\s+)?(?:de\s+)?" + c + r"s?\b"
+                    r"|\b(?:el|la|los|las)\s+" + c + r"s?\s+restantes?\b", re.IGNORECASE)
+    return sum(len(rx.findall(p)) for p in (meal.get("recipe") or [])
+               if isinstance(p, str) and not p.lstrip().startswith(_NOTA))
+
+
+_FOTO_524 = ("ingredients", "ingredients_raw", "protein", "carbs", "fats", "cals", "macros")
+
+
+class _DosPreparaciones524(Exception):
+    """El plato usa el alimento en dos preparaciones: la suma se deshace (no es un error)."""
+
+
 def sustituir_en_plato(meal: dict, idx: int, viejo: str, nueva: str, sub: str, db=None) -> None:
     """La línea visible `idx` pasa a `nueva`; su pareja en `ingredients_raw` también (por alimento); el plato deja de
     nombrar el fresco y sus macros cambian con la línea (lote 468). Marca `_fresh_substituted`."""
@@ -911,6 +1112,28 @@ def sustituir_en_plato(meal: dict, idx: int, viejo: str, nueva: str, sub: str, d
     parear_raw(meal, viejo, nueva)                                                     # [P1-PLAN-LOTE-461]
     if _fusiona(ings, nueva):                                                          # [P1-PLAN-LOTE-496]
         _fusiona(meal.get("ingredients_raw"), nueva)
+    else:
+        import copy as _copy
+        foto = {k: _copy.deepcopy(meal[k]) for k in _FOTO_524 if k in meal}
+        try:
+            if _fusiona_con_existente(meal, nueva, sub, db=db):                        # [P1-PLAN-LOTE-524]
+                # el plato que usa el alimento en dos preparaciones conserva sus dos líneas: se ensaya la reescritura
+                # sobre una copia y, si los pasos siguen dando dos cantidades, la suma se deshace
+                prueba = _copy.deepcopy(meal)
+                reescribir_plato(prueba, viejo, nueva, sub)
+                corto = (_DURADERO.get(sub) or ("",))[0]
+                if corto and _menciones_524(prueba, corto) >= 2:
+                    raise _DosPreparaciones524()
+        except Exception as e:                                                         # fail-open: sin sumar
+            if not isinstance(e, _DosPreparaciones524):
+                logger.debug(f"[P1-PLAN-LOTE-524] suma no-op: {type(e).__name__}: {e}")
+            for k in _FOTO_524:
+                if k not in foto:
+                    meal.pop(k, None)
+                elif isinstance(meal.get(k), list) and isinstance(foto[k], list):
+                    meal[k][:] = foto[k]          # EN SITIO: el bucle del llamador guarda la referencia a la lista
+                else:
+                    meal[k] = foto[k]
     meal["_fresh_substituted"] = (meal.get("_fresh_substituted") or []) + [f"{str(viejo)[:40]} → {sub}"]
     reescribir_plato(meal, viejo, nueva, sub)                                          # [P1-PLAN-LOTE-460]
 

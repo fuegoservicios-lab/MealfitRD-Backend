@@ -96,7 +96,7 @@ _GRANOS_425 = {"quinoa": ("12-15 minutos", "tierna"), "arroz": ("18-20 minutos",
                "bulgur": ("12-15 minutos", "tierno"), "cuscus": None, "maiz": ("5-6 minutos", "tierno")}
 _TUBERCULOS_425 = {"papa": "15-20", "batata": "12-15", "yuca": "20-25", "name": "20-25", "yautia": "20-25",
                    "malanga": "20-25", "platano": "18-20", "guineito": "15-18", "guineo": "15-18", "auyama": "10-12",
-                   "mapuey": "20-25"}
+                   "mapuey": "20-25", "remolacha": "25-30"}
 _SOFRITO_425 = ("cebolla", "cebollin", "cebollita", "tomate", "jitomate", "aji", "pimiento", "pimenton", "ajo", "puerro",
                 "apio", "chile")
 _QUITAR_425_RE = re.compile(
@@ -1015,6 +1015,17 @@ def guiso_sin_proteina(meal) -> int:
                 n += 1
                 return (f"{v} {x} al guiso con el doble de su volumen en agua, tapa y cocina a fuego bajo {t}, hasta que "
                         f"{_este(nombre)} {_adj(nombre, 'tiern')} y el agua se absorba.")
+            # [P1-PLAN-LOTE-499] la hoja se marchita en minutos: «Incorpora la espinaca al guiso y cocínala 8-10 minutos»
+            # (replay de la cola del 498) → al final. tooltip-anchor: P1-PLAN-LOTE-499-HOJAS
+            # [P1-PLAN-LOTE-499] la hierba fresca no se «cocina 8-10 minutos hasta que esté tierna» (replay de la cola: 3
+            # «Añade el cilantro al guiso y cocínalo…»): va al final. tooltip-anchor: P1-PLAN-LOTE-499-HIERBAS
+            if re.match(r"(?:cilantro|culantro|perejil|albahaca|menta|hierbabuena|cebollin|cebollino|oregano fresco)", cab):
+                n += 1
+                return f"{v} {x} al guiso al final, justo antes de servir."
+            if re.match(r"(?:espinaca|acelga|kale|berro|rucula|arugula|lechuga|hoja|bok)", cab):
+                n += 1
+                return (f"{v} {x} al guiso en los últimos 2-3 minutos, hasta que se "
+                        f"ablande{'n' if _genero_numero(nombre)[0] else ''}.")
             if clase == "tuberculo":
                 k = next((t for t in _TUBERCULOS_425 if cab.startswith(t)), "papa")
                 t = _TUBERCULOS_425[k] + " minutos"
@@ -1029,6 +1040,48 @@ def guiso_sin_proteina(meal) -> int:
             q = _GUISO_498_RE.sub(_sub, p)
             if q != p:
                 rec[i] = q
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+# ── [P1-PLAN-LOTE-499 · 2026-09-27] El guineo no tiene semillas que separar ──────────────────────────────────────────────
+# La IA escribe «separa 60 g de semillas de guineo… distribuye encima las semillas de guineo» (3 planes de adulto mayor
+# con HTA del corpus re-encadenado) y «extrae las semillas de 1 guineo» (batería real del dueño, día 13): el guineo se
+# corta en rodajas. Lo que se «extrae/separa» pasa a cortarse en rodajas; lo que se sirve son las rodajas.
+# tooltip-anchor: P1-PLAN-LOTE-499
+_GUINEO_499 = r"(?:guineos?|bananas?|bananos?|pl[aá]tanos?\s+maduros?)"
+_SEMILLAS_VERBO_499_RE = re.compile(
+    r"\b(?P<v>extrae|separa|saca)\s+(?:las\s+)?(?:(?P<q>\d+(?:[.,]\d+)?\s*g)\s+de\s+)?semillas\s+de(?:l)?\s+"
+    r"(?P<obj>(?:\d+\s+|½\s+|un\s+|el\s+|los\s+)?" + _GUINEO_499 + r")\b", re.IGNORECASE)
+_SEMILLAS_499_RE = re.compile(r"\b(?P<art>las\s+)?semillas\s+de(?:l)?\s+(?P<obj>" + _GUINEO_499 + r")\b", re.IGNORECASE)
+
+
+def guineo_sin_semillas(meal) -> int:
+    """Nº de pasos corregidos; 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list) or not rec:
+            return 0
+        n = 0
+
+        def _verbo(m):
+            obj = re.sub(r"^(?:el|los)\s+", "", m.group("obj"), flags=re.IGNORECASE)
+            q = m.group("q")
+            cuerpo = f"{q} de {obj}" if q else obj
+            return ("Corta" if m.group("v")[:1].isupper() else "corta") + f" {cuerpo} en rodajas"
+
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or _es_nota(p):
+                continue
+            q = _SEMILLAS_VERBO_499_RE.sub(_verbo, p)
+            q = _SEMILLAS_499_RE.sub(lambda m: (m.group("art") or "") + "rodajas de " + m.group("obj"), q)
+            if q != p:
+                rec[i] = q
+                n += 1
         if n:
             meal["recipe"] = rec
             meal.pop("_display", None)
