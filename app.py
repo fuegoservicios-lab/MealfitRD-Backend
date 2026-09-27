@@ -932,7 +932,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # (0.25 unidad)» y «1 aceite de oliva (1 cdta)»).
 # [P1-PLAN-LOTE-590 · 2026-09-27] (backend) «1 pizca», «jugo de ½ limón» y «Limón» ya no abortan el recálculo de macros
 # de la comida (quedaban los números viejos: 98 g de proteína mostrados con 26 g en sus líneas).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-590 · 2026-09-27"
+# [P1-PLAN-LOTE-591 · 2026-09-27] (backend) Con sólo claras en la lista (tope de yemas), el paso no pocha huevos enteros
+# «hasta que la yema quede cremosa»: cuaja las claras.
+# [P1-PLAN-LOTE-592 · 2026-09-27] (backend) Con los topes atando la proteína del día (huevos, edamame, lácteos), entra
+# una proteína magra NUEVA en la comida principal: 4 de 6 días cortos de las baterías vuelven sobre el piso.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-592 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

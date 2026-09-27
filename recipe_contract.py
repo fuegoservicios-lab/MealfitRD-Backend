@@ -965,6 +965,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").articulo_de_uno(meal)  # [P1-PLAN-LOTE-403] «las 1 rebanada» → «la rebanada»
         __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»
         __import__("pasos_cantidades").claras_de_la_lista(meal)  # [P1-PLAN-LOTE-405] las claras también se cocinan
+        __import__("claras_pochadas").alinear(meal)  # [P1-PLAN-LOTE-591] sólo claras: nada de huevo pochado entero
         __import__("pasos_cantidades").masa_con_su_agua(meal)  # [P1-PLAN-LOTE-406] la masa de maíz, con su agua
         __import__("pasos_cantidades").proteina_cocida_de_la_lista(meal)  # [P1-PLAN-LOTE-407] el pollo cocido que la lista compra crudo
         __import__("pasos_cantidades").viver_cocido_de_la_lista(meal)  # [P1-PLAN-LOTE-408] el víver hervido que la lista compra crudo

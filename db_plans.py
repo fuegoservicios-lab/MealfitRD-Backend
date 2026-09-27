@@ -1398,7 +1398,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # ANTES de `_rbs`, para que la banda que se persiste mida el plato corregido.
                 try:
                     from protein_floor_last_word import reencuadra_y_mide as _pflw_ins
-                    _pflw_ins(_pd, surface=str(surface or "pre-INSERT"))
+                    _pflw_ins(_pd, form_data=locals().get("_clin_ctx") or None,  # [P1-PLAN-LOTE-592] proteína nueva
+                              surface=str(surface or "pre-INSERT"))
                 except Exception as _pflw_ins_e:
                     logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] pre-INSERT no-op: "
                                  f"{type(_pflw_ins_e).__name__}: {_pflw_ins_e}")

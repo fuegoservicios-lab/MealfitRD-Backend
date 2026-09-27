@@ -167,6 +167,11 @@ def reencuadra_y_mide(plan_data: dict, *, form_data: Optional[dict] = None,
                     __import__("pulido_lineas").pulir_plan(plan_data)
                 except Exception:
                     pass
+            # [P1-PLAN-LOTE-592 · 2026-09-27] 3. Si el tope volvió a abrir el hueco y hay formulario (alergias, dieta,
+            # país): una proteína NUEVA que el día no usa, en la comida principal, hasta 150 g y sin pasar el 107 % de las
+            # kcal. No es un bucle con el tope: lo que entra no es lo que el tope recorta. Detalle en `proteina_nueva.py`.
+            if form_data and __import__("proteina_nueva").cerrar(plan_data, form_data):
+                subio = True
             informe["recuperado"] = subio
         except Exception as e:
             logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] re-encuadre no-op: {type(e).__name__}: {e}")
