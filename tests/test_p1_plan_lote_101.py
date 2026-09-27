@@ -29,7 +29,9 @@ def test_el_pan_que_el_cuerpo_no_consume_se_cancela_y_la_hoja_sigue_al_dedo():
     assert "if (!scrollable) { e.preventDefault(); return; }" in hook
     assert "if ((dir > 0 && atTop) || (dir < 0 && atBottom)) e.preventDefault();" in hook
     # mismos umbrales que la hoja de actualizar platos (v4)
-    assert "if (y > 70 || vy > 0.35 || y + vy * 150 > 100) {" in hook
+    # [P1-PLAN-LOTE-410] umbrales más firmes (la hoja se cerraba sin querer al subir el scroll)
+    assert ("if (y > 110 || (y > 40 && (vy > 0.5 || y + vy * 150 > 170))) {" in hook
+            or "if (y > 70 || vy > 0.35 || y + vy * 150 > 100) {" in hook)
     jsx = _front("src/components/dashboard/LogMealModal.jsx")
     for h in ("onTouchStart={hoja.onTouchStart}", "onTouchMove={hoja.onTouchMove}", "onTouchEnd={hoja.onTouchEnd}", "onTouchCancel={hoja.onTouchEnd}"):
         assert h in jsx, h

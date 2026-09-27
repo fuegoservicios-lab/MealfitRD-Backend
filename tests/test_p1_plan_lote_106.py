@@ -28,7 +28,9 @@ def _front(rel: str) -> str:
 def test_la_hoja_y_el_gesto_son_los_del_componedor():
     hook = _front("src/hooks/useBottomSheet.js")
     assert "export function useBottomSheet({ containerRef, bodyRef, onClose, disabled = false })" in hook
-    assert "if (y > 70 || vy > 0.35 || y + vy * 150 > 100) {" in hook
+    # [P1-PLAN-LOTE-410] umbrales más firmes (la hoja se cerraba sin querer al subir el scroll)
+    assert ("if (y > 110 || (y > 40 && (vy > 0.5 || y + vy * 150 > 170))) {" in hook
+            or "if (y > 70 || vy > 0.35 || y + vy * 150 > 100) {" in hook)
     assert "const scrollY0 = window.scrollY;" in hook
     sm = _front("src/components/dashboard/ScanMealModal.jsx")
     lm = _front("src/components/dashboard/LogMealModal.jsx")
