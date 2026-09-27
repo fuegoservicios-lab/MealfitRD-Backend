@@ -20,6 +20,32 @@ quita la temperatura a `gpt-5*`, así que `llm_provider.ChatOpenAI` (base de `bu
 `ChatOpenAIInstrumented`) la quita del payload para la familia `gpt-6` (`openai_model_only_default_temperature`).
 Sin ese filtro, cada llamada con temperatura (la red del planner a 0,95, el reviewer a 0,1…) habría fallado.
 
+## [P1-PLAN-LOTE-600 · 2026-09-27] GPT-6 como proveedor de TEXTO por knob — listo, pero DORMIDO
+
+**Cómo.** `MEALFIT_LLM_PROVIDER=openai` (tercer valor junto a `zai` y `deepseek`; el default no cambia). Los IDs
+GLM/DeepSeek de los ~12 defaults por feature se traducen: flash → `MEALFIT_OPENAI_FLASH_MODEL`, pro →
+`MEALFIT_OPENAI_PRO_MODEL` (los dos `gpt-6-luna` por defecto), contra `MEALFIT_OPENAI_BASE_URL` con `OPENAI_API_KEY`.
+Sin el `thinking` de GLM/DeepSeek (OpenAI rechaza el campo con 400) y con su esfuerzo (`thinking.type=disabled` ⇒
+`none`). Un ID `deepseek-*` FIJADO sigue yendo a DeepSeek, para que la red post-fallo (`MEALFIT_PRO_MODEL=deepseek-flash`)
+quede en otro proveedor. Test ancla: `test_p1_plan_lote_600_openai_texto.py`.
+
+**Medido antes de activarlo** (batería del coach, 76 casos, solo lectura, en una copia del código en el VPS):
+- **Tools + razonamiento = 400.** `gpt-6-luna` en `/v1/chat/completions` rechaza tools con `reasoning_effort`
+  («set reasoning_effort to 'none'»), y sin el campo aplica un esfuerzo suyo que tampoco los admite. El coach usa tools
+  en cada turno y la salida estructurada va por `function_calling`: la primera corrida cayó entera. El filtro único del
+  payload (`openai_model_tools_sin_razonar`) pone `none` cuando hay tools. En producción ese 400 no ocurría (0 en 7
+  días): solo afectaba al camino nuevo.
+- **Límite de la cuenta: 200.000 tokens/min para `gpt-6-luna`.** Una sola batería secuencial lo saturó (cada turno del
+  coach manda ~23.000 tokens de media, casi todo prompt de sistema) y un caso cayó con 429. En los 14 días previos, el
+  tráfico que pasaría a `gpt-6-luna` (DeepSeek + el Luna actual) tuvo 15 minutos por encima de 150.000 tokens y uno de
+  212.000. **Por eso el knob se queda en `deepseek`** hasta que OpenAI suba el nivel de la cuenta
+  (platform.openai.com/account/rate-limits).
+- Coste de la batería US$0,13 frente a 0,18 con DeepSeek (−28 %); respuestas más cortas (52 frente a 74 palabras de
+  media); más lento (p50 11,7 s frente a 8,7 s).
+
+**Activar (cuando el límite lo permita):** `MEALFIT_LLM_PROVIDER=openai` + `MEALFIT_PRO_MODEL=deepseek-flash` en el
+`.env` del VPS y reiniciar. Rollback: `MEALFIT_LLM_PROVIDER=deepseek` y reiniciar.
+
 ## [P0-GLM-MIGRATION · 2026-09-02] Provider: Z.ai GLM-5.3 (sustituye al anterior)
 
 Decisión del owner: **Z.ai GLM-5.3** es el provider OpenAI-compatible del stack; el anterior
