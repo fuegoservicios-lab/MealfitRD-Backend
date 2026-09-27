@@ -35,6 +35,7 @@ def sustituir(texto, rx, candidato, *, titulo: bool = False) -> str:
             cand = cand[:1].lower() + cand[1:]
         nuevo = t[:m.start()] + cand + t[m.end():]
         nuevo = _CORTE_MANI_RX.sub(lambda mm: f"{mm.group(1)} picado", nuevo)
+        nuevo = __import__("concordancia_sustituto").concordar(nuevo, cand, m.group(0))  # [P1-PLAN-LOTE-612] «Arroz… seco»
         try:
             import graph_orchestrator as go
             nuevo = go._dedup_unit_noun_collision(nuevo)

@@ -150,7 +150,11 @@ def test_fruit_savory_respects_dislike_ladder(go, monkeypatch):
     monkeypatch.setattr(go, "_truth_up_meal_macros_from_strings", lambda meal, db: None)
     days = _mk_clash_day()
     assert go._fruit_savory_autofix(days, {"dislikes": ["aguacate"]}) == 1
-    assert "batata" in days[0]["meals"][0]["name"].lower(), "dislike de aguacate → escalera a batata"
+    # [P1-PLAN-LOTE-613] la escalera pasa por el tomate (se come crudo) antes que la batata (hay que cocinarla)
+    assert "tomate" in days[0]["meals"][0]["name"].lower(), "dislike de aguacate → escalera a tomate"
+    days = _mk_clash_day()
+    assert go._fruit_savory_autofix(days, {"dislikes": ["aguacate", "tomate"]}) == 1
+    assert "batata" in days[0]["meals"][0]["name"].lower(), "sin aguacate ni tomate → batata"
 
 
 def test_fruit_savory_no_clash_no_touch(go, monkeypatch):

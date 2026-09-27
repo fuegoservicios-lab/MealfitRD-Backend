@@ -943,7 +943,13 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # base (una corrida sola varía ±2-4 puntos); dos variantes del prompt y el modelo Gemini pro, medidos y rechazados.
 # [P1-PLAN-LOTE-610 · 2026-09-27] (backend) La proteína nueva del 592 es magra de verdad: el «pavo molido» (más grasa
 # que proteína por kcal) lo recortaba el reequilibrio de grasa del escudo y el día quedaba bajo el piso.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-610 · 2026-09-27"
+# [P1-PLAN-LOTE-611 · 2026-09-27] (backend) El grano que pone el presupuesto cabe en el tiempo del formulario: la quinoa
+# de «30 min» ya no pasa a arroz integral (40-45 min), y el paso hierve el grano nuevo con su tiempo.
+# [P1-PLAN-LOTE-612 · 2026-09-27] (backend) Tras una sustitución, la concordancia sigue al alimento nuevo:
+# «arroz integral… escúrrela», «espinacas… se ablande», «filete… cocínalos», «maní fileteado» en los pasos.
+# [P1-PLAN-LOTE-613 · 2026-09-27] (backend) La fruta del plato salado se cambia por algo que se come crudo: sin
+# aguacate, tomate — la batata (que hay que cocinar) salía «fresca cortada en cubos» junto al mangú.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-613 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -13525,6 +13525,8 @@ def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
         if s4 != s:
             s = s4
             changed = True
+        if s != str(st):  # [P1-PLAN-LOTE-612] la concordancia sigue al alimento nuevo («escúrrela» → «escúrrelo»)
+            s = __import__("concordancia_sustituto").tras_reescritura(s, token_subs, meal)
         out.append(s)
     # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] Post-pass: pasos heredados de las plantillas de
     # HUEVO que el replace textual convirtió en absurdos ("Cocina yogurt griego a la plancha",
@@ -29040,7 +29042,7 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                     return False  # conservador: duda → no usar el candidato
             return __import__("nevera_exigida").admite(cand)  # [P1-PLAN-LOTE-199] sin Nevera exigida ⇒ True
 
-        repl = next((c for c in ("Aguacate", "Batata") if _replacement_ok(c)), None)
+        repl = next((c for c in ("Aguacate", "Tomate", "Batata") if _replacement_ok(c)), None)  # [P1-PLAN-LOTE-613] crudo antes que batata
         if repl is None:
             return 0
 
@@ -34825,6 +34827,8 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
                         m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
                         if not m:
                             continue
+                        if not (candidate := __import__("presupuesto_tiempo").candidato(ing, candidate, form_data, meal)):
+                            continue  # [P1-PLAN-LOTE-611] el grano sustituto cabe en el tiempo del formulario
                         # [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] el usuario fijó marca
                         # para ESTE alimento en 'Marcas del súper' — no pisar esa elección
                         # explícita con la sustitución económica genérica.
@@ -34892,6 +34896,7 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
                         if SUBST_RECIPE_REWRITE_ENABLED:
                             try:
                                 _rewrite_recipe_steps_after_subs(meal, [([m.group(0)], candidate)])
+                                __import__("presupuesto_tiempo").tiempo_en_pasos(meal, candidate)  # [P1-PLAN-LOTE-611]
                             except Exception:
                                 pass
                         logger.info(f"💰 [P1-BUDGET-TIER-LEVERS] Sustitución económica: {note} "
@@ -35238,6 +35243,8 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
                         m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
                         if not m:
                             continue
+                        if not (candidate := __import__("presupuesto_tiempo").candidato(ing, candidate, form_data, meal)):
+                            continue  # [P1-PLAN-LOTE-611] el grano sustituto cabe en el tiempo del formulario
                         # [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] la familia matcheó por
                         # categoría (ej. "mariscos") y esta OCURRENCIA puntual resulta ser el
                         # alimento con marca fijada — no pisar la elección del usuario aunque
@@ -35279,6 +35286,7 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
                         if SUBST_RECIPE_REWRITE_ENABLED:
                             try:
                                 _rewrite_recipe_steps_after_subs(meal, [([m.group(0)], candidate)])
+                                __import__("presupuesto_tiempo").tiempo_en_pasos(meal, candidate)  # [P1-PLAN-LOTE-611]
                                 _rec_dd = meal.get("recipe")
                                 if isinstance(_rec_dd, list):
                                     meal["recipe"] = [
