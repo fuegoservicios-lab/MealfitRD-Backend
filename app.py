@@ -1027,7 +1027,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # Montaje (709, con readiness); separador decimal y onzas por país (703/708); cobertura de plantillas por país (704); G59/
 # G67 comprobados contra producción y USDA (705/740); el coach da el número de emergencias del país (741); vitest y
 # Playwright prueban el sistema de países encendido (706/743/744); el JS de arranque vuelve a 147,5/148 kB (629/702/742).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-744 · 2026-09-28"
+# [P1-PLAN-LOTE-760 · 2026-09-28] (backend) El coach termina y guarda su respuesta aunque el usuario salga de la app: el
+# turno corre en su propio hilo (`turno_desacoplado.py`) y «Detener» es `POST /api/chat/stop` (dueño 28-sep 12:25 UTC:
+# «Cómo estás?» abortado a los 24 s → «No llegó la respuesta del coach»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-760 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

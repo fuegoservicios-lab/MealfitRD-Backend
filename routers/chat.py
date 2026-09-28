@@ -593,6 +593,25 @@ def _chat_stream_limiter_per_min() -> int:
 # Exenta del paywall (read-only, cero LLM): al llegar al tope el usuario necesita VER cuánto
 # le queda y cuándo se renueva, no otro 402. Anti-spam por RateLimiter, no por cuota.
 _COACH_QUOTA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+# [P1-PLAN-LOTE-760] «Detener» del chat: barato, pero con tope como todo endpoint sin cuota.
+_CHAT_STOP_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+
+@router.post("/stop")
+def api_chat_stop(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id),
+                  _rl: None = Depends(_CHAT_STOP_LIMITER)):
+    """[P1-PLAN-LOTE-760] «Detener»: corta el turno en curso de ese chat. Desde que el turno sigue aunque el cliente se
+    vaya (`turno_desacoplado`), cortar la conexión ya no para la generación; esto sí. Mismo control de dueño que
+    `/stream`: un chat con dueño solo lo detiene su dueño. Cero LLM."""
+    session_id = str((data or {}).get("session_id") or "").strip()
+    if not session_id or len(session_id) > 100:
+        raise HTTPException(status_code=400, detail="Falta el chat.")
+    from db_chat import get_session_owner
+    _dueno = get_session_owner(session_id)
+    if _dueno and _dueno != verified_user_id:
+        raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
+    from turno_desacoplado import detener
+    return {"stopped": detener(session_id)}
 
 
 @router.get("/quota")
@@ -1162,7 +1181,11 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                             f"(best-effort): {_bill_err}"
                         )
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        # [P1-PLAN-LOTE-760] El turno corre en SU hilo: si el cliente se va (salió de la app), la respuesta se termina,
+        # se guarda y avisa por push igual. «Detener» ya no es cortar la conexión: es `POST /api/chat/stop`.
+        from turno_desacoplado import activo as _turno_desacoplado, desacoplar
+        _flujo = desacoplar(event_generator(), session_id) if _turno_desacoplado() else event_generator()
+        return StreamingResponse(_flujo, media_type="text/event-stream")
 
     except HTTPException:
         raise
