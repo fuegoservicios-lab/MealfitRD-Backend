@@ -623,6 +623,37 @@ def _conserva_el_vocab_cerrado(original: str, traducido: str) -> bool:
     return _marca_de_vocab_cerrado(traducido) == marca
 
 
+# [P1-PLAN-LOTE-625 · 2026-09-27] Los dos puntos de una etiqueta traducida, con la tipografía francesa (espacio,
+# U+00A0 o U+202F delante) o sin ella.
+_DOS_PUNTOS_DE_ETIQUETA = re.compile(r"[ \u00a0\u202f]*[:：]")
+
+
+def _reponer_vocab_cerrado(original: str, traducido: str) -> Optional[str]:
+    """[P1-PLAN-LOTE-625 · 2026-09-27] La línea traducida con la etiqueta española repuesta, o `None`.
+
+    MEDIDO en el único plan real traducido (fr-FR): 12 de 54 pasos volvían ENTEROS al español porque el modelo
+    escribía «Mise en place : » (la tipografía francesa correcta) o traducía la etiqueta («Coup de feu : »). Lo único
+    que hay que conservar es la etiqueta: se toma la del original hasta sus dos puntos (con su emoji, si lo lleva), se
+    pone delante del texto que el modelo escribió tras SUS dos puntos, y el resultado vuelve a pasar el mismo control.
+    Sin dos puntos en la cabeza traducida (o con una cabeza de más de seis palabras, que ya no es una etiqueta) no hay
+    qué sustituir y la línea cae al español, como antes. La frase «Ajustamos ligeramente las porciones» no es una
+    etiqueta con dos puntos: no se repara."""
+    marca = _marca_de_vocab_cerrado(original)
+    if marca is None or marca == "porciones_ajustadas" or not isinstance(traducido, str):
+        return None
+    fin = original.find(":")
+    if fin < 0 or fin > 80:
+        return None
+    m = _DOS_PUNTOS_DE_ETIQUETA.search(traducido[:80])
+    if not m or len(traducido[:m.start()].split()) > 6:
+        return None
+    resto = traducido[m.end():].lstrip(" \u00a0\u202f")
+    if not resto:
+        return None
+    candidato = f"{original[:fin + 1]} {resto}"
+    return candidato if _conserva_el_vocab_cerrado(original, candidato) else None
+
+
 # ============================================================
 # Directivas de idioma NATIVAS por locale + prompt (UN lote por llamada)
 #
@@ -651,7 +682,7 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "as in the original (it is a system identifier).\n"
         "2. The output arrays 'recipe' and 'ingredients' MUST have EXACTLY the same number "
         "of elements as the original, in the SAME order (aligned by index).\n"
-        "3. Some 'recipe' lines start with a SECTION label or are a NOTE, not a cooking action. These labels are system identifiers, exactly like the canonical food name: copy them VERBATIM in Spanish, with the same punctuation and no space before the colon — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Translate only the text AFTER the label. The app renders the label in English on screen; a translated label makes the app show a nutritionist note as if it were a numbered cooking step.\n"
+        "3. Some 'recipe' lines start with a SECTION label or are a NOTE, not a cooking action. These labels are system identifiers, exactly like the canonical food name: copy them VERBATIM in Spanish, with the same punctuation and no space before the colon — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Translate only the text AFTER the label. The app renders the label in English on screen; a translated label makes the app show a nutritionist note as if it were a numbered cooking step. Keep every number in digits exactly as in the original (\"3\" stays \"3\", never \"three\").\n"
         "4. Reply with ONLY valid JSON, no markdown, no text outside the JSON, with this "
         "exact contract:\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
@@ -669,7 +700,7 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "traduzir, exatamente como no original (é um identificador do sistema).\n"
         "2. Os arrays 'recipe' e 'ingredients' de saída DEVEM ter EXATAMENTE a mesma "
         "quantidade de elementos que o original, na MESMA ordem (alinhados por índice).\n"
-        "3. Algumas linhas de 'recipe' comecam com um rotulo de SECAO ou sao uma NOTA, nao uma acao de cozinha. Esses rotulos sao identificadores do sistema, exatamente como o nome canonico do alimento: copie-os LITERALMENTE em espanhol, com a mesma pontuacao e sem espaco antes dos dois-pontos — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Traduza somente o texto DEPOIS do rotulo. O aplicativo exibe o rotulo em portugues na tela; um rotulo traduzido faz o app mostrar uma nota do nutricionista como se fosse um passo numerado.\n"
+        "3. Algumas linhas de 'recipe' comecam com um rotulo de SECAO ou sao uma NOTA, nao uma acao de cozinha. Esses rotulos sao identificadores do sistema, exatamente como o nome canonico do alimento: copie-os LITERALMENTE em espanhol, com a mesma pontuacao e sem espaco antes dos dois-pontos — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Traduza somente o texto DEPOIS do rotulo. O aplicativo exibe o rotulo em portugues na tela; um rotulo traduzido faz o app mostrar uma nota do nutricionista como se fosse um passo numerado. Mantenha todos os numeros em algarismos, exatamente como no original (\"3\" continua \"3\", nunca \"tres\").\n"
         "4. Responda APENAS com JSON válido, sem markdown, sem texto fora do JSON, com este "
         "contrato exato:\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
@@ -688,7 +719,7 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "identifiant du système).\n"
         "2. Les tableaux 'recipe' et 'ingredients' de sortie DOIVENT avoir EXACTEMENT le "
         "même nombre d'éléments que l'original, dans le MÊME ordre (alignés par indice).\n"
-        "3. Certaines lignes de 'recipe' commencent par une etiquette de SECTION ou sont une NOTE, pas une action de cuisine. Ces etiquettes sont des identifiants du systeme, exactement comme le nom canonique de l'aliment : recopie-les LITTERALEMENT en espagnol, avec la meme ponctuation et SANS espace avant les deux-points — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Attention : la typographie francaise mettrait une espace avant les deux-points ; ici il ne faut PAS. Traduis uniquement le texte APRES l'etiquette. L'application affiche l'etiquette en francais a l'ecran ; une etiquette traduite fait afficher une note du nutritionniste comme une etape numerotee.\n"
+        "3. Certaines lignes de 'recipe' commencent par une etiquette de SECTION ou sont une NOTE, pas une action de cuisine. Ces etiquettes sont des identifiants du systeme, exactement comme le nom canonique de l'aliment : recopie-les LITTERALEMENT en espagnol, avec la meme ponctuation et SANS espace avant les deux-points — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Attention : la typographie francaise mettrait une espace avant les deux-points ; ici il ne faut PAS. Traduis uniquement le texte APRES l'etiquette. L'application affiche l'etiquette en francais a l'ecran ; une etiquette traduite fait afficher une note du nutritionniste comme une etape numerotee. Garde tous les nombres en chiffres, exactement comme dans l'original (\"3\" reste \"3\", jamais \"trois\").\n"
         "4. Réponds UNIQUEMENT avec du JSON valide, sans markdown, sans texte hors du JSON, "
         "avec ce contrat exact :\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
@@ -707,7 +738,7 @@ _DISPLAY_LANGUAGE_DIRECTIVES = {
         "sistema).\n"
         "2. Gli array 'recipe' e 'ingredients' in uscita DEVONO avere ESATTAMENTE lo stesso "
         "numero di elementi dell'originale, nello STESSO ordine (allineati per indice).\n"
-        "3. Alcune righe di 'recipe' iniziano con un'etichetta di SEZIONE o sono una NOTA, non un'azione di cucina. Queste etichette sono identificatori di sistema, esattamente come il nome canonico dell'alimento: copiale ALLA LETTERA in spagnolo, con la stessa punteggiatura e senza spazio prima dei due punti — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Traduci solo il testo DOPO l'etichetta. L'app mostra l'etichetta in italiano sullo schermo; un'etichetta tradotta fa comparire una nota del nutrizionista come se fosse un passo numerato.\n"
+        "3. Alcune righe di 'recipe' iniziano con un'etichetta di SEZIONE o sono una NOTA, non un'azione di cucina. Queste etichette sono identificatori di sistema, esattamente come il nome canonico dell'alimento: copiale ALLA LETTERA in spagnolo, con la stessa punteggiatura e senza spazio prima dei due punti — \"Mise en place:\", \"El Toque de Fuego:\", \"Montaje:\", \"Nota del nutricionista:\", \"Seguridad alimentaria:\". Traduci solo il testo DOPO l'etichetta. L'app mostra l'etichetta in italiano sullo schermo; un'etichetta tradotta fa comparire una nota del nutrizionista come se fosse un passo numerato. Scrivi tutti i numeri in cifre, esattamente come nell'originale (\"3\" resta \"3\", mai \"tre\").\n"
         "4. Rispondi SOLO con JSON valido, senza markdown, senza testo fuori dal JSON, con "
         "questo contratto esatto:\n"
         '{"meals":[{"i":0,"name":"...","description":"...","recipe":["...","..."],'
@@ -1482,6 +1513,7 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     # el usuario ejecuta con las manos. Mismo fallback per-linea que ingredients:
     # se descarta la LINEA, no el meal, para no perder la traduccion de todo lo demas.
     final_recipe = []
+    revertidas = 0
     for idx, step in enumerate(recipe):
         step = step if isinstance(step, str) else str(step)
         original_step = original["recipe"][idx]
@@ -1493,9 +1525,17 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         #     seccion, y sin la etiqueta de nota una ANOTACION pasa a numerarse como
         #     accion de cocina.
         ok = (_conserva_las_cifras(original_step, step)
-              and _conserva_la_unidad(original_step, step)       # P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD
-              and _conserva_el_vocab_cerrado(original_step, step))
+              and _conserva_la_unidad(original_step, step))      # P2-I18N-DISPLAY-VALIDADOR-CIEGO-A-LA-UNIDAD
+        if ok and not _conserva_el_vocab_cerrado(original_step, step):
+            # [P1-PLAN-LOTE-625] la etiqueta se repone en vez de tirar la traducción de toda la línea
+            step = _reponer_vocab_cerrado(original_step, step)
+            ok = step is not None
+        if not ok:
+            revertidas += 1
         final_recipe.append(step if ok else original_step)
+    if revertidas:
+        # [P1-PLAN-LOTE-625] antes nadie contaba estas líneas: la comida salía «traducida» con pasos en español
+        logger.info(f"[P1-PLAN-LOTE-625] {revertidas} de {len(recipe)} pasos quedaron en español en «{name.strip()[:60]}»")
 
     return {
         "name": name.strip(),

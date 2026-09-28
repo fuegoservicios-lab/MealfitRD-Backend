@@ -141,8 +141,10 @@ def test_un_paso_que_pierde_el_prefijo_cae_al_espanol(mod) -> None:
 
     d = mod._validate_and_build_display(_original(orig), _traducido(trad))
     assert d is not None, "el meal entero se descartó; el fallback es POR LÍNEA"
-    assert d["recipe"] == orig, (
-        f"las líneas que perdieron el prefijo no cayeron al español: {d['recipe']!r}. "
+    # [P1-PLAN-LOTE-625] la etiqueta española se REPONE delante del texto traducido (antes la línea entera caía al
+    # español): lo que el parser de pantalla necesita es el prefijo, y el prefijo vuelve.
+    assert d["recipe"] == ["Mise en place: chop the onion.", "Montaje: serve hot."], (
+        f"las líneas que perdieron el prefijo no lo recuperaron: {d['recipe']!r}. "
         f"Sin el prefijo, el parser de pantalla no reconoce la sección. [{_MARKER}]"
     )
 
@@ -161,8 +163,9 @@ def test_una_anotacion_que_pierde_su_etiqueta_cae_al_espanol(mod) -> None:
     assert d["recipe"][0] == "Mise en place: chop the onion.", (
         "la línea que SÍ conservó el prefijo tenía que quedarse traducida"
     )
-    assert d["recipe"][1] == orig[1], (
-        f"la anotación traducida se persistió: {d['recipe'][1]!r}. Sin «Nota del "
+    # [P1-PLAN-LOTE-625] la etiqueta vuelve delante del texto traducido; la nota sigue siendo nota
+    assert d["recipe"][1] == "Nota del nutricionista: covers 30 % of your daily iron.", (
+        f"la anotación traducida se persistió sin su etiqueta: {d['recipe'][1]!r}. Sin «Nota del "
         f"nutricionista», `isRecipeAnnotation` devuelve false y la nota pasa a "
         f"numerarse como acción de cocina — el defecto que P2-RECIPE-NOTES-NOT-STEPS "
         f"cerró. [{_MARKER}]"
@@ -189,7 +192,8 @@ def test_la_puntuacion_francesa_no_cuenta_como_prefijo_conservado(mod) -> None:
     orig = ["Mise en place: pica la cebolla."]
     trad = ["Mise en place : hache l'oignon."]
     d = mod._validate_and_build_display(_original(orig), _traducido(trad))
-    assert d["recipe"] == orig, (
+    # [P1-PLAN-LOTE-625] el espacio de la tipografía francesa se quita y el texto traducido se queda
+    assert d["recipe"] == ["Mise en place: hache l'oignon."], (
         f"«Mise en place :» con espacio antes de los dos puntos se dio por bueno: "
         f"{d['recipe']!r}. El parser exige `place:` pegado, así que esa línea no se "
         f"reconoce — es el caso que dejaba fr-FR en 0/12. [{_MARKER}]"
