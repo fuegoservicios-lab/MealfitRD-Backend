@@ -170,7 +170,8 @@ def test_los_dos_codigos_nuevos_tienen_copy_en_los_cuatro_catalogos(locale):
     es exactamente el que este gap cierra."""
     cat = json.loads(_leer(_FRONT / "src" / "i18n" / "locales" / f"{locale}.json"))
     for clave in (
-        "No hay Service Worker registrado en este navegador.",
+        # [P1-PLAN-LOTE-710] Copy en lenguaje llano: «Service Worker» era jerga para el usuario.
+        "Este navegador no está listo para recibir notificaciones. Recarga la página e inténtalo de nuevo.",
         "El servidor rechazó la suscripción (error {codigo}).",
     ):
         assert cat.get(clave), f"{locale} no traduce {clave!r}"
