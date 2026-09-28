@@ -997,6 +997,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cerrador").proteina_servida_una_vez(meal)  # [P1-PLAN-LOTE-449] lo que el cerrador sirve, una vez
         __import__("pasos_cerrador").acompanamientos_en_una_frase(meal)  # [P1-PLAN-LOTE-449] «Acompaña…» en una frase
         __import__("restos_de_sustitucion").limpiar(meal)  # [P1-PLAN-LOTE-731] el pollo no se cuaja ni el yogur se desmenuza
+        __import__("mani_picado").limpiar(meal)  # [P1-PLAN-LOTE-781] el maní no se filetea: «maní picado»
         __import__("doble_punto").limpiar(meal)  # [P1-PLAN-LOTE-634] «pollo..» → «pollo.»: lo último que toca los pasos
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
