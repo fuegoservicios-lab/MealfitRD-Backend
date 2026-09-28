@@ -20456,8 +20456,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 # "queso" — antes "queso mozzarella".split()[0]="queso" matcheaba "queso ricotta" del plato y metía un
                 # 2º queso ajeno. Ahora solo declara congruencia si un token específico del candidato (≥4 chars, fuera
                 # de _CLOSER_GENERIC_PROTEIN_WORDS) aparece en el plato → escala el MISMO alimento, no otro.
-                _cong_toks = [t for t in nlow.split() if len(t) >= 4 and t not in _CLOSER_GENERIC_PROTEIN_WORDS]
-                if (info.protein or 0) >= 18 and any(t in meal_text for t in _cong_toks):
+                if (info.protein or 0) >= 18 and __import__("congruencia_cerrador").congruente(nlow, meal_text, _CLOSER_GENERIC_PROTEIN_WORDS):  # [P1-PLAN-LOTE-782] por palabra: «agua» ⊄ «aguacate»
                     chosen = info
                     break
             else:
