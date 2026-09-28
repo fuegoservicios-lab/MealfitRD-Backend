@@ -114,7 +114,7 @@ class DreamConsolidationResult(BaseModel):
     contradictions: List[DreamContradiction] = Field(default_factory=list,
         description="Contradicciones detectadas (NO se auto-resuelven). Vacío si no hay.")
     user_model: str = Field(default="",
-        description="6-8 frases en español dominicano que describen al usuario para personalizar su nutrición.")
+        description="6-8 frases en español que describen al usuario para personalizar su nutrición.")   # [P1-PLAN-LOTE-655]
     evidence_fact_ids: List[str] = Field(default_factory=list,
         description="IDs (UUID) de los hechos que respaldan el user_model. Cada afirmación debe tener base.")
 
@@ -418,7 +418,7 @@ def _build_dream_prompt(facts: List[dict]) -> str:
         cat = f.get("category") or "?"
         lines.append(f'- id={f["id"]} [{cat}] {f["fact"]}')
     facts_block = "\n".join(lines)
-    return f"""Eres el "sistema de consolidación de memoria" (estilo sueño) de un coach nutricional dominicano.
+    return f"""Eres el "sistema de consolidación de memoria" (estilo sueño) de un coach nutricional (Bioboros).
 Recibes TODOS los hechos activos de UN usuario. Tu trabajo OFFLINE:
 
 1) FUSIONAR (merges): agrupa hechos de PREFERENCIA redundantes/complementarios en UN hecho canónico
@@ -426,7 +426,7 @@ Recibes TODOS los hechos activos de UN usuario. Tu trabajo OFFLINE:
    'condicion_medica' — esos son clínicos y NUNCA se tocan.
 2) CONTRADICCIONES: marca (sin resolver) pares de hechos que se contradigan, sobre todo los clínicos.
    Solo describe y lista fact_ids; NO los borres.
-3) USER_MODEL: sintetiza 6-8 frases en español dominicano que describan al usuario para personalizar
+3) USER_MODEL: sintetiza 6-8 frases en español que describan al usuario para personalizar
    su nutrición (preferencias fuertes, rechazos, hábitos, objetivos, restricciones). Sé concreto y
    citable: cada afirmación debe basarse en hechos reales de la lista. Lista en evidence_fact_ids los
    IDs que respaldan tu síntesis. NO inventes preferencias sin base. NO inventes alergias/condiciones.

@@ -4003,7 +4003,9 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
         _vc_ej = (" (ej. " + ", ".join(_vc_kept) + ")") if _vc_kept else ""
         block = (
             "\n\n=== CATÁLOGO VERIFICADO — USA EXCLUSIVAMENTE ESTOS ALIMENTOS ===\n"
-            "El usuario SOLO puede comprar alimentos con precio verificado en el supermercado. "
+            # [P1-PLAN-LOTE-655] (G72) para beta la premisa era falsa: sus filas entran PORQUE no tienen precio
+            + ("El usuario SOLO puede comprar alimentos con precio verificado en el supermercado. " if not _vc_beta
+               else "Estos son los alimentos que el sistema sabe resolver para su país. ") +
             "DEBES construir TODAS las comidas (y sus `ingredients`) usando ÚNICAMENTE los alimentos "
             "de la lista de abajo. PROHIBIDO ABSOLUTO inventar o agregar cualquier alimento fuera de "
             "esta lista — ni proteínas, ni vegetales, ni frutas, ni granos, NI CONDIMENTOS NI ESPECIAS. "
