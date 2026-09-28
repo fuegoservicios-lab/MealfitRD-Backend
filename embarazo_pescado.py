@@ -187,10 +187,13 @@ def _punto_del_sustituto(meal: dict, nombre: str) -> int:
                 continue
             partes = re.split(r"((?<!\d)[.;](?!\d))", p)
             for j, cl in enumerate(partes):
-                if nucleo.search(cl):
-                    cl2 = _TEMP_PESCADO_RE.sub(grados, cl)
-                    cl2 = _PUNTO_PESCADO_RE.sub(f"no quede {rosado} por dentro", cl2)
-                    partes[j] = cl2
+                mn = nucleo.search(cl)
+                if mn:
+                    # [P1-PLAN-LOTE-788] sólo lo que va DETRÁS de la mención: «saltea la cebolla hasta que esté opaca y
+                    # añade la pechuga» habla de la cebolla. tooltip-anchor: P1-PLAN-LOTE-788
+                    cola = _TEMP_PESCADO_RE.sub(grados, cl[mn.start():])
+                    cola = _PUNTO_PESCADO_RE.sub(f"no quede {rosado} por dentro", cola)
+                    partes[j] = cl[:mn.start()] + cola
             q = "".join(partes)
             if q != p:
                 rec[i] = q

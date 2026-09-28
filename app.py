@@ -1046,7 +1046,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # los 173 g, así que la fracción mentía. La cuenta de una pieza vaga sigue a su peso (27 líneas del corpus 744).
 # [P1-PLAN-LOTE-787 · 2026-09-28] (backend) Los gramos del paso siguen a la pieza de la lista también cuando la pieza
 # empieza por su unidad («½ pedazo mediano de yuca (≈172 g)» ↔ «corta 205 g de yuca») o va en plural («filetes»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-787 · 2026-09-28"
+# [P1-PLAN-LOTE-788 · 2026-09-28] (backend) El punto del sustituto del pescado (785) sólo se cambia DETRÁS de su mención
+# en la frase: «saltea la cebolla hasta que esté opaca y añade la pechuga» habla de la cebolla.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-788 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
