@@ -159,6 +159,10 @@ deploy, re-correr los ids `3,4,9,10,13,17,19,20` y comparar contra la línea bas
    Matriz: +5 perfiles (21-25). El 21 (`renal_hta`) es el que más aporta — activa las dos ramas de
    precedencia de `build_condition_prompt` (dm2+renal, hta+renal) que hasta ahora ningún perfil del
    formulario podía alcanzar.
+   **[P1-PLAN-LOTE-795 · 2026-09-28]** Los perfiles 21-25 no se han corrido: la cifra publicada
+   (`CLINICAL`, 20 perfiles, agosto) no incluye renal. Por eso el sub de CAPS pasó a
+   «DM2 · HTA · colesterol · alergias» y el ejemplo «Verificado» de `/funciones` a «DM2 + HTA +
+   colesterol» (perfil 12). Cuando una corrida con el 21 entre en `CLINICAL`, renal puede volver.
 2. ~~**Medicamentos fuera de los 14 chips quedan sin capturar en silencio.**~~ **CERRADO
    [P1-MEDICAL-SCOPE-GATE · 2026-08-09]**: ya no es silencio. Lo no listado se declara con los chips
    `Otra condición` / `Otro medicamento`, y esa señal **bloquea la generación** (422
