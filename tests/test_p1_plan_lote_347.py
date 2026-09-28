@@ -47,7 +47,8 @@ def test_el_escaneo_manda_la_aclaracion_al_modelo(monkeypatch):
 def test_el_endpoint_acepta_la_aclaracion():
     src = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
     assert "aclaracion: Optional[str] = Form(None)" in src
-    assert "process_image_with_vision(file_bytes, aclaracion=aclaracion)" in src
+    # [P1-PLAN-LOTE-628] + el país del perfil
+    assert "process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)" in src
 
 
 def test_marker():

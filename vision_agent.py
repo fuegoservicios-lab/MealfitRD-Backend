@@ -954,10 +954,16 @@ def _aclaracion_segura(texto) -> str:
     return limpio[:_ACLARACION_MAX]
 
 
-def _prompt_de_escaneo(aclaracion=None, base: str = None) -> str:
+def _prompt_de_escaneo(aclaracion=None, base: str = None, pais=None) -> str:
     """[P1-PLAN-LOTE-347 · 2026-09-26] El prompt del escaneo, con la aclaración del usuario si la hay («Otra…»: ninguna
-    opción de la duda encajaba y la escribió). Va entre comillas y declarada como dato: no son instrucciones."""
+    opción de la duda encajaba y la escribió). Va entre comillas y declarada como dato: no son instrucciones.
+    [P1-PLAN-LOTE-628] y con el país del usuario fuera de RD (`pais_del_estimador.contexto`; en RD, nada)."""
     base = _MEAL_VISION_PROMPT if base is None else base
+    try:
+        from pais_del_estimador import contexto as _contexto_de_pais
+        base = base + _contexto_de_pais(pais)
+    except Exception:
+        pass
     a = _aclaracion_segura(aclaracion)
     if not a:
         return base
@@ -970,7 +976,7 @@ def _prompt_de_escaneo(aclaracion=None, base: str = None) -> str:
     )
 
 
-async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None) -> dict:
+async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None, pais=None) -> dict:
     """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → extraído P1-VISION-LUNA ·
     2026-07-28] Intento de análisis vía provider OpenAI-compatible
     (gpt-5.6-luna u otro configurado por knob) — el ÚNICO provider tras
@@ -1032,7 +1038,7 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
         # normalizar.
         response = await _invoke_structured_vision(
             image_bytes,
-            _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT),   # [P1-PLAN-LOTE-347] + aclaración, si la hay
+            _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais),   # [P1-PLAN-LOTE-347/628] + aclaración y país
             _MealVisionResult,
         )
         data = response.model_dump() if response else {}
@@ -1067,7 +1073,7 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
         }
 
 
-async def process_image_with_vision(image_bytes: bytes, aclaracion=None) -> dict:
+async def process_image_with_vision(image_bytes: bytes, aclaracion=None, pais=None) -> dict:
     """
     Toma los bytes de una imagen, usa el provider de visión configurado para
     extraer una descripción y determina si contiene alimentos usando
@@ -1109,9 +1115,13 @@ async def process_image_with_vision(image_bytes: bytes, aclaracion=None) -> dict
     )
 
     # [P1-PLAN-LOTE-347] la aclaración solo viaja si la hay: la llamada de siempre no cambia de forma
+    # [P1-PLAN-LOTE-628] …y el país, solo fuera de RD
+    extra = {}
     if aclaracion:
-        return await _dispatch_openai_compatible_vision(image_bytes, aclaracion=aclaracion)
-    return await _dispatch_openai_compatible_vision(image_bytes)
+        extra["aclaracion"] = aclaracion
+    if pais and str(pais).strip().upper() != "DO":
+        extra["pais"] = pais
+    return await _dispatch_openai_compatible_vision(image_bytes, **extra)
 
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
 # "multimodal" siempre vectorizó el TEXTO de la descripción (no la imagen),

@@ -115,6 +115,7 @@ async def estimar_con_ia(pet: PeticionAjuste, idioma: Optional[str], user_id: st
     """Llamada al modelo flash. Lanza si falla: el router hace el soft-fail."""
     from graph_orchestrator import ChatGLM, _plan_flash_model_name, _current_node_var, user_id_var
     from langchain_core.messages import SystemMessage, HumanMessage
+    from pais_del_estimador import contexto_del_usuario
     humano = mensaje_para_el_modelo(pet) + (f"\nEscribe 'nombre_plato' en {idioma}." if idioma else "")
     llm = ChatGLM(model=_plan_flash_model_name(), temperature=0.1, max_retries=1, timeout=20).with_structured_output(
         AjusteModelo, method="json_mode"
@@ -122,7 +123,8 @@ async def estimar_con_ia(pet: PeticionAjuste, idioma: Optional[str], user_id: st
     tok_node = _current_node_var.set("scan_doubt_adjust")
     tok_user = user_id_var.set(user_id)
     try:
-        est = await asyncio.wait_for(llm.ainvoke([SystemMessage(content=_SISTEMA), HumanMessage(content=humano)]), timeout=25)
+        est = await asyncio.wait_for(llm.ainvoke([SystemMessage(content=_SISTEMA + await contexto_del_usuario(user_id)),   # [P1-PLAN-LOTE-628]
+                                                  HumanMessage(content=humano)]), timeout=25)
     finally:
         try:
             _current_node_var.reset(tok_node)

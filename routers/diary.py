@@ -610,7 +610,10 @@ async def api_diary_upload(
         logger.info("\n-------------------------------------------------------------")
         logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
         _t_vision = time.perf_counter()
-        vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion)
+        # [P1-PLAN-LOTE-628] el país del perfil: la foto se lee con el sentido que tiene allí (en RD, nada cambia)
+        from pais_del_estimador import pais_del_usuario
+        _pais = await pais_del_usuario(verified_user_id)
+        vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
         # [P1-PLAN-LOTE-575] cuánto tardó y si sirvió, para el panel (ni la foto ni su texto). En SEGUNDO PLANO: esperarla
         # aquí con el pool saturado podía sumar segundos al escaneo de cualquier usuario (revisión final).
         try:
@@ -1148,11 +1151,13 @@ async def api_estimate_macros(
     llm = ChatGLM(model=model, temperature=0.1, max_retries=1, timeout=25).with_structured_output(
         MacroEstimateModel, method="json_mode"
     )
+    from pais_del_estimador import contexto_del_usuario   # [P1-PLAN-LOTE-628]
     tok_node = _current_node_var.set("diary_freetext_estimate")
     tok_user = user_id_var.set(verified_user_id)
     try:
         est = await asyncio.wait_for(
-            llm.ainvoke([SystemMessage(content=_ESTIMATE_SYSTEM_PROMPT), HumanMessage(content=human)]),
+            llm.ainvoke([SystemMessage(content=_ESTIMATE_SYSTEM_PROMPT + await contexto_del_usuario(verified_user_id)),   # [P1-PLAN-LOTE-628]
+                         HumanMessage(content=human)]),
             timeout=30,
         )
     except Exception as e:
