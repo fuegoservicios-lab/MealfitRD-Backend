@@ -38,6 +38,9 @@ de `master_ingredients` (replay determinista, sin DB ni IA — auditoría G58/G1
     DO conserva el predicado de siempre (la unión, sin sello) — mismo criterio que el catálogo del
     generador (`_vc_beta = _vc_country != "DO"`): byte-identidad de la lista dominicana. Knob
     `MEALFIT_COUNTRY_CATALOG_FOREIGN_FLAG` (default on).
+    [Revisión ronda 1] Los dos falsos positivos medidos se cierran en el DATO y en el mercado: «trucha»
+    pasa también al bloque de ES y «chile en polvo» al de MX (se venden allí), y PR↔US cuentan como el
+    mismo mercado (`mercado_de`). El sello todavía no lo pinta el frontend: decisión del dueño.
 
 EL PAÍS VIAJA POR CONTEXTO. `aggregate_and_deduct_shopping_list` tiene 26 call sites y ninguno sabe
 de países; las dos puertas que reciben el PLAN (`get_shopping_list_delta`, `get_realtime_pantry`)
@@ -46,6 +49,7 @@ mismo SSOT que ya usa la proyección métrica) y lo deja en un `ContextVar` mien
 Sin plan (chat, swap, scripts) el contexto es `None` y todo se comporta como hoy.
 
 Vive fuera de `shopping_calculator.py` porque éste está en su tope de líneas (roadmap 2.5 §11).
+Doc (qué hace, por qué, lo pendiente del dueño): docs/envases_y_catalogo_por_pais.md
 tooltip-anchor: P1-PLAN-LOTE-790
 """
 from __future__ import annotations
@@ -235,9 +239,20 @@ def paises_del_alimento(nombre) -> list:
         return []
 
 
+# [P1-PLAN-LOTE-790 · 2026-09-28 · revisión ronda 1, defecto 2] Puerto Rico compra en el súper de Estados Unidos
+# (la 791 ya usa US como sustituto DECLARADO de PR): lo que sólo reclama el bloque del otro no es
+# «de otro país» para el sello. Sin esto, el Chile en polvo de una lista boricua salía sellado `['US']`.
+_MISMO_MERCADO = {"PR": frozenset({"PR", "US"}), "US": frozenset({"US", "PR"})}
+
+
+def mercado_de(pais) -> frozenset:
+    """Los países cuyo catálogo sin precio cuenta como el mercado de `pais` para el sello."""
+    return _MISMO_MERCADO.get(pais, frozenset({pais}))
+
+
 def sellar_catalogo_de_otro_pais(items) -> int:
     """Sella `catalogo_de_otro_pais` en los ítems de catálogo-país sin precio que NO son del país de la
-    lista. Devuelve cuántos selló. Corre al final del agregador, sobre los dicts de salida."""
+    lista (ni de su mismo mercado: PR↔US). Devuelve cuántos selló. Corre al final del agregador."""
     pais = pais_de_la_lista()
     if not pais or pais == "DO" or not _sello_catalogo_de_otro_pais_activo():
         return 0
@@ -245,6 +260,7 @@ def sellar_catalogo_de_otro_pais(items) -> int:
         import shopping_calculator as sc
     except Exception:
         return 0
+    mercado = mercado_de(pais)
     sellados = []
     for it in items or []:
         try:
@@ -253,11 +269,11 @@ def sellar_catalogo_de_otro_pais(items) -> int:
             nombre = str(it.get("name") or "")
             if not nombre or not sc.is_country_catalog_unpriced_item(nombre):
                 continue
-            if sc.is_country_catalog_unpriced_item(nombre, country=pais):
+            if any(sc.is_country_catalog_unpriced_item(nombre, country=cc) for cc in mercado):
                 continue  # es de SU mercado
             if sc._is_verified_for_shopping(nombre):
                 continue  # tiene precio: es comida verificada, no catálogo-país
-            ajenos = [cc for cc in paises_del_alimento(nombre) if cc != pais]
+            ajenos = [cc for cc in paises_del_alimento(nombre) if cc not in mercado]
             if not ajenos:
                 continue
             it["catalogo_de_otro_pais"] = ajenos
@@ -266,8 +282,62 @@ def sellar_catalogo_de_otro_pais(items) -> int:
             # Corre por cada ítem: una excepción aquí no puede tumbar la lista.
             continue
     if sellados:
-        logger.warning(
-            "[P1-PLAN-LOTE-790] lista de %s con %d alimento(s) de catálogo de OTRO país (se quedan, "
-            "sellados catalogo_de_otro_pais): %s. Fuga aguas arriba: el generador no se los ofreció.",
-            pais, len(sellados), ", ".join(sellados))
+        _avisar_fuga(pais, sellados)
     return len(sellados)
+
+
+# [P1-PLAN-LOTE-790 · 2026-09-28 · revisión ronda 1, defecto 8] Un recálculo llama al agregador 3-9 veces sobre la
+# misma lista (semanal, quincenal, mensual, delta): el WARN salía otras tantas y enterraba el caso
+# nuevo. Se avisa UNA vez por (país, alimentos sellados) cada hora y por proceso; lo repetido va a
+# DEBUG. El SELLO no se deduplica: cada lista lo lleva siempre.
+_SELLOS_AVISADOS: "dict[str, float]" = {}
+_AVISO_CADA_S = 3600.0
+_AVISOS_MAX = 512
+
+
+def _avisar_fuga(pais, sellados) -> None:
+    import time
+    firma = f"{pais}|{'|'.join(sorted(sellados))}"
+    ahora = time.monotonic()
+    try:
+        ultimo = _SELLOS_AVISADOS.get(firma)
+        if ultimo is not None and ahora - ultimo < _AVISO_CADA_S:
+            logger.debug("[P1-PLAN-LOTE-790] (repetido) lista de %s: %s", pais, ", ".join(sellados))
+            return
+        if len(_SELLOS_AVISADOS) >= _AVISOS_MAX:
+            _SELLOS_AVISADOS.clear()
+        _SELLOS_AVISADOS[firma] = ahora
+    except Exception:
+        pass
+    logger.warning(
+        "[P1-PLAN-LOTE-790] lista de %s con %d alimento(s) de catálogo de OTRO país (se quedan, "
+        "sellados catalogo_de_otro_pais): %s. Fuga aguas arriba: el generador no se los ofreció.",
+        pais, len(sellados), ", ".join(sellados))
+
+
+# ── (c) Un PAQUETE pequeño es comida, no especiero ───────────────────────────────────────────────
+
+# [P1-PLAN-LOTE-791 · 2026-09-28 · revisión ronda 1, defecto 1] El tope de condimentos
+# (P1-SHOPLIST-SANITY-CAP) reconoce un condimento por su DATO: Despensa + envase ≤ 120 g. Con los
+# envases del lote 791, los seis chiles secos mexicanos (paquete de 85 g) cumplían las dos cosas y
+# el tope los capaba a 1-3 paquetes por ciclo: 4 × «60 g de Chile guajillo» en una semana (240 g)
+# salían «1 paquete de Chile guajillo», 85 g de 240, sin nota de cobertura. La premisa del tope —un
+# frasco dura meses, «el consumo de un condimento no escala con las recetas que lo mencionan»— vale
+# para el ESPECIERO (sobre, frasco, pote, caja), no para un paquete de comida: cada salsa gasta sus
+# chiles. Lo que separa sigue siendo un DATO de la fila (`market_container`), no una lista de nombres,
+# y el fallo va hacia el lado que el propio tope declara barato: una fila nueva en paquete no se capa
+# (ítem feo), jamás se capa comida a ciegas (compra corta). Sin los diminutivos: la «fundita» o
+# «bolsita» de orégano sí es especiero. Knob `MEALFIT_CONDIMENT_CAP_FOOD_PACKAGE_EXEMPT` (default on).
+_ENVASES_DE_COMIDA = frozenset({"paquete", "paquetes", "bolsa", "bolsas", "funda", "fundas"})
+
+
+def envase_de_comida(master_item) -> bool:
+    """¿La fila se vende en un envase de COMIDA (paquete, bolsa, funda)? Entonces el tope de
+    condimentos no la toca aunque su envase sea pequeño. Nunca revienta: corre en el agregador."""
+    try:
+        if not _env_bool("MEALFIT_CONDIMENT_CAP_FOOD_PACKAGE_EXEMPT", True):
+            return False
+        envase = (master_item or {}).get("market_container") if isinstance(master_item, dict) else None
+        return str(envase or "").strip().lower() in _ENVASES_DE_COMIDA
+    except Exception:
+        return False

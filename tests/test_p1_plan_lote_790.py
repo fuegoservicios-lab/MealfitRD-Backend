@@ -227,6 +227,12 @@ _CATALOGO = [
     _fila("Harina de yuca", "Despensa", "paquete", aliases=["cassava flour", "harina de mandioca"],
           name_en="Cassava flour"),
     _fila("Trucha", "Proteínas", "lb", aliases=["trout"], name_en="Trout", shelf_life_days=3),
+    _fila("Chile en polvo", "Despensa", "frasco", aliases=["chili powder"], name_en="Chili powder",
+          market_container="frasco", container_weight_g=71.0, available_sizes_g=[71]),
+    _fila("Pretzels", "Despensa", "funda", aliases=["pretzel"], name_en="Pretzels",
+          market_container="funda", container_weight_g=340.0, available_sizes_g=[340]),
+    _fila("Pique", "Despensa", "botella", aliases=["pique boricua"], name_en="Pique",
+          market_container="botella", container_weight_g=148.0, available_sizes_g=[148]),
     _fila("Pechuga de pollo", "Proteínas", "lb", aliases=["pollo", "pechuga"], price_per_lb=150.0,
           name_en="Chicken breast", shelf_life_days=3),
 ]
@@ -234,6 +240,8 @@ _CATALOGO = [
 
 @pytest.fixture
 def catalogo(sc, monkeypatch):
+    import envase_pais as _ep
+    monkeypatch.setattr(_ep, "_SELLOS_AVISADOS", {}, raising=False)  # el WARN deduplicado no cruza tests
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
     monkeypatch.setattr(sc, "_master_cache", [dict(r) for r in _CATALOGO])
@@ -290,12 +298,66 @@ def test_la_tortilla_mexicana_en_una_lista_espanola_se_queda_sellada(catalogo, e
                for r in caplog.records), "la fuga tiene que ser grep-able"
 
 
-def test_la_trucha_colombiana_no_se_le_quita_a_un_espanol(catalogo, ep):
-    """El caso del replay: dropear por país borraba el pescado de la semana de un plan español."""
+def test_el_warn_de_la_fuga_sale_una_vez_por_lista_no_por_llamada(catalogo, ep, caplog):
+    """[revisión ronda 1, defecto 8] Un recálculo de una lista ES llama al agregador 3-9 veces (lista
+    semanal, quincenal, mensual, delta…): el mismo WARN salía otras tantas. Se avisa una vez por
+    (país, alimentos sellados); lo repetido baja a DEBUG. Otra fuga distinta sí vuelve a avisar."""
+    caplog.set_level(logging.DEBUG, logger="envase_pais")
+
+    def _warns():
+        return [r for r in caplog.records
+                if r.levelno == logging.WARNING and "P1-PLAN-LOTE-790" in r.getMessage()]
+
+    with ep.lista_de_pais("ES"):
+        for _ in range(3):
+            it = _item(catalogo, ["80 g de Tortilla de maíz"], "Tortilla de maíz")
+            assert it.get("catalogo_de_otro_pais") == ["MX"], "el sello no se deduplica: sólo el log"
+    assert len(_warns()) == 1, [r.getMessage() for r in _warns()]
+    with ep.lista_de_pais("ES"):
+        _item(catalogo, ["80 g de Tortilla de maíz", "100 g de Pretzels"], "Pretzels")
+    assert len(_warns()) == 2, "una fuga distinta tiene que volver a avisar"
+    with ep.lista_de_pais("MX"):
+        _item(catalogo, ["100 g de Pretzels"], "Pretzels")
+    assert len(_warns()) == 3, "otro país, otro aviso"
+
+
+def test_la_trucha_tambien_es_de_espana_y_no_se_sella(catalogo, ep):
+    """El caso del replay: dropear por país borraba el pescado de la semana de un plan español.
+
+    [revisión ronda 1, defecto 2] Y sellarla era un falso positivo: en España la trucha se vende en
+    cualquier pescadería. Se añade a su bloque (mismo patrón que «duraznos», P1-PLAN-LOTE-624)."""
+    assert catalogo.is_country_catalog_unpriced_item("Trucha", country="ES") is True
     with ep.lista_de_pais("ES"):
         it = _item(catalogo, ["340 g de Trucha"], "Trucha")
     assert it is not None, "la trucha se dropeó de una lista española"
-    assert it.get("catalogo_de_otro_pais") == ["CO"], it
+    assert "catalogo_de_otro_pais" not in it, it
+
+
+def test_el_chile_en_polvo_tambien_es_de_mexico(catalogo, ep):
+    """[revisión ronda 1, defecto 2] Cuatro planes mexicanos llevaban «Chile en polvo», que sólo
+    reclamaba el bloque de US: en México se vende en cualquier súper."""
+    assert catalogo.is_country_catalog_unpriced_item("Chile en polvo", country="MX") is True
+    with ep.lista_de_pais("MX"):
+        it = _item(catalogo, ["5 g de Chile en polvo"], "Chile en polvo")
+    assert it is not None and "catalogo_de_otro_pais" not in it, it
+
+
+@pytest.mark.parametrize("pais,linea,nombre", [
+    ("PR", "100 g de Pretzels", "Pretzels"),   # sólo lo reclama US
+    ("US", "30 g de Pique", "Pique"),          # sólo lo reclama PR
+])
+def test_puerto_rico_y_estados_unidos_son_el_mismo_mercado(catalogo, ep, pais, linea, nombre):
+    """[revisión ronda 1, defecto 2] «PR usa US declarado» (lote 791): el súper de Puerto Rico es el
+    de Estados Unidos. Sellar como ajeno lo que sólo reclama el otro era un falso positivo."""
+    with ep.lista_de_pais(pais):
+        it = _item(catalogo, [linea], nombre)
+    assert it is not None and "catalogo_de_otro_pais" not in it, it
+
+
+def test_el_mismo_mercado_no_desella_a_los_demas(catalogo, ep):
+    with ep.lista_de_pais("ES"):
+        it = _item(catalogo, ["100 g de Pretzels"], "Pretzels")
+    assert it is not None and it.get("catalogo_de_otro_pais") == ["US"], it
 
 
 @pytest.mark.parametrize("pais", ["MX", "DO", None])
@@ -334,10 +396,29 @@ def test_el_espejo_del_guard_sigue_viendo_el_item(catalogo):
 
 def test_el_generador_no_le_ofrece_la_tortilla_mexicana_a_un_espanol(sc, monkeypatch):
     """La fuga nace aguas arriba: el catálogo verificado del generador YA pregunta por país
-    (P1-COUNTRY-CATALOG-BY-COUNTRY); el modelo la escribió igual. La lista es la última red."""
+    (P1-COUNTRY-CATALOG-BY-COUNTRY); el modelo la escribió igual. La lista es la última red.
+
+    [revisión ronda 1, defecto 9] No basta el predicado: se mide el bloque «USA EXCLUSIVAMENTE» que
+    de verdad se renderiza para el generador (`_vc_comprable` → `_get_verified_catalog_instruction`)."""
+    import graph_orchestrator as go
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     assert sc.is_country_catalog_unpriced_item("Tortilla de maíz", country="ES") is False
     assert sc.is_country_catalog_unpriced_item("Tortilla de maíz", country="MX") is True
+    filas = [{"name": n, "price_per_lb": 0, "price_per_unit": 0}
+             for n in ("Tortilla de maíz", "Trucha", "Chile en polvo", "Azafrán")]
+    filas.append({"name": "Arroz blanco", "price_per_lb": 35.0, "price_per_unit": 0})
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda *a, **k: [dict(r) for r in filas])
+    monkeypatch.setattr(sc, "_verified_ingredients_only_enabled", lambda *a, **k: True)
+    go._VERIFIED_CATALOG_INSTRUCTION_CACHE.clear()
+    try:
+        es = go._get_verified_catalog_instruction({"country": "ES"})
+        mx = go._get_verified_catalog_instruction({"country": "MX"})
+    finally:
+        go._VERIFIED_CATALOG_INSTRUCTION_CACHE.clear()
+    assert "Tortilla de maíz" not in es, "al generador español se le ofrece la tortilla mexicana"
+    assert "Azafrán" in es and "Trucha" in es and "Arroz blanco" in es
+    assert "Tortilla de maíz" in mx and "Chile en polvo" in mx
+    assert "Azafrán" not in mx
 
 
 # ── G. «… de De Harina de yuca» ─────────────────────────────────────────────────────────────────

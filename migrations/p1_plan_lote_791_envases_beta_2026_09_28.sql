@@ -10,7 +10,8 @@
 -- tienen unidad de envase (paquete, frasco) sin peso de envase: el mismo hueco.
 --
 -- QUÉ SE LLENA: `market_container` (el mismo envase que la fila ya declara en `default_unit`; Champús,
--- que decía «litro», va en «botella»), `container_weight_g` y `available_sizes_g` (un solo tamaño).
+-- que decía «litro», va en «botella», y Sofrito, que decía «paquete», va en «frasco»: todas sus muestras
+-- con marca son frascos de 12 oz), `container_weight_g` y `available_sizes_g` (un solo tamaño).
 -- NO se toca `market_packages`: cada entrada exige un precio y estos países no tienen precios propios.
 -- NO se inventa envase para las 57 filas que se venden a peso ni para las 9 de mazo o unidad.
 --
@@ -18,17 +19,25 @@
 -- atribución es obligatoria: «© colaboradores de Open Food Facts, ODbL». Se consultó el campo
 -- `quantity` de los productos de cada país y categoría (search.openfoodfacts.org, 28-sep), se
 -- descartaron a mano los productos que no eran el alimento (salsas, snacks, multipacks, formatos de
--- hostelería) y se tomó el tamaño real más cercano a la mediana — o la moda cuando la mediana caía
--- entre un envase pequeño y uno a granel, dicho fila por fila. PR usa US como sustituto DECLARADO
+-- hostelería). REGLA DEL TAMAÑO, una sola para las 66 filas: el tamaño real más cercano a la mediana,
+-- salvo cuando a la mediana la arrastran formatos que no son el de referencia (granel, hostelería,
+-- tarrinas de 32-64 oz, monodosis) y el envase minorista que más se repite (la moda) es otro: entonces
+-- la moda. Así salen Azafrán, Anchoas, Mazapán, Arándanos rojos, Ensalada de macarrones, Sazonador para
+-- tacos, Adobo y Sofrito. Un formato FAMILIAR que se vende en cualquier súper no es granel: la lata de
+-- 28 oz de Frijoles horneados no arrastra nada y ahí gana la mediana (16 oz). PR usa US como sustituto DECLARADO
 -- (OFF casi no tiene productos de PR con cantidad). Donde el alimento no tenía ninguna muestra, se usó
 -- la mediana de su CATEGORÍA y la fila lo dice («PROXY»). La procedencia de cada fila queda en la
 -- columna nueva `container_source`: la auditoría de procedencia del catálogo ya mostró lo que cuesta
 -- que el origen de un dato viva sólo en un comentario.
 --
--- JAMÁS TOCA UNA FILA DO CON PRECIO. El bloque beta exige `price_per_lb = 0 AND price_per_unit = 0` y
--- `container_weight_g IS NULL`. Dátiles y Cúrcuma (DO, con precio) van en un bloque APARTE, por nombre,
--- que sólo llena el hueco del envase (`container_weight_g IS NULL AND market_packages IS NULL`) y no
--- lee ni escribe ninguna columna de precio. Si no se quiere tocar DO en esta pasada no basta con
+-- EL BLOQUE BETA JAMÁS TOCA UNA FILA CON PRECIO: exige `price_per_lb = 0 AND price_per_unit = 0` y
+-- `container_weight_g IS NULL`. LA EXCEPCIÓN, DECLARADA: el bloque 2 SÍ toca dos filas DO con precio,
+-- Dátiles y Cúrcuma, por nombre y sólo en el hueco del envase (`container_weight_g IS NULL AND
+-- market_packages IS NULL`), sin leer ni escribir ninguna columna de precio. Sus valores NO tienen
+-- evidencia dominicana: Dátiles sale de OFF US (340 g; en DO hace comprar un paquete entero para los
+-- ~48 g de una receta) y Cúrcuma, del frasco de especiero de EE. UU. (57 g), cuando el único dato
+-- dominicano de OFF es un Badia de 16 oz (435,6 g). ESPERAN EL OK DEL DUEÑO CON CAPTURA de su súper
+-- antes de aplicar esta migración. Si no se quiere tocar DO en esta pasada no basta con
 -- borrar ese bloque: hay que quitar también sus dos nombres del sanity y aplazar la constraint, que
 -- las acusaría (son las dos únicas filas DO con unidad de envase y sin peso).
 --
@@ -114,13 +123,13 @@ FROM (VALUES
     ('Wafles'                       , 'paquete' ,    255, 'US', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: OFF US en:waffles n=30: mediana 255 g (9 oz)'),
     ('Sazonador para tacos'         , 'sobre'   ,     28, 'US', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: OFF US n=22: moda 28 g (x9, el sobre de 1 oz); mediana 71 g arrastrada por frascos y bolsas de 6 a 24 oz -> 28 g'),
     ('Aceitunas rellenas'           , 'frasco'  ,    340, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US n=4 (sin multipack ni hostelería): mediana 354 g -> 340 g (12 oz)'),
-    ('Adobo'                        , 'frasco'  ,    340, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US n=23: mediana 340 g (12 oz); moda 227 g (Goya 8 oz)'),
+    ('Adobo'                        , 'frasco'  ,    227, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US n=23: moda 227 g (x4, Goya 8 oz, la marca de referencia en PR); mediana 340 g arrastrada por los 2 lb de Badia y el de 30 oz -> 227 g'),
     ('Alcaparrado'                  , 'frasco'  ,     99, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. Sin alcaparrado con cantidad en OFF; PROXY alcaparras OFF US n=4: mediana 108,5 g -> 99 g'),
     ('Especias para arroz con dulce', 'sobre'   ,     28, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. Sin la mezcla en OFF; PROXY especias enteras de formato chico (clavo, canela) OFF US n=6: mediana 28 g'),
     ('Harina de yuca'               , 'paquete' ,    454, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US harinas de yuca n=5: mediana 454 g (1 lb)'),
     ('Pique'                        , 'botella' ,    148, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US en:hot-sauces n=8: mediana 151,5 g -> 148 ml (5 fl oz)'),
     ('Ron de cocina'                , 'botella' ,    750, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US ron n=4 (50 ml, 750 ml, 1,75 L x2) -> 750 ml, la botella estándar. n bajo'),
-    ('Sofrito'                      , 'paquete' ,    680, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US sofrito y recaito boricuas n=27: mediana 680 g (24 oz); moda 340 g')
+    ('Sofrito'                      , 'frasco'  ,    340, 'PR', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: PR usa US declarado. OFF US sofrito y recaito boricuas n=27: moda 340 g (x9, el frasco de 12 oz de Goya, Iberia y Loisa); mediana 680 g arrastrada por las tarrinas de 32 y 64 oz -> 340 g, en frasco (la fila dice paquete)')
 ) AS v(name, envase, gramos, pais, fuente)
 WHERE m.name = v.name
   AND m.container_weight_g IS NULL

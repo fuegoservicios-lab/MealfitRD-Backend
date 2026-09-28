@@ -1014,7 +1014,7 @@ def _apply_condiment_sanity_cap(market_obj, master_item, display_category, cycle
     if not _shoplist_sanity_cap_enabled() or not isinstance(market_obj, dict):
         return False
     _envase = (master_item or {}).get("container_weight_g") if isinstance(master_item, dict) else None
-    if not _is_condiment_presentation(display_category, _envase):
+    if not _is_condiment_presentation(display_category, _envase) or _envase_de_comida(master_item):  # [P1-PLAN-LOTE-791] paquete = comida (envase_pais.py)
         return False
     try:
         _qty = float(market_obj.get("market_qty_numeric") or 0)
@@ -1191,6 +1191,7 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "membrillo",
         "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
         "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce", "duraznos",   # [P1-PLAN-LOTE-624]
+        "trucha",   # [P1-PLAN-LOTE-790 · 2026-09-28] también de CO: en España se vende en cualquier pescadería
     ),
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismas 46 altas de catálogo MX/CO de este task —
     # también SIN precio RD a propósito (mismo motivo que ES: países beta,
@@ -1207,6 +1208,7 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
         "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
         "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "duraznos",   # [P1-PLAN-LOTE-624]
+        "chile en polvo",   # [P1-PLAN-LOTE-790 · 2026-09-28] también de US: en México se vende en cualquier súper
     ),
     "CO": (
         "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
@@ -5230,7 +5232,7 @@ def _lbs_to_market_fraction(lbs: float) -> "tuple[int, str]":
 
 # [P1-PLAN-LOTE-790 · 2026-09-28] El rótulo del envase habla el sistema del PAÍS de la lista (ES/MX/CO en g/kg/ml, DO/US/PR como
 # siempre, decimales bajo 1 g) y el país viaja por contexto desde el sello del plan. Vive en `envase_pais.py` (tope de líneas).
-from envase_pais import etiqueta_envase as _sku_size_label, con_pais_del_plan as _con_pais_del_plan, sellar_catalogo_de_otro_pais as _sellar_catalogo_de_otro_pais  # noqa: E402
+from envase_pais import etiqueta_envase as _sku_size_label, con_pais_del_plan as _con_pais_del_plan, sellar_catalogo_de_otro_pais as _sellar_catalogo_de_otro_pais, envase_de_comida as _envase_de_comida  # noqa: E402
 
 
 # [P1-COHERENCE-BASE-QTY · 2026-07-26] Cantidad en unidad BASE del item de la lista, en el
