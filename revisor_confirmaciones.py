@@ -64,8 +64,40 @@ PERMITIDO y todo lo demás se queda —
     es de rechazo o alergia, nunca de una condición («indicó anemia ferropénica; no aparece hierro hemo»: negar algo
     BUENO es un defecto). Los cuantificadores y «severa» pasan a giros.
 `oraciones_sin_hallazgo` le da la misma inversión a la regla del 227 (sin listas de verbos): ver `revisor_no_defectos`.
+
+[P1-PLAN-LOTE-746 · 2026-09-28] Revisión 3 —
+  · EL VEREDICTO Y SU COLA (importante, ya en main): «…no es violación de alergia, pero es un ingrediente prohibido
+    temporalmente…», «No hay violación de la alergia, pero el Día 3 incluye maní…», «…no es violación; el Día 3 incluye
+    hígado encebollado, que el paciente rechazó» salían aprobadas con severidad `critical`: el veredicto local miraba
+    su texto hasta el primer signo y absolvía la oración ENTERA. Ahora lo que queda tras su objeto cerrado es otra
+    cláusula: con un contraste (pero, aunque, sin embargo, no obstante, excepto, salvo, sino, mientras que…) se queda;
+    si no, cada cláusula suya pasa por la misma regla (confirmación, declaración, ausencia de lo declarado u otro
+    veredicto local). Solo dos colas cerradas se aceptan tal cual: «solo riesgo de seguridad alimentaria genérico ya
+    advertido en el plan» (n.º 20) y «pero se recomienda verificar tolerancia» (n.º 30 del corpus). Igual tras la
+    conclusión del 227 («…, por lo que no es una violación, pero…»): `conclusion_cerrada`.
+  · ALCANCE: uno afirmativo para cumplir («en todas las comidas») y uno negativo para negar algo malo («en ninguna
+    comida»): «se cumple en ningún día» no es un cumplimiento y «no se detectan alérgenos en todas las comidas» es
+    ambiguo. «ningún/ninguna» cuentan como negación.
+  · NOMBRES CERRADOS: el nombre de la dieta sale del SSOT `constants.canonicalize_diet_type` (vía `diet_type_aliases`),
+    no de texto libre entre comillas; «restricciones … declaradas» solo con calificativos de una lista cerrada; el
+    paciente del «es seguro para…» solo con un calificativo de otra («renal», «embarazada»…).
+  · el veredicto con SU PROPIO sujeto juzga su cláusula, no la de antes: «Hay pollo en la cena del Día 2; el queso no
+    es violación» se queda (`_antes_del_veredicto`); solo tras un preámbulo cerrado («— sin alergia a lácteos
+    declarada, no es violación») juzga la cláusula anterior, que es el caso del 227.
+  · RECHAZOS DE MÁS frente a main (la inversión del 227), cerrados donde se puede sin texto libre: «El plan es seguro
+    para el paciente renal / la paciente embarazada» (calificativo cerrado), «X, rechazados por el paciente, no
+    aparecen en el plan» y «Los alimentos rechazados (X) no aparecen en el plan» (ORACIÓN ENTERA: lo ausente es lo
+    declarado en ella). COSTE ACEPTADO — un reintento de más, ninguno en el fixture ni en el corpus de baterías —:
+    «El plan no incluye pescado ni berenjena. El plan es seguro.» y «… ninguno aparece en el plan» sin declaración
+    (la ausencia de lo no declarado puede ser algo BUENO que falta: el hierro hemo); «Día 2 | Desayuno: huevo revuelto.
+    Sin alergia al huevo declarada, no es violación.» (el veredicto en OTRA oración es la forma del hueco del 227
+    entre oraciones); y una dieta fuera del SSOT («Dieta 'baja en sodio' respetada», «DASH», «renal»).
+  · SIGUE ABIERTO (ya en main): el veredicto que el LLM da sobre su propia cláusula («Día 2: pollo en la cena, no es
+    violación de la dieta vegetariana»; «El Día 3 incluye hígado…, que el paciente rechazó; no hay violación de la
+    dieta vegetariana») y la conclusión del 227 sobre las oraciones ANTERIORES (la decisión del 25-sep).
 tooltip-anchor: P1-PLAN-LOTE-746-CONFIRMACIONES
 tooltip-anchor: P1-PLAN-LOTE-746-FORMAS-CERRADAS
+tooltip-anchor: P1-PLAN-LOTE-746-VEREDICTO-Y-SU-COLA
 """
 from __future__ import annotations
 
@@ -90,10 +122,10 @@ _GIROS = re.compile(
     r"cambi\w*|corrig\w*|correg\w*|ajust\w*|evit\w*|reduc\w*|elimin\w*|quit\w*|añad\w*|agreg\w*|aument\w*|"
     r"falta\w*|insuficient\w*|exced\w*|exces\w*|super[ae]\w*|sobrepas\w*|por debajo|d[eé]ficit|alt[oa]s?|elevad\w*)\b",
     _I)
-_NEGACION = re.compile(r"\b(?:no|nunca|jam[aá]s|ni)\b", _I)
+_NEGACION = re.compile(r"\b(?:no|nunca|jam[aá]s|ni|ning[uú]n[oa]?)\b", _I)   # [revisión 3] + ningún/ninguna
 
-# Lo que el nombre de una dieta entre comillas o las palabras de «restricciones … declaradas» no pueden llevar: un verbo
-# que afirme contenido o un cambio, ni un día, una comida, una cantidad o un cuantificador.
+# Lo que el nombre de un alimento (regla 4) no puede ser: un verbo que afirme contenido o un cambio, ni un día, una
+# comida, una cantidad o un cuantificador.
 _NO_LIBRE = (r"(?:contien\w*|conten\w*|inclu\w*|aport\w*|combin\w*|tien\w*|tuv\w*|llev\w*|us[aeoó]\w*|sirv\w*|"
              r"retir\w*|mantien\w*|mantuv\w*|pon\w*|pus\w*|mezcl\w*|acompañ\w*|dej\w*|conserv\w*|persist\w*|sigu\w*|"
              r"contin[uú]\w*|permanec\w*|aparec\w*|figur\w*|trae\w*|traj\w*|lleg\w*|hay|hubo|existe\w*|exist[ií]\w*|"
@@ -101,11 +133,28 @@ _NO_LIBRE = (r"(?:contien\w*|conten\w*|inclu\w*|aport\w*|combin\w*|tien\w*|tuv\w
              r"d[ií]as?|desayunos?|almuerzos?|cenas?|meriendas?|comidas?|platos?|plan|men[uú]|semanas?|jornadas?|"
              r"mayor[ií]a|mitad|parte|algun\w*|poc[oa]s|ciert[oa]s|vari[oa]s|primer\w*|segund\w*|[uú]ltim\w*|"
              r"[uú]nicamente|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|mg|kcal|\d\w*)")
-_PALABRA = r"(?:(?!\b" + _NO_LIBRE + r"\b)[^\s,;:()])+"     # una palabra de texto libre nominal
-# «dieta 'balanced'», «dieta 'baja en sodio'», «dieta vegetariana». [revisión 2] Entre comillas solo letras, espacio, «/»
-# y «-», sin conjunciones que sumen un alimento («'vegetariana con pollo'», «'vegetariana y pescado'»).
-_NOMBRE = (r"(?:['\"«“‘](?:(?!\b(?:" + _NO_LIBRE + r"|con|y|o|m[aá]s|menos|pero|adem[aá]s)\b)[a-záéíóúñü /-]){1,30}"
-           r"['\"»”’]|(?!\b" + _NO_LIBRE + r"\b)[a-záéíóúñü-]+)")
+
+
+def _vocabulario_de_dietas() -> str:
+    """[revisión 3] Los nombres de dieta que reconoce el SSOT (`constants.canonicalize_diet_type`, vía
+    `diet_type_aliases`: vegano/a, vegetariano/a, pescetariano/a… y `balanced`), los largos primero. Si el SSOT no
+    carga, ninguno: ninguna «dieta X» es entonces una confirmación (falla hacia rechazar)."""
+    try:
+        from constants import diet_type_aliases
+        nombres = {n for c in ("vegan", "vegetarian", "pescatarian", "balanced") for n in diet_type_aliases(c)}
+    except Exception as e:                                                     # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-746] sin el SSOT de dietas ninguna «dieta X» se descarta: {type(e).__name__}")
+        nombres = set()
+    if not nombres:
+        return r"(?!)"
+    return r"(?:" + "|".join(re.escape(n) for n in sorted(nombres, key=len, reverse=True)) + r")"
+
+
+# «dieta 'balanced'», «dieta vegetariana». [revisión 3] VOCABULARIO CERRADO del SSOT, con o sin comillas: ni texto libre
+# entre comillas («'vegetariana hasta el miércoles'», «'renal sin control de potasio'») ni una palabra cualquiera
+# («la dieta pollo»). Una dieta fuera del SSOT («'baja en sodio'», «DASH») se queda: un reintento de más, a sabiendas.
+_DIETAS = _vocabulario_de_dietas()
+_NOMBRE = r"(?:['\"«“‘]" + _DIETAS + r"['\"»”’]|" + _DIETAS + r"\b)"
 
 # ── formas CERRADAS [revisión 2] ──
 _DECLARADO = (r"(?:\s+(?:declarad|registrad|conocid|reportad)[oa]s?(?:\s+(?:por|de)\s+(?:el\s+|la\s+)?paciente)?)?"
@@ -113,9 +162,13 @@ _DECLARADO = (r"(?:\s+(?:declarad|registrad|conocid|reportad)[oa]s?(?:\s+(?:por|
 _OBJ_CLIN = (r"(?:(?:las|los|sus?|la|el)\s+)?(?:condiciones\s+m[eé]dicas|condici[oó]n\s+m[eé]dica|"
              r"restricciones(?:\s+diet[eé]ticas)?|alergias?(?:\s+alimentarias)?|medicamentos|medicaci[oó]n|"
              r"preferencias|rechazos|intolerancias?|dieta\s+" + _NOMBRE + r")" + _DECLARADO)
-_ALCANCE = (r"(?:\s+en\s+(?:(?:todo\s+)?(?:el|este)\s+(?:plan|men[uú])|todas\s+las\s+comidas|"
-            r"todos\s+los\s+(?:d[ií]as|platos)|ninguna\s+(?:de\s+las\s+)?comidas?|ning[uú]n\s+(?:d[ií]a|plato)|"
-            r"ninguno\s+de\s+los\s+(?:d[ií]as|platos)))?")
+# [revisión 3] Dos alcances: el AFIRMATIVO para cumplir («se respeta en todas las comidas»; «se cumple en ningún día» es
+# que no se cumple) y el NEGATIVO para negar algo malo («no se detectan alérgenos en ninguna comida»; «… en todas las
+# comidas» es ambiguo: puede que en alguna sí). «(todo) el plan» vale en los dos.
+_ALCANCE_TODO = (r"(?:\s+en\s+(?:(?:todo\s+)?(?:el|este)\s+(?:plan|men[uú])|todas\s+las\s+comidas|"
+                 r"todos\s+los\s+(?:d[ií]as|platos)))?")
+_ALCANCE_NINGUNO = (r"(?:\s+en\s+(?:(?:todo\s+)?(?:el|este)\s+(?:plan|men[uú])|ninguna\s+(?:de\s+las\s+)?comidas?|"
+                    r"ning[uú]n\s+(?:d[ií]a|plato)|ninguno\s+de\s+los\s+(?:d[ií]as|platos)))?")
 # El único paréntesis es el que describe al PACIENTE con esos sustantivos: «(paciente sin alergias)», «(el paciente no
 # reporta alergias)», «(paciente sin condiciones ni medicamentos)». «(paciente sin alergias, maní en el postre)» se queda.
 _PAC_NOMBRE = (r"(?:alergias?(?:\s+alimentarias)?|condiciones(?:\s+m[eé]dicas)?|condici[oó]n\s+m[eé]dica|medicamentos|"
@@ -144,26 +197,37 @@ _NEG_EXISTE = (r"(?:no\s+se\s+(?:detecta|detectan|detect[oó]|detectaron|encuent
                r"observa|observan|observ[oó]|identifica|identifican|identific[oó]|identificaron|registra|registran)|"
                r"no\s+(?:hay|existe|existen)|sin|ning[uú]n|ninguna|ninguno)"
                r"(?:\s+(?:ning[uú]n|ninguna|ninguno|otr[oa]s?))?")
-_RESTRICCION = (r"restricci[oó]n(?:es)?(?:\s+" + _PALABRA + r"){0,4}?\s+declarad[oa]s?"
-                r"(?:\s+(?:por|de)\s+(?:el\s+|la\s+)?paciente)?")
+# [revisión 3] Sin palabras libres: los calificativos de la restricción son una lista CERRADA — los nombres de dieta del
+# SSOT («vegetarianas/veganas»), «sin gluten/lactosa», «de sodio/potasio/…» y «dietéticas/alimentarias/…». «No hay
+# restricciones de sodio respetadas declaradas» se queda.
+_CALIF_RESTRICCION = (r"(?:" + _DIETAS + r"s?\b|sin\s+(?:gluten|lactosa|l[aá]cteos|az[uú]car)|"
+                      r"de\s+(?:gluten|lactosa|l[aá]cteos|sodio|sal|potasio|f[oó]sforo|az[uú]car(?:es)?|purinas|"
+                      r"grasas?|carbohidratos|alergias?)|diet[eé]ticas|alimentarias|m[eé]dicas|cl[ií]nicas|especiales|"
+                      r"adicionales|particulares)")
+_RESTRICCION = (r"restricci[oó]n(?:es)?(?:\s+" + _CALIF_RESTRICCION + r"(?:(?:\s*/\s*|\s*,\s*|\s+(?:y|ni|o)\s+)"
+                + _CALIF_RESTRICCION + r"){0,5})?\s+declarad[oa]s?(?:\s+(?:por|de)\s+(?:el\s+|la\s+)?paciente)?")
 _NIEGA_ALGO_MALO = re.compile(
     r"(?:" + _NEG + r"\s+" + _LISTA_MALO + r"(?:\s+(?:aparecen?|figuran?|se\s+incluyen?|est[aá]n?\s+presentes?))?"
-    + _ALCANCE + r"|" + _NEG_EXISTE + r"\s+" + _RESTRICCION + r")" + _PAREN, _I)
+    + _ALCANCE_NINGUNO + r"|" + _NEG_EXISTE + r"\s+" + _RESTRICCION + r")" + _PAREN, _I)
 
 # 2. cumplimiento
 _SUJETO_PLAN = r"(?:(?:el|este)\s+plan|el\s+men[uú])"
 _OBJ_CUMPLE = (r"(?:(?:todas\s+)?(?:las|sus)\s+(?:restricciones(?:\s+diet[eé]ticas)?|preferencias|alergias|"
                r"condiciones\s+m[eé]dicas|intolerancias)|(?:todos\s+)?(?:los|sus)\s+(?:rechazos|medicamentos)|"
                r"(?:la|su)\s+dieta\s+" + _NOMBRE + r")" + _DECLARADO)
-_OBJ_APTO = (r"(?:(?:el|la)\s+paciente|(?:las|sus)\s+(?:restricciones|condiciones\s+m[eé]dicas|alergias)" + _DECLARADO
-             + r"|(?:la|su)\s+dieta(?:\s+" + _NOMBRE + r")?)")
+# [revisión 3] «el paciente renal», «la paciente embarazada»: el calificativo del paciente, de una lista CERRADA (nunca
+# «sin insuficiencia renal», «sano», «con 4200 mg de potasio»).
+_PAC_CALIF = (r"(?:renal(?:es)?|diab[eé]tic[oa]|hipertens[oa]|embarazada|gestante|lactante|cel[ií]ac[oa]|an[eé]mic[oa]|"
+              r"card[ií]ac[oa]|" + _DIETAS + r")\b")
+_OBJ_APTO = (r"(?:(?:el|la)\s+paciente(?:\s+" + _PAC_CALIF + r")?|(?:las|sus)\s+(?:restricciones|condiciones\s+m[eé]dicas|"
+             r"alergias)" + _DECLARADO + r"|(?:la|su)\s+dieta(?:\s+" + _NOMBRE + r")?)")
 _CUMPLE = re.compile(
     r"(?:(?:la\s+)?dieta\s+" + _NOMBRE + r"\s+(?:(?:es|fue|est[aá]|queda)\s+)?"
-    r"(?:respetad[oa]|cumplid[oa]|se\s+respeta|se\s+cumple)" + _ALCANCE
+    r"(?:respetad[oa]|cumplid[oa]|se\s+respeta|se\s+cumple)" + _ALCANCE_TODO
     + r"|" + _SUJETO_PLAN + r"\s+(?:respeta|cumple(?:\s+con)?)\s+" + _OBJ_CUMPLE
-    + r"(?:\s+y\s+" + _OBJ_CUMPLE + r")?" + _ALCANCE
+    + r"(?:\s+y\s+" + _OBJ_CUMPLE + r")?" + _ALCANCE_TODO
     + r"|" + _SUJETO_PLAN + r"\s+es\s+(?:segur[oa]|adecuad[oa]|apt[oa]|compatible)"
-    r"(?:\s+(?:para|con)\s+" + _OBJ_APTO + r")?" + _ALCANCE + r")" + _PAREN,
+    r"(?:\s+(?:para|con)\s+" + _OBJ_APTO + r")?" + _ALCANCE_TODO + r")" + _PAREN,
     _I)
 
 # 3. el número de días, cerrado por «no un riesgo médico» (el paréntesis solo puede ser el rango: «(Día 4 a Día 7)»)
@@ -197,7 +261,10 @@ _SIN_PROBLEMA_FINAL = re.compile(
 _STOP_ALIMENTO = (r"(?:" + _NO_LIBRE + r"|y|o|ni|no|sin|con|en|del|al|de|a|por|para|el|la|los|las|un|una|lo|le|"
                   r"presentes?|servid\w*|incluid\w*|detectad\w*|encontrad\w*|visibles?|añadid\w*|agregad\w*|usad\w*|"
                   r"utilizad\w*|rechaz\w*|prohibid\w*|pacientes?|usuari[oa]s?|suficientes?|pero|tambi[eé]n|"
-                  r"adem[aá]s|s[oó]lo|solamente|gust\w*|ningun\w*|ning[uú]n)")
+                  r"adem[aá]s|s[oó]lo|solamente|gust\w*|ningun\w*|ning[uú]n|"
+                  # [revisión 3] ni lo que no es un alimento: «no hay violaciones de la dieta pollo» no es el
+                  # veredicto sobre el alimento «dieta pollo»
+                  r"dietas?|restricci\w*|condici\w*|alergi\w*|intoleranci\w*|medicament\w*|medicaci\w*|violaci\w*)")
 _PALABRA_ALIMENTO = r"['\"«“‘]?(?!" + _STOP_ALIMENTO + r"\b)[a-záéíóúñü][a-záéíóúñü-]*['\"»”’]?"
 _ALIMENTO = (r"(?:(?:el|la|los|las|un|una)\s+)?" + _PALABRA_ALIMENTO
              + r"(?:\s+(?:de\s+)?" + _PALABRA_ALIMENTO + r"){0,2}")
@@ -237,6 +304,15 @@ _SUBCLAUSULA = re.compile(
 # («El Día 2 incluye pescado…, y el resto se generó respetando los rechazos» se queda).
 _RESPETANDO = re.compile(
     r"respetando\s+(?:los|las|sus)\s+(?:rechazos|restricciones|preferencias)" + _DECLARADO, _I)
+# [revisión 3] La declaración y la ausencia en UNA oración: «El pescado y la berenjena, rechazados por el paciente, no
+# aparecen en el plan», «Los alimentos rechazados (pescado, berenjena) no aparecen en el plan». Solo como oración
+# ENTERA: el apósito solo («Hígado encebollado, rechazado por el paciente.») señala un plato, no lo declara ausente.
+_RECHAZADOS_AUSENTES = re.compile(
+    r"(?:" + _ALIMENTOS + r"\s*,\s*(?:rechazad|vetad|excluid)[oa]s?\s+por\s+(?:el|la)\s+(?:paciente|usuari[oa])\s*,"
+    r"|(?:los|las|sus)\s+(?:alimentos|ingredientes)\s+rechazad[oa]s(?:\s+(?:por\s+(?:el|la)\s+paciente|"
+    r"del\s+paciente|declarad[oa]s))?\s*\(\s*" + _ALIMENTOS + r"\s*\))"
+    r"\s+no\s+" + _PRESENCIA + _EN_PLAN,
+    _I)
 
 # El veredicto LOCAL del 227 («…contiene queso — sin alergia a lácteos declarada, no es violación») absuelve SU oración,
 # y solo si lo que le sigue en su cláusula es cerrado: «no hay violaciones en las comidas principales» / «… de la dieta
@@ -251,6 +327,29 @@ _RESTO_VEREDICTO = re.compile(
     + r"|" + _ALIMENTO + r"))?" + _PAREN + r"\s*",
     _I)
 _CORTE_VEREDICTO = re.compile(r"[,;:—–.!?]")
+# [revisión 3] Lo que sigue al objeto cerrado del veredicto es OTRA cláusula. Con un contraste se queda: «no es
+# violación de alergia, pero es un ingrediente prohibido temporalmente…».
+_CONTRASTE = re.compile(
+    r"\b(?:pero|aunque|sin\s+embargo|no\s+obstante|excepto|salvo|a\s+excepci[oó]n|sino|mientras\s+que|en\s+cambio|"
+    r"por\s+el\s+contrario|aun\s+as[ií]|con\s+todo)\b", _I)
+# Las únicas colas que se aceptan TAL CUAL (cerradas, sin texto libre): la n.º 20 de producción («…, solo riesgo de
+# seguridad alimentaria genérico ya advertido en el plan») y la n.º 30 del corpus de baterías («…, por lo que no es
+# una violación, pero se recomienda verificar tolerancia»). Ninguna afirma un defecto.
+_COLA_SIN_HALLAZGO = re.compile(
+    r"(?:s[oó]lo|solamente|[uú]nicamente)\s+(?:un\s+)?riesgo\s+(?:de\s+)?(?:seguridad|inocuidad)\s+alimentaria"
+    r"(?:\s+gen[eé]ric[oa])?\s+ya\s+(?:advertid|señalad|indicad|mencionad)[oa]\s+en\s+el\s+(?:plan|men[uú])"
+    r"|pero\s+se\s+recomienda\s+(?:verificar|confirmar|vigilar|evaluar)\s+(?:la\s+)?tolerancia",
+    _I)
+# La cláusula del veredicto termina en la última frontera anterior; si es solo este preámbulo, el veredicto juzga la
+# cláusula de antes («X — sin alergia a lácteos declarada, no es violación»). Un preámbulo más laxo solo absolvería lo
+# mismo que antes de la revisión 3: nunca más.
+_FRONTERA_VEREDICTO = re.compile(r"\s*[;—–]\s*|,\s*y\s+", _I)
+_PREAMBULO_VEREDICTO = re.compile(
+    r"(?:sin\s+(?:ninguna\s+)?alergias?(?:\s+(?:a|al)\s+[^\s,;]+(?:\s+[^\s,;]+)?)?(?:\s+declarad[oa]s?)?"
+    r"|(?:el|la)\s+paciente\s+no\s+(?:declar[oó]|report[oó]|tiene|indic[oó])\s+(?:ninguna\s+)?alergias?"
+    r"(?:\s+(?:a|al)\s+[^\s,;]+(?:\s+[^\s,;]+)?)?(?:\s*,?\s*(?:por\s+lo\s+que|as[ií]\s+que|de\s+modo\s+que|entonces))?"
+    r"|por\s+lo\s+(?:tanto|que)|as[ií]\s+que|entonces|de\s+modo\s+que)?\s*,?",
+    _I)
 
 
 def _confirma(c: str) -> bool:
@@ -308,29 +407,84 @@ def _neutras(clausulas) -> bool:
     return bool(declarados) and ausentes <= declarados and (remite or declarados <= ausentes)
 
 
-def _veredicto_local(oracion: str) -> bool:
+def _cola(resto: str):
+    """Lo que sigue al OBJETO CERRADO de un veredicto («… de alergia (paciente sin alergias)»), sin su signo: la cola
+    de la oración ("" si no queda nada), o None si el objeto no es cerrado — entonces no es un veredicto («no hay
+    violaciones en las comidas principales»)."""
+    corte = _CORTE_VEREDICTO.search(resto)
+    if not _RESTO_VEREDICTO.fullmatch(resto[:corte.start()] if corte else resto):
+        return None
+    return re.sub(r"^(?:y|e)\s+", "", resto[corte.start():].strip(" ,;:—–.!?"), flags=_I) if corte else ""
+
+
+def _pendientes_de_cola(cola: str, prof: int):
+    if not cola or _COLA_SIN_HALLAZGO.fullmatch(cola):
+        return []
+    if _CONTRASTE.search(cola) or prof >= 12:          # tope de veredictos encadenados: pasado, se queda
+        return None
+    return _pendientes(cola, prof + 1)
+
+
+def _antes_del_veredicto(prefijo: str) -> list:
+    """[revisión 3] Lo que PRECEDE al veredicto y él no juzga. Juzga SU cláusula (tras la última frontera «;», «—» o
+    «, y»); si su cláusula es solo un preámbulo cerrado (nada, «sin alergia a lácteos declarada,», «el paciente no
+    declaró alergia al maní, por lo que»), juzga la cláusula ANTERIOR — el caso del 227: «…contiene queso mozzarella —
+    sin alergia a lácteos declarada, no es violación». Las demás quedan pendientes: en «Hay pollo en la cena del Día 2;
+    el queso no es violación» el veredicto es del queso, no del pollo."""
+    partes = _FRONTERA_VEREDICTO.split(prefijo)
+    previas = partes[:-1]
+    if previas and _PREAMBULO_VEREDICTO.fullmatch(partes[-1].strip()):
+        previas = previas[:-1]
+    return [c for p in previas for c in _subclausulas(p)]
+
+
+def _pendientes(oracion: str, prof: int = 0):
+    """[revisión 3] Las cláusulas de la oración que su veredicto local NO absuelve ([] = ninguna), o None si lo que
+    sigue al veredicto trae un contraste. El veredicto absuelve la cláusula que juzga (`_antes_del_veredicto`; sigue
+    abierto: el LLM juzga su propia cláusula, «Día 2: pollo en la cena, no es violación de la dieta vegetariana»); lo
+    que le SIGUE es otra cláusula y pasa por la misma regla — puede traer su propio veredicto."""
     for m in _VEREDICTO_LOCAL.finditer(oracion):
-        resto = oracion[m.end():]
-        corte = _CORTE_VEREDICTO.search(resto)
-        if _RESTO_VEREDICTO.fullmatch(resto[:corte.start()] if corte else resto):
-            return True
-    return False
+        cola = _cola(oracion[m.end():])
+        if cola is not None:
+            despues = _pendientes_de_cola(cola, prof)
+            return None if despues is None else _antes_del_veredicto(oracion[:m.start()]) + despues
+    return _subclausulas(oracion)
+
+
+def conclusion_cerrada(resto) -> bool:
+    """[P1-PLAN-LOTE-746 · revisión 3] Para la conclusión del 227 («…, por lo que no es una violación» / «… este punto
+    se cumple»): lo que le sigue en su oración es su objeto cerrado y, detrás, nada o una cola sin contraste que sea
+    confirmación, declaración o ausencia de lo declarado. «…, por lo que no es una violación, pero el Día 3 aporta
+    4200 mg de potasio» se queda. Puro; nunca lanza."""
+    try:
+        cola = _cola(str(resto or ""))
+        if cola is None:
+            return False
+        p = _pendientes_de_cola(cola, 0)
+        return p is not None and _neutras(p)
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-746] conclusion_cerrada no-op: {type(e).__name__}: {e}")
+        return False
 
 
 def oraciones_sin_hallazgo(texto) -> bool:
     """[P1-PLAN-LOTE-746 · revisión 2] La regla del 227, invertida: la razón no afirma ningún defecto si CADA oración
     trae su propio veredicto («…, no es violación») o CADA cláusula suya es confirmación, declaración de rechazo/alergia
     del paciente o la ausencia de lo declarado. Sin listas de verbos: «Hay pollo en la cena del Día 2… El pescado no
-    aparece en el plan» se queda porque «Hay pollo…» no es ninguna de esas formas. Puro; nunca lanza."""
+    aparece en el plan» se queda porque «Hay pollo…» no es ninguna de esas formas. [revisión 3] Lo que sigue al
+    veredicto en su oración no queda absuelto: ver `_pendientes`. Puro; nunca lanza."""
     try:
         if not isinstance(texto, str):
             return False
         resto = []
         for s in re.split(r"(?<=[.!?])\s+", " ".join(texto.split())):
             s = s.strip().rstrip(".!? ").strip()
-            if not s or _veredicto_local(s):
+            if not s or _RECHAZADOS_AUSENTES.fullmatch(s):
                 continue
-            resto.extend(_subclausulas(s))
+            p = _pendientes(s)
+            if p is None:
+                return False
+            resto.extend(p)
         return _neutras(resto)
     except Exception as e:                                                     # noqa: BLE001
         logger.debug(f"[P1-PLAN-LOTE-746] oraciones_sin_hallazgo no-op: {type(e).__name__}: {e}")
@@ -388,4 +542,4 @@ def es_confirmacion_sin_defecto(texto) -> bool:
     return bool(m)
 
 
-__all__ = ["es_confirmacion_sin_defecto", "motivo", "activo", "oraciones_sin_hallazgo"]
+__all__ = ["es_confirmacion_sin_defecto", "motivo", "activo", "oraciones_sin_hallazgo", "conclusion_cerrada"]

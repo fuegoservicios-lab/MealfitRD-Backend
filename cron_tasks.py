@@ -6288,7 +6288,7 @@ def _review_failed_delivered_rate_alert_job():
     lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", _ent.lookback_por_defecto()), 168))
     min_samples = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_REVFAIL_RATE_THRESHOLD", 0.20)
-    _n = _n_corridas = 0
+    _n = _n_corridas = _n_sin = _rf_sin = 0
     _rf = 0
     _rate = None
     _alert_emitted = _legacy_close = False
@@ -6296,7 +6296,8 @@ def _review_failed_delivered_rate_alert_job():
     try:
         # [P1-PLAN-LOTE-746 · 2026-09-28] ENTREGAS, no corridas: `clinical_band` se emite por corrida del pipeline y el
         # bloque 9 de 3957a669 corrió 4 veces para 1 entrega (27-sep). Lógica en `entregas_revisadas`.
-        _n, _rf, _n_corridas = __import__("entregas_revisadas").contar_entregas_revisadas(lookback_h)
+        # [revisión 3] + las filas heredadas (sin `entrega`) contadas en `_n`: el SOP de la transición de 7 días las lee
+        _n, _rf, _n_corridas, _n_sin, _rf_sin = __import__("entregas_revisadas").contar_entregas_revisadas(lookback_h)
         if _n < min_samples:
             _skip = f"insufficient_samples ({_n}<{min_samples})"
             # la abierta por el conteo por CORRIDAS no se cerraba nunca con muestra insuficiente
@@ -6320,7 +6321,8 @@ def _review_failed_delivered_rate_alert_job():
                         f"{int(threshold * 100)}%). Plan entregado con review_passed=false (variedad/repetición/"
                         f"skeleton-fidelity) — revisar el reviewer/retry budget del pipeline.",
                         json.dumps({"review_failed_rate": _rate, "n_review_failed": _rf, "n_delivered": _n,
-                                    "n_corridas": _n_corridas, "lookback_h": lookback_h, "threshold": threshold},
+                                    "n_corridas": _n_corridas, "n_sin_entrega": _n_sin, "n_fallidas_sin_entrega": _rf_sin,
+                                    "lookback_h": lookback_h, "threshold": threshold},
                                    ensure_ascii=False),
                     ),
                 )
@@ -6348,7 +6350,8 @@ def _review_failed_delivered_rate_alert_job():
                 """,
                 (_rate if _rate is not None else -1.0,
                  json.dumps({"n_delivered": _n, "n_review_failed": _rf, "review_failed_rate": _rate,
-                             "n_corridas": _n_corridas, "alert_emitted": _alert_emitted, "skip_reason": _skip,
+                             "n_corridas": _n_corridas, "n_sin_entrega": _n_sin, "n_fallidas_sin_entrega": _rf_sin,
+                             "alert_emitted": _alert_emitted, "skip_reason": _skip,
                              "legacy_close_attempted": _legacy_close,
                              "threshold": threshold, "lookback_h": lookback_h}, ensure_ascii=False)),
             )

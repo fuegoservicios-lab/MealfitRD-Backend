@@ -47,6 +47,11 @@ _ISSUE_CONTINUES_RX = re.compile(
 # de algo que nadie declaró rechazar («el hierro hemo no aparece en el plan») puede ser algo bueno que falta: se queda.
 # El caso del 227 («contiene queso mozzarella — sin alergia a lácteos declarada, no es violación») no cambia, ni la regla
 # de la conclusión (`_SELF_NEGATING_TAIL_RX`, la del 25-sep). No depende del knob del 746: el hueco estaba en main.
+# [P1-PLAN-LOTE-746 · 2026-09-28 · revisión 3] Y lo que SIGUE al veredicto en su oración ya no queda absuelto: «No hay
+# violación de la alergia, pero el Día 3 incluye maní» o «…, por lo que no es una violación, pero el Día 3 aporta
+# 4200 mg de potasio» salían aprobadas con `critical` (`_ISSUE_CONTINUES_RX` solo ve «pero además / pero se detecta /
+# pero el plan»). No se añade un «pero» suelto aquí: el de la n.º 20 va ANTES del veredicto y es el mismo objeto. La
+# regla vive en `revisor_confirmaciones._pendientes` (veredicto local) y `.conclusion_cerrada` (la conclusión).
 # [P1-PLAN-LOTE-255 · 2026-09-25] «Posible reactividad cruzada» con un alimento que el usuario NO declaró no es un
 # defecto: batería rd252 (maní + sésamo + «piña» escrita a mano) — el revisor rechazó como CRÍTICO la linaza «por el
 # sésamo», el edamame «por el maní» y la lechosa y el guineo «por la piña», dos veces, y el usuario recibió el PLAN DE
@@ -74,9 +79,11 @@ def _downgrade_reviewer_non_issues(approved, issues, severity):
         for it in issues:
             t = str(it)
             _ultima = [s for s in re.split(r"(?<=[.;!?])\s+", t.strip()) if s.strip()][-1:] or [""]
+            _fin = _SELF_NEGATING_TAIL_RX.search(_ultima[0])
             _niega = ((_SELF_NEGATING_ISSUE_RX.search(t) and not _ISSUE_CONTINUES_RX.search(t)
                        and __import__("revisor_confirmaciones").oraciones_sin_hallazgo(t))  # [P1-PLAN-LOTE-746 · rev. 2]
-                      or bool(_SELF_NEGATING_TAIL_RX.search(_ultima[0]))
+                      or bool(_fin and __import__("revisor_confirmaciones").conclusion_cerrada(  # [P1-PLAN-LOTE-746 · rev. 3]
+                          _ultima[0][_fin.end():]))
                       or bool(_CROSS_REACTIVITY_RX.search(t))   # [P1-PLAN-LOTE-255]
                       or __import__("revisor_confirmaciones").es_confirmacion_sin_defecto(t))  # [P1-PLAN-LOTE-746]
             (avisos if _niega else real).append(it)

@@ -36,9 +36,15 @@ como antes (y ventana de 72 h).
     entregas salen de la cuenta (por eso un replay desde el journal da más entregas que las filas `completed` de hoy).
   · TRANSICIÓN TRAS DESPLEGAR (revisión 2): las filas `clinical_band` sin `entrega` (anteriores al despliegue) siguen
     contando UNA POR CORRIDA hasta salir de la ventana, y con la ventana de 168 h eso son hasta 7 DÍAS, no 3: durante
-    esa semana la tasa puede salir inflada por los reintentos (el caso del 27-sep: 4 corridas, 1 entrega). SOP: una
-    alerta `review_failed_delivered_rate_high` en los 7 días siguientes al despliegue se lee con el `n_corridas` de su
-    metadata — si `n_corridas` supera con mucho a `n_delivered`, es el conteo heredado; no se toca el umbral.
+    esa semana la tasa puede salir inflada por los reintentos (el caso del 27-sep: 4 corridas, 1 entrega).
+    [revisión 3] SOP (el de la ronda 2 estaba invertido: una fila heredada cuenta UNA en `n_corridas` y UNA en
+    `n_delivered`, así que no abre ninguna diferencia entre los dos; la diferencia solo la abre la lógica nueva al
+    agrupar corridas). La metadata de la alerta y del tick lleva `n_sin_entrega` (filas heredadas contadas en
+    `n_delivered`) y `n_fallidas_sin_entrega` (cuántas de ellas fallaron). Con `n_sin_entrega` = 0 la transición
+    terminó y la alerta se lee como siempre. Con `n_sin_entrega` > 0, `tasa_sin_heredadas(metadata)` da la tasa de las
+    entregas NUEVAS, (n_review_failed − n_fallidas_sin_entrega) / (n_delivered − n_sin_entrega): si esa queda bajo el
+    umbral, la alerta es el conteo heredado y se deja cerrar sola (sale de la ventana en ≤ 7 días); si también lo
+    supera, es real. Si no hay entregas nuevas (`None`), no hay nada que leer todavía. No se toca el umbral.
 tooltip-anchor: P1-PLAN-LOTE-746-ENTREGAS
 """
 from __future__ import annotations
@@ -131,7 +137,8 @@ def _es(valor, esperado: str) -> bool:
 
 def contar_entregas(corridas, completados, por_entrega=None) -> dict:
     """Puro. `corridas`: filas {created_at, review_passed, fallback, entrega}; `completados`: {plan_id, semana,
-    updated_at}. Devuelve {entregas, fallidas, corridas, modo} — entregas y fallidas SIN fallback."""
+    updated_at}. Devuelve {entregas, fallidas, corridas, modo, sin_entrega, fallidas_sin_entrega} — entregas y
+    fallidas SIN fallback; `sin_entrega`/`fallidas_sin_entrega`: cuántas de ellas son filas heredadas (sin clave)."""
     if por_entrega is None:
         por_entrega = activo()
     filas = [c for c in (corridas or []) if isinstance(c, dict)]
@@ -171,24 +178,40 @@ def contar_entregas(corridas, completados, por_entrega=None) -> dict:
             except Exception as ex:                                            # noqa: BLE001
                 logger.debug(f"[P1-PLAN-LOTE-746] grupo no contado: {type(ex).__name__}: {ex}")
     vivas = [c for c in elegidas if not _es(c.get("fallback"), "true")]
+    heredadas = [c for c in vivas if not (isinstance(c.get("entrega"), dict) and c["entrega"].get("clave"))]
     return {"entregas": len(vivas), "fallidas": sum(1 for c in vivas if _es(c.get("review_passed"), "false")),
-            "corridas": len(filas), "modo": "entregas" if por_entrega else "corridas"}
+            "corridas": len(filas), "modo": "entregas" if por_entrega else "corridas",
+            "sin_entrega": len(heredadas),
+            "fallidas_sin_entrega": sum(1 for c in heredadas if _es(c.get("review_passed"), "false"))}
+
+
+def tasa_sin_heredadas(metadata) -> "float | None":
+    """[revisión 3] El SOP de la transición: la tasa de revisión fallida de las entregas NUEVAS (sin las filas heredadas
+    que aún cuentan una por corrida), desde la metadata de la alerta o del tick. None si no hay entregas nuevas. Puro."""
+    try:
+        m = metadata if isinstance(metadata, dict) else {}
+        n = int(m["n_delivered"]) - int(m.get("n_sin_entrega") or 0)
+        rf = int(m["n_review_failed"]) - int(m.get("n_fallidas_sin_entrega") or 0)
+        return round(rf / n, 3) if n > 0 else None
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def contar_entregas_revisadas(lookback_h) -> tuple:
-    """(entregas, entregas_con_revision_fallida, corridas) de las últimas `lookback_h` horas. Solo SELECT; (0, 0, 0)
-    si la base falla (el cron lo registra como muestra insuficiente, nunca como alerta)."""
+    """(entregas, entregas_con_revision_fallida, corridas, sin_entrega, fallidas_sin_entrega) de las últimas
+    `lookback_h` horas. Solo SELECT; ceros si la base falla (el cron lo registra como muestra insuficiente, nunca como
+    alerta)."""
     try:
         import db_core
         h = str(int(lookback_h))
         corridas = db_core.execute_sql_query(_SQL_CORRIDAS, (h,), fetch_all=True) or []
         completados = (db_core.execute_sql_query(_SQL_COMPLETADOS, (h,), fetch_all=True) or []) if activo() else []
         r = contar_entregas(corridas, completados)
-        return r["entregas"], r["fallidas"], r["corridas"]
+        return r["entregas"], r["fallidas"], r["corridas"], r["sin_entrega"], r["fallidas_sin_entrega"]
     except Exception as e:                                                     # noqa: BLE001
         logger.warning(f"[P1-PLAN-LOTE-746] conteo de entregas revisadas no disponible: {type(e).__name__}: {e}")
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0
 
 
 __all__ = ["clave_de_entrega", "contar_entregas", "contar_entregas_revisadas", "activo", "lookback_por_defecto",
-           "cerrar_alerta_heredada"]
+           "cerrar_alerta_heredada", "tasa_sin_heredadas"]

@@ -319,7 +319,8 @@ R2_SIGUEN_DESCARTANDOSE = [
     "No hay violaciones de la dieta vegetariana.",
     "No hay interacciones con los medicamentos declarados.",
     "No se detectan violaciones de las restricciones declaradas en el plan.",
-    "La dieta 'baja en sodio' se respeta en todas las comidas.",
+    # [revisión 3] «La dieta 'baja en sodio' se respeta en todas las comidas.» pasó a R3_COSTE_ACEPTADO: el nombre de
+    # la dieta es ahora el vocabulario cerrado del SSOT de dietas.
     "El plan no contiene pescado ni berenjena, respetando los rechazos del paciente.",   # corpus de baterías
 ]
 
@@ -431,16 +432,253 @@ def test_corpus_de_baterias_solo_descarta_las_dos_sin_defecto():
     # y por el camino completo (227 + 746) no cambia NADA frente a la ronda 1: ver el test de abajo
 
 
+def _cadena_completa(t, severidad="critical"):
+    """El orden de `review_plan_node`: demandas de verificación → 227 → este lote."""
+    import graph_orchestrator as go
+    ok, iss, sev, _ = go._downgrade_reviewer_verification_demands(False, [t], severidad)
+    return rnd._downgrade_reviewer_non_issues(ok, iss, sev)
+
+
 def test_r2_el_camino_completo_sobre_las_188_razones_no_cambia():
     """[revisión 2] Las 188 razones del fixture (38 del LLM + 15 deterministas + 135 del corpus) por el camino completo
     con severidad `critical`: rebaja las 7 «no_problema» del LLM y nada más de producción, ninguna determinista, y 17
-    del corpus — las mismas 24 que la ronda 1 (medido contra `aabef1a7`)."""
-    def rebaja(t):
+    del corpus — las mismas 24 que la ronda 1 (medido contra `aabef1a7`).
+    [revisión 3] El camino completo es el de `review_plan_node`: la n.º 4 («no es violación de alergia …, pero
+    confirmar que es aceptable para el perfil vegetariano») ya no la rebaja el 227 (el «pero» tras el veredicto la
+    deja en pie), sino antes `_downgrade_reviewer_verification_demands` («confirmar que»)."""
+    import graph_orchestrator as go
+
+    def verificacion(t):
+        return go._downgrade_reviewer_verification_demands(False, [t], "critical")[0]
+
+    def solo_227_746(t):
         return rnd._downgrade_reviewer_non_issues(False, [t], "critical")[0]
-    assert sorted(x["n"] for x in _LLM if rebaja(x["texto"])) == sorted(
-        x["n"] for x in _LLM if x["clase"] == "no_problema") == [4, 20, 34, 35, 36, 37, 38]
+
+    def rebaja(t):
+        return _cadena_completa(t)[0]
+    no_problema = sorted(x["n"] for x in _LLM if x["clase"] == "no_problema")
+    assert no_problema == [4, 20, 34, 35, 36, 37, 38]
+    # la rebaja de verificación, anterior a este lote: la n.º 4 («confirmar que…») y la n.º 27 (real, anemia, «confirmar
+    # con el médico tratante» — el riesgo abierto del 17-sep, fuera de este lote; ver el test del replay)
+    assert [x["n"] for x in _LLM if verificacion(x["texto"])] == [4, 27]
+    assert sorted(x["n"] for x in _LLM if solo_227_746(x["texto"])) == [20, 34, 35, 36, 37, 38]
+    assert sorted(x["n"] for x in _LLM if rebaja(x["texto"])) == sorted(no_problema + [27])
     assert not [t for t in _FIX["deterministas"] if rebaja(t)]
-    assert sum(rebaja(x["t"]) for x in _FIX["corpus_baterias"]) == 17
+    assert sum(solo_227_746(x["t"]) for x in _FIX["corpus_baterias"]) == 17
+    # por la cadena entera, 55 del corpus (38 las rebaja la verificación): las mismas que la ronda 2 (medido contra
+    # `5ea7a222` con el arnés de la revisión 3)
+    assert sum(rebaja(x["t"]) for x in _FIX["corpus_baterias"]) == 55
+    n4 = _LLM[3]["texto"]
+    assert rnd._downgrade_reviewer_non_issues(False, [n4], "critical")[:2] == (False, [n4]), n4
+
+
+# ─── [revisión 3 · 2026-09-28] Un veredicto seguido de un contraste u otra cláusula ya no absuelve la oración ───
+# (1) IMPORTANTE (ya en main): `_veredicto_local` miraba el texto hasta el primer signo tras «no es violación» y, si
+#     su objeto era cerrado, absolvía la ORACIÓN ENTERA: lo que seguía a la coma no se leía. La plantilla es real (n.º 4
+#     del LLM y n.º 30 del corpus: «…no es violación…, pero…»), y las prohibiciones temporales, la anemia y lo renal
+#     solo las ve el LLM. Ahora lo que queda tras el objeto cerrado es otra cláusula: sin contraste, y confirmación/declaración/
+#     ausencia de lo declarado (u otro veredicto local), o se queda. Igual tras la conclusión del 227.
+R3_VEREDICTO_CON_CONTRASTE = [
+    # los seis de la re-verificación
+    "Día 2 | Almuerzo: contiene plátano maduro — no es violación de alergia, pero es un ingrediente prohibido "
+    "temporalmente en el perfil de gustos.",
+    "Día 4 | Almuerzo: contiene pan de trigo — sin alergia al gluten declarada, no es violación, aunque el pan de trigo "
+    "está prohibido temporalmente en el perfil.",
+    "Ingesta frecuente de queso: no es violación de alergia (paciente sin alergias), pero la leche con avena del Día 2 "
+    "inhibe la absorción de hierro en la anemia.",
+    "No hay violación de la dieta vegetariana, pero el Día 2 aporta 4200 mg de potasio para un paciente renal.",
+    "No hay violación de la alergia, pero el Día 3 incluye maní en la merienda.",
+    "Día 1 | Cena: contiene queso mozzarella — sin alergia a lácteos declarada, no es violación; el Día 3 incluye "
+    "hígado encebollado, que el paciente rechazó.",
+    # sondas propias: otros conectores y otras cláusulas tras el veredicto
+    "No hay violación de la alergia; sin embargo, el Día 3 incluye maní en la merienda.",
+    "No es violación de la dieta vegetariana, no obstante el Día 2 aporta 4200 mg de potasio.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación, excepto por el sodio del Día 2.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación, salvo el potasio del Día 2 para el "
+    "paciente renal.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación, y el Día 2 aporta 4200 mg de potasio.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación — el Día 3 incluye hígado, que el paciente "
+    "rechazó.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación: el Día 3 incluye hígado, que el paciente "
+    "rechazó.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación, solo riesgo de hiperpotasemia por 4200 mg "
+    "de potasio.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación, sino un exceso de sodio.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación, mientras que el Día 2 aporta 4200 mg de "
+    "potasio.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación; Día 2 | Cena: pollo en dieta vegetariana.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación; Día 2: maní — sin alergia al maní "
+    "declarada, no es violación, pero el Día 3 incluye hígado, que el paciente rechazó.",
+    # la conclusión del 227 («por lo que no es una violación») seguida de un contraste u otra cláusula
+    "Día 2: maní — el paciente no declaró alergia al maní, por lo que no es una violación, pero el Día 3 aporta 4200 mg "
+    "de potasio para un paciente renal.",
+    "El paciente no declaró alergia al maní, por lo que no hay violación, aunque el pan de trigo del Día 4 está "
+    "prohibido temporalmente.",
+    "El paciente no declaró alergia al maní, por lo que no hay violación; el Día 3 incluye hígado encebollado, que el "
+    "paciente rechazó.",
+]
+# Lo que sigue descartándose: la n.º 20 del fixture (su «pero» va ANTES del veredicto; tras él, una cola cerrada),
+# los veredictos del 227 sin nada detrás, una confirmación o un segundo veredicto local tras el primero, y la cola
+# cerrada de la n.º 30 del corpus («pero se recomienda verificar tolerancia», que no afirma ningún defecto).
+R3_VEREDICTO_SIGUE = [
+    _LLM[19]["texto"],
+    "Día 1 | Cena: contiene queso mozzarella (lácteo) — sin alergia a lácteos declarada, no es violación.",
+    "Día 1 | Merienda y Día 2 | Merienda: contienen mantequilla de maní; sin alergia declarada, no constituye "
+    "violación.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación; no se detectan otros alérgenos.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación; Día 2 | Merienda: maní — sin alergia al "
+    "maní declarada, no es violación.",
+    "Día 2 | Almuerzo: contiene '10 g de maní tostado' — el paciente no declaró alergia al maní, por lo que no es una "
+    "violación, pero se recomienda verificar tolerancia.",
+    "El plan incluye 'maní tostado' en la merienda del Día 2. El paciente no declaró alergia al maní, por lo que no es "
+    "una violación de alergias.",
+]
+
+
+# La misma clase en el otro sentido (sondas de la re-verificación, aprobadas en main y en la ronda 2): el veredicto
+# con SU PROPIO sujeto («el queso no es violación») juzga su cláusula, no la de antes. Solo cuando su cláusula es un
+# preámbulo cerrado («— sin alergia a lácteos declarada, no es violación») juzga la anterior (el caso del 227).
+R3_OTRO_SUJETO_ANTES_DEL_VEREDICTO = [
+    "Hay pollo en la cena del Día 2 con dieta vegetariana; el queso no es violación.",
+    "El Día 4 incluye pan de trigo, prohibido temporalmente en el perfil; el queso del desayuno no es violación de la "
+    "dieta vegetariana.",
+    "Anemia: leche con avena en el desayuno del Día 2 inhibe la absorción de hierro, y el queso de la cena no es "
+    "violación.",
+    "Día 3: 4200 mg de potasio para paciente renal; el plátano no constituye violación.",
+    "Día 3 | Cena: contiene hígado encebollado (rechazado por el paciente); Día 1 | Cena: contiene queso — sin alergia "
+    "a lácteos declarada, no es violación.",
+]
+
+
+def test_r3_el_veredicto_seguido_de_contraste_rechaza_con_su_severidad():
+    """Camino completo (demandas de verificación → 227 → 746) con severidad `critical`: plan rechazado y razón intacta."""
+    malos = [t for t in R3_VEREDICTO_CON_CONTRASTE + R3_OTRO_SUJETO_ANTES_DEL_VEREDICTO
+             if _cadena_completa(t) != (False, [t], "critical", [])]
+    assert not malos, malos
+
+
+def test_r3_la_regla_del_227_por_si_sola_ya_no_absuelve_el_contraste():
+    """No depende de `_ISSUE_CONTINUES_RX` (que solo ve «pero además / pero se detecta / pero el plan»): la inversión
+    del 227 lee lo que sigue al veredicto. Ni del knob del 746."""
+    casos = R3_VEREDICTO_CON_CONTRASTE + R3_OTRO_SUJETO_ANTES_DEL_VEREDICTO
+    assert not [t for t in casos if rc.oraciones_sin_hallazgo(t)]
+    assert not [t for t in casos if rc.motivo(t)]
+
+
+def test_r3_la_n20_y_los_veredictos_cerrados_se_siguen_descartando():
+    for t in R3_VEREDICTO_SIGUE:
+        assert _cadena_completa(t, "minor") == (True, [], "low", [t]), t
+    anc = (_BACKEND / "revisor_confirmaciones.py").read_text(encoding="utf-8")
+    assert "tooltip-anchor: P1-PLAN-LOTE-746-VEREDICTO-Y-SU-COLA" in anc
+
+
+# (3) MENOR, regresión frente a la ronda 1: `_ALCANCE` admitía «ninguna/ningún» también en la forma de CUMPLIMIENTO
+#     («se cumple en ningún día» = no se cumple), y `_NEGACION` no los veía; y el universal en la NEGACIÓN («no se
+#     detectan alérgenos en todas las comidas» = en alguna sí) es ambiguo. Dos alcances: afirmativo para cumplir,
+#     negativo para negar algo malo.
+R3_CUANTIFICADOR_INVERTIDO = [
+    "La dieta vegetariana se cumple en ningún día.",
+    "El plan cumple con las restricciones declaradas en ninguno de los días.",
+    "El plan es compatible con la dieta renal en ningún día.",
+    "El plan es compatible con la dieta vegetariana en ningún día.",
+    "La dieta vegetariana se respeta en ninguna comida.",
+    "El plan respeta la dieta vegetariana en ningún plato.",
+    "Dieta vegetariana respetada en ninguna de las comidas.",
+    "El plan es seguro para el paciente en ningún día.",
+    "No se detectan alérgenos en todas las comidas.",
+    "No hay violaciones de la dieta vegetariana en todos los días.",
+    "Sin alérgenos declarados en todos los platos.",
+]
+R3_ALCANCE_BIEN_USADO = [
+    "No se detectan alérgenos en ninguna comida.",
+    "No hay violaciones de la dieta vegetariana en ningún día.",
+    "No se detectan alérgenos en todo el plan.",
+    "La dieta vegetariana se respeta en todos los días.",
+    "El plan respeta las restricciones declaradas en todas las comidas.",
+]
+
+# (4) MENOR: el nombre de la dieta era texto libre (entre comillas o una palabra cualquiera) y «restricciones … declaradas»
+#     admitía 4 palabras libres. Ahora vocabulario CERRADO: los nombres de dieta que reconoce el SSOT
+#     `constants.canonicalize_diet_type` (vía `diet_type_aliases`), y para la restricción una lista cerrada de
+#     calificativos (esos nombres, «sin gluten/lactosa», «de sodio/potasio/…», «dietéticas/alimentarias/…»).
+R3_NOMBRE_O_CALIFICATIVO_LIBRE = [
+    "Dieta 'vegetariana hasta el miércoles' respetada.",
+    "El plan es compatible con la dieta 'renal de lunes a miércoles'.",
+    "Dieta 'renal sin control de potasio' respetada.",
+    "Sin problemas con la dieta 'baja en potasio pollo'.",
+    "El plan respeta la dieta pollo.",
+    "No hay restricciones de sodio respetadas declaradas.",
+    "No hay violaciones de la dieta pollo.",
+    "Dieta 'vegetariana a medias' respetada.",
+    "El plan respeta la dieta 'vegana' 'con atún'.",
+    "No hay restricciones de sodio incumplidas declaradas.",
+    "No hay restricciones renales ignoradas declaradas.",
+]
+R3_VOCABULARIO_CERRADO_SIGUE = [
+    "Dieta 'vegetarian' respetada.",
+    "El plan respeta la dieta vegana.",
+    "No hay violaciones de la dieta pescetariana.",
+    "Dieta 'ovo-lacto-vegetariano' respetada.",
+    "No hay restricciones dietéticas declaradas.",
+    "No hay restricciones de sodio declaradas.",
+    "No hay restricciones vegetarianas ni veganas declaradas.",
+]
+
+# (5) Rechazos de más frente a main por la inversión del 227: los que se pueden cerrar SIN texto libre se cierran — el
+#     paciente con un calificativo de un vocabulario cerrado, y «X, rechazados por el paciente, no aparecen» / «Los
+#     alimentos rechazados (X) no aparecen» como ORACIÓN ENTERA (lo ausente es lo declarado en la misma frase) —.
+R3_SIN_DEFECTO_DE_NUEVO_DESCARTADAS = [
+    "El plan es seguro para el paciente renal.",
+    "El plan es seguro para la paciente embarazada.",
+    "El pescado y la berenjena, rechazados por el paciente, no aparecen en el plan.",
+    "Los alimentos rechazados (pescado, berenjena) no aparecen en el plan.",
+]
+# Y esas formas no abren nada: el apósito solo, con otra cláusula o con un calificativo fuera del vocabulario, se queda.
+R3_FORMAS_NUEVAS_NO_ABREN = [
+    "Hígado encebollado, rechazado por el paciente.",
+    "Hígado encebollado, rechazado por el paciente. No aparece en el plan la berenjena.",
+    "El pescado y la berenjena, rechazados por el paciente, no aparecen en el plan, pero el Día 2 incluye hígado.",
+    "Los alimentos rechazados (pescado, berenjena) no aparecen en el plan; el Día 3 incluye hígado encebollado.",
+    "El hígado, rechazado por el paciente, no aparece en el desayuno del Día 2.",
+    "El plan es seguro para el paciente renal con 4200 mg de potasio.",
+    "El plan es seguro para el paciente renal excepto el Día 2.",
+    "El plan es seguro para el paciente sano.",
+    "El plan es seguro para el paciente con insuficiencia renal leve.",
+]
+# COSTE ACEPTADO (un reintento de más frente a main; ninguno en el fixture ni en el corpus): cerrarlos reabre el hueco.
+#   · la ausencia sin declaración puede ser algo BUENO que falta («El plan no incluye hierro hemo… El plan es seguro»);
+#   · un veredicto en otra oración que el objeto («… huevo revuelto. Sin alergia…, no es violación») es la forma del
+#     hueco del 227 entre oraciones («El Día 3 incluye hígado… Sin alergia…, no es violación»);
+#   · una dieta fuera del SSOT («'baja en sodio'», «DASH», «renal») no se puede distinguir de un nombre con cola.
+R3_COSTE_ACEPTADO = [
+    "El plan no incluye pescado ni berenjena. El plan es seguro.",
+    "Día 2 | Desayuno: huevo revuelto. Sin alergia al huevo declarada, no es violación.",
+    "El plan no contiene pescado ni berenjena; ninguno aparece en el plan.",
+    "La dieta 'baja en sodio' se respeta en todas las comidas.",
+]
+
+
+def test_r3_los_huecos_menores_rechazan_con_su_severidad():
+    malos = [t for t in R3_CUANTIFICADOR_INVERTIDO + R3_NOMBRE_O_CALIFICATIVO_LIBRE + R3_FORMAS_NUEVAS_NO_ABREN
+             + R3_COSTE_ACEPTADO if _cadena_completa(t) != (False, [t], "critical", [])]
+    assert not malos, malos
+    assert not [t for t in R3_CUANTIFICADOR_INVERTIDO + R3_NOMBRE_O_CALIFICATIVO_LIBRE if rc.motivo(t)]
+
+
+def test_r3_las_formas_cerradas_de_alcance_y_nombre_se_descartan():
+    for t in R3_ALCANCE_BIEN_USADO + R3_VOCABULARIO_CERRADO_SIGUE + R3_SIN_DEFECTO_DE_NUEVO_DESCARTADAS:
+        assert _cadena_completa(t, "minor") == (True, [], "low", [t]), t
+
+
+def test_r3_el_vocabulario_de_dietas_sale_del_ssot():
+    """Si el SSOT gana una grafía, este filtro la reconoce sin tocarlo; y nunca una palabra que el SSOT no conoce."""
+    import constants
+    for canon in ("vegan", "vegetarian", "pescatarian", "balanced"):
+        for nombre in constants.diet_type_aliases(canon):
+            t = f"Dieta '{nombre}' respetada."
+            assert rc.motivo(t) == "confirmacion", t
+    mod = (_BACKEND / "revisor_confirmaciones.py").read_text(encoding="utf-8")
+    assert "diet_type_aliases" in mod and "_PALABRA =" not in mod
 
 
 def test_la_regla_depende_del_knob_del_227(monkeypatch):
@@ -607,7 +845,7 @@ def test_contar_entregas_revisadas_solo_lee(monkeypatch):
 
     import db_core
     monkeypatch.setattr(db_core, "execute_sql_query", _q)
-    assert er.contar_entregas_revisadas(72) == (1, 0, 2)
+    assert er.contar_entregas_revisadas(72) == (1, 0, 2, 0, 0)   # [revisión 3] + sin_entrega, fallidas_sin_entrega
     assert len(llamadas) == 2 and all(s.lstrip().upper().startswith("SELECT") for s in llamadas)
     assert "node = 'clinical_band'" in llamadas[0] and "status = 'completed'" in llamadas[1]
 
@@ -619,7 +857,7 @@ def test_contar_entregas_revisadas_falla_a_cero(monkeypatch):
         raise RuntimeError("db caída")
 
     monkeypatch.setattr(db_core, "execute_sql_query", _boom)
-    assert er.contar_entregas_revisadas(72) == (0, 0, 0)
+    assert er.contar_entregas_revisadas(72) == (0, 0, 0, 0, 0)
 
 
 def _cron_con(monkeypatch, corridas, completados, escrituras=None):
@@ -736,12 +974,55 @@ def test_la_fila_clinical_band_lleva_su_clave_de_entrega():
 
 def test_r2_la_transicion_de_7_dias_queda_escrita_en_el_sop():
     """[revisión 2, punto 5] Con 168 h las filas viejas sin `entrega` (una por corrida) inflan la tasa hasta 7 días tras
-    desplegar, no 3: escrito en el módulo y en la tabla de alertas, con cómo leer una alerta de esa semana."""
+    desplegar, no 3: escrito en el módulo y en la tabla de alertas, con cómo leer una alerta de esa semana.
+    [revisión 3] El SOP de la ronda 2 estaba invertido («si `n_corridas` supera con mucho a `n_delivered`, es el
+    conteo heredado»): las filas heredadas cuentan igual en los dos números. Ahora se lee con `n_sin_entrega` (ver el
+    test de la lógica, abajo)."""
     mod = (_BACKEND / "entregas_revisadas.py").read_text(encoding="utf-8")
-    assert "TRANSICIÓN TRAS DESPLEGAR" in mod and "7 DÍAS" in mod and "n_corridas" in mod
+    assert "TRANSICIÓN TRAS DESPLEGAR" in mod and "7 DÍAS" in mod and "n_sin_entrega" in mod
     tabla = (_BACKEND / "docs" / "system_alerts_resolution_table.md").read_text(encoding="utf-8")
     fila = [ln for ln in tabla.splitlines() if ln.startswith("| `review_failed_delivered_rate_high`")]
     assert len(fila) == 1 and "SOP tras desplegar P1-PLAN-LOTE-746: durante 7 días" in fila[0]
+    for texto in (mod, fila[0]):
+        assert "supera con mucho" not in texto          # el diagnóstico invertido de la ronda 2
+        assert "n_sin_entrega" in texto and "tasa_sin_heredadas" in texto
+
+
+# La semana de la transición: 4 corridas HEREDADAS (sin `entrega`) del bloque 9 del 27-sep (2 rechazadas, 1 entrega
+# real) y 3 bloques nuevos entregados aprobados.
+def _transicion():
+    heredadas = [_run(_t(4, 37), True), _run(_t(4, 43), True), _run(_t(4, 51), False), _run(_t(16, 59), False)]
+    nuevas, completados = _entregas([True, True, True])
+    return heredadas + nuevas, completados
+
+
+def test_r3_las_filas_heredadas_no_abren_diferencia_entre_corridas_y_entregas():
+    """Por qué el SOP de la ronda 2 no servía: una fila sin `entrega` cuenta UNA en `corridas` y UNA en `entregas`."""
+    solo_heredadas = [_run(_t(4, 37), True), _run(_t(4, 43), True), _run(_t(4, 51), False), _run(_t(16, 59), False)]
+    r = er.contar_entregas(solo_heredadas, [])
+    assert (r["entregas"], r["corridas"], r["sin_entrega"], r["fallidas_sin_entrega"]) == (4, 4, 4, 2), r
+    # la diferencia solo aparece cuando la lógica NUEVA agrupa corridas
+    r = er.contar_entregas([_run(_t(4, 37), True, _W9), _run(_t(4, 43), True, _W9), _run(_t(4, 51), False, _W9),
+                            _run(_t(16, 59), False, _W9)], [{"plan_id": "3957a669", "semana": 9, "updated_at": _t(17, 2)}])
+    assert (r["entregas"], r["corridas"], r["sin_entrega"]) == (1, 4, 0), r
+
+
+def test_r3_el_sop_de_la_transicion_lee_la_tasa_sin_heredadas(monkeypatch):
+    """La alerta de la semana de transición: 2/7 = 28,6 % > 20 % → alerta, con `n_corridas == n_delivered` (7 = 7): el
+    SOP de la ronda 2 la habría leído como real. Con `n_sin_entrega` la tasa de las entregas NUEVAS es 0/3."""
+    tick, alerta = _cron_con(monkeypatch, *_transicion())
+    assert tick["alert_emitted"] is True and (tick["n_delivered"], tick["n_corridas"]) == (7, 7), tick
+    meta = json.loads(alerta[0][3])
+    assert (meta["n_sin_entrega"], meta["n_fallidas_sin_entrega"]) == (4, 2), meta
+    assert (tick["n_sin_entrega"], tick["n_fallidas_sin_entrega"]) == (4, 2), tick
+    assert er.tasa_sin_heredadas(meta) == 0.0
+    # sin filas heredadas, la tasa sin heredadas ES la tasa de la alerta; sin entregas nuevas, no hay tasa que leer
+    corridas, completados = _entregas([True, False, False, True, True])
+    _, alerta = _cron_con(monkeypatch, corridas, completados)
+    meta = json.loads(alerta[0][3])
+    assert meta["n_sin_entrega"] == 0 and er.tasa_sin_heredadas(meta) == meta["review_failed_rate"] == 0.4
+    assert er.tasa_sin_heredadas({"n_delivered": 4, "n_review_failed": 2, "n_sin_entrega": 4}) is None
+    assert er.tasa_sin_heredadas({}) is None and er.tasa_sin_heredadas(None) is None
 
 
 def test_los_ficheros_con_tope_no_crecen():
