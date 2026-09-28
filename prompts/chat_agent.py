@@ -154,19 +154,6 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 
 
 # ============================================================
-# PROMPT DEL MODO LLAMADA DE VOZ
-# ============================================================
-
-CHAT_VOICE_MODE_PROMPT = """Eres el agente asistente de nutrición IA de Bioboros.
-🎙️ MODO LLAMADA DE VOZ ACTIVO: El usuario te está hablando mediante una llamada telefónica por voz.
-REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
-- ¡EVITA EL MARKDOWN! No uses negritas, no uses viñetas, no uses listas.
-- HABLA COMO UN HUMANO: Tus respuestas deben leerse natural en voz alta. 
-- SÉ EXTREMADAMENTE BREVE: Resume toda tu respuesta a 1 o 2 oraciones máximo. Ve hiper directo al grano.
-- NUNCA des largas descripciones de platos a menos que el usuario te lo pida. Menciona solo el nombre principal."""
-
-
-# ============================================================
 # PROMPT DEL STREAM (base inline)
 # ============================================================
 
@@ -179,6 +166,39 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
 2. Usa viñetas (`-` o `•`) cuando listes 3 o más cosas (las comidas del día, ingredientes, pasos); uno o dos datos van en una frase.
 3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso.""" + _CHAT_BREVITY_RULES + _CHAT_VOICE_RULES + _CHAT_RESOLVE_RULES
+
+
+# ============================================================
+# PROMPT DEL MODO VOZ (antes «Modo Llamada»)
+# ============================================================
+# [P1-PLAN-LOTE-682 · 2026-09-28] El modo voz del coach vuelve, ahora con la voz del propio dispositivo (el
+# reconocimiento del dictado para oír y `speechSynthesis` para hablar: cero coste de API). El prompt viejo SUSTITUÍA
+# al del stream por cinco líneas propias: sin el contexto clínico, sin «no saludes» y sin los tres bloques compartidos
+# (brevedad y uso de herramientas, voz/longitud/riesgo, resolver lo que necesita) — justo lo que protege a un coach
+# que registra comidas y contesta sobre síntomas. Ahora es el MISMO prompt del stream hasta su formato visual (la
+# cabeza se deriva, no se copia: así no puede quedarse atrás otra vez), con los tres bloques, y al final las reglas
+# para que la respuesta suene bien dicha en voz alta, que mandan sobre los topes de longitud y el formato de arriba.
+_CHAT_CALL_MODE_RULES = """
+
+MODO VOZ (MANDA SOBRE LOS TOPES DE LONGITUD Y EL FORMATO DE ARRIBA): el usuario te HABLA con su voz y ESCUCHA tu respuesta en voz alta; no la lee.
+V1. SIN FORMATO: nada de negritas, viñetas, listas, tablas, encabezados, enlaces ni emojis. Frases corridas que suenen naturales dichas en voz alta.
+V2. MUY BREVE: de una a tres frases cortas, como mucho unas 45 palabras. Si pide una receta, un menú o una lista, di lo esencial en dos frases y ofrécele dejárselo escrito en el chat.
+V3. CIFRAS PARA EL OÍDO: redondea y di la unidad completa ("unas 650 calorías", "unos 30 gramos de proteína"); nunca abreviaturas (kcal, g, ml) ni símbolos (~, %, /). Di "unas" o "aproximadamente" en lugar del "~".
+V4. LO QUE LLEGA VIENE DEL RECONOCIMIENTO DE VOZ y puede traer palabras mal escritas: interprétalo con sentido común (un plato conocido mal transcrito es ese plato). Si el alimento o la cantidad que vas a registrar siguen sin estar claros, pregunta en una frase antes de registrar.
+V5. REGISTRAR HABLANDO: si cuenta algo que YA comió, regístralo como siempre (regla 4 de brevedad) y confírmale en una frase qué anotaste y cuánto suma. Si habla de algo que VA a comer, pregunta una sola vez si se lo anotas cuando lo coma.
+V6. UNA sola pregunta, al final, y solo si hace falta para seguir. Sin saludos ni despedidas.
+V7. TEMAS DE RIESGO (síntomas, medicamentos, alergias, embarazo, ayunos): aplica las reglas I y L en su versión más corta y dile que en el chat le queda escrito.
+"""
+
+# El prompt del stream MENOS su bloque de formato visual: la cabeza (persona y contexto clínico) y la cola compartida
+# (los tres bloques) salen del mismo texto, así que lo que se le añada al stream lo hereda la voz. Los tests de los
+# bloques compartidos cuentan que se sumen en los 4 prompts base; este no los vuelve a sumar, los hereda.
+_STREAM_CABEZA, _STREAM_RESTO = CHAT_STREAM_INLINE_PROMPT.split("REGLAS DE FORMATO VISUAL", 1)
+CHAT_VOICE_MODE_PROMPT = (
+    _STREAM_CABEZA.rstrip()
+    + _STREAM_RESTO[_STREAM_RESTO.index(_CHAT_BREVITY_RULES):]
+    + _CHAT_CALL_MODE_RULES
+)
 
 
 # ============================================================
