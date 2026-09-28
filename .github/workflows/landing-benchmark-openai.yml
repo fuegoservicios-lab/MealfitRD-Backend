@@ -8,7 +8,7 @@
 # El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
 # fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [P1-LANDING-BENCH-1 · 2026-08-07] Corrida on-demand del benchmark del landing con la
-# corrida FORZADA a OpenAI (`_OPENAI_FORCE_KNOBS`: GPT-6 Luna, cero GLM) —
+# corrida FORZADA a OpenAI en los 4 knobs del pipeline (`_OPENAI_FORCE_KNOBS`: GPT-6 Luna) —
 # `scripts/landing_benchmark.py live --provider openai`. [P1-PLAN-LOTE-749 · 2026-09-28] por
 # defecto la MATRIZ ENTERA (25) y reporte schema v2. Los perfiles de la matriz corren como user_id=guest (cuenta de
 # invitado); el runner de Actions aporta el egress que un sandbox de desarrollo no tiene.
@@ -43,6 +43,9 @@ on:
       changes:
         description: "ejercitar swap individual + bucle de día (true/false)"
         default: "true"
+      architecture:
+        description: "arquitectura que se mide (v1 | v2.2 del contrato del landing; vacío = unspecified)"
+        default: ""
   push:
     branches: [claude/landing-benchmarks-plan-generation-5ujyio]
     paths: [".github/workflows/landing-benchmark-openai.yml"]
@@ -81,7 +84,7 @@ jobs:
               echo "Faltan secrets del repo:**$missing**"
               echo ""
               echo "**Activación (owner):** Settings → Secrets and variables → Actions → New repository secret."
-              echo "La corrida es \`live --provider openai\` (GPT-6 Luna, cero GLM) con perfiles guest;"
+              echo "La corrida es \`live --provider openai\` (pipeline en GPT-6 Luna) con perfiles guest;"
               echo "sin \`OPENAI_API_KEY\` no es lo que dice ser y sin Neon el catálogo sale vacío"
               echo "(medirías el fallback matemático, no el motor). SOP: \`docs/landing_benchmarks.md\`."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -97,20 +100,29 @@ jobs:
         run: pip install -q -r requirements.txt
       - name: Landing benchmark — live --provider openai (perfiles guest)
         if: steps.guard.outputs.skip == 'false'
+        # [P1-PLAN-LOTE-749 · ronda 1] Inputs por `env:` y citados; `architecture` declarada (sin
+        # ella la corrida salía `unspecified` y el importador la rechazaba); stdout a $RUNNER_TEMP
+        # para no ensuciar el checkout antes de que el runner mida `git status`.
+        env:
+          IN_N: ${{ github.event.inputs.n }}
+          IN_CHANGES: ${{ github.event.inputs.changes }}
+          IN_ARCH: ${{ github.event.inputs.architecture }}
         run: |
-          N="${{ github.event.inputs.n || '0' }}"
-          EXTRA=""
-          if [ "${{ github.event.inputs.changes || 'true' }}" = "true" ]; then EXTRA="--changes"; fi
-          PYTHONPATH=. python scripts/landing_benchmark.py live "$N" \
-            --provider openai --conc 2 $EXTRA --save-plans \
-            --out landing_benchmark_openai.json | tee run_stdout.txt
+          set -o pipefail
+          N="${IN_N:-0}"
+          CHANGES="${IN_CHANGES:-true}"
+          ARGS=(live "$N" --provider openai --conc 2 --save-plans
+                --out landing_benchmark_openai.json)
+          [ "$CHANGES" = "true" ] && ARGS+=(--changes)
+          [ -n "$IN_ARCH" ] && ARGS+=(--architecture "$IN_ARCH")
+          PYTHONPATH=. python scripts/landing_benchmark.py "${ARGS[@]}" | tee "$RUNNER_TEMP/run_stdout.txt"
       - name: Resumen al step summary
         if: always() && steps.guard.outputs.skip == 'false'
         run: |
           {
             echo "## Landing benchmark (OpenAI) — resumen"
             echo '```'
-            tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
+            tail -30 "$RUNNER_TEMP/run_stdout.txt" 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Publicar reporte como artifact

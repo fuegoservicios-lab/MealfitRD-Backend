@@ -118,35 +118,42 @@ jobs:
       - name: Install backend deps (scorers locales)
         run: pip install -q -r requirements.txt
       - name: Benchmark remote (guest) contra el deploy
+        # [P1-PLAN-LOTE-749 · ronda 1] Los inputs del dispatch viajan por `env:` y se CITAN: antes
+        # `architecture` se interpolaba sin comillas dentro del script (texto libre ejecutado como
+        # shell). El stdout va a $RUNNER_TEMP: un `tee run_stdout.txt` en la raíz del checkout
+        # creaba un fichero sin trackear mientras el runner medía `git status`, y TODA corrida salía
+        # `source_dirty=True` (el importador del landing la rechaza).
+        env:
+          IN_N: ${{ github.event.inputs.n }}
+          IN_IDS: ${{ github.event.inputs.ids }}
+          IN_CHANGES: ${{ github.event.inputs.changes }}
+          IN_ARCH: ${{ github.event.inputs.architecture }}
+          API_BASE: ${{ steps.discover.outputs.base }}
         run: |
+          set -o pipefail
           # dispatch → inputs; push → env PUSH_RUN_* (editables arriba).
           # [P1-PLAN-LOTE-749 · 2026-09-28] Antes el fallback `ids || PUSH_RUN_IDS` también
           # corría en un DISPATCH con `ids` vacío: «vacío = usar n» acababa corriendo los 5 ids
           # del smoke (4,9,17,19,20), y los ids ganan sobre n. Cada evento lee SOLO lo suyo.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            N="${{ github.event.inputs.n }}"
-            IDS="${{ github.event.inputs.ids }}"
-            CHANGES="${{ github.event.inputs.changes }}"
+            N="$IN_N"; IDS="$IN_IDS"; CHANGES="$IN_CHANGES"; ARCH="$IN_ARCH"
           else
-            N="$PUSH_RUN_N"; IDS="$PUSH_RUN_IDS"; CHANGES="$PUSH_RUN_CHANGES"
+            N="$PUSH_RUN_N"; IDS="$PUSH_RUN_IDS"; CHANGES="$PUSH_RUN_CHANGES"; ARCH=""
           fi
           [ -z "$N" ] && N=0
-          EXTRA=""
-          [ "$CHANGES" = "true" ] && EXTRA="--changes"
-          [ -n "$IDS" ] && EXTRA="$EXTRA --ids $IDS"
-          ARCH="${{ github.event.inputs.architecture }}"
-          [ -n "$ARCH" ] && EXTRA="$EXTRA --architecture $ARCH"
-          PYTHONPATH=. python scripts/landing_benchmark.py remote "$N" \
-            --api-base "${{ steps.discover.outputs.base }}" \
-            --conc 2 $EXTRA --save-plans \
-            --out landing_benchmark_remote.json | tee run_stdout.txt
+          ARGS=(remote "$N" --api-base "$API_BASE" --conc 2 --save-plans
+                --out landing_benchmark_remote.json)
+          [ "$CHANGES" = "true" ] && ARGS+=(--changes)
+          [ -n "$IDS" ] && ARGS+=(--ids "$IDS")
+          [ -n "$ARCH" ] && ARGS+=(--architecture "$ARCH")
+          PYTHONPATH=. python scripts/landing_benchmark.py "${ARGS[@]}" | tee "$RUNNER_TEMP/run_stdout.txt"
       - name: Resumen al step summary
         if: always()
         run: |
           {
             echo "## Landing benchmark remote-guest — resumen"
             echo '```'
-            tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
+            tail -30 "$RUNNER_TEMP/run_stdout.txt" 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           # El JSON al LOG (no solo al artifact): el sandbox que orquesta esto no

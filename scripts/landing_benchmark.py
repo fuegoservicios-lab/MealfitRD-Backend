@@ -72,8 +72,9 @@ from landing_benchmarks import (
     build_report,
     build_run_meta,
     classify_remote_error,
-    derive_expectations,
+    corpus_profile,
     engine_band_definition,
+    engine_identity,
     latency_percentiles,
     plan_delivery_state,
     score_plan_nutrition,
@@ -84,13 +85,14 @@ from landing_benchmarks import (
 )
 
 
-# [P1-LANDING-BENCH-1-OPENAI] Forzado "todo OpenAI, cero GLM" para el modo live.
+# [P1-LANDING-BENCH-1-OPENAI] Forzado a OpenAI de los 4 knobs del pipeline para el modo live.
 # SOLO knobs per-feature sancionados (P3-PREVIEW-MODEL-KNOB) — el override global de
 # modelo fue ELIMINADO adrede (P1-SINGLE-PROVIDER-RESTORE: colapsaba también el reviewer
 # clínico risk-tier a un provider de test) y NO se reintroduce aquí. Estos 4 knobs
 # mueven el pipeline (flash nodes + router por tier + red post-fallo); el reviewer
-# (Luna/Terra/Sol), day-gen (Luna por tier) y swap (Luna fijo) YA son OpenAI por
-# default y conservan su routing fail-secure propio.
+# (Luna/Terra/Sol), day-gen (Luna por tier) y swap (Luna fijo) son OpenAI por default
+# y conservan su routing fail-secure propio — que un knob per-feature del ENTORNO puede
+# cambiar, así que la corrida no afirma «cero GLM» [P1-PLAN-LOTE-749 · ronda 1].
 # [P1-PLAN-LOTE-171 · 2026-09-23] Luna = GPT-6 Luna (la misma que ahora usan por defecto el reviewer free, el
 # day-gen, los swaps y la red post-fallo).
 _OPENAI_FORCE_KNOBS = {
@@ -109,8 +111,8 @@ def _force_openai_provider():
     if not os.environ.get("OPENAI_API_KEY"):
         raise SystemExit(
             "--provider openai requiere OPENAI_API_KEY en el entorno. Sin ella la "
-            "red post-fallo cae a GLM (fail-safe P1-NET-LUNA) y la corrida no "
-            "sería 'todo OpenAI'. Exporta la key y reintenta."
+            "red post-fallo cae a GLM (fail-safe P1-NET-LUNA) y los nodos forzados "
+            "no serían OpenAI. Exporta la key y reintenta."
         )
     for k, v in _OPENAI_FORCE_KNOBS.items():
         os.environ[k] = v
@@ -265,8 +267,18 @@ def _country_scope(profiles):
 
 
 def _score_delivered(row, plan, profile, band):
-    """Puntúa un plan que SÍ llegó al usuario: seguridad + nutrición + gym."""
+    """Puntúa un plan que SÍ llegó al usuario: seguridad + nutrición + gym.
+
+    [P1-PLAN-LOTE-749 · ronda 1] El perfil pasa por la MISMA unión de texto libre que hace el
+    motor (`profile_with_free_text`: «Otra…» de alergias/condiciones a sus listas, centinela
+    «Ninguna» incluido): el scorer de seguridad solo lee `allergies`. Idempotente sobre un perfil
+    ya unido (`corpus_profile`) y un no-op en la matriz, que hoy no trae texto libre."""
     from plan_gym import score_plan
+    try:
+        from graph_orchestrator import profile_with_free_text
+        profile = profile_with_free_text(profile)
+    except Exception as e:
+        row["free_text_merge_error"] = f"{type(e).__name__}: {e}"
     fd = strip_benchmark_meta(profile)
     try:
         row["safety"] = score_plan_safety(plan, profile)
@@ -565,18 +577,25 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s, transport="sse", b
     return row
 
 
+# Claves de `/health/version` que identifican el BINARIO medido. `git_sha` es el commit del motor
+# (lo inyecta el deploy por env `GIT_SHA`); sin él, `run.source_commit` en remote es el commit de
+# los scorers, no el del motor (gate G-04 del landing). [P1-PLAN-LOTE-749 · ronda 1]
+_SERVER_VERSION_KEYS = ("git_sha", "git_short_sha", "deploy_timestamp", "process_started_at",
+                        "last_known_pfix", "expected_marker", "drift")
+
+
 def _server_version(api_base):
-    """`/health/version` del deploy (público, sin LLM): qué P-fix corría cuando se midió. Sin esto
-    un reporte remote no dice contra QUÉ binario se midió. Best-effort."""
+    """`/health/version` del deploy (público, sin LLM): qué binario corría cuando se midió. Sin esto
+    un reporte remote no dice contra QUÉ motor se midió. Best-effort."""
     try:
         import httpx
         r = httpx.get(f"{api_base.rstrip('/')}/health/version", timeout=10)
         if r.status_code == 200:
             d = r.json()
-            return {k: d.get(k) for k in ("last_known_pfix", "expected_marker", "drift") if k in d}
+            return {k: d.get(k) for k in _SERVER_VERSION_KEYS if k in d}
+        return {"error": f"HTTP {r.status_code}"}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
-    return None
 
 
 def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, ids=None,
@@ -585,6 +604,9 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
 
     band = engine_band_definition()
     profiles = _select_profiles(n, ids)
+    # [P1-PLAN-LOTE-749 · ronda 1] El binario se identifica ANTES de generar y otra vez al final:
+    # un deploy a mitad de corrida mezcla dos motores y el reporte tiene que decirlo.
+    server_start = _server_version(api_base)
     # conc: el /analyze de un guest comparte RateLimiter por IP (3/60s); con generaciones de
     # minutos, 1-2 en vuelo no lo rozan pero >2 sí al arrancar. El workflow corre con 2.
     with ThreadPoolExecutor(max_workers=max(1, conc)) as ex:
@@ -592,6 +614,8 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
             lambda p: _run_one_remote(api_base, p, do_changes, timeout_s, transport=transport,
                                       band=band),
             profiles))
+    server_end = _server_version(api_base)
+    engine = engine_identity(server_start, server_end)
 
     if save_plans_path:
         _save_plans(save_plans_path, rows, [p["_id"] for p in profiles])
@@ -620,13 +644,18 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
             "routing": ("modelos decididos por el SERVIDOR (knobs del deploy: proveedor por "
                         "defecto + router por tier + overrides per-feature, ver "
                         "docs/llm_tier_routing.md); este reporte no afirma un modelo concreto"),
-            "server_version": _server_version(api_base),
+            "server_version": {"inicio": server_start, "fin": server_end,
+                               "cambio_durante_la_corrida":
+                                   engine["engine_commit_status"] == "changed_during_run"},
+            # `run.source_commit` es el del runner y sus scorers; el del motor medido es
+            # `run.engine_commit` (None mientras el servidor no publique su `git_sha`).
+            "source_commit_es": "commit de los scorers/runner, NO del motor medido",
         },
         "changes": changes,
         **_profile_sections(rows, len(profiles), band),
     }
     ctx = {"profile_ids": [p["_id"] for p in profiles], "country_scope": _country_scope(profiles),
-           "cohort": "matrix"}
+           "cohort": "matrix", "source_commit_role": "scorers", "engine": engine}
     return sections, ctx
 
 
@@ -634,7 +663,8 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
 
 def _telemetry_section(days):
     """[P1-PLAN-LOTE-749 · 2026-09-28] SQL en `landing_benchmarks.telemetry_queries` (testeable):
-    solo lo ENTREGADO, con lo descartado aparte en `no_entregados`."""
+    solo lo ENTREGADO (filas de banda emparejadas con su corrida); lo que no se empareja va
+    aparte en `banda_excluida_sin_corrida` y `corridas_por_entrega`."""
     _open_pools()
     d = int(days)
     out = {"window_days": d}
@@ -710,13 +740,17 @@ def _score_sections(plans_path=None, plans_glob=None, forms_root=None):
                              "error": "fichero sin plan legible"})
                 continue
             form = dict(form or {})
-            prof = dict(form, _id=pid, _label=pid, _expect=derive_expectations(form))
+            # [P1-PLAN-LOTE-749 · ronda 1] El perfil con la unión de texto libre de producción
+            # (antes el formulario crudo: «frutos del mar» escrito a mano no llegaba al scorer).
+            prof = corpus_profile(form, pid)
             if not form:
                 prof["_sin_formulario"] = True
             state = plan_delivery_state(plan)
             row = {"id": pid, "label": pid, "delivery": state,
                    "goal": form.get("mainGoal"), "country": form.get("country"),
-                   "conditions": form.get("medicalConditions"), "diet": form.get("dietType")}
+                   "conditions": prof.get("medicalConditions"), "diet": form.get("dietType")}
+            if prof.get("_free_text_discarded"):
+                row["free_text_discarded"] = {f: form.get(f) for f in prof["_free_text_discarded"]}
             if state in ("delivered", "delivered_fallback"):
                 _score_delivered(row, plan, prof, band)
             rows.append(row)
@@ -729,7 +763,11 @@ def _score_sections(plans_path=None, plans_glob=None, forms_root=None):
     sections.pop("reliability", None)
     ctx = {"profile_ids": attempted, "country_scope": _country_scope(profiles_used) or ["DO"],
            "cohort": cohort,
-           "sin_formulario": sum(1 for p in profiles_used if p.get("_sin_formulario"))}
+           "sin_formulario": sum(1 for p in profiles_used if p.get("_sin_formulario")),
+           # Texto libre que producción descarta por el centinela «Ninguna» (P0-FORM-1): el scorer
+           # sigue la regla, pero la corrida lo nombra en vez de callarlo.
+           "texto_libre_descartado": [p["_id"] for p in profiles_used
+                                      if p.get("_free_text_discarded")]}
     return sections, ctx
 
 
@@ -740,13 +778,18 @@ def _utc_now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _git_source_info():
+def _git_source_info(root=None):
     """(commit, dirty) del backend que corre el benchmark. dirty=None = no verificable (sin git):
     el importador del landing lo rechaza igual que un árbol sucio, a propósito. El commit puede
     venir de env (`LANDING_BENCH_SOURCE_COMMIT`/`GITHUB_SHA`) si no hay git, pero la limpieza NO:
-    esa no se declara, se comprueba. Se mide al ARRANCAR, antes de escribir ningún fichero."""
+    esa no se declara, se comprueba. Se mide al ARRANCAR, antes de escribir ningún fichero.
+
+    [P1-PLAN-LOTE-749 · ronda 1] Las salidas del propio benchmark (`landing_benchmark_*.json`,
+    `landing_plans_*.json`, `run_stdout.txt`) están en `.gitignore`, y los workflows mandan el
+    stdout a `$RUNNER_TEMP`: el `| tee run_stdout.txt` en la raíz del checkout ensuciaba TODAS
+    las corridas de Actions y el importador las rechazaba."""
     import subprocess
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     commit = dirty = None
     try:
         commit = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True,
@@ -762,11 +805,36 @@ def _git_source_info():
 
 # ─────────────────────────────── main ───────────────────────────────
 
-def main():
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+# `run.architecture` del contrato del landing (`protocol.required_architectures`) + el valor por
+# defecto, que se DECLARA (el importador lo rechaza) en vez de adivinarse.
+ARCHITECTURES = ("v1", "v2.2", "unspecified")
+
+# Parámetros que cada modo USA de verdad — `run.parameters` lleva solo esos (antes arrastraba
+# `transport`/`timeout`/`days`/`provider` en score y telemetry). [P1-PLAN-LOTE-749 · ronda 1]
+_MODE_PARAMETERS = {
+    "structural": (),
+    "live": ("n", "conc", "changes", "save_plans", "provider", "ids"),
+    "remote": ("n", "conc", "changes", "save_plans", "api_base", "ids", "transport", "timeout"),
+    "telemetry": ("days",),
+    "score": ("plans", "plans_glob", "forms_root"),
+}
+_DEFAULT_CONC = {"live": 2, "remote": 1}
+
+
+def _run_parameters(args) -> dict:
+    """`run.parameters`: solo los del modo, con la concurrencia EFECTIVA (no el `None` del CLI)."""
+    out = {}
+    for k in _MODE_PARAMETERS.get(args.mode, ()):
+        v = getattr(args, k, None)
+        if k == "conc":
+            v = max(1, v or _DEFAULT_CONC.get(args.mode, 1))
+        if v is None or v is False:
+            continue
+        out[k] = v
+    return out
+
+
+def _build_parser():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("mode", choices=("structural", "live", "remote", "telemetry", "score"))
     ap.add_argument("n", nargs="?", type=int, default=0,
@@ -791,19 +859,39 @@ def main():
                                          "({'final_plan'|'plan', 'form'?} por fichero)")
     ap.add_argument("--forms-root", help="score: raíz de los crudos para recuperar el formulario "
                                          "por la convención <dir>__<fichero>.json de cola_corpus")
-    ap.add_argument("--architecture", default=os.environ.get("LANDING_BENCH_ARCHITECTURE") or "unspecified",
+    ap.add_argument("--architecture", choices=ARCHITECTURES,
+                    default=os.environ.get("LANDING_BENCH_ARCHITECTURE") or "unspecified",
                     help="run.architecture (v1 | v2.2 en el contrato del landing); se DECLARA, no se adivina")
     ap.add_argument("--protocol-version", default=LANDING_BENCHMARK_PROTOCOL_VERSION,
                     help="run.protocol_version (debe coincidir con protocol.version del landing)")
     ap.add_argument("--out", help="ruta del JSON de salida")
-    args = ap.parse_args()
+    return ap
+
+
+def _parse_args(argv=None):
+    """Parsea y valida. `choices` no revisa un default que viene de env: se valida aquí también."""
+    ap = _build_parser()
+    args = ap.parse_args(argv)
+    if args.architecture not in ARCHITECTURES:
+        ap.error(f"--architecture/LANDING_BENCH_ARCHITECTURE debe ser uno de {ARCHITECTURES}")
+    if args.mode == "remote" and not args.api_base:
+        ap.error("--api-base es obligatorio en modo remote")
+    if args.mode == "score" and not (args.plans or args.plans_glob):
+        ap.error("score necesita --plans o --plans-glob")
+    return args
+
+
+def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    args = _parse_args()
 
     started_at = _utc_now_iso()
     source_commit, source_dirty = _git_source_info()
     _ids = {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
-    # `is not`: `0 in (None, False)` es True en Python y borraría n=0 (= la matriz entera).
-    params = {k: v for k, v in vars(args).items()
-              if k != "out" and v is not None and v is not False}
+    params = _run_parameters(args)
     ctx = {"profile_ids": [], "country_scope": [], "cohort": "matrix"}
 
     if args.mode == "structural":
@@ -814,15 +902,13 @@ def main():
         if args.provider == "openai":
             _force_openai_provider()
         save_path = f"landing_plans_{os.getpid()}.json" if args.save_plans else None
-        sections, ctx = asyncio.run(_live_sections(args.n, max(1, args.conc or 2), args.changes,
+        sections, ctx = asyncio.run(_live_sections(args.n, params["conc"], args.changes,
                                                    save_path, ids=_ids))
         if save_path:
             print(f"planes crudos: {save_path}")
     elif args.mode == "remote":
-        if not args.api_base:
-            ap.error("--api-base es obligatorio en modo remote")
         save_path = f"landing_plans_{os.getpid()}.json" if args.save_plans else None
-        sections, ctx = _remote_sections(args.api_base, args.n, max(1, args.conc or 1),
+        sections, ctx = _remote_sections(args.api_base, args.n, params["conc"],
                                          args.changes, save_path, args.timeout, ids=_ids,
                                          transport=args.transport)
         if save_path:
@@ -830,8 +916,6 @@ def main():
     elif args.mode == "telemetry":
         sections = {"telemetry": _telemetry_section(args.days)}
     else:
-        if not (args.plans or args.plans_glob):
-            ap.error("score necesita --plans o --plans-glob")
         # Los scorers leen el catálogo (master_ingredients) como en live: sin pool abierto
         # degradarían en silencio a catálogo vacío. Solo lectura.
         _open_pools()
@@ -843,6 +927,8 @@ def main():
                                         forms_root=args.forms_root)
         if ctx.get("sin_formulario"):
             params["planes_sin_formulario"] = ctx["sin_formulario"]
+        if ctx.get("texto_libre_descartado"):
+            params["texto_libre_descartado"] = ctx["texto_libre_descartado"]
 
     sections["run"] = build_run_meta(
         mode=args.mode, started_at=started_at, finished_at=_utc_now_iso(),
@@ -850,7 +936,8 @@ def main():
         architecture=args.architecture, protocol_version=args.protocol_version,
         country_scope=ctx.get("country_scope") or [], profile_ids=ctx.get("profile_ids") or [],
         full_profile_ids=[p["_id"] for p in build_landing_profiles()], parameters=params,
-        cohort=ctx.get("cohort") or "matrix")
+        cohort=ctx.get("cohort") or "matrix", source_commit_role=ctx.get("source_commit_role"),
+        engine=ctx.get("engine"))
     report = build_report(args.mode, **sections)
     out_path = args.out or os.environ.get("LANDING_BENCH_OUT") \
         or f"landing_benchmark_{args.mode}_{os.getpid()}.json"
@@ -862,7 +949,8 @@ def main():
     print(f"modo: {args.mode} | schema v{report['schema_version']} | run {run['id']} | "
           f"cohorte {run['cohort_status']} ({run['profile_count']}/{run['full_profile_count']}) | "
           f"arquitectura {run['architecture']} | commit {run['source_commit']} "
-          f"(sucio={run['source_dirty']})")
+          f"({run['source_commit_role']}, sucio={run['source_dirty']}) | motor "
+          f"{run['engine_commit']} ({run['engine_commit_status']})")
     if "meta" in report:
         print(f"  remote: {report['meta'].get('api_base')} (guest) — servidor "
               f"{report['meta'].get('server_version')}")
@@ -897,7 +985,8 @@ def main():
     if "reliability" in report:
         r = report["reliability"]
         print(f"  entrega: {r.get('n_delivered')}/{r.get('n_attempted')} ({r.get('delivery_rate_pct')}%) "
-              f"| fallback {r.get('fallback_rate_pct')}% | errores {r.get('n_errors')}")
+              f"| fallback {r.get('fallback_rate_pct')}% | petición rechazada "
+              f"{r.get('n_rejected_request')} | errores {r.get('n_errors')}")
     if report.get("changes"):
         c = report["changes"]
         rd = c.get("regen_day") or {}
@@ -908,7 +997,9 @@ def main():
         t = report["telemetry"]
         print(f"  telemetría ({t['window_days']}d, solo entregado): cambios={t['changes']} | "
               f"banda={t['banda_entregada']} | fallback={t['fallback_rate']} | "
-              f"no entregados={t['no_entregados']} | PQI={t['quality_index']}")
+              f"latencia={t['generacion_latencia']} | PQI={t['quality_index']}")
+        print(f"  aparte: banda sin corrida detrás={t['banda_excluida_sin_corrida']} | "
+              f"corridas por entrega={t['corridas_por_entrega']}")
     print(f"\nJSON completo: {out_path}")
 
 

@@ -432,7 +432,10 @@ NUTRITION_MACROS = ("kcal", "protein", "carbs", "fats")
 # respeta los knobs MEALFIT_BAND_SCORE_* del entorno). Esto sólo se usa si el motor no importa.
 _DEFAULT_ENGINE_BAND = {"macro": [0.90, 1.12], "kcal": [0.95, 1.05], "kcal_upper_gain_muscle": 1.10}
 
-# Espejo de `graph_orchestrator._GAINMUSCLE_GOAL_TOKENS` (paridad anclada por test).
+# Espejo de `graph_orchestrator._GAINMUSCLE_GOAL_TOKENS`. Paridad anclada por
+# test_p1_plan_lote_749.py::test_copias_del_motor_iguales_al_motor (igualdad de la tupla y de
+# `_macro_num`/`_goal_is_gain_muscle` contra las funciones del motor). Es copia y no import para
+# que el scorer no cargue el grafo entero por cada comida.
 _GAINMUSCLE_GOAL_TOKENS = ("gain_muscle", "ganar_musculo", "ganancia", "bulk", "superavit")
 
 
@@ -514,8 +517,10 @@ def score_plan_nutrition(plan: dict, *, goal=None, band: dict = None) -> dict:
     per_day, days_eval, all4 = [], 0, 0
     for i, day in enumerate(days):
         meals = [m for m in (day.get("meals") or []) if isinstance(m, dict)]
+        # [P1-PLAN-LOTE-749 · ronda 1] kcal SOLO de `cals`, como `compute_clinical_band_score`: la
+        # primera versión sumaba `calories` cuando faltaba `cals` y daba otro número que el motor.
         delivered = {
-            "kcal": sum(_macro_num(m.get("cals") if "cals" in m else m.get("calories")) for m in meals),
+            "kcal": sum(_macro_num(m.get("cals")) for m in meals),
             "protein": sum(_macro_num(m.get("protein")) for m in meals),
             "carbs": sum(_macro_num(m.get("carbs")) for m in meals),
             "fats": sum(_macro_num(m.get("fats")) for m in meals),
@@ -624,15 +629,44 @@ def plan_delivery_state(plan) -> str:
     return "delivered"
 
 
+# Los dos únicos `detail` de TEXTO del 503 del FALLBACK-GUARD síncrono (routers/plans.py:
+# spending cap / saturación). Otros 503 del mismo endpoint NO son un fallback: «no pudimos
+# guardarlo» (P2-PLAN-PERSIST-FAILED), `server_busy_generating` (dict) o el HTML de nginx.
+_FALLBACK_GUARD_503_DETAILS = ("La IA está temporalmente saturada",
+                               "El servicio de IA no está disponible")
+
+
 def classify_remote_error(message: str) -> str:
-    """Un error del modo remote que es el FALLBACK-GUARD descartando el plan (SSE
-    `critical_restriction` / `llm_unavailable`, o el 503 del síncrono) no es un fallo de red:
-    es un fallback que el servidor no entregó. Lo demás (timeouts, 5xx de infraestructura)
-    queda como `error`."""
+    """Estado de entrega de un error del modo remote. Solo el FALLBACK-GUARD es un fallback
+    descartado; el resto se distingue por el `detail` que el runner guarda en el mensaje:
+      · SSE `code=critical_restriction` / `code=llm_unavailable` → `discarded_fallback`.
+      · Síncrono 422 con `detail` de TEXTO → rechazo crítico (`discarded_fallback`): es el contrato
+        P2-CRITICAL-REJECTION-CODE (el frontend lo reconoce por `typeof detail === 'string'`).
+      · Síncrono 422 con `detail` OBJETO con `code` (`missing_required_fields`,
+        `invalid_biometric_range`, `budget_insufficient`, `too_many_medical_conditions`,
+        `clinical_scope_exceeded`, `invalid_total_days`…) → `rejected_request`: el servidor rechazó
+        la PETICIÓN antes de generar; no es un fallback y no debe inflar esa tasa.
+      · Síncrono 503 con uno de `_FALLBACK_GUARD_503_DETAILS` → `discarded_fallback`.
+      · Todo lo demás (503 «no pudimos guardarlo», `server_busy_generating`, nginx, SSE
+        `plan_persist_failed`, timeouts) → `error`.
+    [P1-PLAN-LOTE-749 · ronda 1] La primera versión contaba CUALQUIER 422/503 como fallback.
+    tooltip-anchor: P1-PLAN-LOTE-749-DELIVERY"""
     msg = str(message or "")
     if re.search(r"code=(critical_restriction|llm_unavailable)\b", msg):
         return "discarded_fallback"
-    if re.search(r"HTTP (422|503) en /api/plans/analyze\b", msg) and "clinical_scope" not in msg:
+    m = re.search(r"HTTP (\d{3}) en /api/plans/analyze\b:?\s*(.*)", msg, re.DOTALL)
+    if not m:
+        return "error"
+    status, body = m.group(1), m.group(2)
+    detail_str = re.match(r'\s*\{\s*"detail"\s*:\s*"((?:[^"\\]|\\.)*)', body)
+    detail_code = re.match(r'\s*\{\s*"detail"\s*:\s*\{.*?"code"\s*:\s*"(\w+)"', body, re.DOTALL)
+    if status == "422":
+        if detail_str:
+            return "discarded_fallback"
+        if detail_code:
+            return "rejected_request"
+        return "error"
+    if status == "503" and detail_str and detail_str.group(1).startswith(_FALLBACK_GUARD_503_DETAILS):
         return "discarded_fallback"
     return "error"
 
@@ -664,6 +698,9 @@ def aggregate_reliability(rows: list, *, n_attempted: int = None) -> dict:
         "n_delivered": n_del,
         "n_delivered_fallback": n_fb_del,
         "n_discarded_fallback": n_fb_desc,
+        # Petición rechazada ANTES de generar (422 de validación): sigue en el denominador (no se
+        # entregó) pero no es un fallback ni un error de infraestructura.
+        "n_rejected_request": states.count("rejected_request"),
         "n_errors": states.count("error"),
         "delivery_rate_pct": pct(n_del),
         "fallback_rate_pct": pct(n_fb_del + n_fb_desc),
@@ -729,6 +766,31 @@ def derive_expectations(form: dict) -> dict:
     if "Warfarina" in meds:
         out["vitk_monitor"] = True
     return out
+
+
+# Campos de texto libre que producción une a sus listas (`_OTHER_TEXT_FIELD_MAP` del motor).
+_FREE_TEXT_FIELDS = ("otherAllergies", "otherConditions", "otherDislikes", "otherStruggles")
+
+
+def corpus_profile(form: dict, pid: str) -> dict:
+    """Perfil de un plan de CORPUS con la MISMA unión de texto libre que hace producción.
+
+    [P1-PLAN-LOTE-749 · ronda 1] El generador une `otherAllergies`/`otherConditions`/… a sus listas
+    al empezar (`graph_orchestrator._merge_other_text_fields`, vía `profile_with_free_text` sobre una
+    copia), y `score_plan_safety` solo lee `allergies`. Armar el perfil con el formulario CRUDO
+    dejaba ciego al scorer: camarones a quien escribió «frutos del mar» salía «seguro».
+
+    Se usa la función del motor (no una copia) y las expectativas se derivan del perfil YA unido.
+    Con el centinela «Ninguna» producción DESCARTA el texto (P0-FORM-1); el scorer sigue esa regla,
+    pero el perfil lo deja a la vista en `_free_text_discarded` (campos cuyo texto no llegó al
+    motor) para que la corrida no lo calle. tooltip-anchor: P1-PLAN-LOTE-749-EXPECT"""
+    from graph_orchestrator import profile_with_free_text
+    raw = dict(form or {})
+    merged = profile_with_free_text(raw)
+    discarded = [f for f in _FREE_TEXT_FIELDS
+                 if str(raw.get(f) or "").strip() and not str(merged.get(f) or "").strip()]
+    return dict(merged, _id=pid, _label=pid, _expect=derive_expectations(merged),
+                _free_text_discarded=discarded)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════
@@ -844,16 +906,53 @@ LANDING_REPORT_SECTIONS = ("run", "meta", "structural", "safety", "nutrition", "
 _PROFILE_MODES = ("live", "remote", "score")
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{7,64}$", re.IGNORECASE)
+
+# De quién es `run.source_commit` según el modo. En `live`/`structural` el motor corre EN el mismo
+# proceso: el commit es el del motor medido. En `remote` el motor es el del SERVIDOR y en `score`
+# los planes se generaron en otra parte: el commit es el de los scorers. En `telemetry`, el de las
+# consultas (los datos son de lo que corrió en prod en la ventana).
+_SOURCE_COMMIT_ROLE = {"live": "engine_and_scorers", "structural": "engine_and_scorers",
+                       "remote": "scorers", "score": "scorers", "telemetry": "queries"}
+
+
+def engine_identity(start, end) -> dict:
+    """Commit del MOTOR medido en una corrida remote, a partir de `/health/version` al empezar y al
+    terminar (`git_sha`, que el deploy inyecta por env `GIT_SHA`; hoy puede valer `"unknown"`).
+
+    `verified` solo si los dos extremos dan el MISMO sha válido; `changed_during_run` si hubo un
+    deploy a mitad (la corrida mezcla dos binarios); `not_exposed` si el servidor no lo publica;
+    `unreachable` si no se pudo leer. Solo `verified` rellena `engine_commit`.
+    [P1-PLAN-LOTE-749 · ronda 1] tooltip-anchor: P1-PLAN-LOTE-749-RUN"""
+    def _sha(v):
+        s = str((v or {}).get("git_sha") or "").strip() if isinstance(v, dict) else ""
+        return s if _SHA_RE.fullmatch(s) else None
+    if not isinstance(start, dict) or not isinstance(end, dict) or "error" in start or "error" in end:
+        return {"engine_commit": None, "engine_commit_status": "unreachable"}
+    a, b = _sha(start), _sha(end)
+    if a is None or b is None:
+        return {"engine_commit": None, "engine_commit_status": "not_exposed"}
+    if a.lower() != b.lower():
+        return {"engine_commit": None, "engine_commit_status": "changed_during_run"}
+    return {"engine_commit": a, "engine_commit_status": "verified"}
+
+
 def build_run_meta(*, mode: str, started_at: str, finished_at: str, source_commit, source_dirty,
                    architecture: str, protocol_version: str, country_scope: list,
                    profile_ids: list, full_profile_ids: list, parameters: dict,
-                   cohort: str = "matrix") -> dict:
+                   cohort: str = "matrix", source_commit_role: str = None,
+                   engine: dict = None) -> dict:
     """Bloque `run` del reporte v2 (contrato del importador del landing). Puro.
 
     `cohort_status`: `complete` si la corrida intentó EXACTAMENTE la matriz entera, `partial` si
     un subconjunto, `not_applicable` en structural/telemetry o en un corpus que no es la matriz.
     `publication_status` nace SIEMPRE `candidate` (G-06: el importador crea candidatos; publica
     una persona). `source_dirty=None` = no verificable, y el importador lo rechaza igual que True.
+
+    [P1-PLAN-LOTE-749 · ronda 1] G-04 (trazabilidad) pide el commit de ORIGEN del resultado. En
+    remote `source_commit` es el del runner/scorers, no el del binario medido: `source_commit_role`
+    lo dice y `engine_commit`/`engine_commit_status` (de `engine_identity`) dan el del motor cuando
+    el servidor lo publica. En live el motor corre en proceso: `engine_commit = source_commit`.
     tooltip-anchor: P1-PLAN-LOTE-749-RUN"""
     pids = list(profile_ids or [])
     full = list(full_profile_ids or [])
@@ -865,6 +964,11 @@ def build_run_meta(*, mode: str, started_at: str, finished_at: str, source_commi
         cohort_status = "partial"
     stamp = re.sub(r"[^0-9t]", "", str(started_at).lower().replace("z", ""))[:15] or "sinfecha"
     commit7 = str(source_commit)[:7].lower() if source_commit else "nocommit"
+    role = source_commit_role or _SOURCE_COMMIT_ROLE.get(mode, "scorers")
+    if engine is None:
+        engine = ({"engine_commit": source_commit, "engine_commit_status": "in_process"}
+                  if role == "engine_and_scorers"
+                  else {"engine_commit": None, "engine_commit_status": "not_applicable"})
     return {
         "id": f"{mode}-{stamp}z-{commit7}",
         "mode": mode,
@@ -873,6 +977,9 @@ def build_run_meta(*, mode: str, started_at: str, finished_at: str, source_commi
         "started_at": started_at,
         "finished_at": finished_at,
         "source_commit": source_commit,
+        "source_commit_role": role,
+        "engine_commit": engine.get("engine_commit"),
+        "engine_commit_status": engine.get("engine_commit_status"),
         "source_dirty": source_dirty,
         "country_scope": list(country_scope or []),
         "full_profile_count": len(full),
@@ -927,12 +1034,75 @@ def _delivered_surface_sql() -> str:
     return f"({exact} OR {pref})"
 
 
+# ── [P1-PLAN-LOTE-749 · ronda 1] Emparejar cada fila de banda con la CORRIDA que la produjo ──
+# La primera versión filtraba por superficie y daba por hecho que toda fila `pre-INSERT` era una
+# entrega. Medido en prod (solo lectura, 28-sep, ventana de 30 días): de 81 filas `pre-INSERT`, 67
+# (todas del 2-7 sep) no tenían ninguna corrida `clinical_band` detrás ni `meal_plans` cerca — con
+# `user_id` NULL y sesión `post-finalize`, que es exactamente lo que deja CUALQUIER llamada a
+# `db_plans._finalize_plan_data_for_insert` fuera de una generación (tests, scripts). Su media
+# (0,95) tapaba la de las entregas reales. Y la latencia promediaba 49 corridas de pipeline cuando
+# hubo 14 planes iniciales: entraban los bloques en segundo plano (`session_id='unknown'`, el
+# pipeline del chunk worker) y los reintentos que nunca se fusionaron.
+#
+# Regla: una fila de banda es una entrega si hay una corrida `clinical_band` del MISMO usuario
+# ≤ `_PAIR_WINDOW` antes. `pre-INSERT` guarda `user_id` NULL (el dict que recibe el finalize no lo
+# lleva), así que ahí el usuario se prueba por su fila de `meal_plans`, creada entre el arranque de
+# esa corrida y el INSERT. Medido: fila↔corrida a 1-21 s en pre-INSERT y a 3-48 s en chunk-T1;
+# `meal_plans.created_at` ≈ arranque de la corrida (el plan nace al empezar a generar). Un invitado
+# no persiste su plan: su corrida no tiene fila de entrega y se cuenta aparte, sin inventarla.
+# El tipo (plan inicial / bloque posterior) sale de la CORRIDA, no de la superficie: desde el
+# lifecycle 2.5 un plan inicial también se entrega por el merge T1 (`chunk_kind='initial_plan'`).
+_PAIR_WINDOW = "5 minutes"
+
+
+def _delivery_pairing_ctes() -> str:
+    """CTEs `win`, `corridas`, `entregas` y `pares` (entrega ↔ corrida). UN solo parámetro: los días
+    de la ventana. tooltip-anchor: P1-PLAN-LOTE-749-TELEMETRY"""
+    return f"""WITH win AS (SELECT NOW() - make_interval(days => %s) AS desde),
+            corridas AS (
+                SELECT pm.id, pm.user_id, pm.session_id, pm.created_at, pm.duration_ms,
+                       COALESCE(pm.metadata->>'delivered_was_fallback', 'false') = 'true' AS con_fallback
+                FROM pipeline_metrics pm, win
+                WHERE pm.node = 'clinical_band'
+                  AND pm.created_at >= win.desde - interval '{_PAIR_WINDOW}'),
+            entregas AS (
+                SELECT f.id, f.user_id, f.created_at, f.confidence, f.metadata->>'surface' AS surface
+                FROM pipeline_metrics f, win
+                WHERE f.node = 'clinical_band_final' AND {_delivered_surface_sql()}
+                  AND f.created_at >= win.desde),
+            pares AS (
+                SELECT e.id AS entrega_id, e.confidence, e.surface, c.id AS corrida_id,
+                       c.session_id, c.duration_ms, c.con_fallback
+                FROM entregas e
+                JOIN LATERAL (
+                    SELECT c.id, c.session_id, c.duration_ms, c.con_fallback
+                    FROM corridas c
+                    WHERE c.user_id IS NOT NULL
+                      AND c.created_at BETWEEN e.created_at - interval '{_PAIR_WINDOW}' AND e.created_at
+                      AND (c.user_id = e.user_id
+                           OR (e.user_id IS NULL AND EXISTS (
+                                 SELECT 1 FROM meal_plans mp
+                                 WHERE mp.user_id::text = c.user_id
+                                   AND mp.created_at BETWEEN
+                                       c.created_at - make_interval(secs => c.duration_ms / 1000.0)
+                                           - interval '10 minutes'
+                                       AND e.created_at + interval '{_PAIR_WINDOW}')))
+                    ORDER BY c.created_at DESC
+                    LIMIT 1) c ON TRUE)
+            """
+
+
 def telemetry_queries(days: int) -> dict:
-    """{nombre: (sql, params)} del modo telemetry. Todas filtran por ventana `days`.
-    `no_entregados` se reporta APARTE (denominador honesto) — nunca mezclado con lo entregado."""
+    """{nombre: (sql, params)} del modo telemetry. Todas filtran por ventana `days` (un parámetro).
+    Banda y latencia cuentan SOLO pares entrega↔corrida (`_delivery_pairing_ctes`); lo que no se
+    empareja se reporta APARTE (`banda_excluida_sin_corrida`, `corridas_por_entrega`) — nunca
+    mezclado con lo entregado. tooltip-anchor: P1-PLAN-LOTE-749-TELEMETRY"""
     d = (int(days),)
     win = "created_at >= NOW() - make_interval(days => %s)"
-    no_fb = "COALESCE(metadata->>'delivered_was_fallback', 'false') <> 'true'"
+    def _tipo(alias):  # plan inicial vs bloque en segundo plano, según la CORRIDA
+        return (f"CASE WHEN {alias}.session_id = 'unknown' THEN 'bloque_posterior' "
+                "ELSE 'plan_inicial' END")
+    ctes = _delivery_pairing_ctes()
     return {
         # [P1-CHANGE-OUTCOME-TELEMETRY] ¿los cambios de plato salen a la primera?
         "changes": (
@@ -942,13 +1112,22 @@ def telemetry_queries(days: int) -> dict:
                FROM pipeline_metrics
                WHERE node IN ('change_swap','change_regen_day') AND {win}
                GROUP BY 1, 2 ORDER BY 1, 2""", d),
+        # Banda de lo ENTREGADO: solo filas emparejadas con su corrida; tipo según la corrida.
         "banda_entregada": (
-            f"""SELECT CASE WHEN metadata->>'surface' = 'pre-INSERT' THEN 'plan_inicial'
-                            ELSE 'bloque_posterior' END AS entrega,
-                      COUNT(*) AS n, ROUND(AVG(confidence)::numeric, 3) AS media,
-                      ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY confidence)::numeric, 3) AS p50
-               FROM pipeline_metrics
-               WHERE node = 'clinical_band_final' AND {_delivered_surface_sql()} AND {win}
+            f"""{ctes}
+               SELECT {_tipo('p')} AS entrega,
+                      COUNT(*) AS n, ROUND(AVG(p.confidence)::numeric, 3) AS media,
+                      ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY p.confidence)::numeric, 3) AS p50
+               FROM pares p
+               GROUP BY 1 ORDER BY 1""", d),
+        # Filas de superficie de entrega SIN corrida detrás (tests/scripts contra prod): aparte.
+        "banda_excluida_sin_corrida": (
+            f"""{ctes}
+               SELECT CASE WHEN e.surface = 'pre-INSERT' THEN 'pre-INSERT' ELSE 'chunk-T1' END AS superficie,
+                      COUNT(*) AS n, ROUND(AVG(e.confidence)::numeric, 3) AS media,
+                      MIN(e.created_at)::date AS desde, MAX(e.created_at)::date AS hasta
+               FROM entregas e
+               WHERE NOT EXISTS (SELECT 1 FROM pares p WHERE p.entrega_id = e.id)
                GROUP BY 1 ORDER BY 1""", d),
         "fallback_rate": (
             f"""SELECT COUNT(*) AS planes_entregados,
@@ -957,17 +1136,32 @@ def telemetry_queries(days: int) -> dict:
                             / NULLIF(COUNT(*), 0), 3) AS rate
                FROM meal_plans
                WHERE {win}""", d),
+        # Latencia del pipeline de las corridas que SÍ se entregaron (emparejadas), por tipo. Una
+        # reparación parcial entregada cuenta (llegó al usuario); un fallback descartado no tiene
+        # fila de entrega y no entra.
         "generacion_latencia": (
-            f"""SELECT COUNT(*) AS n,
-                      ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) / 1000.0)::numeric) AS p50_s,
-                      ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) / 1000.0)::numeric) AS p95_s
-               FROM pipeline_metrics
-               WHERE node = 'clinical_band' AND {no_fb} AND {win}""", d),
-        "no_entregados": (
-            f"""SELECT COUNT(*) FILTER (WHERE metadata->>'delivered_was_fallback' = 'true') AS corridas_con_fallback,
-                      COUNT(*) AS corridas_totales
-               FROM pipeline_metrics
-               WHERE node = 'clinical_band' AND {win}""", d),
+            f"""{ctes}
+               SELECT {_tipo('c')} AS tipo, COUNT(*) AS n,
+                      ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY c.duration_ms) / 1000.0)::numeric) AS p50_s,
+                      ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY c.duration_ms) / 1000.0)::numeric) AS p95_s
+               FROM corridas c, win
+               WHERE c.created_at >= win.desde
+                 AND c.id IN (SELECT corrida_id FROM pares)
+               GROUP BY 1 ORDER BY 1""", d),
+        # Denominador honesto: TODAS las corridas del pipeline por tipo, con y sin entrega. Antes
+        # `no_entregados` contaba solo las marcadas fallback (0/49) cuando ≥23 no se entregaron.
+        "corridas_por_entrega": (
+            f"""{ctes}
+               SELECT CASE WHEN c.session_id = 'unknown' THEN 'bloque_posterior'
+                           WHEN c.user_id IS NULL THEN 'invitado'
+                           ELSE 'plan_inicial' END AS tipo,
+                      COUNT(*) AS corridas,
+                      COUNT(*) FILTER (WHERE c.id IN (SELECT corrida_id FROM pares)) AS con_entrega,
+                      COUNT(*) FILTER (WHERE c.id NOT IN (SELECT corrida_id FROM pares)) AS sin_entrega,
+                      COUNT(*) FILTER (WHERE c.con_fallback) AS con_fallback
+               FROM corridas c, win
+               WHERE c.created_at >= win.desde
+               GROUP BY 1 ORDER BY 1""", d),
         "quality_index": (
             f"""SELECT COUNT(*) AS n,
                       ROUND(AVG((plan_data->'_quality_index'->>'score')::float)::numeric, 1) AS media

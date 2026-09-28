@@ -11,7 +11,7 @@ QUÉ ESTABA MAL (medido en el código, no supuesto):
      ninguno (solo el eje `banda` del gym, con una banda que no es la del motor: sin el techo kcal
      de ganancia muscular y dividiendo por días vacíos).
   3. **La telemetría contaba lo que no se entregó.** `banda_entregada` promediaba las filas
-     `assemble-tail` (lectura INTERMEDIA, pre-review: 269 de 404 filas en 30 días) y
+     `assemble-tail` (lectura INTERMEDIA, pre-review: 269 de 408 filas en 30 días) y
      `fallback_rate`/`generacion_latencia` salían de `clinical_band`, que se emite por CORRIDA del
      pipeline — incluidas las que acaban en un fallback que el router descarta (422/503).
   4. **Textos de routing muertos** («gpt-5.6», «cuota GLM») en el runner, la doc y los workflows.
@@ -183,7 +183,11 @@ def test_estado_de_entrega_del_plan():
 def test_error_remoto_de_fallback_descartado_se_distingue_de_un_error_de_red():
     assert classify_remote_error("SSE error code=critical_restriction: x") == "discarded_fallback"
     assert classify_remote_error("SSE error code=llm_unavailable: x") == "discarded_fallback"
-    assert classify_remote_error("HTTP 503 en /api/plans/analyze: IA saturada") == "discarded_fallback"
+    # [ronda 1] El cuerpo REAL del 503 del FALLBACK-GUARD (JSON de FastAPI), no un texto inventado:
+    # la clasificación ahora mira el `detail` (ver test_clasificacion_de_errores_remotos).
+    assert classify_remote_error('HTTP 503 en /api/plans/analyze: {"detail":"La IA está '
+                                 'temporalmente saturada y no pudimos generar tu plan."}'
+                                 ) == "discarded_fallback"
     assert classify_remote_error("RuntimeError: stream excedió el presupuesto total de 1200s") == "error"
 
 
@@ -300,12 +304,16 @@ def test_telemetria_solo_cuenta_lo_entregado():
     banda_sql = q["banda_entregada"][0]
     assert "clinical_band_final" in banda_sql and "pre-INSERT" in banda_sql and "chunk-T1" in banda_sql
     assert "assemble-tail" not in banda_sql
+    # [ronda 1] Antes solo se pedía que la latencia filtrara `delivered_was_fallback`: eso fijaba el
+    # defecto (entraban bloques en segundo plano y reintentos no entregados). Ahora la latencia sale
+    # de las corridas EMPAREJADAS con una entrega (test_latencia_solo_de_corridas_con_entrega_y_por_tipo).
     lat_sql = q["generacion_latencia"][0]
-    assert "delivered_was_fallback" in lat_sql and "<> 'true'" in lat_sql
+    assert "SELECT corrida_id FROM pares" in lat_sql
     fb_sql = q["fallback_rate"][0]
     assert "meal_plans" in fb_sql and "_is_fallback" in fb_sql, (
         "el fallback ENTREGADO sale de los planes persistidos, no de las corridas del pipeline")
-    assert "no_entregados" in q, "lo descartado se reporta aparte, no mezclado"
+    assert "corridas_por_entrega" in q and "banda_excluida_sin_corrida" in q, (
+        "lo no entregado se reporta aparte, no mezclado")
     for name, (sql, params) in q.items():
         assert params == (30,), name
 
@@ -352,3 +360,329 @@ def test_score_de_planes_de_la_matriz_respeta_el_denominador(tmp_path):
 def test_marcadores():
     lb = (_BACKEND / "landing_benchmarks.py").read_text(encoding="utf-8")
     assert "P1-PLAN-LOTE-749" in lb and "P1-PLAN-LOTE-749" in _RUNNER_SRC and "P1-PLAN-LOTE-749" in _DOC
+
+
+# ===========================================================================
+# RONDA 1 DE LA REVISIÓN ADVERSARIA (2026-09-28). Cada test reproduce un defecto que la revisión
+# encontró en la primera versión de esta rama — y fallaba contra ella.
+# tooltip-anchor: P1-PLAN-LOTE-749-R1
+# ===========================================================================
+import shutil
+import subprocess
+
+
+def _run_step(wf: str, name: str) -> str:
+    """Cuerpo (hasta el siguiente `- name:`/`- uses:`) del paso `name` de un workflow."""
+    tail = wf.split(f"- name: {name}", 1)[1]
+    return re.split(r"\n\s+- (?:name|uses):", tail, maxsplit=1)[0]
+
+
+# --- Defecto 1 (CRÍTICO): la corrida pagada salía «sucia» y el importador la rechazaba ------------
+def test_workflows_no_escriben_en_el_arbol_antes_de_medir_git_status():
+    """`| tee run_stdout.txt` creaba un fichero SIN trackear en la raíz del checkout mientras el
+    runner arrancaba y medía `git status --porcelain`: `source_dirty=True` en 3 de 3 corridas, y el
+    importador del landing rechaza «la corrida proviene de un worktree sucio». El tee va fuera del
+    repo ($RUNNER_TEMP) y el resumen lee de ahí."""
+    for nombre, wf in (("remote.yml", _WF_REMOTE), ("openai.yml", _WF_OPENAI)):
+        targets = re.findall(r"\|\s*tee\s+(\S+)", wf)
+        assert targets, f"{nombre}: no encuentro el tee del stdout"
+        for t in targets:
+            assert t.startswith('"$RUNNER_TEMP/'), f"{nombre}: tee a {t} ensucia el checkout"
+        assert re.search(r'tail -\d+ "\$RUNNER_TEMP/run_stdout\.txt"', wf), (
+            f"{nombre}: el resumen debe leer el stdout de $RUNNER_TEMP")
+
+
+def test_las_salidas_del_benchmark_no_ensucian_git_status(tmp_path):
+    """Funcional: un repo con el `.gitignore` del backend + las salidas que escribe el benchmark
+    (`--out`, `--save-plans`, el stdout) sigue LIMPIO para `_git_source_info`; un fichero ajeno no."""
+    if not shutil.which("git"):
+        pytest.skip("git no disponible")
+    mod = _load_runner()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text((_BACKEND / ".gitignore").read_text(encoding="utf-8"),
+                                     encoding="utf-8")
+    (repo / "x.py").write_text("x = 1\n", encoding="utf-8")
+    g = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+         "-c", "commit.gpgsign=false"]
+    subprocess.run(g + ["init", "-q"], check=True)
+    subprocess.run(g + ["add", "-A"], check=True)
+    subprocess.run(g + ["commit", "-q", "-m", "base"], check=True)
+    for f in ("run_stdout.txt", "landing_benchmark_remote.json", "landing_benchmark_openai.json",
+              "landing_plans_4242.json"):
+        (repo / f).write_text("{}", encoding="utf-8")
+    commit, dirty = mod._git_source_info(str(repo))
+    assert re.fullmatch(r"[0-9a-f]{40}", commit or "")
+    assert dirty is False, "las salidas propias del benchmark no pueden marcar la corrida como sucia"
+    (repo / "otro.py").write_text("y = 2\n", encoding="utf-8")
+    assert mod._git_source_info(str(repo))[1] is True, "un cambio ajeno SÍ ensucia"
+
+
+def test_workflow_openai_declara_la_arquitectura():
+    """Sin input `architecture`, toda corrida OpenAI salía `unspecified` — que el importador rechaza."""
+    assert re.search(r"\n\s+architecture:\n\s+description:", _WF_OPENAI)
+    paso = _run_step(_WF_OPENAI, "Landing benchmark — live --provider openai (perfiles guest)")
+    assert "--architecture" in paso
+
+
+def test_los_inputs_no_se_interpolan_en_el_script_del_shell():
+    """El input `architecture` iba sin comillas dentro del `run:` (`--architecture $ARCH` tras
+    `${{ github.event.inputs.architecture }}`): texto libre del dispatch ejecutado como shell. Los
+    inputs viajan por `env:` y se citan."""
+    for nombre, wf, paso in (
+            ("remote.yml", _WF_REMOTE, "Benchmark remote (guest) contra el deploy"),
+            ("openai.yml", _WF_OPENAI, "Landing benchmark — live --provider openai (perfiles guest)")):
+        cuerpo = _run_step(wf, paso)
+        script = cuerpo.split("run: |", 1)[1]
+        assert "github.event.inputs" not in script, f"{nombre}: input interpolado en el script"
+        assert re.search(r'--architecture "\$', script), f"{nombre}: --architecture sin comillas"
+        assert "set -o pipefail" in script, f"{nombre}: sin pipefail, `| tee` esconde un fallo del runner"
+
+
+def test_arquitectura_se_valida():
+    mod = _load_runner()
+    base = ["remote", "--api-base", "https://x"]
+    assert mod._parse_args(base + ["--architecture", "v2.2"]).architecture == "v2.2"
+    assert mod._parse_args(base + ["--architecture", "v1"]).architecture == "v1"
+    assert mod._parse_args(base).architecture == "unspecified"
+    with pytest.raises(SystemExit):
+        mod._parse_args(base + ["--architecture", "v3; rm -rf /"])
+
+
+def test_run_parameters_solo_los_del_modo():
+    """`run.parameters` arrastraba `transport`, `timeout`, `days` y `provider` en corridas
+    `score`/`telemetry`: parámetros que esa corrida no usó."""
+    mod = _load_runner()
+    p = mod._run_parameters(mod._parse_args(["score", "--plans-glob", "/tmp/c/*.json",
+                                             "--forms-root", "/tmp"]))
+    assert p == {"plans_glob": "/tmp/c/*.json", "forms_root": "/tmp"}
+    t = mod._run_parameters(mod._parse_args(["telemetry", "--days", "7"]))
+    assert t == {"days": 7}
+    r = mod._run_parameters(mod._parse_args(["remote", "--api-base", "https://x", "--changes"]))
+    assert r["conc"] == 1 and r["n"] == 0 and r["changes"] is True and r["transport"] == "sse"
+    assert "days" not in r and "provider" not in r and "plans_glob" not in r
+    lv = mod._run_parameters(mod._parse_args(["live", "--provider", "openai"]))
+    assert lv["conc"] == 2 and lv["provider"] == "openai" and "api_base" not in lv
+
+
+# --- Defectos 2 y 3 (IMPORTANTES): la telemetría contaba filas que no son entregas ----------------
+def _placeholders(sql: str) -> int:
+    return len(re.findall(r"(?<!%)%s", sql))
+
+
+def test_banda_entregada_exige_una_corrida_real_detras():
+    """Medido en prod (solo lectura, 28-sep): de 81 filas `pre-INSERT` en 30 días, 67 (todas del
+    2-7 sep) no tenían corrida `clinical_band` ni `meal_plans` detrás (no eran entregas: todas con
+    `user_id` NULL y sesión `post-finalize`, que es lo que deja cualquier llamada a
+    `_finalize_plan_data_for_insert` fuera de una generación). La media 0,954 salía casi toda de
+    ellas (emparejadas: plan inicial n=19, media 0,904). Cada
+    fila de banda se empareja ahora con la corrida del pipeline que la produjo (mismo usuario —
+    para `pre-INSERT`, vía el `meal_plans` de ese usuario—, ≤5 min antes); las que no tienen
+    corrida se cuentan APARTE."""
+    q = telemetry_queries(30)
+    sql = q["banda_entregada"][0]
+    assert "JOIN LATERAL" in sql and "node = 'clinical_band'" in sql and "meal_plans" in sql
+    assert "FROM pares" in sql
+    assert "banda_excluida_sin_corrida" in q
+    assert "NOT EXISTS" in q["banda_excluida_sin_corrida"][0]
+
+
+def test_latencia_solo_de_corridas_con_entrega_y_por_tipo():
+    """49 corridas contra 14 planes iniciales + 12 merges T1: entraban bloques en segundo plano
+    (sesión `unknown`) y reintentos que nunca se entregaron. La latencia cuenta solo corridas con
+    una entrega emparejada y separa plan inicial de bloque en segundo plano."""
+    q = telemetry_queries(30)
+    sql = q["generacion_latencia"][0]
+    assert "FROM pares" in sql and "session_id = 'unknown'" in sql and "bloque_posterior" in sql
+    assert "no_entregados" not in q, "el nombre mentía: contaba corridas CON fallback, no no-entregas"
+    cpe = q["corridas_por_entrega"][0]
+    for col in ("con_entrega", "sin_entrega", "con_fallback", "invitado"):
+        assert col in cpe, col
+
+
+def test_cada_consulta_de_telemetria_tiene_un_solo_parametro():
+    for name, (sql, params) in telemetry_queries(30).items():
+        assert params == (30,), name
+        assert _placeholders(sql) == 1, (name, _placeholders(sql))
+
+
+# --- Defecto 4 (IMPORTANTE latente): el modo corpus no veía las alergias escritas a mano ---------
+def test_corpus_une_el_texto_libre_como_produccion(tmp_path):
+    """Producción une `otherAllergies`/`otherConditions` a sus listas (`_merge_other_text_fields`);
+    el modo corpus armaba el perfil con el formulario crudo y `score_plan_safety` solo lee
+    `allergies`: camarones a quien escribió «frutos del mar» salía «seguro»."""
+    mod = _load_runner()
+    corpus = tmp_path / "cola"
+    corpus.mkdir()
+    (tmp_path / "rdX").mkdir()
+    camarones = {"name": "Camarones al ajillo", "meal": "Almuerzo", "cals": 2000,
+                 "protein": "150g", "carbs": "200g", "fats": "60g",
+                 "ingredients": ["250 g de camarones cocidos"], "recipe": ["Saltear."]}
+    plan = _plan([[camarones]])
+    for nombre, alergias in (("texto", []), ("centinela", ["Ninguna"])):
+        (corpus / f"rdX__{nombre}.json").write_text(json.dumps({"final_plan": plan}), encoding="utf-8")
+        (tmp_path / "rdX" / f"{nombre}.json").write_text(json.dumps({"form": {
+            "allergies": alergias, "otherAllergies": "frutos del mar", "dietType": "balanced",
+            "mainGoal": "maintenance", "medicalConditions": [], "medications": []}}), encoding="utf-8")
+    sections, ctx = mod._score_sections(plans_glob=str(corpus / "*.json"), forms_root=str(tmp_path))
+    per = {p["profile_id"]: p for p in sections["safety"]["per_profile"]}
+    assert per["rdX__texto"]["safe"] is False, "«frutos del mar» escrito a mano debe cazar camarones"
+    # Con el centinela «Ninguna» producción DESCARTA el texto (P0-FORM-1): el scorer sigue esa regla,
+    # pero la corrida lo deja a la vista en vez de callarlo.
+    assert per["rdX__centinela"]["safe"] is True
+    assert ctx["texto_libre_descartado"] == ["rdX__centinela"]
+
+
+def test_expectativas_del_corpus_con_texto_libre():
+    from landing_benchmarks import corpus_profile
+    prof = corpus_profile({"allergies": [], "otherAllergies": "Maní"}, "p1")
+    assert prof["_expect"]["allergens"] == ["Maní"] and prof["_id"] == "p1"
+    assert prof["_free_text_discarded"] == []
+    prof2 = corpus_profile({"allergies": ["Ninguna"], "otherAllergies": "Maní"}, "p2")
+    assert "allergens" not in prof2["_expect"] and prof2["_free_text_discarded"] == ["otherAllergies"]
+
+
+# --- Defecto 5 (IMPORTANTE): en remote, `source_commit` no es el motor medido ----------------------
+def test_version_del_servidor_conserva_git_sha(monkeypatch):
+    import httpx
+    mod = _load_runner()
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return {"git_sha": "2490e35abcdef0123456789", "git_short_sha": "2490e35",
+                    "last_known_pfix": "P1-PLAN-LOTE-765 · 2026-09-28", "drift": False,
+                    "deploy_timestamp": "2026-09-28T10:00:00Z", "knobs_sample": {"x": 1}}
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _R())
+    v = mod._server_version("https://x")
+    assert v["git_sha"] == "2490e35abcdef0123456789" and v["deploy_timestamp"]
+    assert "knobs_sample" not in v
+
+
+def test_remote_captura_el_servidor_al_inicio_y_al_final(monkeypatch):
+    mod = _load_runner()
+    llamadas = []
+    versiones = iter([{"git_sha": "aaaaaaa1", "last_known_pfix": "A"},
+                      {"git_sha": "aaaaaaa1", "last_known_pfix": "A"}])
+
+    def _sv(api_base):
+        llamadas.append("version")
+        return next(versiones)
+
+    def _one(api_base, p, *a, **k):
+        llamadas.append("gen")
+        return {"id": p["_id"], "label": p["_label"], "delivery": "error", "duration_s": 1.0,
+                "error": "x"}
+
+    monkeypatch.setattr(mod, "_server_version", _sv)
+    monkeypatch.setattr(mod, "_run_one_remote", _one)
+    sections, ctx = mod._remote_sections("https://x", 2, 1, False, None, 10)
+    assert llamadas[0] == "version" and llamadas[-1] == "version", llamadas
+    sv = sections["meta"]["server_version"]
+    assert sv["inicio"]["git_sha"] == "aaaaaaa1" and sv["fin"]["git_sha"] == "aaaaaaa1"
+    assert ctx["engine"]["engine_commit"] == "aaaaaaa1"
+    assert ctx["source_commit_role"] == "scorers"
+
+
+def test_identidad_del_motor():
+    from landing_benchmarks import engine_identity
+    ok = engine_identity({"git_sha": "abc1234"}, {"git_sha": "abc1234"})
+    assert ok == {"engine_commit": "abc1234", "engine_commit_status": "verified"}
+    unk = engine_identity({"git_sha": "unknown"}, {"git_sha": "unknown"})
+    assert unk["engine_commit"] is None and unk["engine_commit_status"] == "not_exposed"
+    cambio = engine_identity({"git_sha": "abc1234"}, {"git_sha": "def5678"})
+    assert cambio["engine_commit"] is None and cambio["engine_commit_status"] == "changed_during_run"
+    assert engine_identity(None, None)["engine_commit_status"] == "unreachable"
+
+
+def test_run_meta_dice_de_quien_es_el_commit():
+    full = [p["_id"] for p in build_landing_profiles()]
+    run = build_run_meta(
+        mode="remote", started_at="2026-09-28T10:00:00Z", finished_at="2026-09-28T12:00:00Z",
+        source_commit="2490e35abc", source_dirty=False, architecture="v2.2",
+        protocol_version=LANDING_BENCHMARK_PROTOCOL_VERSION, country_scope=["DO"],
+        profile_ids=full, full_profile_ids=full, parameters={},
+        source_commit_role="scorers",
+        engine={"engine_commit": None, "engine_commit_status": "not_exposed"})
+    assert run["source_commit_role"] == "scorers"
+    assert run["engine_commit"] is None and run["engine_commit_status"] == "not_exposed"
+    live = build_run_meta(
+        mode="live", started_at="2026-09-28T10:00:00Z", finished_at="2026-09-28T12:00:00Z",
+        source_commit="2490e35abc", source_dirty=False, architecture="v2.2",
+        protocol_version=LANDING_BENCHMARK_PROTOCOL_VERSION, country_scope=["DO"],
+        profile_ids=full, full_profile_ids=full, parameters={})
+    assert live["source_commit_role"] == "engine_and_scorers"
+    assert live["engine_commit"] == "2490e35abc" and live["engine_commit_status"] == "in_process"
+
+
+# --- Defecto 6 (MENOR): 422/503 del síncrono no son todos fallbacks -------------------------------
+@pytest.mark.parametrize("msg, esperado", [
+    ('RuntimeError: HTTP 422 en /api/plans/analyze: {"detail":"No pudimos generar un plan que '
+     'respete tus restricciones declaradas"} | diag: {"fallback_reason": "x"}', "discarded_fallback"),
+    ('RuntimeError: HTTP 503 en /api/plans/analyze: {"detail":"La IA está temporalmente saturada y '
+     'no pudimos generar tu plan."}', "discarded_fallback"),
+    ('RuntimeError: HTTP 503 en /api/plans/analyze: {"detail":"El servicio de IA no está disponible '
+     'en este momento."}', "discarded_fallback"),
+    ('RuntimeError: HTTP 422 en /api/plans/analyze: {"detail":{"code":"missing_required_fields",'
+     '"missing_fields":["age"]}}', "rejected_request"),
+    ('RuntimeError: HTTP 422 en /api/plans/analyze: {"detail":{"code":"invalid_biometric_range"}}',
+     "rejected_request"),
+    ('RuntimeError: HTTP 422 en /api/plans/analyze: {"detail":{"code":"budget_insufficient"}}',
+     "rejected_request"),
+    ('RuntimeError: HTTP 422 en /api/plans/analyze: {"detail":{"code":"too_many_medical_conditions",'
+     '"max":3}}', "rejected_request"),
+    ('RuntimeError: HTTP 422 en /api/plans/analyze: {"detail":{"code":"clinical_scope_exceeded"}}',
+     "rejected_request"),
+    ('RuntimeError: HTTP 503 en /api/plans/analyze: {"detail":"Generamos tu plan pero no pudimos '
+     'guardarlo por un problema temporal."}', "error"),
+    ('RuntimeError: HTTP 503 en /api/plans/analyze: {"detail":{"code":"server_busy_generating"}}',
+     "error"),
+    ("RuntimeError: HTTP 503 en /api/plans/analyze: <html><body><h1>503 Service Temporarily "
+     "Unavailable</h1></body></html>", "error"),
+    ("RuntimeError: SSE error code=plan_persist_failed: Generamos tu plan pero...", "error"),
+    ("RuntimeError: SSE error code=llm_unavailable_fallback: x", "error"),
+    ("RuntimeError: SSE error code=critical_restriction: x", "discarded_fallback"),
+])
+def test_clasificacion_de_errores_remotos(msg, esperado):
+    assert classify_remote_error(msg) == esperado
+
+
+def test_rechazo_de_la_peticion_cuenta_aparte():
+    r = aggregate_reliability([{"delivery": "delivered", "duration_s": 1.0},
+                               {"delivery": "rejected_request", "duration_s": 0.2}])
+    assert r["n_rejected_request"] == 1 and r["n_delivered"] == 1
+    assert r["fallback_rate_pct"] == 0.0 and r["delivery_rate_pct"] == 50.0
+
+
+# --- Defecto 7 (MENOR): copias del motor sin test de igualdad --------------------------------------
+def test_copias_del_motor_iguales_al_motor():
+    import graph_orchestrator as go
+    import landing_benchmarks as lb
+    assert lb._GAINMUSCLE_GOAL_TOKENS == go._GAINMUSCLE_GOAL_TOKENS
+    for x in ("154g", "464 kcal", None, "", "abc", 12, 12.5, "nan", "inf", " 30 G ", True):
+        assert lb._macro_num(x) == go._meal_macro_num(x), x
+    for goal in ("Ganancia Muscular (Superávit 8%)", "Pérdida de Grasa", "gain_muscle", "BULK",
+                 "Mantenimiento", None, ""):
+        plan = {"main_goal": goal}
+        assert lb._goal_is_gain_muscle(plan) == go._plan_goal_is_gainmuscle(plan), goal
+
+
+def test_kcal_solo_de_cals_como_el_motor():
+    """El motor suma `cals`; la copia sumaba `calories` cuando faltaba `cals` — otro número."""
+    from graph_orchestrator import compute_clinical_band_score
+    meal = {"name": "x", "calories": 2000, "protein": "150g", "carbs": "200g", "fats": "60g"}
+    plan = _plan([[meal]])
+    eng = compute_clinical_band_score(plan, {})
+    mine = score_plan_nutrition(plan, band=engine_band_definition())
+    assert mine["four_macros_in_band_days"] == eng["all4_days"] == 0
+    assert mine["per_macro"]["kcal"]["in_band"] == 0
+
+
+# --- Defecto 8 (MENOR): la doc reproduce el replay tal como se hizo --------------------------------
+def test_doc_del_replay_reproducible():
+    assert "cola744*/" not in _DOC, "ese glob mete también `_rec` (67 duplicados: 493 ficheros)"
+    assert "481/481" not in _DOC, "481 contaba dos veces los 67 del corpus reciente; únicos = 414"
+    assert "cero GLM" not in _DOC and "cero GLM" not in _WF_OPENAI, (
+        "no se afirma «cero GLM» mientras reviewer/day-gen/swap dependen de los knobs del entorno")

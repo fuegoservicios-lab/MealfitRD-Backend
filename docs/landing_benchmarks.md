@@ -47,10 +47,10 @@ ejercita EXACTAMENTE ese espacio — cada chip literal, con la forma de payload 
 | Modo | Necesita | Qué mide | Secciones del JSON |
 |---|---|---|---|
 | `structural` | nada (DB opcional) | hechos contables: reglas clínicas, micros DRI, catálogo | `structural` |
-| `live [N] --conc 2 [--changes] [--save-plans] [--provider openai]` | claves LLM + Neon | genera los planes reales de la matriz (N=0 por defecto = **los 25**) y puntúa seguridad + nutrición + gym + latencia + entrega; `--changes` ejercita swap individual y bucle de día. `--provider openai` fuerza TODA la corrida a la familia OpenAI (`_OPENAI_FORCE_KNOBS`: GPT-6 Luna, cero GLM) vía los 4 knobs sancionados (`MEALFIT_FLASH_MODEL`, `MEALFIT_MODEL_FREE_TIER`, `MEALFIT_MODEL_PAID_TIER`, `MEALFIT_PRO_MODEL`); requiere `OPENAI_API_KEY`, fail-loud sin ella. NO reintroduce el override global eliminado (P1-SINGLE-PROVIDER-RESTORE): reviewer/day-gen/swap conservan su routing propio por tier | `run`, `structural`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
-| `remote [N] --api-base URL [--conc 2] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` (N=0 por defecto = **los 25**) y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el SERVIDOR con los knobs de su deploy ([`llm_tier_routing.md`](llm_tier_routing.md)); el reporte no afirma un modelo, guarda el `/health/version` contra el que midió (`meta.server_version`). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): el workflow corre con conc 2 (default del CLI 1), backoff ante 429 | `run`, `meta`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
-| `telemetry --days 30` | Neon | series de PROD, **solo lo entregado**: éxito de cambios a la primera, banda de las superficies de entrega (`pre-INSERT` + `chunk-T1 semana N`), fallback de los planes persistidos, latencia de las corridas sin fallback; lo descartado aparte (`no_entregados`); PQI, costo por nodo | `run`, `telemetry` |
-| `score --plans f.json` · `score --plans-glob G --forms-root R` | nada (sin LLM) | re-puntúa planes guardados: los de una corrida `live/remote --save-plans` (el denominador sale de `attempted_ids`) o un **corpus real** (un fichero por plan con `final_plan`; el formulario del propio fichero o, con la convención `<dir>__<fichero>.json` de `cola_corpus`, de `<R>/<dir>/<fichero>.json`; expectativas clínicas por `derive_expectations`) | `run`, `safety`, `nutrition`, `gym` |
+| `live [N] --conc 2 [--changes] [--save-plans] [--provider openai]` | claves LLM + Neon | genera los planes reales de la matriz (N=0 por defecto = **los 25**) y puntúa seguridad + nutrición + gym + latencia + entrega; `--changes` ejercita swap individual y bucle de día. `--provider openai` fuerza a OpenAI los 4 knobs del pipeline (`_OPENAI_FORCE_KNOBS`: GPT-6 Luna en `MEALFIT_FLASH_MODEL`, `MEALFIT_MODEL_FREE_TIER`, `MEALFIT_MODEL_PAID_TIER`, `MEALFIT_PRO_MODEL`); requiere `OPENAI_API_KEY`, fail-loud sin ella. NO reintroduce el override global eliminado (P1-SINGLE-PROVIDER-RESTORE): reviewer/day-gen/swap conservan su routing propio por tier (OpenAI por defecto, pero un knob per-feature del entorno lo cambia), así que la corrida **no** afirma que ningún nodo use GLM | `run`, `structural`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
+| `remote [N] --api-base URL [--conc 2] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` (N=0 por defecto = **los 25**) y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el SERVIDOR con los knobs de su deploy ([`llm_tier_routing.md`](llm_tier_routing.md)); el reporte no afirma un modelo: guarda el `/health/version` AL EMPEZAR y AL TERMINAR (`meta.server_version.inicio/fin`, con `git_sha`) y de ahí sale `run.engine_commit` (ver `run`). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): el workflow corre con conc 2 (default del CLI 1), backoff ante 429 | `run`, `meta`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
+| `telemetry --days 30` | Neon | series de PROD, **solo lo entregado**: éxito de cambios a la primera; banda de las filas de entrega (`pre-INSERT` + `chunk-T1 semana N`) **emparejadas con la corrida que las produjo**; latencia de esas corridas, por tipo (plan inicial / bloque en segundo plano); fallback de los planes persistidos; lo que no se empareja, aparte (`banda_excluida_sin_corrida`, `corridas_por_entrega`); PQI, costo por nodo | `run`, `telemetry` |
+| `score --plans f.json` · `score --plans-glob G --forms-root R` | nada (sin LLM) | re-puntúa planes guardados: los de una corrida `live/remote --save-plans` (el denominador sale de `attempted_ids`) o un **corpus real** (un fichero por plan con `final_plan`; el formulario del propio fichero o, con la convención `<dir>__<fichero>.json` de `cola_corpus`, de `<R>/<dir>/<fichero>.json`; perfil con la MISMA unión de texto libre que producción —`corpus_profile`— y expectativas clínicas por `derive_expectations`) | `run`, `safety`, `nutrition`, `gym` |
 
 ```bash
 # desde backend/, con .env cargable
@@ -78,10 +78,17 @@ landing (`bioboros-cinematic/benchmark_import.py` + `contract/benchmark-v22.json
   defecto `unspecified`, que el importador rechaza — no se adivina), `protocol_version`
   (`LANDING_BENCHMARK_PROTOCOL_VERSION` = `2.2-prep.1`, el `protocol.version` congelado del landing),
   `started_at`/`finished_at` UTC, `source_commit` (`git rev-parse HEAD`) y `source_dirty` (`git status`
-  al ARRANCAR; `None` = no verificable, el importador lo rechaza igual que sucio), `country_scope`,
+  al ARRANCAR; `None` = no verificable, el importador lo rechaza igual que sucio — las salidas del propio
+  benchmark están en `.gitignore` y los workflows mandan el stdout a `$RUNNER_TEMP`, porque un
+  `tee run_stdout.txt` en el checkout ensuciaba TODA corrida de Actions), `source_commit_role` (de
+  quién es ese commit: `engine_and_scorers` en live, `scorers` en remote/score, `queries` en
+  telemetry), `engine_commit` + `engine_commit_status` (el motor MEDIDO: en live el mismo commit,
+  `in_process`; en remote el `git_sha` del servidor solo si coincide al empezar y al terminar,
+  `verified` — si no, `not_exposed`, `changed_during_run` o `unreachable` y `engine_commit=None`), `country_scope`,
   `full_profile_count` (25), `profile_count` (intentados), `cohort_status` (`complete` solo si se intentó
   la matriz ENTERA; `partial`; `not_applicable` en structural/telemetry/corpus), `publication_status`
-  (siempre `candidate`: publica una persona) y `parameters`.
+  (siempre `candidate`: publica una persona) y `parameters` (solo los que el modo usa, con la
+  concurrencia efectiva).
 - **`nutrition`** (live/remote/score), sobre el plan ENTREGADO con funciones puras
   (`score_plan_nutrition` / `aggregate_nutrition`): por día y macro (kcal, proteína, carbos, grasas) el
   total RECALCULADO desde las comidas contra el objetivo de la cabecera del plan (`calories`/`macros`,
@@ -89,20 +96,38 @@ landing (`bioboros-cinematic/benchmark_import.py` + `contract/benchmark-v22.json
   media de los 4; `worst_macro_mape_pct` el mayor; `four_macros_in_band_pct` = días con las 4 celdas en
   la **banda del motor** (`engine_band_definition()`: P/C/G en `[BAND_SCORE_LOWER, BAND_SCORE_UPPER]`,
   kcal `[0.95, 1.05]` con techo `GAINMUSCLE_KCAL_BAND_UPPER` en ganancia muscular). La paridad con
-  `compute_clinical_band_score` la ancla el test (y el replay del 28-sep: 481/481 planes idénticos).
+  `compute_clinical_band_score` la ancla el test (y el replay del 28-sep: 414/414 planes entregados
+  únicos idénticos; el corpus reciente es un subconjunto del completo). kcal se suma SOLO de `cals`,
+  como el motor, y las copias de sus helpers tienen test de igualdad.
 - **`reliability`** (live/remote): entrega = entregados / intentados; fallback = fallbacks entregados +
   descartados / intentados; `latency_all_s` incluye los fallos terminales (contrato B-04) y
   `latency_delivered_s` solo lo entregado. Un plan con `_is_fallback` sin `_partial_repair` es
   `discarded_fallback` (el FALLBACK-GUARD del router lo descarta con 422/503): **ya no se puntúa como
-  entregado** en `live`, y en `remote` el 422/503 se cuenta como fallback descartado, no como error de red.
+  entregado** en `live`. En `remote` se mira el `detail`: 422 con `detail` de texto (rechazo crítico) o
+  503 «IA saturada / no disponible» → `discarded_fallback`; 422 con `detail.code` de validación
+  (`missing_required_fields`, `budget_insufficient`, `clinical_scope_exceeded`…) →
+  `rejected_request` (`n_rejected_request`, no infla el fallback); 503 «no pudimos guardarlo»,
+  `server_busy_generating` o de nginx → `error`.
 - **`telemetry`** cuenta solo lo entregado (ver la tabla de modos) — antes `banda_entregada` mezclaba
-  269 filas `assemble-tail` (intermedias) con 81 `pre-INSERT` en 30 días.
+  269 filas `assemble-tail` (intermedias) con 81 `pre-INSERT` en 30 días. Y filtrar por superficie
+  no bastaba (ronda 1): de esas 81, **67 no eran entregas** — todas del 2-7 sep, `user_id` NULL y
+  sesión `post-finalize`, sin corrida `clinical_band` ni `meal_plans` detrás (lo que deja cualquier
+  llamada a `_finalize_plan_data_for_insert` fuera de una generación). Ahora cada fila de entrega se
+  empareja con la corrida del MISMO usuario ≤5 min antes (para `pre-INSERT`, que no guarda
+  `user_id`, por la fila de `meal_plans` de ese usuario); el tipo sale de la corrida (desde el
+  lifecycle 2.5 un plan inicial también se entrega por `chunk-T1`). Medido el 28-sep (30 días, solo
+  SELECT): banda plan inicial **n=19, media 0,904** (antes n=81, 0,954), bloque posterior n=7, 0,977;
+  67 filas sin corrida aparte (0,964); latencia plan inicial **p50 226 s, p95 456 s (n=19)**, bloque
+  posterior p50 436 s (n=7) — antes 49 corridas mezcladas, p50 347 s; corridas sin entrega: 1 de 20
+  iniciales, 15 de 22 bloques (reintentos), 7 de 7 de invitado (su plan no se persiste: no hay fila
+  que lo pruebe, no entra en la latencia).
 - **`--save-plans`** guarda también `attempted_ids` y el estado de entrega, para que `score` reproduzca
   el denominador sin pagar LLM.
 
 ### Replay gratis del 28-sep (corpus de baterías, sin LLM, en el VPS)
 
-`score --plans-glob "/tmp/ia6d_wf_cola744*/*.json" --forms-root /tmp` sobre los planes ya pasados por
+`score --plans-glob "/tmp/ia6d_wf_cola744/*.json" --forms-root /tmp` (y `ia6d_wf_cola744_rec/*.json`
+por separado para el corpus reciente) sobre los planes ya pasados por
 la cola del lote 744 (contrato de receta + pulido). Mide el DATO del plan; **no** es la matriz: son
 perfiles de baterías (bloques de 3 días casi siempre, varios adversariales), así que no sustituye a la
 corrida pagada — sirve para decidir si pagarla.
@@ -113,11 +138,25 @@ corrida pagada — sirve para decidir si pagarla.
 | completo | 426 (414; 12 fallbacks `medical_critical` descartados) | 4 alérgenos en 2 planes del 25-sep | 2,85 · 4,42 · 4,40 · 5,18 | 4,21 · grasas 5,18 | 83,1 % (1263) | 88,5 |
 
 Las 4 violaciones, leídas una a una: `salsa de soya` en un plan sin gluten (rd248) y `Harina de
-Negrito` ×3 a un celíaco (rd252). En el corpus reciente, cero. La sonda negativa (inyectar
-`camarones` o `queso cheddar` en un plan con alergia a mariscos y lácteos) marca las dos.
+Negrito` ×3 a un perfil con alergia a mariscos y gluten (rd252 `mariscos_gluten`). En el corpus
+reciente, cero. La sonda negativa (inyectar `camarones` o `queso cheddar` en un plan con alergia a
+mariscos y lácteos) marca las dos.
 Contra el landing publicado (`frontend/src/data/benchmark.js`, N=8, junio: MAPE P 1,5 · kcal 2,0 ·
 G 3,1 · C 3,2; 4-en-banda 91,7 %) el replay sale peor en las cinco cifras. El eje `micros` del gym
 (~50) lee el panel persistido, que la cola no recalcula: no concluir nada de él con este corpus.
+
+**Ronda 1 (28-sep): texto libre.** El modo corpus arma ahora el perfil con la misma unión de
+«Otra…» que producción (`corpus_profile` → `profile_with_free_text`). Re-corrido sobre los dos
+corpus con el árbol de la rama (sin IA, sesiones Postgres de solo lectura): **las cinco cifras, las
+4 violaciones y el gym no cambian** (en rd252 `mariscos_gluten` cambia solo el sinónimo citado,
+`negrito` ↔ `harina de negrito`, sobre los mismos 3 ingredientes: el escáner lo elige por el orden de
+un set, que varía con `PYTHONHASHSEED` — comprobado con 4 semillas). Lo nuevo es que la corrida NOMBRA
+el texto que producción descarta por el centinela «Ninguna» (P0-FORM-1) en
+`run.parameters.texto_libre_descartado`: 12 planes del corpus completo — 11 celíacos con
+`otherConditions: "celiaquía"` junto a «Ninguna» (llevan el chip `Gluten`, así que el guard de
+alérgeno sigue activo) y `rd252__frutos_del_mar_textol252`, con `otherAllergies: "frutos del mar"`
+junto a «Ninguna»: **su plan sirve «250 g de camarones cocidos»** y, por la regla P0-FORM-1, no
+cuenta como violación. Pendiente de revisión humana (¿puede el wizard real mandar esa combinación?).
 
 ## Matriz de perfiles (cobertura del formulario)
 
