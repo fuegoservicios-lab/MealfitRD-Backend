@@ -93,12 +93,16 @@ def test_las_descripciones_no_acotan_el_servicio_a_un_pais(html):
 
 # ── Lo que NO se toca ───────────────────────────────────────────────────────────────────────────
 
-def test_no_se_toco_el_precio_ni_el_copy_de_marketing(html):
-    """P1-27 y P1-28 son decisiones del dueño («el landing vende comida dominicana», «mismo precio
-    por un producto medidamente menor»). Colarlas dentro de un arreglo técnico sería decidir por
-    él. Este test las deja explícitamente fuera del alcance."""
-    assert '"priceCurrency": "DOP"' in html, (
-        "se cambió la moneda del Offer: eso es P1-28, una decisión de producto, no este P-fix"
+def test_la_moneda_del_offer_es_la_del_apex_usd(html):
+    """[P1-PLAN-LOTE-793 · 2026-09-28] Antes este test fijaba DOP: P1-28 era una decisión del dueño
+    pendiente y colarla dentro de un arreglo técnico habría sido decidir por él. El dueño ya decidió
+    (G95, 28-sep): la oferta va en USD, la misma moneda que declara el apex. Invertido, no borrado:
+    el motivo de no tocarla aquí sigue valiendo para el copy de marketing, que este P-fix no toca."""
+    assert '"priceCurrency": "USD"' in html, (
+        "la moneda del Offer ya no es USD: el apex declara la misma oferta en USD (G95)"
+    )
+    assert '"priceCurrency": "DOP"' not in html, (
+        "volvió el DOP al Offer: dos datos estructurados del mismo producto con dos monedas"
     )
 
 
