@@ -1561,7 +1561,8 @@ escaneando el corpus antes y después y leyendo CADA hallazgo que desaparece.
 Sobre el corpus grande (426 planes, 5 334 comidas): V1 195 → 45, V2 130 → 0, V7a 245 → 53, V8a 98 → 18; la capa 1
 entera pasa de **946 comidas (17,7 %) a 541 (10,1 %)**, con los demás checks idénticos (lo que queda lo dominan V7f
 con 214 y V4 con 142, fuera de este lote). El replay de la cola (contrato + pulido) sobre los 67 planes da salidas
-byte-idénticas con y sin el lote: `retirar_sin_lista` usa V1/V7a como espejo y no cambió ninguna decisión.
+byte-idénticas con y sin el lote (y sobre los 426: 426 de 426 idénticas): `retirar_sin_lista` usa V1/V7a como
+espejo y no cambió ninguna decisión.
 
 **Las reglas** (tooltip-anchors `P1-PLAN-LOTE-745-V1/-V2/-V7A/-V8A`):
 
