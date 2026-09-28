@@ -102,3 +102,25 @@ def superponer(perfil):
         if cortesia and efectivo == cortesia["plan"] and efectivo != pagado else None)
     perfil["creditos_extra"] = {"generacion": extra_de(regalos, "generacion"), "coach": extra_de(regalos, "coach")}
     return perfil
+
+
+def resumen_creditos(perfil) -> dict:
+    """Para `GET /api/user/credits`: el tope REAL de créditos de planes (plan efectivo + regalos), cuánto es regalo y
+    hasta cuándo, y los regalos de los últimos `DIAS_AVISO` días que están en efecto, para avisar a la persona.
+    Recibe el perfil YA superpuesto (`get_user_profile`)."""
+    from auth import _TIER_LIMITS   # perezoso: auth importa db al arrancar y este módulo lo importa db_profiles
+    perfil = perfil or {}
+    tier = perfil.get("plan_tier") or "gratis"
+    base = int(_TIER_LIMITS.get(tier, _TIER_LIMITS["gratis"]))
+    regalos = [] if tier == "admin" else regalos_vigentes(perfil.get("id"))
+    extra = extra_de(regalos, "generacion")
+    hastas = [r["ends_at"] for r in regalos if r.get("kind") == MEDIDORES["generacion"] and r.get("ends_at")]
+    desde = datetime.now(timezone.utc) - timedelta(days=DIAS_AVISO)
+    recientes = [
+        {"id": r["id"], "tipo": r["kind"], "cantidad": r.get("amount"), "plan": r.get("plan"),
+         "hasta": iso(r.get("ends_at"))}
+        for r in regalos
+        if isinstance(r.get("created_at"), datetime) and r["created_at"] >= desde
+        and (r.get("kind") != "plan" or r.get("plan") == tier)]
+    return {"limit": base + extra, "bonus": extra, "bonus_hasta": iso(max(hastas)) if hastas else None,
+            "regalos_recientes": recientes}

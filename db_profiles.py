@@ -439,8 +439,11 @@ def get_user_profile(user_id: str):
                 profile["plan_tier"] = "gratis"
                 profile["subscription_status"] = "INACTIVE"
         # ---------------------------------------
-        
-        return profile
+
+        # [P1-PLAN-LOTE-772] El plan que la persona DISFRUTA: la cortesía se superpone al LEER, después de la
+        # degradación (que sigue escribiendo solo lo pagado). Nunca se escribe de vuelta.
+        from regalos_cuenta import superponer
+        return superponer(profile)
     except Exception as e:
         logger.error(f"Error obteniendo perfil: {e}")
         return None
@@ -471,7 +474,13 @@ def get_user_plan_tier(user_id: str) -> Optional[str]:
         fetch_one=True,
     )
     if row:
-        return row.get("plan_tier") or "gratis"
+        pagado = row.get("plan_tier") or "gratis"
+        if pagado == "admin":
+            return pagado
+        # [P1-PLAN-LOTE-772] el enrutado de modelos sigue al plan que la persona disfruta (cortesía incluida).
+        # `regalos_vigentes` no lanza: si no puede leer, queda lo pagado.
+        from regalos_cuenta import cortesia_de, plan_efectivo, regalos_vigentes
+        return plan_efectivo(pagado, cortesia_de(regalos_vigentes(user_id))) or "gratis"
     return None
 
 
@@ -1106,12 +1115,13 @@ def get_monthly_api_usage(user_id: str, kind: str = "generation") -> int:
     endpoint nuevo quedaría GRATIS por olvido; en negativo queda caro por defecto
     y alguien lo nota."""
     if not user_id or user_id == "guest": return 0
-    from datetime import datetime
-    
+
     try:
-        now = datetime.now()
-        start_date = datetime(now.year, now.month, 1).isoformat()
-        
+        # [P1-PLAN-LOTE-772] la MISMA ventana que la caducidad de los regalos (día 1, 00:00 UTC; el VPS ya corre en
+        # UTC, así que ninguna cifra cambia): un regalo «de este mes» se acaba justo cuando este contador se reinicia.
+        from regalos_cuenta import inicio_de_mes
+        start_date = inicio_de_mes().isoformat()
+
         # [P1-NEON-DB-MIGRATION · 2026-06-12] Rama fallback PostgREST (con su
         # retry loop específico de red REST) eliminada — pool o nada.
         from db_core import connection_pool

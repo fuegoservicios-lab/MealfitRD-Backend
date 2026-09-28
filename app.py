@@ -3485,7 +3485,10 @@ def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends
         if not user_id or user_id == "guest":
             return {"credits": 0}
         credits_used = get_monthly_api_usage(user_id)
-        return {"credits": credits_used}
+        # [P1-PLAN-LOTE-772] el tope REAL (plan efectivo + regalos) y los regalos recientes: el medidor lo adivinaba con
+        # una tabla del frontend que a Ultra le decía «Ilimitado» con un tope de 500.
+        from regalos_cuenta import resumen_creditos
+        return {"credits": credits_used, **resumen_creditos(get_user_profile(user_id))}
     except HTTPException as he:
         # Re-lanzar excepciones HTTP explícitas (ej. 401/403 de Auth)
         raise he
