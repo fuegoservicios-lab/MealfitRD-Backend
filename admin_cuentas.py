@@ -141,12 +141,18 @@ def _anotar(admin_id, accion, user_id, detalle) -> None:
         raise ErrorRegalo(503, "No se pudo registrar la acción; no se hizo ningún cambio.") from e
 
 
+def _anotar_fallo(admin_id, accion, user_id, detalle) -> None:
+    """El rastro ya dice `accion` (se anota ANTES de escribir); si el cambio no se hizo, deja `accion_fallo` al lado.
+    Best-effort: el fallo ya está en el log."""
+    try:
+        registrar_acceso(admin_id, f"{accion}_fallo", user_id, detalle)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _fallo_al_guardar(admin_id, accion, user_id, grant_id, e) -> ErrorRegalo:
     logger.error(f"🛑 [P1-PLAN-LOTE-774] {accion} no guardado para {user_id}: {e!r}")
-    try:
-        registrar_acceso(admin_id, f"{accion}_fallo", user_id, {"grant_id": grant_id, "error": type(e).__name__})
-    except Exception:  # noqa: BLE001 — el fallo ya está en el log
-        pass
+    _anotar_fallo(admin_id, accion, user_id, {"grant_id": grant_id, "error": type(e).__name__})
     if type(e).__name__ == "UniqueViolation":
         return ErrorRegalo(409, "Se acaba de dar otra cortesía a esta cuenta; recarga la ficha.")
     return ErrorRegalo(500, "No se pudo guardar el regalo.")
@@ -266,6 +272,9 @@ def revocar(admin_id, grant_id, motivo) -> dict:
     except Exception as e:  # noqa: BLE001
         raise _fallo_al_guardar(admin_id, "revocar_regalo", r["user_id"], gid, e) from e
     if not filas:
+        # Carrera perdida: otro lo revirtió entre la lectura y el UPDATE. Este admin no revirtió nada.
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-774] revocar_regalo {gid}: ya estaba revertido (carrera perdida)")
+        _anotar_fallo(admin_id, "revocar_regalo", r["user_id"], {"grant_id": gid, "error": "ya_revertido"})
         raise ErrorRegalo(409, "Ese regalo ya estaba revertido.")
     if r.get("kind") == "plan":
         _invalidar_plan(r["user_id"])

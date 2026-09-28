@@ -23,11 +23,12 @@ ALTER TABLE public.account_grants DROP CONSTRAINT IF EXISTS account_grants_kind_
 ALTER TABLE public.account_grants ADD CONSTRAINT account_grants_kind_chk
     CHECK (kind IN ('creditos_generacion', 'creditos_coach', 'plan'));
 
--- Un plan de cortesía jamás es 'admin'; los créditos siempre caducan.
+-- Un plan de cortesía jamás es 'admin'; los créditos siempre caducan. Los IS NOT NULL van explícitos: un CHECK que
+-- evalúa a NULL PASA (una cortesía sin plan o unos créditos sin cantidad entrarían).
 ALTER TABLE public.account_grants DROP CONSTRAINT IF EXISTS account_grants_forma_chk;
 ALTER TABLE public.account_grants ADD CONSTRAINT account_grants_forma_chk CHECK (
-    (kind = 'plan' AND plan IN ('basic', 'plus', 'ultra') AND amount IS NULL)
-    OR (kind <> 'plan' AND amount BETWEEN 1 AND 1000 AND plan IS NULL AND ends_at IS NOT NULL)
+    (kind = 'plan' AND plan IS NOT NULL AND plan IN ('basic', 'plus', 'ultra') AND amount IS NULL)
+    OR (kind <> 'plan' AND amount IS NOT NULL AND amount BETWEEN 1 AND 1000 AND plan IS NULL AND ends_at IS NOT NULL)
 );
 
 ALTER TABLE public.account_grants DROP CONSTRAINT IF EXISTS account_grants_ventana_chk;

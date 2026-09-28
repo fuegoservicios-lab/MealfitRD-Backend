@@ -458,10 +458,11 @@ def get_user_plan_tier(user_id: str) -> Optional[str]:
     El router de modelos corre en el hot path de CADA llamada LLM (con cache
     TTL upstream) — necesita un SELECT de una columna, sin side-effects.
 
-    Retorna el tier crudo (`gratis`/`basic`/`plus`/`ultra`) o None si el
-    perfil no existe (guests / session_ids). El caller normaliza y aplica
-    fail-cheap. Excepciones propagan — el caller (`llm_provider.get_user_tier`)
-    las captura y degrada a `gratis`.
+    Retorna el tier EFECTIVO (`gratis`/`basic`/`plus`/`ultra`): lo pagado con
+    la cortesía vigente superpuesta [P1-PLAN-LOTE-772] (`admin` tal cual, sin
+    leer regalos), o None si el perfil no existe (guests / session_ids). El
+    caller normaliza y aplica fail-cheap. Excepciones propagan — el caller
+    (`llm_provider.get_user_tier`) las captura y degrada a `gratis`.
     """
     if not user_id:
         return None

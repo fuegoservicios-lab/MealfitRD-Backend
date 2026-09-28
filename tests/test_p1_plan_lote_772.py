@@ -28,6 +28,7 @@ def _fila(**extra):
 
 
 def test_el_perfil_trae_el_plan_efectivo_y_el_pagado(monkeypatch):
+    monkeypatch.setattr(db_profiles, "connection_pool", object(), raising=False)   # en CI no hay base: sin pool
     monkeypatch.setattr(db_profiles, "execute_sql_query", lambda *a, **k: _fila())
     monkeypatch.setattr(rc, "regalos_vigentes", lambda uid: PLUS)
     p = db_profiles.get_user_profile(UID)
@@ -37,6 +38,7 @@ def test_el_perfil_trae_el_plan_efectivo_y_el_pagado(monkeypatch):
 
 def test_la_degradacion_escribe_solo_lo_pagado(monkeypatch):
     escrito = []
+    monkeypatch.setattr(db_profiles, "connection_pool", object(), raising=False)
     monkeypatch.setattr(db_profiles, "execute_sql_query",
                         lambda *a, **k: _fila(plan_tier="basic", subscription_status="CANCELLED"))
     monkeypatch.setattr(db_profiles, "execute_sql_write", lambda q, p=None, **k: escrito.append(p) or True)
@@ -108,6 +110,19 @@ def test_resumen_para_el_medidor(monkeypatch):
     assert r["limit"] == auth._TIER_LIMITS["plus"] + 20 and r["bonus"] == 20 and r["bonus_hasta"] == fin.isoformat()
     # el de hace 30 días ya se avisó; la cortesía Básico no rige para quien disfruta Plus: no se anuncia
     assert [x["id"] for x in r["regalos_recientes"]] == ["a"]
+
+
+def test_cortesia_igual_a_lo_pagado_no_se_anuncia_en_el_medidor(monkeypatch):
+    # Review Focus 3: cortesía Plus y luego paga Plus por PayPal → la cortesía no está en efecto: no se anuncia.
+    ahora = datetime.now(timezone.utc)
+    plus = [{"id": "p", "kind": "plan", "amount": None, "plan": "plus", "ends_at": None, "created_at": ahora}]
+    monkeypatch.setattr(rc, "regalos_vigentes", lambda uid: plus)
+    perfil = rc.superponer({"id": UID, "plan_tier": "plus"})
+    assert perfil["cortesia"] is None
+    assert rc.resumen_creditos(perfil)["regalos_recientes"] == []
+    # control: con Básico pagado la misma cortesía SÍ está en efecto y se anuncia una vez
+    perfil = rc.superponer({"id": UID, "plan_tier": "basic"})
+    assert [x["id"] for x in rc.resumen_creditos(perfil)["regalos_recientes"]] == ["p"]
 
 
 def test_resumen_de_admin_no_lee_regalos(monkeypatch):

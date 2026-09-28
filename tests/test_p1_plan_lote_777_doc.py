@@ -18,6 +18,8 @@ def test_cada_lote_tiene_su_test():
 
 
 def test_claude_md_enlaza_el_doc():
-    claude = _BACKEND.parent / "CLAUDE.md"
-    if claude.exists():                      # el repo del backend puede ir solo (CI); el workspace sí lo trae
-        assert "backend/docs/regalos_cuenta.md" in claude.read_text(encoding="utf-8")
+    # Revisión final: la copia que el repo del backend COMMITEA es `backend/CLAUDE.md` (en CI va sola); la del
+    # workspace se mira además cuando está (las dos deben ser idénticas: test_p1_diary_editable).
+    copias = [_BACKEND / "CLAUDE.md"] + [c for c in (_BACKEND.parent / "CLAUDE.md",) if c.exists()]
+    for claude in copias:
+        assert "backend/docs/regalos_cuenta.md" in claude.read_text(encoding="utf-8"), claude

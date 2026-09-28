@@ -3342,6 +3342,10 @@ app.add_middleware(
         # lista no — inerte en la web (mismo origen, sin preflight), muro en
         # nativo.
         "X-MF-Session",
+        # [P1-PLAN-LOTE-774] Los POST del panel /admin → Cuentas la exigen; en
+        # desarrollo el panel es de OTRO origen (:5173) y sin ella el preflight
+        # los corta todos.
+        "X-Admin-Accion",
     ],
     # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
     # browser JS lea `X-Correlation-ID` de la response — útil para que el

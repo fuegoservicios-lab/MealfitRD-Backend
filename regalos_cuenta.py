@@ -116,11 +116,14 @@ def resumen_creditos(perfil) -> dict:
     extra = extra_de(regalos, "generacion")
     hastas = [r["ends_at"] for r in regalos if r.get("kind") == MEDIDORES["generacion"] and r.get("ends_at")]
     desde = datetime.now(timezone.utc) - timedelta(days=DIAS_AVISO)
+    # Revisión final (Review Focus 3): una cortesía se anuncia solo si está EN EFECTO (`superponer` la deja en
+    # `cortesia`); igualar el plan efectivo no basta: cortesía Plus y luego paga Plus diría «Plus de cortesía».
+    en_efecto = (perfil.get("cortesia") or {}).get("plan")
     recientes = [
         {"id": r["id"], "tipo": r["kind"], "cantidad": r.get("amount"), "plan": r.get("plan"),
          "hasta": iso(r.get("ends_at"))}
         for r in regalos
         if isinstance(r.get("created_at"), datetime) and r["created_at"] >= desde
-        and (r.get("kind") != "plan" or r.get("plan") == tier)]
+        and (r.get("kind") != "plan" or (en_efecto is not None and r.get("plan") == en_efecto))]
     return {"limit": base + extra, "bonus": extra, "bonus_hasta": iso(max(hastas)) if hastas else None,
             "regalos_recientes": recientes}

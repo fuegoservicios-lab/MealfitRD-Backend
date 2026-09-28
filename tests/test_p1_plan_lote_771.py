@@ -97,6 +97,11 @@ def test_migracion_idempotente_y_con_sus_reglas():
               "account_grants_motivo_chk"):
         assert f"DROP CONSTRAINT IF EXISTS {c}" in sql and f"ADD CONSTRAINT {c}" in sql
     assert "plan IN ('basic', 'plus', 'ultra')" in sql and "amount BETWEEN 1 AND 1000" in sql
+    # Revisión final: un CHECK que evalúa a NULL PASA — `plan IN (…)` con plan NULL o `amount BETWEEN …` con amount
+    # NULL dejarían entrar una cortesía sin plan o un regalo de créditos sin cantidad. Los NOT NULL van explícitos.
+    forma = sql.split("ADD CONSTRAINT account_grants_forma_chk", 1)[1].split(";", 1)[0]
+    assert "kind = 'plan' AND plan IS NOT NULL AND plan IN ('basic', 'plus', 'ultra')" in forma
+    assert "kind <> 'plan' AND amount IS NOT NULL AND amount BETWEEN 1 AND 1000" in forma
     assert "CREATE UNIQUE INDEX IF NOT EXISTS account_grants_una_cortesia_idx" in sql
     assert "WHERE kind = 'plan' AND revoked_at IS NULL" in sql
     assert "RAISE EXCEPTION" in sql

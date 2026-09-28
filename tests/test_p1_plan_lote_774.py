@@ -2,6 +2,7 @@
 créditos o una cortesía y revertir. El rastro va ANTES de escribir; si no se anota, no hay cambio."""
 import json
 from datetime import datetime, time, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,6 +15,7 @@ import regalos_cuenta as rc
 import routers.admin as ra
 from auth import get_verified_user_id
 
+_BACKEND = Path(__file__).resolve().parents[1]
 ADMIN = "11111111-1111-1111-1111-111111111111"
 UID = "33333333-3333-3333-3333-333333333333"
 GID = "44444444-4444-4444-4444-444444444444"
@@ -207,6 +209,25 @@ def test_revertir_lo_ya_revertido_o_inexistente(bd):
     assert ei.value.status == 404
 
 
+def test_revertir_con_la_carrera_perdida_deja_su_fallo_en_el_rastro(bd, monkeypatch):
+    # Revisión final: otro lo revirtió entre la lectura y el UPDATE → 409, y el rastro no se queda en «revocar_regalo»
+    bd.historial = [{"id": GID, "user_id": UID, "kind": "plan", "revoked_at": None}]
+    monkeypatch.setattr(ac, "execute_sql_write", lambda q, p=None, **k: [] if k.get("returning") else True)
+    with pytest.raises(ac.ErrorRegalo) as ei:
+        ac.revocar(ADMIN, GID, "se acabó la prueba")
+    assert ei.value.status == 409 and ("cache", UID) not in bd.avisos
+    assert [r[0] for r in bd.rastro] == ["revocar_regalo", "revocar_regalo_fallo"]
+    assert bd.rastro[1][1] == UID and bd.rastro[1][2]["grant_id"] == GID
+
+    def _fallo_sin_rastro(admin, accion, objetivo=None, detalle=None):      # best-effort: sin rastro sigue el 409
+        if accion.endswith("_fallo"):
+            raise RuntimeError("sin DB")
+    monkeypatch.setattr(ac, "registrar_acceso", _fallo_sin_rastro)
+    with pytest.raises(ac.ErrorRegalo) as ei:
+        ac.revocar(ADMIN, GID, "se acabó la prueba")
+    assert ei.value.status == 409
+
+
 def test_revertir_funciona_con_el_knob_apagado(bd, monkeypatch):
     # Review Focus 4: apagado, regalar da 503 claro y revertir sigue funcionando
     monkeypatch.setenv("MEALFIT_ACCOUNT_GRANTS", "false")
@@ -254,6 +275,29 @@ def test_regalar_por_http_y_los_errores_con_su_codigo(cliente, bd):
     assert r.status_code == 200 and r.json()["ok"] is True and r.json()["cuenta"]["user_id"] == UID
     r = c.post(f"/api/admin/cuentas/{UID}/creditos", json={**cuerpo, "cantidad": 0}, headers=H)
     assert r.status_code == 422 and "1 a 1000" in r.json()["detail"]
+
+
+def test_si_releer_la_ficha_falla_el_regalo_dado_no_es_un_500(cliente, monkeypatch):
+    # Revisión final: el regalo YA se guardó; si releer la ficha falla → 200 con `cuenta: null` (el panel la vuelve a
+    # pedir). Un 500 invitaría a reintentar y duplicar el regalo.
+    monkeypatch.setattr(ac, "regalar_creditos", lambda *a: {"grant_id": GID, "cantidad": 20, "hasta": "2026-10-01"})
+
+    def _ficha_rota(uid):
+        raise RuntimeError("sin DB")
+    monkeypatch.setattr(ac, "ficha", _ficha_rota)
+    cuerpo = {"medidor": "generacion", "modo": "sumar", "cantidad": 20, "hasta": "mes", "motivo": "compensación"}
+    r = cliente(ADMIN).post(f"/api/admin/cuentas/{UID}/creditos", json=cuerpo, headers=H)
+    assert r.status_code == 200 and r.json() == {"ok": True, "grant_id": GID, "cantidad": 20, "hasta": "2026-10-01",
+                                                 "cuenta": None}
+
+
+def test_la_cabecera_de_accion_pasa_el_cors():
+    # Revisión final: en desarrollo el panel es de OTRO origen (:5173 → :8000): sin la cabecera en `allow_headers` el
+    # preflight corta todos los POST del panel.
+    src = (_BACKEND / "app.py").read_text(encoding="utf-8")
+    cors = src[src.index("    CORSMiddleware,"):]           # el comentario de arriba CITA `allow_headers=["*"]`
+    i = cors.index("allow_headers=[")
+    assert '"X-Admin-Accion"' in cors[i:cors.index("\n    ],", i)]
 
 
 def test_las_rutas_no_llevan_el_segmento_reservado():

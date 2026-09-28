@@ -44,8 +44,8 @@ def api_admin_metricas(dias: int = Query(default=7, ge=1, le=90), admin_id: str 
 # regalos-design §4.1). Todo POST exige `X-Admin-Accion: 1`: defensa extra además de la cookie SameSite=Strict (un
 # formulario de otro sitio no puede poner cabeceras propias sin preflight). La respuesta de cada acción trae la ficha
 # nueva, así el panel no necesita otra petición.
-_CUENTAS_LECTURA = RateLimiter(max_calls=30, period_seconds=60)
-_CUENTAS_ESCRITURA = RateLimiter(max_calls=20, period_seconds=60)
+_CUENTAS_LECTURA_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_CUENTAS_ESCRITURA_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 
 def _exigir_cabecera(x_admin_accion: Optional[str] = Header(None, alias="X-Admin-Accion")) -> None:
@@ -84,17 +84,24 @@ def _anotar_vista(admin_id: str, accion: str, objetivo, detalle: dict) -> None:
 
 
 def _hecho(user_id: str, resultado: dict) -> dict:
-    return {"ok": True, **resultado, "cuenta": ac.ficha(user_id)}
+    # Revisión final: el cambio YA se guardó. Si releer la ficha falla no es un 500 (invitaría a reintentar y a
+    # duplicar el regalo): `cuenta: None` y el panel la vuelve a pedir.
+    try:
+        cuenta = ac.ficha(user_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-774] cambio guardado pero la ficha de {user_id} no se pudo releer: {e!r}")
+        cuenta = None
+    return {"ok": True, **resultado, "cuenta": cuenta}
 
 
-@router.post("/cuentas/buscar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_LECTURA)])
+@router.post("/cuentas/buscar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_LECTURA_LIMITER)])
 def api_admin_buscar_cuenta(body: _Busqueda, admin_id: str = Depends(require_admin)):
     uid = ac.buscar_por_correo(body.email)
     _anotar_vista(admin_id, "buscar_cuenta", uid, {"encontrada": bool(uid)})
     return {"cuenta": ac.ficha(uid) if uid else None}
 
 
-@router.get("/cuentas/{user_id}", dependencies=[Depends(_CUENTAS_LECTURA)])
+@router.get("/cuentas/{user_id}", dependencies=[Depends(_CUENTAS_LECTURA_LIMITER)])
 def api_admin_ver_cuenta(user_id: uuid.UUID, admin_id: str = Depends(require_admin)):
     cuenta = ac.ficha(str(user_id))
     if not cuenta:
@@ -103,7 +110,7 @@ def api_admin_ver_cuenta(user_id: uuid.UUID, admin_id: str = Depends(require_adm
     return {"cuenta": cuenta}
 
 
-@router.post("/cuentas/{user_id}/creditos", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA)])
+@router.post("/cuentas/{user_id}/creditos", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA_LIMITER)])
 def api_admin_regalar_creditos(user_id: uuid.UUID, body: _Creditos, admin_id: str = Depends(require_admin)):
     try:
         r = ac.regalar_creditos(admin_id, str(user_id), body.medidor, body.modo, body.cantidad, body.hasta, body.motivo)
@@ -112,7 +119,7 @@ def api_admin_regalar_creditos(user_id: uuid.UUID, body: _Creditos, admin_id: st
     return _hecho(str(user_id), r)
 
 
-@router.post("/cuentas/{user_id}/cortesia", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA)])
+@router.post("/cuentas/{user_id}/cortesia", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA_LIMITER)])
 def api_admin_dar_cortesia(user_id: uuid.UUID, body: _Cortesia, admin_id: str = Depends(require_admin)):
     try:
         r = ac.dar_cortesia(admin_id, str(user_id), body.plan, body.hasta, body.motivo)
@@ -121,7 +128,7 @@ def api_admin_dar_cortesia(user_id: uuid.UUID, body: _Cortesia, admin_id: str = 
     return _hecho(str(user_id), r)
 
 
-@router.post("/regalos/{grant_id}/revocar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA)])
+@router.post("/regalos/{grant_id}/revocar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA_LIMITER)])
 def api_admin_revocar_regalo(grant_id: uuid.UUID, body: _Revocar, admin_id: str = Depends(require_admin)):
     try:
         r = ac.revocar(admin_id, str(grant_id), body.motivo)
