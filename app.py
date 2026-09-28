@@ -973,7 +973,16 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # (275 ml en la lista, 150 + 210 = 360 en los pasos): vaso = lista − cocción, y el Mise en place con la cifra de la lista.
 # [P1-PLAN-LOTE-636 · 2026-09-28] (backend) El yogur que el texto nombra es el de la lista (griego ≠ natural): «Acompaña
 # con yogurt natural entero y yogurt griego entero» con un solo yogur en la lista (255 de 5.042 comidas del corpus).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-636 · 2026-09-28"
+# [P1-PLAN-LOTE-623 · 2026-09-27] (backend, P0) Una alergia escrita con el nombre de otro país hispano bloquea el
+# alimento («Melocotón» dejaba pasar «durazno»): `variantes_regionales`/`variantes_solo_alergias` en food_names_i18n.
+# [P1-PLAN-LOTE-624..628 · 2026-09-27] (backend) Durazno fresco en ES/MX/CO/PR; pasos traducidos que recuperan su
+# etiqueta; dudas de la foto traducidas; el escáner y los estimadores saben el país del usuario.
+# [P1-PLAN-LOTE-641..651 · 2026-09-27] (backend) Rollback de países sin borrar el sello; el coach entiende el país en 5
+# idiomas; 25 push al catálogo; glosa del nombre local (`nombre_por_pais`); palancas de rollback en el registro.
+# [P1-PLAN-LOTE-652 · 2026-09-27] (backend, P0) El shift ya no retrocede el ancla 4 h (archivaba días dos veces).
+# [P1-PLAN-LOTE-653..657 · 2026-09-27] (backend) Plan congelado no avanza y sus fechas quedan ISO; alerta de saldo
+# agotado del proveedor de IA; catálogo beta sin «precio verificado»; doc de países sin números de línea.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-655 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
