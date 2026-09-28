@@ -94,6 +94,29 @@ _NO_ES_BASE_PROPIA = ("fruta",)
 _CLASE_LEGUMBRE = ("legumbres", "leguminosas")
 _LEGUMBRES_RESPALDO = ("habichuela", "frijol", "lenteja", "garbanzo", "gandul", "guandul", "arveja", "guisante")
 
+# [ronda 3] Sinónimos para la PUERTA, no para el escáner (su vocabulario es el lote aparte de arriba). El vocabulario
+# de alergias resuelve «elote» como «elote / maíz dulce en grano» y «habichuelas» como «habichuela roja/negra/blanca»:
+# ninguno cabe dentro de «tortilla de maíz» ni de «frijoles», y la A se los imponía. Si el ítem nombra a un miembro de
+# la familia (1.ª tupla, raíces), la puerta pregunta con TODOS sus nombres (2.ª tupla, singular y plural porque una
+# declaración que el vocabulario no conoce se busca LITERAL). «harina de maíz precocida» es la base con que el catálogo
+# compra la arepa (`GLOBAL_REVERSE_MAP["arepa"]`) y la que casan «harina de maíz» y «maíz precocido»: la tortilla de
+# maíz también es masa de maíz.
+_FAMILIAS_PUERTA = (
+    (("maiz", "elote", "choclo", "mazorca", "maicena"),
+     ("maíz", "elote", "elotes", "choclo", "choclos", "mazorca", "mazorcas", "maicena", "harina de maíz precocida")),
+    (("frijol", "habichuela", "poroto", "judia", "alubia"),
+     ("frijoles", "frijol", "habichuelas", "habichuela", "porotos", "poroto", "judías", "judía", "alubias", "alubia")),
+)
+
+# ─── (c) el respaldo y la neutra ─────────────────────────────────────────────────────────────────────────────────────
+# [ronda 3] El respaldo NOMBRA una clase: pasa por la misma puerta con lo que la palabra «tubérculo» afirma (SSOT:
+# `desc_sin_categoria_falsa._SI_ES_TUBERCULO`) y la clase. A una española alérgica a la patata «⚠️ OBLIGATORIO … Base de
+# tubérculo local» le pedía patatas. Si la puerta lo veta ⇒ la NEUTRA: no nombra un alimento, ni «lo típico local» (en
+# Colombia, la arepa: la CO alérgica al maíz ya cayó al respaldo por eso), ni la base de otra categoría.
+_CLASE_TUBERCULO = ("tubérculo", "tubérculos")
+_TUBERCULOS_RESPALDO = ("yautia", "ñame", "mapuey", "batata", "papa", "patata", "yuca", "casabe")
+ETIQUETA_A_BETA_NEUTRA = "Desayuno de libre elección"
+
 _EXCLUSIVOS_DO_RESPALDO = ("casabe",)
 
 
@@ -180,25 +203,55 @@ def _nombres_para_la_puerta(item) -> list:
     """[ronda 2] Los nombres con que la puerta de alergias pregunta por un ítem de la A: el ítem, la BASE con que el
     catálogo lo compra (`constants.GLOBAL_REVERSE_MAP`: «arepa» ⇒ «harina de maíz precocida») y, si es una legumbre,
     el nombre de la CLASE. La puerta (`_allergen_pool_item_banned`) sólo casa el término declarado DENTRO del texto:
-    «arepa» no contiene «maíz» y «frijoles» no contiene «legumbres». El dato ya viene calificado («arepa de maíz»,
-    `cultural_profiles`); esto es la defensa para el que no lo venga."""
+    «arepa» no contiene «maíz» y «frijoles» no contiene «legumbres».
+
+    [ronda 3] Con los datos REALES la base no salía: el dato viene calificado («arepa de maíz», `cultural_profiles`) y
+    `GLOBAL_REVERSE_MAP` sólo conoce «arepa» a secas. Ahora pregunta también
+      · con la base del nombre SIN calificar («arepa de maíz» ⇒ «arepa» ⇒ «harina de maíz precocida»), salvo que esa
+        base sea la de OTRA categoría: «tortilla» a secas es la de huevo (⇒ «huevos», la E) y arrastrarla le quitaba
+        la tortilla de maíz al alérgico al huevo — el calificativo dice justo que NO es ésa;
+      · con todos los nombres de la familia del ítem (`_FAMILIAS_PUERTA`): maíz/elote/choclo/mazorca/maicena y
+        frijoles/habichuelas/porotos/judías/alubias."""
     nombres = [item]
+
+    def _suma(n):
+        if n and n not in nombres:
+            nombres.append(n)
     try:
         from constants import GLOBAL_REVERSE_MAP
         for clave in (str(item).strip().casefold(), _norm(item).strip()):
-            base = GLOBAL_REVERSE_MAP.get(clave)
-            if base and base not in nombres:
-                nombres.append(base)
+            _suma(GLOBAL_REVERSE_MAP.get(clave))
+        for clave in (str(item).strip().casefold(), _norm(item).strip()):
+            cabeza = re.split(r"\s+de\s+", clave, maxsplit=1)[0].strip()
+            base = GLOBAL_REVERSE_MAP.get(cabeza) if cabeza and cabeza != clave else None
+            if base and not _contiene(base, _BASES_DE_OTRAS_CATEGORIAS):
+                _suma(base)
     except Exception:                                                          # noqa: BLE001
         pass
+    for raices, familia in _FAMILIAS_PUERTA:
+        if _contiene(item, raices):
+            for n in familia:
+                _suma(n)
     try:
         import graph_orchestrator as _go
         miembros = tuple(_go._LEGUME_PROTEIN_HINT) or _LEGUMBRES_RESPALDO
     except Exception:                                                          # noqa: BLE001
         miembros = _LEGUMBRES_RESPALDO
     if _contiene(item, miembros):
-        nombres.extend(_CLASE_LEGUMBRE)
+        for n in _CLASE_LEGUMBRE:
+            _suma(n)
     return nombres
+
+
+def _nombres_del_respaldo() -> tuple:
+    """[ronda 3] Con qué nombres pregunta la puerta por el respaldo «Base de tubérculo local»: la clase y lo que la
+    palabra «tubérculo» afirma (SSOT `desc_sin_categoria_falsa._SI_ES_TUBERCULO`)."""
+    try:
+        from desc_sin_categoria_falsa import _SI_ES_TUBERCULO
+        miembros = tuple(_SI_ES_TUBERCULO) or _TUBERCULOS_RESPALDO
+    except Exception:                                                          # noqa: BLE001
+        miembros = _TUBERCULOS_RESPALDO
+    return _CLASE_TUBERCULO + miembros
 
 
 def _vetados_por_dieta(dieta) -> tuple:
@@ -240,8 +293,10 @@ def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None,
         gluten y al huevo reabre el «ALÉRGENO DETECTADO» del lote 227. [ronda 2] La puerta pregunta también por la base
         del catálogo y la clase (`_nombres_para_la_puerta`): «arepa» a un alérgico al maíz, «frijoles» a quien declaró
         «legumbres», y ni el escáner ni el backstop lo marcan después.
-    Si no queda nada ⇒ `ETIQUETA_A_BETA_RESPALDO` (también en el brief). `detalle=False` (el brief de los OTROS días) da
-    sólo el nombre, sin la lista. `pais_cocina` es un código YA canónico: el de la cocina de ESE día."""
+    Si no queda nada ⇒ `ETIQUETA_A_BETA_RESPALDO` (también en el brief) — [ronda 3] que pasa por la MISMA puerta
+    (`_nombres_del_respaldo`: papa, patata, yuca, tubérculos…); vetado ⇒ `ETIQUETA_A_BETA_NEUTRA`. `detalle=False` (el
+    brief de los OTROS días) da sólo el nombre, sin la lista. `pais_cocina` es un código YA canónico: el de la cocina de
+    ESE día."""
     if categoria != ENUM_DESAYUNO_A or es_do(pais_cocina):
         return categoria
     prohibidos = _BASES_DE_OTRAS_CATEGORIAS + _NO_ES_DESAYUNO + _NO_ES_BASE_PROPIA + _vetados_por_dieta(dieta)
@@ -249,5 +304,7 @@ def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None,
     if vetado is not None:
         items = [i for i in items if not any(vetado(n) for n in _nombres_para_la_puerta(i))]
     if not items:
+        if vetado is not None and any(vetado(n) for n in _nombres_del_respaldo()):
+            return ETIQUETA_A_BETA_NEUTRA
         return ETIQUETA_A_BETA_RESPALDO
     return f"{_ETIQUETA_A_BETA_CORTA} ({', '.join(items)})" if detalle else _ETIQUETA_A_BETA_CORTA

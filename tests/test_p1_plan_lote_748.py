@@ -372,9 +372,14 @@ def test_etiqueta_a_filtra_por_la_puerta_de_vetos_y_cae_al_respaldo():
     from prompts import asignacion_pais as ap
     assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: "frijol" in i) == \
         "Desayuno típico local (tortilla de maíz)"
-    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True) == ap.ETIQUETA_A_BETA_RESPALDO
-    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True, detalle=False) == \
+    # [ronda 3] el respaldo pasa por la MISMA puerta: una que lo veta todo veta también el tubérculo ⇒ la neutra
+    solo_mx = lambda i: bool(re.search(r"ma[ií]z|elote|choclo|mazorca|maicena|frijol|habichuela|legum", i))  # noqa: E731
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=solo_mx) == ap.ETIQUETA_A_BETA_RESPALDO
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=solo_mx, detalle=False) == \
         ap.ETIQUETA_A_BETA_RESPALDO
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True) == ap.ETIQUETA_A_BETA_NEUTRA
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True, detalle=False) == \
+        ap.ETIQUETA_A_BETA_NEUTRA
     # DO: el enum tal cual, pase lo que pase (su huella está arriba)
     assert ap.etiqueta_desayuno("Mangú/Tubérculos", "DO", vetado=lambda i: True, dieta="vegan") == "Mangú/Tubérculos"
 
@@ -634,3 +639,158 @@ def test_r2_el_brief_deriva_la_cocina_una_vez_por_dia():
     previo = src[ini:i]
     assert "_abd_paises = [cultural_country_for_form_data(form_data, day_index=" in previo, previo
     assert previo.count("cultural_country_for_form_data(") == 1, previo
+
+
+
+# ─────────────── H. ronda 3 de la revisión adversaria (P1-PLAN-LOTE-748) ───────────────
+# 1 IMPORTANTE (seguridad clínica, regresión frente a main): la defensa del «ingrediente base» no actuaba con los DATOS
+#   REALES. `GLOBAL_REVERSE_MAP.get("arepa de maíz")` y `.get("tortilla de maíz")` son None — sólo «arepa» a secas
+#   lleva a «harina de maíz precocida» —, y el test de la ronda 2 lo probaba con el dato sustituido por «arepa». CO con
+#   alergia «harina de maíz» recibía «⚠️ OBLIGATORIO … (arepa de maíz)» y el escáner marcaba después «Harina de maíz
+#   precocida»: un intento quemado, el fallo del lote 227. Estos tests NO sustituyen datos ni vocabulario.
+# 2 MENOR: sinónimos que la puerta no veía — maíz (elote, choclo, mazorca, maicena) y frijoles (habichuelas, porotos,
+#   judías, alubias).
+# 3 MENOR: el respaldo «Base de tubérculo local» salía sin pasar por la puerta, y `reasignar` no apartaba la A del
+#   alérgico a los tubérculos.
+
+def _puerta_real(alergias):
+    import graph_orchestrator as go
+    return lambda i: go._allergen_pool_item_banned(i, alergias)
+
+
+@pytest.mark.parametrize("alergias", (["harina de maíz"], ["Harina de Maíz"], ["harina de maiz"], ["maíz precocido"]))
+def test_r3_co_harina_de_maiz_no_muestra_la_arepa(vocab_real, alergias):
+    linea = _linea_a_con("CO", alergias)
+    assert not _tiene("arepa", linea) and not _tiene("maiz", linea), (alergias, linea)
+    from prompts import asignacion_pais as ap
+    et = ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=_puerta_real(alergias))
+    assert "arepa" not in et.casefold(), (alergias, et)
+
+
+@pytest.mark.parametrize("alergias", (["harina de maíz"], ["elote"], ["maíz precocido"]))
+def test_r3_mx_harina_de_maiz_o_elote_no_muestra_la_tortilla_de_maiz(vocab_real, alergias):
+    linea = _linea_a_con("MX", alergias)
+    assert not _tiene("tortilla", linea) and not _tiene("maiz", linea), (alergias, linea)
+    assert "frijoles" in linea, ("los frijoles no llevan maíz", linea)
+
+
+@pytest.mark.parametrize("alergias", (["huevo"], ["Huevos"], ["huevo", "gluten"]))
+def test_r3_el_alergico_al_huevo_conserva_la_tortilla_y_la_arepa_de_maiz(vocab_real, alergias):
+    """«tortilla» a secas lleva a «huevos» en el catálogo (`GLOBAL_REVERSE_MAP`): la base del nombre sin calificar NO
+    puede arrastrarla — la tortilla de maíz no lleva huevo."""
+    assert "tortilla de maíz" in _linea_a_con("MX", alergias), alergias
+    assert "arepa de maíz" in _linea_a_con("CO", alergias), alergias
+
+
+def test_r3_la_puerta_pregunta_por_la_base_con_los_datos_reales():
+    """Sin monkeypatch: el dato de producción es «arepa de maíz» / «tortilla de maíz»."""
+    import cultural_profiles
+    from prompts import asignacion_pais as ap
+    tipicos = {pid: (p.get("slot_affinity") or {}).get("desayuno") or [] for pid, p in cultural_profiles.PROFILES.items()}
+    assert "arepa de maíz" in tipicos["colombia_casera"] and "tortilla de maíz" in tipicos["mexico_casera"]
+    arepa = [n.casefold() for n in ap._nombres_para_la_puerta("arepa de maíz")]
+    tortilla = [n.casefold() for n in ap._nombres_para_la_puerta("tortilla de maíz")]
+    assert "harina de maíz precocida" in arepa, arepa
+    assert "harina de maíz precocida" in tortilla, tortilla
+    assert not any("huevo" in n for n in tortilla), ("la tortilla de maíz no es la de huevo", tortilla)
+
+
+@pytest.mark.parametrize("cc,alergia", [("CO", a) for a in ("elote", "elotes", "choclo", "mazorca", "maicena")] +
+                                       [("MX", a) for a in ("elote", "elotes", "choclo", "mazorca", "maicena")])
+def test_r3_sinonimos_del_maiz(vocab_real, cc, alergia):
+    linea = _linea_a_con(cc, [alergia])
+    for tok in ("arepa", "tortilla", "maiz"):
+        assert not _tiene(tok, linea), (cc, alergia, linea)
+
+
+@pytest.mark.parametrize("alergia", ("habichuelas", "habichuela", "porotos", "poroto", "judías", "judias", "alubias",
+                                     "alubia"))
+def test_r3_sinonimos_de_los_frijoles(vocab_real, alergia):
+    linea = _linea_a_con("MX", [alergia])
+    assert not _tiene("frijol", linea), (alergia, linea)
+    assert "tortilla de maíz" in linea, ("la tortilla de maíz no es una legumbre", alergia, linea)
+
+
+def test_r3_los_sinonimos_no_recortan_a_quien_no_los_declara(vocab_real):
+    for alergias in ([], ["gluten"], ["lácteos"], ["maní"], ["soya"], ["frutos secos"], ["mariscos"]):
+        assert "frijoles, tortilla de maíz" in _linea_a_con("MX", alergias), alergias
+        assert "arepa de maíz" in _linea_a_con("CO", alergias), alergias
+
+
+_TUBERCULOS_DECLARADOS = (["papa"], ["Papas"], ["patata"], ["yuca"], ["tubérculos"], ["tubérculo"], ["Tuberculos"],
+                          ["batata"])
+
+
+@pytest.mark.parametrize("cc", ("ES", "US", "PR"))
+@pytest.mark.parametrize("alergias", _TUBERCULOS_DECLARADOS)
+def test_r3_el_respaldo_pasa_por_la_puerta(vocab_real, cc, alergias):
+    from prompts import asignacion_pais as ap
+    linea = _linea_a_con(cc, alergias)
+    assert linea.endswith(f"ASIGNADA: {ap.ETIQUETA_A_BETA_NEUTRA}"), (cc, alergias, linea)
+    for tok in ("tuberculo", "papa", "patata", "yuca", "batata"):
+        assert not _tiene(tok, linea), (cc, alergias, tok, linea)
+
+
+def test_r3_co_maiz_y_papa_no_cae_en_el_tuberculo(vocab_real):
+    from prompts import asignacion_pais as ap
+    assert _linea_a_con("CO", ["maíz"]).endswith(f"ASIGNADA: {ap.ETIQUETA_A_BETA_RESPALDO}")
+    assert _linea_a_con("CO", ["maíz", "papa"]).endswith(f"ASIGNADA: {ap.ETIQUETA_A_BETA_NEUTRA}")
+
+
+def test_r3_el_brief_de_otros_dias_tambien_pasa_el_respaldo_por_la_puerta(vocab_real):
+    from prompts import asignacion_pais as ap
+    brief = [{"technique": "horno", "breakfast": "Mangú/Tubérculos", "country": "ES"}]
+    sk = _esqueleto("Batido/Bowl")
+    sk["_other_days_brief"] = copy.deepcopy(brief)
+    t = _bdac(sk, 1, day_name="Lunes", allergies=["papa"], country="ES")
+    assert f"horno (desayuno: {ap.ETIQUETA_A_BETA_NEUTRA})" in t, t
+    sk = _esqueleto("Batido/Bowl")
+    sk["_other_days_brief"] = copy.deepcopy(brief)
+    t = _bdac(sk, 1, day_name="Lunes", allergies=["gluten"], country="ES")
+    assert f"horno (desayuno: {ap.ETIQUETA_A_BETA_RESPALDO})" in t, "sin alergia a tubérculos, el respaldo de siempre"
+
+
+def test_r3_sin_alergias_el_respaldo_no_cambia(vocab_real):
+    from prompts import asignacion_pais as ap
+    for cc in ("ES", "US", "PR"):
+        assert _linea_a_con(cc, []).endswith(f"ASIGNADA: {ap.ETIQUETA_A_BETA_RESPALDO}"), cc
+        assert _linea_a_con(cc, ["gluten", "huevo"]).endswith(f"ASIGNADA: {ap.ETIQUETA_A_BETA_RESPALDO}"), cc
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "ES") == ap.ETIQUETA_A_BETA_RESPALDO
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "DO", vetado=lambda i: True) == "Mangú/Tubérculos"
+
+
+def test_r3_la_etiqueta_neutra_no_impone_un_alergeno():
+    """La neutra no nombra un alimento: ni un tubérculo, ni el maíz, ni la base de otra categoría, ni «lo típico
+    local» (en Colombia, la arepa)."""
+    import graph_orchestrator as go
+    from prompts import asignacion_pais as ap
+    n = ap.ETIQUETA_A_BETA_NEUTRA
+    for tok in ("tuberculo", "papa", "patata", "yuca", "batata", "maiz", "arepa", "tortilla", "huevo", "avena", "pan",
+                "cereal", "trigo", "leche", "queso", "yogur", "frijol", "platano", "fruta", "local", "tipico"):
+        assert not _tiene(tok, n), (tok, n)
+    todas = ["gluten", "huevo", "lácteos", "maní", "frutos secos", "soya", "mariscos", "pescado", "sésamo", "maíz",
+             "legumbres", "papa", "yuca", "tubérculos"]
+    assert not go._allergen_pool_item_banned(n, todas), n
+    assert n != ap.ETIQUETA_A_BETA_RESPALDO
+
+
+def test_r3_reasignar_aparta_la_a_del_alergico_a_los_tuberculos():
+    import desayuno_por_alergia as dpa
+    for alergias in (["tubérculos"], ["tubérculo"], ["Tuberculos"]):
+        dias = [{"day": 1, "breakfast_category": "Mangú/Tubérculos"}, {"day": 2, "breakfast_category": "Avena/Cereales"}]
+        assert dpa.reasignar(dias, {"allergies": alergias}) == 1, alergias
+        assert "Mangú/Tubérculos" not in [d["breakfast_category"] for d in dias], (alergias, dias)
+    # gluten + huevo + tubérculos: queda el Batido/Bowl
+    dias = [{"day": i, "breakfast_category": c} for i, c in enumerate(
+        ("Mangú/Tubérculos", "Avena/Cereales", "Pan/Tostadas", "Revoltillo/Tortilla", "Batido/Bowl"), 1)]
+    dpa.reasignar(dias, {"allergies": ["gluten", "huevo", "tubérculos"]})
+    assert {d["breakfast_category"] for d in dias} == {"Batido/Bowl"}, dias
+
+
+def test_r3_reasignar_no_aparta_la_a_por_un_solo_tuberculo():
+    """La A dominicana es el mangú (plátano): una alergia a la papa no la aparta. En beta la etiqueta del respaldo pasa
+    por la puerta (test_r3_el_respaldo_pasa_por_la_puerta)."""
+    import desayuno_por_alergia as dpa
+    dias = [{"day": 1, "breakfast_category": "Mangú/Tubérculos"}]
+    assert dpa.reasignar(dias, {"allergies": ["papa"]}) == 0
+    assert dias[0]["breakfast_category"] == "Mangú/Tubérculos"

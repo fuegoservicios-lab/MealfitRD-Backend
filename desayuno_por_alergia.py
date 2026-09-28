@@ -3,12 +3,14 @@
 
 El scrub de pools del esqueleto no la toca y el prompt del día la impone («El desayuno de este día DEBE ser de esta
 categoría»). Batería real: un alérgico a gluten y huevo recibió «Avena/Cereales» → «30 g de avena» → ALÉRGENO DETECTADO
-→ un intento entero quemado. Gluten ⇒ ni Avena/Cereales ni Pan/Tostadas; huevo ⇒ ni Revoltillo/Tortilla. Se reasigna a
+→ un intento entero quemado. Gluten ⇒ ni Avena/Cereales ni Pan/Tostadas; huevo ⇒ ni Revoltillo/Tortilla; tubérculos
+(la clase, P1-PLAN-LOTE-748) ⇒ ni Mangú/Tubérculos. Se reasigna a
 una categoría permitida que ningún otro día use. tooltip-anchor: P1-PLAN-LOTE-227-DESAYUNO-POR-ALERGIA
 """
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger("graph_orchestrator")
 
@@ -26,6 +28,11 @@ def reasignar(skel_days: list, form_data) -> int:
             _bk_block |= {"Avena/Cereales", "Pan/Tostadas"}
         if {"huevo", "huevos"} & set(_bk_forb):
             _bk_block.add("Revoltillo/Tortilla")
+        # [P1-PLAN-LOTE-748 · 2026-09-28 · ronda 3] Tubérculos ⇒ ni Mangú/Tubérculos: la A nombra la CLASE (el enum en
+        # DO, «Base de tubérculo local» en beta). Sólo la clase: la A dominicana es el mangú (plátano) y una alergia a la
+        # papa no la aparta; en beta la etiqueta del respaldo pasa por la puerta (`prompts/asignacion_pais.py`).
+        if any(re.search(r"\btuberculos?\b", str(t)) for t in _bk_forb):
+            _bk_block.add("Mangú/Tubérculos")
         if not _bk_block:
             return 0
         _bk_ok = [c for c in _CATEGORIAS if c not in _bk_block]
