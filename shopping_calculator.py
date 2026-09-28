@@ -2760,7 +2760,7 @@ def normalize_name(orig_name: str) -> str:
     if _prep_handled:
         if _prep_canon:
             return _prep_canon
-        _prep_disp = re.sub(r'\(.*?\)', '', str(orig_name)).strip()
+        _prep_disp = _NORMALIZE_DE_PREFIX_RE.sub('', _NORMALIZE_CONTAINER_PREFIX_RE.sub('', re.sub(r'\(.*?\)', '', str(orig_name)).strip())).strip()  # [P1-PLAN-LOTE-790] «de Harina de yuca»
         if _prep_disp:
             return _prep_disp[0].upper() + _prep_disp[1:]
         return n
@@ -5228,58 +5228,9 @@ def _lbs_to_market_fraction(lbs: float) -> "tuple[int, str]":
     return int(whole), fraction_str
 
 
-def _sku_size_label(size_g: float, unit_hint: str = None) -> str:
-    """Convierte gramos a etiqueta legible de mercado dominicano.
-    
-    453g → '1lb', 908g → '2lb', 473g → '473ml', 946g → '946ml', 200g → '200g'
-    Con soporte especial para potes/frascos en onzas fluidas.
-    """
-    if size_g is None:
-        return ""
-    size_g = float(size_g)
-    if unit_hint and unit_hint.lower() in ['cartón', 'carton', 'botella', 'ml', 'l', 'galón', 'envase', 'lata']:
-        # Tamaños de volumen conocidos (leche, jugos — se venden por ml, no por peso)
-        VOLUME_LABELS = {250: "250ml", 473: "473ml", 946: "946ml", 1000: "1L", 1892: "1/2 Galón"}
-        for vol_g, label in VOLUME_LABELS.items():
-            if abs(size_g - vol_g) < 10:
-                return label
-        # [BOTELLA-ML-FALLBACK] Si el contenedor es una botella/lata pero el peso
-        # no matchea ninguno de los tamaños canónicos (e.g. aceite de oliva 500g),
-        # NO debemos caer al fallback genérico que produciría "500g". Los líquidos
-        # de cocina (aceite, vinagre, salsas) tienen densidad ≈1 g/ml, así que
-        # mostrar el mismo número como "ml" es correcto y mucho más legible que
-        # "500g" en una botella de aceite (visto 2026-05-06).
-        if unit_hint.lower() in ['botella', 'ml', 'l', 'galón']:
-            if size_g >= 1000:
-                # Convertir a litros con un decimal cuando es ≥1L (1500g → "1.5L")
-                liters = size_g / 1000
-                if abs(liters - round(liters)) < 0.05:
-                    return f"{round(liters):d}L"
-                return f"{liters:.1f}L"
-            return f"{int(round(size_g))}ml"
-            
-    if unit_hint and unit_hint.lower() in ['pote', 'frasco']:
-        # Mapeos típicos de onzas para potes (yogurt, queso crema, aceitunas)
-        if abs(size_g - 453.592) < 15: return "16 oz"
-        if abs(size_g - 226.796) < 15: return "8 oz"
-        if abs(size_g - 340.194) < 15: return "12 oz"
-    
-    lbs = size_g / 453.592
-    # Libras enteras limpias — threshold estricto (±2%) para no confundir 473g con 1lb
-    if abs(lbs - round(lbs)) < 0.05 and round(lbs) >= 1:
-        return f"{round(lbs)} lb" if round(lbs) == 1 else f"{round(lbs)} lbs"
-    # Media libra
-    if abs(lbs - 0.5) < 0.05:
-        return "½ lb"
-    if abs(lbs - 0.25) < 0.05:
-        return "¼ lb"
-        
-    # Mejorar la etiqueta para pesos de mega frutas o porciones grandes (ej. 800g -> ~1.8 lbs)
-    if lbs > 1.2:
-        return f"{round(lbs, 1):g} lbs"
-        
-    # Todo lo demás en gramos
-    return f"{int(size_g)}g"
+# [P1-PLAN-LOTE-790 · 2026-09-28] El rótulo del envase habla el sistema del PAÍS de la lista (ES/MX/CO en g/kg/ml, DO/US/PR como
+# siempre, decimales bajo 1 g) y el país viaja por contexto desde el sello del plan. Vive en `envase_pais.py` (tope de líneas).
+from envase_pais import etiqueta_envase as _sku_size_label, con_pais_del_plan as _con_pais_del_plan, sellar_catalogo_de_otro_pais as _sellar_catalogo_de_otro_pais  # noqa: E402
 
 
 # [P1-COHERENCE-BASE-QTY · 2026-07-26] Cantidad en unidad BASE del item de la lista, en el
@@ -13614,6 +13565,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         for _it in results:
             if isinstance(_it, dict):
                 _it["pantry_deduction_applied"] = bool(_pantry_deduction_effective)
+        _sellar_catalogo_de_otro_pais(results)  # [P1-PLAN-LOTE-790] catálogo de OTRO país: se queda, sellado (envase_pais.py)
 
     results.sort(key=lambda x: x["display_string"] if structured else x)
     
@@ -13839,6 +13791,7 @@ def _strip_prices_for_beta_pricing_mode(res):
     return res
 
 
+@_con_pais_del_plan  # [P1-PLAN-LOTE-790] el país del sello del plan viaja a SU lista (rótulos + catalogo_de_otro_pais)
 def get_shopping_list_delta(
     user_id: str,
     plan_result: dict,
@@ -14358,6 +14311,7 @@ def compute_pantry_completion_delta(
     )
 
 
+@_con_pais_del_plan  # [P1-PLAN-LOTE-790] el país del sello del plan viaja a SU lista (rótulos + catalogo_de_otro_pais)
 def get_realtime_pantry(
     plan_result: dict, consumed_ingredients: list[str], *, num_days: int | None = None, multiplier: float = 1.0
 ) -> list[str]:
