@@ -611,6 +611,9 @@ def _iter_meals(plan_data: dict):
 #   · «dorar» no es sólo saltear: dora quien tuesta, fríe, asa a la plancha u hornea. «Dora el casabe en una sartén
 #     seca» es tostarlo (Casabe: tostar) y «dora el plátano maduro» es freírlo (Plátano maduro: freír). El paso que dora
 #     a un alimento que no admite NINGUNO de esos métodos sigue acusando («dora el queso de hoja»: ninguno/crudo).
+#     Riesgo ACEPTADO (ronda 2, documentado): la salvaguarda del destinatario válido se ensancha igual, así que
+#     cualquier alimento de la cláusula que admita uno de los cinco calla a los demás («dora el salami y el aguacate»,
+#     «mientras hierve la yuca, dora el aguacate» → nada). En los corpus sólo el pan junto al queso blanco.
 #
 # Lo que NO se tocó, a propósito: la metadata del catálogo (Queso blanco sin 'freir' aunque su alias es «queso de
 # freír»; Papa sin 'saltear') — eso lo decide el dueño con una migración, no el escáner.
@@ -800,7 +803,12 @@ def _v2_duenos_del_estado(texto_norm: str, m_estado, spans: list, index: dict) -
     4. y si tampoco, el primero que lo sigue en su oración.
 
     [ronda 1] Las reglas 1 (condimentos y «con») y 3 las pidió la revisión: con «el más cercano» a secas, la pimienta, la
-    cebolla o nadie eran el dueño y el pescado/pollo CRUDO declarado cocido —el caso de seguridad— callaba."""
+    cebolla o nadie eran el dueño y el pescado/pollo CRUDO declarado cocido —el caso de seguridad— callaba.
+
+    [ronda 2] En la regla 1, un dueño con `ready_to_eat` DESCONOCIDO (la cebolla, el tomate, la lechuga: fail-open, nunca
+    se acusa) no se queda solo con el estado aunque el nexo no sea «con»/«y»: la búsqueda sigue hacia atrás en la
+    oración y sólo se para ante un listo-para-comer. «Coloca el filete de pescado blanco sobre la cebolla (ya viene
+    cocido)», «el salmón junto al tomate», «los camarones a la lechuga»: la base los acusaba y la ronda 1 los callaba."""
     pos = m_estado.start()
     ini, fin = _clause_bounds(texto_norm, pos)
     utiles = [s for s in spans if not _v1_es_condimento(s[2])]
@@ -808,10 +816,15 @@ def _v2_duenos_del_estado(texto_norm: str, m_estado, spans: list, index: dict) -
     if antes:
         i = len(antes) - 1
         duenos = [antes[i][2]]
-        while (i > 0 and (index.get(_norm(antes[i][2])) or {}).get("ready_to_eat") is not True
-               and _V2_ACOMPANANTE_RE.search(texto_norm[antes[i - 1][1]:antes[i][0]])):
-            i -= 1
-            duenos.append(antes[i][2])
+        while i > 0:
+            rte = (index.get(_norm(antes[i][2])) or {}).get("ready_to_eat")
+            if rte is True:
+                break                                   # el atún: el estado es suyo y la búsqueda se para
+            if rte is None or _V2_ACOMPANANTE_RE.search(texto_norm[antes[i - 1][1]:antes[i][0]]):
+                i -= 1                                  # [ronda 2] desconocido ⇒ sube sin mirar el nexo
+                duenos.append(antes[i][2])
+                continue
+            break
         return duenos
     mp = _V2_POSPUESTO_RE.match(texto_norm, m_estado.end())
     if mp:

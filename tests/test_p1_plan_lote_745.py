@@ -526,6 +526,117 @@ def test_v7a_trocear_en_rodajas_una_pieza_contable_DECISION_PENDIENTE(idx):
     assert _v7a(["2 guineos"], ["Pela y corta el guineo en rodajas.", "Sirve con la avena."], idx) == []
 
 
+# ───────────────────────────────────────────── ronda 2 de la revisión (re-verificación de la ronda 1)
+# Otra vez: cada caso de abajo disparaba en la BASE y la ronda 1 lo callaba (sondas de una línea del revisor).
+
+# Filas del catálogo real (SELECT del 28-sep), alias recortados.
+_CAT_R2 = _CAT + [
+    {"name": "Salmón", "prep_methods": ["hervir", "plancha", "freir", "hornear", "guisar", "saltear"], "ready_to_eat": False,
+     "category": "Proteínas", "aliases": ["salmon", "salmón", "salmon fresco", "filete de salmon"]},
+    {"name": "Camarones", "prep_methods": ["hervir", "plancha", "freir", "hornear", "guisar", "saltear"],
+     "ready_to_eat": False, "category": "Proteínas", "aliases": ["camarón", "langostinos"]},
+    {"name": "Lechuga", "prep_methods": ["hervir", "saltear", "plancha", "hornear", "guisar", "crudo"], "ready_to_eat": None,
+     "category": "Vegetales", "aliases": ["lechuga repollada", "lechuga iceberg"]},
+]
+
+
+@pytest.mark.parametrize("paso, crudo", [
+    ("Coloca el filete de pescado blanco sobre la cebolla (ya viene cocido).", "Filete de pescado blanco"),
+    ("Pon el filete de pescado blanco sobre el tomate picado (ya viene cocido) y sirve.", "Filete de pescado blanco"),
+    ("Sirve el salmón junto al tomate (ya viene cocido).", "Salmón"),
+    ("Añade los camarones a la lechuga (ya viene cocido).", "Camarones"),
+])
+def test_v2_un_vegetal_sin_dato_de_listo_para_comer_no_se_queda_con_el_estado(paso, crudo):
+    """El más cercano es un vegetal con `ready_to_eat` DESCONOCIDO (fail-open: nunca se acusa), unido a la proteína cruda
+    por una preposición que no es «con»/«y» («sobre», «junto a», «a»): el dueño seguía siendo sólo el vegetal y el
+    pescado CRUDO declarado cocido —el check `high`— callaba. Ahora la búsqueda sigue hacia atrás en la oración mientras
+    el dueño sea desconocido, y sólo se para ante un listo-para-comer (el atún)."""
+    i2 = cc.build_culinary_index(_CAT_R2)
+    assert _v2([paso], i2) == [crudo], paso
+
+
+def test_v2_el_listo_para_comer_sigue_parando_la_busqueda(idx):
+    """El caso del corpus no se reabre: tras el atún (listo para comer) no se sube a nadie, pase lo que pase delante."""
+    assert _v2(["Sirve el huevo revuelto con atún en agua (ya viene cocido)."], idx) == []
+    assert _v2([_PASO_ATUN], idx) == []
+    # un vegetal desconocido detrás del atún sube HASTA el atún y se para ahí: el huevo de delante no se acusa
+    assert _v2(["Revuelve el huevo con atún en agua sobre la cebolla (ya viene cocida)."], idx) == []
+    # y un dueño crudo conocido sin «con»/«y» delante tampoco sube (como en la ronda 1)
+    assert _v2(["Revuelve los huevos, agrega el filete de pescado blanco (ya viene cocido)."], idx) == [
+        "Filete de pescado blanco"]
+
+
+@pytest.mark.parametrize("paso, espera", [
+    ("Deja reposar la masa a temperatura ambiente más de 1 hora para que leude.", 60),
+    ("Deja fermentar la mezcla a temperatura ambiente por más de 8 horas.", 480),
+    ("Saca la carne de la nevera y déjala a temperatura ambiente más de 1 hora antes de asarla.", 60),
+])
+def test_v8a_temperatura_ambiente_mas_de_N_sin_negacion_es_una_instruccion(paso, espera):
+    """Sin «no»/«sin»/«nunca»/«evita» delante, «a temperatura ambiente más de N h» es una ESPERA que el paso pide, no el
+    tope de seguridad: la ronda 1 lo recortaba igual."""
+    assert cx.hidden_wait_minutes([paso])[0] == espera, paso
+
+
+@pytest.mark.parametrize("paso", [
+    "Nunca dejes el pollo crudo a temperatura ambiente por más de 2 horas.",
+    "Evita dejarlo a temperatura ambiente más de 2 horas.",
+    "Refrigera el arroz; no lo dejes a temperatura ambiente más de 2 horas.",
+])
+def test_v8a_el_tope_negado_sigue_recortado(paso):
+    assert cx.hidden_wait_minutes([paso])[0] == 0, paso
+
+
+@pytest.mark.parametrize("prep_time, declarado", [
+    ("10 min + 1 h de reposo", 70),
+    ("45 min + 2 h de marinado", 165),
+    ("10 min más reposo de 1 h", 70),
+    ("20 min + 30 min de reposo", 50),
+])
+def test_v8a_el_prep_time_aditivo_CON_cifra_suma_la_cifra_no_declara_todo(prep_time, declarado):
+    """«10 min + 1 h de reposo» declara UNA hora de reposo, no la noche entera: con un paso de «toda la noche» (8 h) la
+    base acusaba y la ronda 1 callaba. La cifra se suma a lo declarado y se compara con la espera."""
+    m = _meal(["Marina el cerdo toda la noche en la nevera.", "Hornéalo 30 min."], prep_time=prep_time)
+    h = cx.check_hidden_time(m)
+    assert h is not None and h["espera_min"] == 480 and h["declarado_min"] == declarado, (prep_time, h)
+
+
+@pytest.mark.parametrize("prep_time", ["10 min + 8 h de remojo", "30 min + 45 min de reposo", "15 min + 1 h de marinado",
+                                       "15 min + 1 h de marinado + reposo nocturno"])
+def test_v8a_el_prep_time_aditivo_con_cifra_que_CUBRE_la_espera_la_declara(prep_time):
+    """La suma cubre la espera ⇒ declarada. Y si alguna mención aditiva no trae cifra («+ reposo nocturno»), declara la
+    espera entera, como en la ronda 1."""
+    pasos = {"10 min + 8 h de remojo": "Remoja los garbanzos toda la noche.",
+             "30 min + 45 min de reposo": "Deja reposar la masa 1 hora tapada.",
+             "15 min + 1 h de marinado": "Marina el pollo 1 hora en la nevera.",
+             "15 min + 1 h de marinado + reposo nocturno": "Marina el pollo toda la noche en la nevera."}
+    m = _meal([pasos[prep_time], "Cocina 10 min."], prep_time=prep_time)
+    assert cx.check_hidden_time(m) is None, (prep_time, cx.check_hidden_time(m))
+
+
+def test_v8a_farmaco_en_la_misma_clausula_LIMITE_CONOCIDO():
+    """Límite conocido y DOCUMENTADO (revisión, ronda 2, punto 5): la coma no parte la cláusula, así que un fármaco en la
+    misma calla la cláusula entera. No se parte por coma a propósito: la segunda mitad de «si tomas levotiroxina, separa
+    estos alimentos al menos 4 horas» se quedaría sin la palabra del fármaco y la nota clínica volvería a ser una espera.
+    Si alguien parte por coma, la segunda aserción se pone en rojo."""
+    assert cx.hidden_wait_minutes(["Remoja la avena toda la noche, y si tomas levotiroxina sepárala 4 horas."])[0] == 0
+    assert cx.hidden_wait_minutes(["Si tomas levotiroxina, separa estos alimentos al menos 4 horas."])[0] == 0
+
+
+def test_v1_dorar_ensancha_la_salvaguarda_RIESGO_ACEPTADO():
+    """Riesgo ACEPTADO y documentado (revisión, ronda 2, punto 6): con «dorar» = saltear/freír/plancha/tostar/hornear,
+    cualquier alimento de la cláusula que admita uno de los cinco es destinatario válido y calla a los demás. La base
+    acusaba al aguacate en los dos casos. Si se decide cerrarlo, este test se invierte a propósito."""
+    i2 = cc.build_culinary_index(_CAT + [
+        {"name": "Salami", "prep_methods": ["ninguno", "plancha"], "ready_to_eat": True, "category": "Proteínas",
+         "aliases": ["salami dominicano"]},
+        {"name": "Aguacate", "prep_methods": ["crudo", "licuar", "ninguno"], "ready_to_eat": True, "category": "Frutas",
+         "aliases": ["palta"]}])
+    assert _v1(["Dora el salami y el aguacate en la sartén."], i2) == set()
+    assert _v1(["Mientras hierve la yuca, dora el aguacate en la sartén."], i2) == set()
+    # sin nadie que admita dorar en la cláusula, el aguacate sí se acusa
+    assert _v1(["Dora el aguacate en la sartén."], i2) == {"Aguacate"}
+
+
 # ───────────────────────────────────────────── anclas
 
 def test_anclas_en_el_codigo():

@@ -1568,14 +1568,18 @@ espejo y no cambió ninguna decisión.
 
 - **V8a** (`culinary_context.hidden_wait_minutes`): una cláusula que habla de un fármaco (dosis, levotiroxina,
   pastilla…) o de que la PERSONA se acueste («acostarte», «te acuestes»; «acuesta los filetes» es cocina), y un paso
-  que abre con «⚕», no son tiempo del plato; el TOPE de seguridad alimentaria («no lo dejes a temperatura ambiente más
-  de 2 horas») y el PLAZO de conservación con su verbo («refrigera lo que sobre dentro de 2 horas»; «cocínalo dentro
-  de 24 horas» no es un plazo) se RECORTAN de la cláusula antes de contar horas; y un `prep_time` que SUMA el reposo
-  («10 min más reposo nocturno», «+ refrigeración») ya lo declaró — el que lo niega o sólo lo menciona («sin reposo»,
-  «no requiere remojo», «guarda en la nevera») no. «Reposa a temperatura ambiente 1 hora», el remojo de la víspera y
-  la avena de «la noche anterior» siguen disparando.
+  que abre con «⚕», no son tiempo del plato; el TOPE de seguridad alimentaria NEGADO («no lo dejes / sin dejarlos a
+  temperatura ambiente más de 2 horas») y el PLAZO de conservación con su verbo («refrigera lo que sobre dentro de 2
+  horas»; «cocínalo dentro de 24 horas» no es un plazo) se RECORTAN de la cláusula antes de contar horas; un
+  `prep_time` que SUMA el reposo sin cifra («10 min más reposo nocturno», «+ refrigeración») ya lo declaró, y el que lo
+  suma CON cifra («10 min + 1 h de reposo») declara esa cifra, que se suma y se compara con la espera — el que lo niega
+  o sólo lo menciona («sin reposo», «no requiere remojo», «guarda en la nevera») no declara nada. «Reposa a
+  temperatura ambiente 1 hora», «deja fermentar a temperatura ambiente más de 8 horas» (sin negación es una orden), el
+  remojo de la víspera y la avena de «la noche anterior» siguen disparando.
 - **V2**: el estado «ya viene/ya está cocido» es de su dueño: el alimento que lo PRECEDE en su oración saltando
-  condimentos (y, si ese no es listo-para-comer y va tras «con» o «y», también aquel al que acompaña); si nada lo precede, el
+  condimentos (y, si ese no es listo-para-comer y va tras «con» o «y», también aquel al que acompaña; si su
+  listo-para-comer es DESCONOCIDO —cebolla, tomate, lechuga—, se sigue hacia atrás sea cual sea el nexo, hasta un
+  listo-para-comer como el atún); si nada lo precede, el
   sujeto pospuesto («ya viene cocido el filete»); si la oración no nombra ninguno, el último de la oración anterior. En
   los dos corpus todos los dueños eran el atún en agua (listo para comer). El pescado FRESCO «(ya viene cocido)» de
   P1-CLOSER-NOTE-FUSED-FRESHCOCIDO sigue disparando.
@@ -1584,7 +1588,11 @@ espejo y no cambió ninguna decisión.
   el verbo sólo acusa a su objeto directo, y a nadie si no es del catálogo; un verbo dentro del nombre de un alimento
   («polvo de hornear», «queso de freír») no es un verbo; «cocción», «licuadora» y «tostadora» son sustantivos; y
   «dorar» se satisface con saltear, freír, plancha, tostar u hornear. «Cuece el casabe», «dora el queso de hoja»,
-  «mientras se hornea el queso de hoja» y «licúa la pechuga» siguen disparando.
+  «mientras se hornea el queso de hoja» y «licúa la pechuga» siguen disparando. **Riesgo aceptado de «dorar»** (más
+  ancho que «con pan o casabe»): la salvaguarda del destinatario válido se ensancha con él, así que CUALQUIER alimento
+  de la cláusula que admita uno de esos cinco métodos cuenta como destinatario y calla a los demás — «dora el salami
+  y el aguacate» y «mientras hierve la yuca, dora el aguacate» salen `[]` (la base acusaba al aguacate). En los
+  corpus sólo aparece el caso del pan junto al queso blanco (`rdv__bariatrica_sopv` d3).
 - **V7a** (rama del número gramatical): se busca el singular de la palabra que la lista CUENTA (tortas, hojas,
   dientes; o el nombre ya plural, «aceitunas»; saltando el tamaño antepuesto, «2 pequeñas tortillas»), sólo cuenta como
   evidencia tras un determinante singular, fuera de
@@ -1639,5 +1647,46 @@ cláusula y no el paso); corpus de 426 planes, V1 45 → 45, V2 0 → 0, V7a 53 
 biblioteca de 193 recetas RD de `deterministic_day`, V1/V2/V8a idénticos (V7a no se mide ahí: la biblioteca no trae
 las líneas de compra).
 Replay de la cola (contrato + pulido, que consulta V1/V7a en `retirar_sin_lista`) sobre los 426 planes crudos, en el
-VPS y sin IA: árbol base (`3ce2c235`) contra el árbol corregido de esta ronda, **426 de 426 salidas byte-idénticas**
-(los 67 planes del corpus reciente van dentro), con las dos listas de md5 guardadas junto a los scripts de la ronda.
+VPS y sin IA: árbol base (`3ce2c235`) contra el árbol `356cdde8` —el PRIMER commit de la ronda, no el final: los dos
+posteriores (`e126745b`, el salto del tamaño en V7a, y `ff071f7c`, V2 con «y») no entraron en ese replay—, **426 de 426
+salidas byte-idénticas** (los 67 planes del corpus reciente van dentro), con las dos listas de md5 guardadas junto a los
+scripts de la ronda. El replay sobre el árbol FINAL se repitió en la ronda 2 (abajo).
+
+### Ronda 2 de la revisión: tres reglas más, otra vez más anchas que su evidencia
+
+La re-verificación de la ronda 1 encontró tres verdaderos que la BASE acusaba y la ronda 1 callaba, con sondas de una
+línea (tests en `tests/test_p1_plan_lote_745.py`, sección «ronda 2»):
+
+- **V2 — el vegetal sin dato no se queda con el estado.** «Coloca el filete de pescado blanco sobre la cebolla (ya viene
+  cocido)», «pon el filete … sobre el tomate picado», «sirve el salmón junto al tomate», «añade los camarones a la
+  lechuga»: el más cercano es un vegetal con `ready_to_eat` DESCONOCIDO (fail-open: nunca se acusa) unido a la proteína
+  por una preposición que no es «con»/«y», así que el pescado CRUDO declarado cocido —el check `high`, que además
+  alimenta la degradación de pasos en `cron_tasks`— callaba. Ahora, en la regla 1, un dueño desconocido sigue hacia
+  atrás en la oración sea cual sea el nexo, y la búsqueda sólo se para ante un listo-para-comer (el atún); un dueño
+  crudo conocido sigue subiendo sólo por «con»/«y». El precio, igual que en la base: «bate los huevos y agrega la
+  cebolla (ya viene cocida)» acusa al huevo. En los corpus no aparece (V2 sigue en 0).
+- **V8a — el tope sólo es tope negado.** «Deja reposar la masa a temperatura ambiente más de 1 hora para que leude»,
+  «deja fermentar la mezcla … por más de 8 horas», «déjala a temperatura ambiente más de 1 hora antes de asarla» son
+  órdenes, y la ronda 1 las recortaba como el tope de seguridad. Ahora se recorta sólo con «no», «sin», «nunca» o
+  «evita…» a ≤6 palabras delante, dentro de la cláusula; las 4 apariciones del corpus llevan «no lo(s) dejes» o «sin
+  dejarlos».
+- **V8a — un `prep_time` aditivo CON cifra declara la cifra, no la espera entera.** «10 min + 1 h de reposo» o «45 min
+  + 2 h de marinado» junto a un paso de «toda la noche» (8 h): la base acusaba, la ronda 1 callaba. Ahora cada suma
+  (de su «más/y/+» a la siguiente) aporta su cifra a lo declarado y se compara con la espera
+  (`_prep_declarado_con_sumas`); la declaración entera queda para la suma SIN cifra («más reposo nocturno», «+
+  refrigeración»). Como la cifra ya cuenta, la forma en minutos («30 min + 45 min de reposo») también se reconoce: con
+  una espera de 1 h la cubre y calla. En el corpus no hay ninguna suma con cifra.
+
+Documentados y NO cambiados (con test que fija la conducta, para que cambiarla sea a propósito):
+
+- **Límite conocido de V8a**: la coma no parte la cláusula, así que un fármaco en la misma la calla entera («remoja la
+  avena toda la noche, y si tomas levotiroxina sepárala 4 horas» → 0). Partir por coma reabriría la nota clínica:
+  «si tomas levotiroxina, separa estos alimentos al menos 4 horas» dejaría su segunda mitad sin la palabra del fármaco.
+  Sintético: el corpus no lo tiene.
+- **Riesgo aceptado de «dorar»**: ver la regla de V1 arriba («dora el salami y el aguacate» → nada).
+
+Validación de la ronda 2 (sin IA ni DB): sobre los 426 planes (5 334 comidas) y las 848 comidas recientes, V1/V2/V7a/V8a
+salen **idénticos a la ronda 1 fila por fila, detalle incluido** (V1 45 y 10, V2 0 y 0, V7a 53 y 13, V8a 18 y 1), y 0
+hallazgos nuevos frente a la base; biblioteca de 193 recetas RD de `deterministic_day`, idéntica a la ronda 1 (23
+hallazgos: 21 V8a y 2 V1); golden set idéntico (0 FP en los buenos, 16/16 defectos atrapados). Las sondas del revisor
+vuelven a disparar como en la base salvo lo documentado arriba (el fármaco tras coma, «dorar», la suma sin cifra).
