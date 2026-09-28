@@ -51521,7 +51521,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
     )
     if _rate_limit_uid == "guest" or not _rate_limit_uid:
         _rate_limit_uid = None
-    _p134_uid_token = user_id_var.set(_rate_limit_uid)
+    _p134_uid_token = user_id_var.set(_rate_limit_uid); _p701_pid = __import__("llm_attribution").fijar_plan_del_pipeline(actual_form_data)  # [P1-PLAN-LOTE-701] el hilo del pool del chunk no hereda el plan
 
     # P1-NEW-4: dict mutable per-pipeline para trackear pérdidas de eventos
     # SSE. Las tasks descendientes (asyncio.Task, run_in_executor) heredan
@@ -52112,7 +52112,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
         except (LookupError, ValueError):
             pass
         try:
-            __import__("nevera_exigida").soltar(_nx_tok); request_id_var.reset(_p134_req_token)
+            __import__("llm_attribution").reset_llm_attribution(_p701_pid); __import__("nevera_exigida").soltar(_nx_tok); request_id_var.reset(_p134_req_token)
         except (LookupError, ValueError):
             pass
 

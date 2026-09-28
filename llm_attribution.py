@@ -40,6 +40,23 @@ def set_llm_attribution(user_id=None, plan_id=None) -> list:
     return toks
 
 
+def fijar_plan_del_pipeline(form_data) -> list:
+    """[P1-PLAN-LOTE-701] Fija el plan desde `_caller_target_plan_id` si nadie lo fijó en este contexto.
+
+    El worker de chunks lanza el pipeline en un hilo de `ThreadPoolExecutor`, que NO hereda ContextVars: 115 de 121
+    filas `day_generator` nacían sin `plan_id` (el usuario sobrevivía porque `arun_plan_pipeline` lo re-fija desde el
+    form). La clave la inyecta el servidor (chunk worker, JIT, lifecycle); el strip se la quita a los clientes.
+    Nunca pisa un plan ya fijado (/swap-meal, /regenerate-day). Tokens para `reset_llm_attribution`.
+    """
+    try:
+        pid = (form_data or {}).get("_caller_target_plan_id")
+        if pid and plan_id_var.get() is None:
+            return [(plan_id_var, plan_id_var.set(str(pid)))]
+    except Exception:
+        pass
+    return []
+
+
 def reset_llm_attribution(toks) -> None:
     """Deshace `set_llm_attribution` (un token de otro contexto no revienta: best-effort)."""
     for var, tok in reversed(list(toks or [])):
@@ -49,4 +66,4 @@ def reset_llm_attribution(toks) -> None:
             pass
 
 
-__all__ = ["plan_id_var", "set_llm_attribution", "reset_llm_attribution"]
+__all__ = ["plan_id_var", "set_llm_attribution", "reset_llm_attribution", "fijar_plan_del_pipeline"]
