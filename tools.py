@@ -1083,6 +1083,11 @@ def _comidas_por_hora(faltan, hora_local, horas) -> tuple:
     return pasadas, proximas
 
 
+# [P1-PLAN-LOTE-696 · 2026-09-28] La nota sale en CADA registro o corrección: el dueño recibió «¿Ese almuerzo lo comiste
+# o de verdad te lo saltaste?» dos turnos seguidos (22-sep, 02:23 y 02:29) sin haber contestado la primera.
+_NO_INSISTAS = (" Una sola vez: si ya se lo preguntaste en esta conversación y no lo contestó, no lo repitas.")
+
+
 def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ahora_local=None) -> str:
     """[P1-PLAN-LOTE-76 · 2026-09-17] Qué comidas de ESE día siguen sin registrar, para que el asistente ofrezca la
     que falta POR SU NOMBRE o no pregunte: el dueño recibió «¿Te falta algo más de ayer por registrar?» cuando el
@@ -1124,7 +1129,7 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                     if _pasadas:
                         return (f" (Para el asistente: son las {_hora_txt}. Hoy sigue sin registrar {', '.join(_pasadas)}, que ya "
                                 f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta. "
-                                f"{', '.join(_proximas)} aún no toca: no preguntes por ella.)")
+                                f"{', '.join(_proximas)} aún no toca: no preguntes por ella.{_NO_INSISTAS})")
                     return (f" (Para el asistente: son las {_hora_txt} y hoy ya tiene registrado todo lo que tocaba hasta ahora. "
                             f"La próxima es {_prox} (~{_fmt_hora_float(float(_prox_h))}) y todavía no ha llegado: NO preguntes si "
                             f"la anotas ni si la registras. Cierra con UNA frase consciente de la hora, sin pregunta, del tipo "
@@ -1132,7 +1137,7 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
         if _faltan:
             return (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
                     f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta; nunca la pregunta "
-                    f"genérica de si le falta algo.)")
+                    f"genérica de si le falta algo.{_NO_INSISTAS})")
         return (f" (Para el asistente: {_dia_txt} ya tiene todas sus comidas registradas — NO preguntes si "
                 f"le falta algo de ese día.)")
     except Exception as _falta_err:

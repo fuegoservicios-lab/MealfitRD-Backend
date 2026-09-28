@@ -1049,6 +1049,10 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                             f"[P2-CHAT-DONE-PERSIST-LOUD] la respuesta del modelo "
                                             f"NO se guardó en el historial: {type(_persist_err).__name__}"
                                         )
+                                    # [P1-PLAN-LOTE-692] «Bioboros te respondió»: la push sale siempre y el
+                                    # teléfono la calla si el usuario la está viendo (`solo_si_no_mira`).
+                                    from aviso_respuesta_chat import avisar_respuesta
+                                    avisar_respuesta(verified_user_id, response_text)
                                     # `done` con response no-vacío también garantiza
                                     # consumo de tokens incluso si por alguna razón
                                     # los chunks intermedios no se observaron.

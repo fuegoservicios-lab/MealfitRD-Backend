@@ -4267,6 +4267,10 @@ class ChatState(MessagesState):
     # fuera del schema se descarta en silencio y el tope no existiría. Son del TURNO: `inputs` las reinicia.
     turn_plate_photos: list
     plate_photo_retried: bool
+    # [P1-PLAN-LOTE-694 · 2026-09-28] El turno de ANOTAR la foto (dudas contestadas o texto-rótulo «Mi cena») y el tope
+    # de su reintento (`nudge_photo_to_log`). Declaradas por lo mismo que las de arriba: fuera del schema se pierden.
+    turn_photo_to_log: bool
+    photo_log_retried: bool
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -5371,6 +5375,13 @@ def nudge_plate_photo(state: ChatState):
     }
 
 
+def nudge_photo_to_log(state: ChatState):
+    """[P1-PLAN-LOTE-694] Devuelve el turno a `call_model` (UNA vez) cuando el usuario anotaba la foto y no se registró."""
+    from respuestas_de_la_foto import NOTA_REINTENTO
+    logger.warning(f"🍽️ [P1-PLAN-LOTE-694] foto para anotar sin registro (user={str(state.get('user_id'))[:8]}). Reintento.")
+    return {"messages": [SystemMessage(content=NOTA_REINTENTO)], "photo_log_retried": True}
+
+
 def route_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -5391,6 +5402,11 @@ def route_tools(state: ChatState):
     if not state.get("plate_photo_retried") and _plate_photos_unlogged(state):
         return "nudge_plate_photo"
 
+    # [P1-PLAN-LOTE-694] ¿El turno era ANOTAR la foto y acabó sin ningún registro? («¿Ya te lo comiste?»)
+    if (state.get("turn_photo_to_log") and not state.get("photo_log_retried")
+            and not _diary_tool_called_this_turn(messages)):
+        return "nudge_photo_to_log"
+
     return END
 
 # Removido el MemorySaver global estático
@@ -5402,13 +5418,15 @@ chat_builder.add_node("execute_tools", execute_tools)
 chat_builder.add_node("nudge_diary_tool", nudge_diary_tool)
 # [P1-PLAN-LOTE-168 · 2026-09-23] Ver `route_tools`: la foto del plato que quedó fuera del diario.
 chat_builder.add_node("nudge_plate_photo", nudge_plate_photo)
+chat_builder.add_node("nudge_photo_to_log", nudge_photo_to_log)   # [P1-PLAN-LOTE-694]
 chat_builder.add_edge(START, "call_model")
 chat_builder.add_conditional_edges(
-    "call_model", route_tools, ["execute_tools", "nudge_diary_tool", "nudge_plate_photo", END]
+    "call_model", route_tools, ["execute_tools", "nudge_diary_tool", "nudge_plate_photo", "nudge_photo_to_log", END]
 )
 chat_builder.add_edge("execute_tools", "call_model")
 chat_builder.add_edge("nudge_diary_tool", "call_model")
 chat_builder.add_edge("nudge_plate_photo", "call_model")
+chat_builder.add_edge("nudge_photo_to_log", "call_model")
 # NOTA: chat_graph_app se compila dinámicamente usando el PostgresSaver en cada petición
 
 # ============================================================
@@ -7102,6 +7120,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P1-PLAN-LOTE-168] Este camino no recibe fotos: sin reiniciarlas, las de un turno del stream en el mismo
         # hilo seguirían en el checkpoint y el guard de la foto dispararía sobre un turno sin foto.
         "turn_plate_photos": [],
+        "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
+        "photo_log_retried": False,
         "plate_photo_retried": False,
     }
     
@@ -7395,6 +7415,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
     _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
+    # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
+    from respuestas_de_la_foto import marcar_rotulo, foto_para_anotar as _foto_para_anotar
+    vision = marcar_rotulo(vision, prompt)
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
     # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
@@ -7720,6 +7743,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-168] las fotos de plato de ESTE turno y el tope de su reintento
         "turn_plate_photos": _plate_photos_from_vision(vision),
         "plate_photo_retried": False,
+        # [P1-PLAN-LOTE-694] ¿este turno es anotar la foto? (dudas contestadas o texto-rótulo)
+        "turn_photo_to_log": _foto_para_anotar(vision, prompt),
+        "photo_log_retried": False,
     }
 
     if not existing_state.values:

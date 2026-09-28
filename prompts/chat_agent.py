@@ -1039,6 +1039,12 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
     if not isinstance(vision, dict) or not vision.get("kind"):
         return ""
     _etiqueta = _ETIQUETA_INSTRUCCION if nevera_activa else _ETIQUETA_INSTRUCCION_SIN_NEVERA
+    # [P1-PLAN-LOTE-690] las dudas ya contestadas: fuera de la descripción, ajuste aplicado y la regla de registrar
+    from respuestas_de_la_foto import preparar_vision, instruccion as _instruccion_respuestas, instruccion_rotulo
+    vision = preparar_vision(vision)
+    _respuestas = _instruccion_respuestas(vision)
+    # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto es el RÓTULO del plato (lo marca agent.py con `marcar_rotulo`)
+    _respuestas += instruccion_rotulo(vision.get("rotulo") if "rotulo" in vision else None)
     kind = str(vision.get("kind"))
     if kind == "multi":
         raw_items = vision.get("items") if isinstance(vision.get("items"), list) else []
@@ -1085,6 +1091,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         if has_plate:   # [P1-PLAN-LOTE-168] una foto de plato con análisis: cómo registrarla junto a otra comida
             instruction += " " + _PLATO_INSTRUCCION
             instruction += _con_dudas(" ".join(lines))   # [P1-PLAN-LOTE-305]
+            instruction += _respuestas   # [P1-PLAN-LOTE-690]
         if unavailable:
             instruction += (
                 f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "
@@ -1145,7 +1152,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
     base = f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una imagen de comida. Análisis de la imagen: \"{desc}\"."
     if has_text:
         return (base + " Responde a su mensaje teniendo en cuenta la foto. " + _PLATO_INSTRUCCION   # [P1-PLAN-LOTE-168]
-                + _con_dudas(desc))   # [P1-PLAN-LOTE-305]
+                + _con_dudas(desc) + _respuestas)   # [P1-PLAN-LOTE-305] [P1-PLAN-LOTE-690]
     return base + (
         " Actúa proactivamente. Menciona amigablemente lo que ves en la foto. REGLA VISUAL DE "
         "FORMATO: Usa SIEMPRE una lista con viñetas para desglosar sus macros y usa **negritas** para "
@@ -1158,7 +1165,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         "registra EN ESE TURNO con log_consumed_meal usando los macros del análisis, pasando "
         "meal_type; si dice que fue de OTRO día (ej: 'es el almuerzo de ayer'), pasa también days_ago "
         "(1=ayer) para que NO cuente en las macros de hoy. Sólo responde directo y conversacional."
-    ) + _con_dudas(desc)   # [P1-PLAN-LOTE-305]
+    ) + _con_dudas(desc) + _respuestas   # [P1-PLAN-LOTE-305] [P1-PLAN-LOTE-690]
 
 
 _LANGUAGE_DIRECTIVE_CACHE: dict = {}

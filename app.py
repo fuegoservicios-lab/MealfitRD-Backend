@@ -997,7 +997,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # («⅓ taza de yogurt (155 g)» → ≈80 g, los que cuentan los macros) cuando se desvían >40 % y >15 g.
 # [P1-PLAN-LOTE-665 · 2026-09-28] (backend) La fusión de líneas duplicadas ya no junta formas que cambian la base del
 # número: leche + leche en polvo, legumbre/grano seco + cocido (plan vivo 6594aae1: 100 g de polvo contados como líquido).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-665 · 2026-09-28"
+# [P1-PLAN-LOTE-690..697 · 2026-09-28] (backend) Chat: las dudas de la foto llegan contestadas al coach (respuestas +
+# ajuste en `vision`, `respuestas_de_la_foto.py`), «Mi cena» + foto es el rótulo del plato y el grafo reintenta UNA vez
+# si el turno de anotar la foto acaba sin registro; push «Bioboros te respondió» (`aviso_respuesta_chat.py`); el aviso de
+# comida ya no interroga a quien sí come esa comida (`tono_del_aviso.py`); «¿lo comiste?» una sola vez por conversación.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-697 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -958,7 +958,9 @@ def run_proactive_checks():
                 # encendido. Y «ignorado» se mide con respuestas en el chat dentro de una ventana corta: quien toca la
                 # notificación y registra su comida desde el Dashboard cuenta como que ignoró. El interruptor es un
                 # consentimiento explícito: la tasa cambia el TONO, no apaga la pantalla. Se apaga en Configuración.
-                base_tone_instruction = "El usuario ha estado ignorando notificaciones recientemente. Usa un tono empático, pregúntale si hay algún obstáculo, estrés o falta de tiempo que le impida registrar sus comidas. NO asumas que se le olvidó, asume que podría estar ocupado o desmotivado. Sé muy breve y sin presiones."
+                # [P1-PLAN-LOTE-693] Pedía preguntar por obstáculos: choca con la regla del 413 (sin interrogatorios).
+                from tono_del_aviso import TONO_POCA_RESPUESTA
+                base_tone_instruction = TONO_POCA_RESPUESTA
             elif global_rate > 0.70:
                 logger.info(f"🌟 [CRON] Usuario {user_id} tiene response rate alto ({global_rate:.0%}). Usando tono de refuerzo positivo.")
                 base_tone_instruction = "El usuario tiene excelente disciplina. Usa un tono de celebración y refuerzo positivo animándolo a mantener la racha."
@@ -1048,8 +1050,12 @@ def run_proactive_checks():
                 display_hr = hours if hours <= 12 else hours - 12
                 if display_hr == 0: display_hr = 12
                 _tono = base_tone_instruction
-                if meal_rate < 0.30 and meal_total >= 3:
-                    _tono = "El usuario frecuentemente ignora o abandona esta comida específica. Pregúntale qué está fallando particularmente con esta comida (ej. tiempo, no le gusta, está fuera de casa) sin sonar acusador."
+                # [P1-PLAN-LOTE-693] «Se salta esta comida» se mide con los días en que NO la registró, no con si
+                # contestó el aviso: al dueño le preguntaban «¿qué te está fallando con el almuerzo?» registrándolo 7
+                # de 9 días. Y el tono ya no interroga (regla del 413): invita.
+                from tono_del_aviso import TONO_SE_LA_SALTA, se_la_salta, tasa_de_salto
+                if se_la_salta(*tasa_de_salto(user_id, meal, _user_tz_off)):
+                    _tono = TONO_SE_LA_SALTA
                 candidatas.append({
                     "meal": meal, "hora": f"{display_hr}:{mins:02d} {am_pm}", "tono": _tono,
                     "meal_rate": meal_rate, "meal_total": meal_total, "atraso": _atraso, "orden": _orden,

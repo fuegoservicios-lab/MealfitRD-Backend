@@ -71,6 +71,13 @@ _TITULOS = {
         "fr-FR": "Votre plan est prêt 🎉",
         "it-IT": "Il tuo piano è pronto 🎉",
     },
+    # [P1-PLAN-LOTE-692 · 2026-09-28] La respuesta del coach con la app cerrada (`aviso_respuesta_chat.py`).
+    "Bioboros te respondió": {
+        "en-US": "Bioboros replied",
+        "pt-BR": "Bioboros respondeu",
+        "fr-FR": "Bioboros vous a répondu",
+        "it-IT": "Bioboros ti ha risposto",
+    },
     "No pudimos terminar tu plan": {
         "en-US": "We couldn't finish your plan",
         "pt-BR": "Não conseguimos terminar seu plano",

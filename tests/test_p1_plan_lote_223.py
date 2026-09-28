@@ -334,7 +334,8 @@ def test_el_cron_corre_cada_15_minutos():
 def test_el_prompt_ya_no_dice_que_son_pasadas_ni_hora_habitual():
     prompt = _src("prompts/proactive.py")
     assert "son pasadas las" not in prompt
-    assert "No la llames «tu hora habitual»" in prompt
+    # [P1-PLAN-LOTE-693] la frase explicativa se copiaba tal cual al aviso: ahora solo la prohibición
+    assert "ni «tu hora habitual»" in prompt
 
 
 def test_el_knob_del_historial_esta_apagado_y_documentado():

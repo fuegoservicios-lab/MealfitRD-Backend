@@ -152,7 +152,8 @@ def test_ignorar_avisos_cambia_el_tono_pero_no_apaga_la_pantalla(dia, monkeypatc
     assert dia["avisos_nuevos"] == ["Almuerzo"]
     assert len(dia["push"]) == 1, "el interruptor es un consentimiento explícito: se apaga en Configuración, no solo"
     assert dia["push"][0]["tag"] == "comida-almuerzo"
-    assert "ignorando notificaciones" in dia["prompts"][0] or "ignora o abandona" in dia["prompts"][0], "el tono sí cambia"
+    # [P1-PLAN-LOTE-693] el tono cambia, pero ya no interroga (regla del 413)
+    assert "casi no contesta los avisos" in dia["prompts"][0], "el tono sí cambia"
     assert not re.search(r"^\s*send_push = False", _src("proactive_agent.py"), re.M), "ni una línea de CÓDIGO lo apaga"
 
 

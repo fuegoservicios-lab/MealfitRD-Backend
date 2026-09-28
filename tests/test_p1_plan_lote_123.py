@@ -50,7 +50,8 @@ def test_la_caja_de_la_foto_tiene_tamano_propio():
 
 def test_la_foto_no_se_remonta_al_llegar_la_del_servidor():
     chat = _front("src/pages/AgentPage.jsx")
-    assert chat.count("clientKey: item.id,") == 2, "la burbuja local y la remota comparten clave"
+    # [P1-PLAN-LOTE-695] la tercera: la burbuja GUARDADA de la foto que espera sus respuestas conserva la misma clave
+    assert chat.count("clientKey: item.id,") == 3, "la burbuja local, la remota y la guardada comparten clave"
     assert "fullUrl: item.image_url || item.url || item.thumbDataUrl," in chat, "el visor no pierde la versión completa"
     assert "const key = attachment.clientKey || attachment.id" in _front("src/components/agent/MessageBubble.jsx")
     img = _front("src/components/agent/ChatImage.jsx")
