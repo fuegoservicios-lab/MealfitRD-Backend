@@ -936,6 +936,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").servir_una_vez(meal)       # [P1-PLAN-LOTE-334] «Sirve X al lado» + «Acompaña con X»
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-339] otra vez: 333-335 pueden dejar dos iguales
         __import__("pasos_cantidades").servir_lo_que_sobra(meal)  # [P1-PLAN-LOTE-357] «70 g de queso mozzarella» sin paso
+        __import__("siembra_en_el_montaje").integrar(meal)  # [P1-PLAN-LOTE-709] la siembra de micros, al Montaje (no sólo en la nota 🌱)
         __import__("pasos_cantidades").pista_sin_eco(meal)  # [P1-PLAN-LOTE-359] «80 g de yogurt (80 g) … sin azúcar»
         __import__("pasos_cantidades").articulo_de_los_gramos(meal)  # [P1-PLAN-LOTE-371] «las 40 g» → «los 40 g»
         __import__("pasos_cantidades").pasos_en_minuscula(meal)  # [P1-PLAN-LOTE-373] «, Sal al gusto y Pimienta»
