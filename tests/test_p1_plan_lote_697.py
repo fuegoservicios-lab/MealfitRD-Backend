@@ -9,4 +9,8 @@ test_p1_plan_lote_694.py (`test_697_*`); este fichero ancla el marcador."""
 
 def test_marker():
     import app
-    assert "P1-PLAN-LOTE-69" in app._LAST_KNOWN_PFIX
+    # [P1-PLAN-LOTE-713] «el marker no bajó de 697», no «el marker empieza por 69»: el siguiente
+    # bloque de otra sesión lo sube a 7xx y el prefijo fallaba sin que nada se hubiera roto.
+    import re
+    m = re.match(r"P1-PLAN-LOTE-(\d+) ", app._LAST_KNOWN_PFIX)
+    assert m and int(m.group(1)) >= 697, app._LAST_KNOWN_PFIX

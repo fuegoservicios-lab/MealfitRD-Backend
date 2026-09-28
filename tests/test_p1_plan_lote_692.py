@@ -64,4 +64,8 @@ def test_el_done_del_stream_lo_dispara_con_el_usuario_verificado():
 
 def test_marker():
     import app
-    assert "P1-PLAN-LOTE-69" in app._LAST_KNOWN_PFIX   # 692 o posterior del bloque
+    # [P1-PLAN-LOTE-713] «el marker no bajó de 692», no «el marker empieza por 69»: el siguiente
+    # bloque de otra sesión lo sube a 7xx y el prefijo fallaba sin que nada se hubiera roto.
+    import re
+    m = re.match(r"P1-PLAN-LOTE-(\d+) ", app._LAST_KNOWN_PFIX)
+    assert m and int(m.group(1)) >= 692, app._LAST_KNOWN_PFIX
