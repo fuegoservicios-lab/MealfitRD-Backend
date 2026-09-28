@@ -7284,8 +7284,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
             diet_type=(form_data or {}).get("dietType"),
             # [P1-ARQ25-F7-CULTURE] la cocina asignada a ESTE día (reparto determinista de la mezcla) y los
-            # pesos para el encabezado de inspiración; el mercado (precios/catálogo) NO pasa por aquí.
+            # pesos para el encabezado de inspiración; el mercado (precios/catálogo) NO va en `country`: va en `mercado`.
             country=cultural_country_for_form_data(form_data, day_index=max(0, int(global_day) - 1)),
+            mercado=country_for_form_data(form_data), pais_gate=cultural_country_for_form_data(form_data),  # [P1-PLAN-LOTE-748] I16: compra / rechazo
             culture_weights=_culture_weights_for_form_data(form_data),
             # [P1-GAINMUSCLE-DINNER-PROTEIN] la cena de ganancia muscular pide proteína animal magra como plato
             goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"),
@@ -7968,6 +7969,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                     {
                         "technique": str((_abd_od or {}).get("assigned_technique") or "").strip(),
                         "breakfast": str((_abd_od or {}).get("breakfast_category") or "").strip(),
+                        "country": cultural_country_for_form_data(form_data, day_index=int(form_data.get("_days_offset", 0) or 0) + _abd_j),  # [P1-PLAN-LOTE-748] la cocina de ESE día
                     }
                     for _abd_j, _abd_od in enumerate(_abd_days)
                     if _abd_j != _abd_i and isinstance(_abd_od, dict)
@@ -10160,7 +10162,7 @@ PLAN A EVALUAR (días generados):
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                             # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_critique_country`
                             # (T3's shadow work) — DO ⇒ camino byte-idéntico.
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), kitchen_equipment=_ctx_equipment_labels(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), mercado=country_for_form_data(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -41139,7 +41141,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 # también en el regen quirúrgico (no solo en el day-gen inicial).
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_surgical_country` (derivado
                 # arriba, una sola vez) — DO ⇒ camino byte-idéntico.
-                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), allergies=(form_data or {}).get('allergies'), dislikes=(form_data or {}).get('dislikes'), mercado=country_for_form_data(form_data), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.

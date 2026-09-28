@@ -1483,8 +1483,13 @@ def test_surgical_marker_regen_node_deriva_pais_via_ssot_una_sola_vez():
     cuerpo = _cuerpo_surgical_marker_regen_node()
     assert "async def _recompute_aggregates_after_swap" not in cuerpo
     _assert_deriva_pais_via_ssot(cuerpo, "surgical_marker_regen_node")
-    n = cuerpo.count("country_for_form_data(form_data)")
-    assert n == 1, f"debe derivar el país UNA sola vez, hallado {n}×"
+    # [P1-PLAN-LOTE-748 · 2026-09-28] I16: el nodo deriva UNA vez la COCINA (`cultural_country_for_form_data`) y UNA
+    # vez el MERCADO (`country_for_form_data`: el catálogo del bloque del día — casabe, «Salami dominicano»). Contar la
+    # subcadena `country_for_form_data(form_data)` sumaba las dos derivaciones como si fueran la misma.
+    n_cocina = cuerpo.count("cultural_country_for_form_data(form_data)")
+    n_mercado = cuerpo.count("country_for_form_data(form_data)") - n_cocina
+    assert n_cocina == 1, f"debe derivar la cocina UNA sola vez, hallado {n_cocina}×"
+    assert n_mercado == 1, f"debe derivar el mercado UNA sola vez, hallado {n_mercado}×"
 
 
 def test_surgical_marker_regen_build_day_assignment_context_wire_country():
@@ -3985,14 +3990,18 @@ def test_f1a_breakfast_cat_label_beta_traducida():
     # [P1-PLAN-LOTE-748 · 2026-09-28] La etiqueta beta de la categoría A ya no es «Tubérculos/plátano (preparación
     # local)» — a una española «plátano» es la banana — sino el desayuno típico de su cocina (cultural_profiles), y el
     # aviso de las otras categorías ya no veta el «plátano». Contrato completo en test_p1_plan_lote_748.py.
+    # [P1-PLAN-LOTE-748 · ronda 1] La lista ya no va entera: sin las bases de las otras categorías, sin sopas y sin lo
+    # que la alergia o la dieta vetan; si no queda nada (US, PR), la etiqueta de respaldo.
     from prompts.day_generator import build_day_assignment_context as bdac
-    from cultural_profiles import PROFILES, profile_for_market
+    from prompts import asignacion_pais as ap
     skeleton = {"protein_pool": [], "breakfast_category": "Mangú/Tubérculos"}
     for cc in _BETA_CCS:
         out = bdac(skeleton, 1, day_name="Lunes", country=cc)
         assert "Mangú/Tubérculos" not in out, cc
-        tipico = ", ".join(PROFILES[profile_for_market(cc)]["slot_affinity"]["desayuno"])
-        assert f"CATEGORÍA DE DESAYUNO ASIGNADA: Desayuno típico local ({tipico})" in out, cc
+        assert f"CATEGORÍA DE DESAYUNO ASIGNADA: {ap.etiqueta_desayuno('Mangú/Tubérculos', cc)}\n" in out, cc
+        linea = next(l for l in out.splitlines() if "CATEGORÍA DE DESAYUNO ASIGNADA" in l)
+        assert linea.split(": ", 1)[1] in {ap.ETIQUETA_A_BETA_RESPALDO} or linea.split(": ", 1)[1].startswith(
+            "Desayuno típico local ("), (cc, linea)
         assert "tubérculo/plátano" not in out, cc
         assert "NO la cambies por la categoría de otro día" in out, cc
 

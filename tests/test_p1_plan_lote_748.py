@@ -207,12 +207,28 @@ def _desayuno_tipico(cc):
     return PROFILES[profile_for_market(cc)]["slot_affinity"]["desayuno"]
 
 
+# [P1-PLAN-LOTE-748 · ronda 1] La lista del perfil YA NO va entera: pierde lo que es base de otra categoría (avena,
+# pan/tostada, huevo, yogur), las sopas (§15a beta las prohíbe en el desayuno) y lo que la alergia o la dieta vetan. En
+# US y PR no queda nada propio ⇒ el respaldo. El contrato por país, a la vista:
+_ETIQUETA_A_ESPERADA = {
+    "ES": "Desayuno típico local (fruta)",
+    "MX": "Desayuno típico local (frijoles, tortilla)",
+    "CO": "Desayuno típico local (arepa)",
+    "US": "Base de tubérculo local",
+    "PR": "Base de tubérculo local",
+}
+
+
 @pytest.mark.parametrize("cc", _BETA)
 def test_beta_etiqueta_a_es_el_desayuno_tipico_del_pais(entorno_fijo, cc):
     t = _render(cc, "cat_0")["cat_0"]
-    esperado = f"CATEGORÍA DE DESAYUNO ASIGNADA: Desayuno típico local ({', '.join(_desayuno_tipico(cc))})"
-    assert esperado in t, t
+    assert f"CATEGORÍA DE DESAYUNO ASIGNADA: {_ETIQUETA_A_ESPERADA[cc]}\n" in t, t
     assert "Tubérculos/plátano" not in t and "tubérculo/plátano" not in t
+    # y lo que queda sale del perfil de su cocina, no de un texto por país
+    tipico = [x.casefold() for x in _desayuno_tipico(cc)]
+    dentro = re.search(r"\((.*)\)", _ETIQUETA_A_ESPERADA[cc])
+    for item in (dentro.group(1).split(", ") if dentro else []):
+        assert item in tipico, (cc, item)
 
 
 def test_espana_ya_no_lee_platano_en_el_desayuno(entorno_fijo):
@@ -230,7 +246,8 @@ def test_beta_las_otras_categorias_no_cambian_de_nombre(entorno_fijo, cc):
 @pytest.mark.parametrize("cc", _BETA)
 def test_beta_brief_de_otros_dias_con_la_etiqueta_corta(entorno_fijo, cc):
     t = _render(cc, "avena_mangu")["avena_mangu"]
-    assert "salteado (desayuno: Desayuno típico local); horno (desayuno: Avena/Cereales)" in t
+    corta = _ETIQUETA_A_ESPERADA[cc].split(" (")[0]
+    assert f"salteado (desayuno: {corta}); horno (desayuno: Avena/Cereales)" in t
 
 
 def test_el_enum_del_esquema_no_se_muta(entorno_fijo):
@@ -287,3 +304,227 @@ def test_marker_en_el_codigo():
     src_dg = (_BACKEND / "prompts" / "day_generator.py").read_text(encoding="utf-8")
     src_ap = (_BACKEND / "prompts" / "asignacion_pais.py").read_text(encoding="utf-8")
     assert "P1-PLAN-LOTE-748" in src_dg and "tooltip-anchor: P1-PLAN-LOTE-748" in src_ap
+
+
+# ─────────────── F. ronda 1 de la revisión adversaria (P1-PLAN-LOTE-748) ───────────────
+# 1 CRÍTICO: la etiqueta A de beta imponía alérgenos y productos animales (PR gluten+huevo ⇒ «avena, huevo, pan»; un
+#   vegano ⇒ huevo/yogur/caldo). `desayuno_por_alergia.reasignar` usa la A como REFUGIO de esos usuarios.
+# 2/3 IMPORTANTE: la A repetía las bases de las otras cuatro (en US y PR, todas) y en CO pedía «caldo», que §15a beta
+#   prohíbe en el desayuno.
+# 4 IMPORTANTE: «el validador de horario lo señala» — la avena en la cena la RECHAZA el revisor cultural también en beta.
+# 5 IMPORTANTE (I16): el catálogo es del MERCADO y la dureza del rechazo es del GATE, no de la cocina del día.
+# 6/7/8 MENOR: una derivación de país por render; el brief de otros días con la cocina de CADA día; «habichuelas» en
+#   el bloque de dieta beta.
+
+def _linea_a(t: str) -> str:
+    return next(l for l in t.splitlines() if "CATEGORÍA DE DESAYUNO ASIGNADA" in l)
+
+
+def _tiene(tok: str, texto: str) -> bool:
+    from constants import strip_accents
+    return re.search(rf"\b{tok}(?:s|es)?\b", strip_accents(texto.casefold())) is not None
+
+
+@pytest.fixture
+def vocab_real(monkeypatch):
+    """El vocabulario de alergias REAL (el del revisor), sólo con la inspiración apagada."""
+    for k in ("MEALFIT_DAYGEN_DINNER_IDENTITY", "MEALFIT_DAYGEN_PROTEIN_DIVERSITY",
+              "MEALFIT_DAYGEN_SLOT_TARGETS_IN_PROMPT"):
+        monkeypatch.delenv(k, raising=False)
+    import dish_library
+    monkeypatch.setattr(dish_library, "DISH_LIBRARY_ENABLED", False)
+
+
+def _bdac(*a, **kw):
+    from prompts.day_generator import build_day_assignment_context as bdac
+    return bdac(*a, **kw)
+
+
+# ── 1. alergias y dieta ──
+
+def test_pr_gluten_y_huevo_la_etiqueta_a_no_impone_sus_alergenos(vocab_real):
+    import desayuno_por_alergia as dpa
+    dias = [{"day": 1, "breakfast_category": "Avena/Cereales"}, {"day": 2, "breakfast_category": "Revoltillo/Tortilla"}]
+    dpa.reasignar(dias, {"allergies": ["gluten", "huevo"]})
+    assert "Mangú/Tubérculos" in [d["breakfast_category"] for d in dias], "la A es el refugio de este usuario"
+    linea = _linea_a(_bdac(_esqueleto(), 1, day_name="Lunes", allergies=["gluten", "huevo"], country="PR"))
+    for tok in ("avena", "huevo", "pan", "tostada", "cereal"):
+        assert not _tiene(tok, linea), (tok, linea)
+
+
+@pytest.mark.parametrize("cc", _BETA)
+def test_vegano_la_etiqueta_a_no_impone_huevo_yogur_ni_caldo(vocab_real, cc):
+    sk = _esqueleto()
+    sk["protein_pool"] = ["Lentejas", "Garbanzos"]
+    linea = _linea_a(_bdac(sk, 1, day_name="Lunes", diet_type="vegan", country=cc))
+    for tok in ("huevo", "yogur", "caldo", "queso", "leche"):
+        assert not _tiene(tok, linea), (cc, tok, linea)
+
+
+@pytest.mark.parametrize("cc", _BETA)
+def test_vegetariano_la_etiqueta_a_sin_caldo(vocab_real, cc):
+    linea = _linea_a(_bdac(_esqueleto(), 1, day_name="Lunes", diet_type="vegetarian", country=cc))
+    assert not _tiene("caldo", linea), (cc, linea)
+
+
+def test_etiqueta_a_filtra_por_la_puerta_de_vetos_y_cae_al_respaldo():
+    from prompts import asignacion_pais as ap
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: "frijol" in i) == \
+        "Desayuno típico local (tortilla)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True) == ap.ETIQUETA_A_BETA_RESPALDO
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True, detalle=False) == \
+        ap.ETIQUETA_A_BETA_RESPALDO
+    # DO: el enum tal cual, pase lo que pase (su huella está arriba)
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "DO", vetado=lambda i: True, dieta="vegan") == "Mangú/Tubérculos"
+
+
+def test_etiqueta_a_filtra_por_la_dieta_con_el_vocabulario_del_escaner(monkeypatch):
+    import cultural_profiles
+    from prompts import asignacion_pais as ap
+    monkeypatch.setitem(cultural_profiles.PROFILES["mexico_casera"], "slot_affinity",
+                        {"desayuno": ["chilaquiles", "queso fresco", "jamón", "frijoles"]})
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", dieta="vegan") == \
+        "Desayuno típico local (chilaquiles, frijoles)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", dieta="vegetarian") == \
+        "Desayuno típico local (chilaquiles, queso fresco, frijoles)"
+
+
+# ── 2/3. la A no repite otra categoría ni pide sopa ──
+
+_BASES_OTRAS = ("avena", "cereal", "granola", "pan", "tostada", "huevo", "yogur", "yogurt", "batido", "bowl", "revoltillo")
+
+
+@pytest.mark.parametrize("cc", _BETA)
+def test_la_etiqueta_a_no_repite_la_base_de_otra_categoria(entorno_fijo, cc):
+    linea = _linea_a(_render(cc, "cat_0")["cat_0"])
+    for tok in _BASES_OTRAS:
+        assert not _tiene(tok, linea), (cc, tok, linea)
+
+
+@pytest.mark.parametrize("cc", _BETA)
+def test_la_etiqueta_a_no_pide_sopa_en_el_desayuno(entorno_fijo, cc):
+    linea = _linea_a(_render(cc, "cat_0")["cat_0"])
+    assert not _tiene("caldo", linea) and not _tiene("sopa", linea), (cc, linea)
+
+
+def test_el_respaldo_no_ofrece_cereal_ni_platano():
+    """El respaldo es el refugio del alérgico al gluten (`reasignar`): «cereal» no lo veta el vocabulario del gluten
+    (`_allergen_pool_item_banned('cereal', ['gluten'])` es False) y además es la base de la B."""
+    from prompts import asignacion_pais as ap
+    r = ap.ETIQUETA_A_BETA_RESPALDO.casefold()
+    assert "cereal" not in r and "plátano" not in r and "tubérculo" in r
+
+
+# ── 4. la avena en la cena: el revisor la rechaza también en beta ──
+
+@pytest.mark.parametrize("cc", _BETA)
+def test_beta_avena_no_promete_solo_un_aviso(entorno_fijo, cc):
+    t = _render(cc, "avena_mangu")["avena_mangu"]
+    frase = re.search(r"es base de DESAYUNO o MERIENDA.*", t).group(0)
+    assert "señala" not in frase, frase
+    assert frase.endswith("eso no es un almuerzo ni una cena, y el revisor lo rechaza."), frase
+    assert "arepitas" not in frase and "dominican" not in frase
+
+
+# ── 5. I16: mercado ≠ cocina del día ≠ gate ──
+
+def test_mercado_do_en_un_dia_de_cocina_espanola(entorno_fijo):
+    """Usuario DO con cocina secundaria ES: su catálogo DO SÍ vende casabe y su gate DO reintenta hasta el final."""
+    t = _bdac(_esqueleto(), 1, day_name="Lunes", country="ES", mercado="DO", pais_gate="DO")
+    assert "pan integral, casabe, tostada de maíz" in t
+    assert "Salami dominicano" in t
+    frase = re.search(r"es base de DESAYUNO o MERIENDA.*", t).group(0)
+    assert frase.endswith("eso no es un almuerzo ni una cena, y el plan se rechaza."), frase
+    assert "mesa dominicana" not in frase and "arepitas" not in frase, "la cocina de ESTE día es española"
+
+
+def test_mercado_beta_en_un_dia_de_cocina_dominicana(entorno_fijo):
+    t = _bdac(_esqueleto(), 1, day_name="Lunes", country="DO", mercado="US", pais_gate="US")
+    assert "casabe" not in _sin_inspiracion(t).casefold(), "el catálogo US no vende casabe"
+    assert "Salami dominicano" not in t
+    assert "en la mesa dominicana eso no es un almuerzo ni una cena, y el revisor lo rechaza." in t
+    assert "CATEGORÍA DE DESAYUNO ASIGNADA: Mangú/Tubérculos\n" in t, "la cocina del día sigue siendo la dominicana"
+
+
+def test_la_linea_de_alergias_sigue_al_mercado(entorno_fijo):
+    assert "casabe con aguacate" in _bdac(_esqueleto(), 1, allergies=["lácteos"], country="ES", mercado="DO")
+    linea = _bdac(_esqueleto(), 1, allergies=["lácteos"], country="DO", mercado="ES").split("• Concepto Temático")[0]
+    assert "Sin lácteos" in linea and "casabe" not in linea.casefold()
+
+
+@pytest.mark.parametrize("cc", ("DO", None) + _BETA)
+def test_sin_mercado_ni_gate_es_la_conducta_de_antes(entorno_fijo, cc):
+    for nombre, sk, kw in _escenarios():
+        a = _bdac(copy.deepcopy(sk), 1, country=cc, **kw)
+        b = _bdac(copy.deepcopy(sk), 1, country=cc, mercado=cc, pais_gate=cc, **kw)
+        assert a == b, (cc, nombre)
+
+
+def _llamadas(src: str, nombre: str) -> list:
+    out, i = [], 0
+    while True:
+        i = src.find(nombre + "(", i)
+        if i < 0:
+            return out
+        prof, j = 0, i + len(nombre)
+        for j in range(i + len(nombre), len(src)):
+            prof += {"(": 1, ")": -1}.get(src[j], 0)
+            if prof == 0:
+                break
+        out.append(src[i:j + 1])
+        i = j
+
+
+def test_los_tres_llamadores_pasan_el_mercado_y_el_del_dia_el_gate():
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    llamadas = [c for c in _llamadas(src, "build_day_assignment_context") if "skeleton_day" in c]
+    assert len(llamadas) == 3, len(llamadas)
+    for c in llamadas:
+        assert "mercado=country_for_form_data(form_data)" in c, c[:200]
+    del_dia = [c for c in llamadas if "day_index=" in c]
+    assert len(del_dia) == 1 and "pais_gate=cultural_country_for_form_data(form_data)" in del_dia[0]
+
+
+# ── 6. una derivación de país por render ──
+
+def test_pais_corrupto_avisa_una_vez_por_render(entorno_fijo, caplog):
+    import logging
+    caplog.set_level(logging.WARNING)
+    _bdac(_esqueleto(), 1, day_name="Lunes", allergies=["lácteos"], country="Marte")
+    n = sum("P2-COUNTRY-HOUSEKEEPING" in r.getMessage() for r in caplog.records)
+    assert n == 1, n
+
+
+# ── 7. el brief de los otros días, con la cocina de CADA día ──
+
+def test_brief_de_otros_dias_con_la_cocina_de_cada_dia(entorno_fijo):
+    sk = _esqueleto()
+    sk["_other_days_brief"] = [{"technique": "salteado", "breakfast": "Mangú/Tubérculos", "country": "DO"},
+                               {"technique": "horno", "breakfast": "Mangú/Tubérculos", "country": "ES"}]
+    esperado = "salteado (desayuno: Mangú/Tubérculos); horno (desayuno: Desayuno típico local)"
+    assert esperado in _bdac(copy.deepcopy(sk), 1, country="ES")
+    assert esperado in _bdac(copy.deepcopy(sk), 1, country="DO")
+
+
+def test_el_brief_lleva_la_cocina_de_cada_dia():
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index('_abd_sd["_other_days_brief"] = [')
+    bloque = src[i:src.index("for _abd_j", i)]
+    assert '"country": cultural_country_for_form_data(form_data, day_index=' in bloque, bloque
+
+
+# ── 8. «habichuelas» en el bloque de dieta beta ──
+
+@pytest.mark.parametrize("cc", ("ES", "US", "MX", "CO"))
+@pytest.mark.parametrize("dieta", ("vegan", "vegetarian"))
+def test_beta_dieta_veg_sin_habichuelas(entorno_fijo, cc, dieta):
+    t = _sin_inspiracion(_bdac(_esqueleto(), 1, day_name="Lunes", diet_type=dieta, country=cc))
+    assert "habichuela" not in t.casefold(), cc
+    assert "frijoles/lentejas/garbanzos" in t
+
+
+@pytest.mark.parametrize("cc", ("DO", "PR"))
+def test_do_y_pr_conservan_habichuelas(entorno_fijo, cc):
+    """En Puerto Rico «habichuelas» ES la palabra (está en los staples de su perfil)."""
+    t = _bdac(_esqueleto(), 1, day_name="Lunes", diet_type="vegan", country=cc)
+    assert "habichuelas/lentejas/garbanzos" in t

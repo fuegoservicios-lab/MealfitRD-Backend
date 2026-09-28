@@ -9,50 +9,105 @@ ES/US/MX/PR/CO, cinco restos dominicanos: «en la mesa dominicana…», «casabe
 días. Y el system prompt justificaba el «arroz de noche» con la cena dominicana y un gate que en beta sólo avisa.
 
 Reglas de este módulo:
-  · La rama DO NO pasa por aquí: el llamador conserva su literal y sólo consulta `es_do`. Byte-idéntico, con huellas
-    sha256 en `tests/test_p1_plan_lote_748.py`.
+  · La rama DO NO cambia: byte-idéntica, con huellas sha256 en `tests/test_p1_plan_lote_748.py`.
   · Nada de un fragmento por país: lo local sale de DATOS que ya existen (el desayuno típico de
     `cultural_profiles.PROFILES`, la lista de exclusivos DO del catálogo). La profundidad por país (platos propios) es
     la parte de G24 que se valida con IA, no ésta.
-  · El gate no cambia: el motivo del arroz de noche en beta dice lo que hace la regla blanda (señalar), no lo que no hace.
+  · El gate no cambia: el texto dice lo que el gate HACE.
+
+[ronda 1 de la revisión] TRES países distintos deciden cosas distintas (I16), y el llamador los deriva UNA vez:
+  · la COCINA del día (`cultural_country_for_form_data(form_data, day_index=…)`): gentilicio, «arepitas», la
+    etiqueta A del desayuno;
+  · el MERCADO (`country_for_form_data`): lo que se COMPRA — casabe, «Salami dominicano», «habichuelas»;
+  · el GATE (`cultural_country_for_form_data(form_data)`, el `_rpn_country` de `review_plan_node`): con qué dureza
+    se rechaza.
+Por eso los helpers reciben el booleano ya calculado (o el código ya canónico), no el país crudo: con un país corrupto
+`canonicalize_country` avisa una vez por DERIVACIÓN, no una vez por ítem (P2-COUNTRY-HOUSEKEEPING).
 
 tooltip-anchor: P1-PLAN-LOTE-748
 """
 from __future__ import annotations
 
+import re
+
 # ─── (b) arroz de noche: el motivo, no la regla ───────────────────────────────────────────────────────────────────────
 # El DO es el literal EXACTO de la regla d) CENA de `DAY_GENERATOR_SYSTEM_PROMPT`: `_BETA_FRAGMENT_TABLE` lo sustituye.
+# El system prompt se renderiza con la cocina PRINCIPAL (`_day_system_instruction_for_diet`), que es el país del gate.
 ARROZ_NOCHE_MOTIVO_DO = "(no se acostumbra en la cena dominicana y el gate lo rechaza)"
 ARROZ_NOCHE_MOTIVO_BETA = "(es una regla de horario del plan y el validador de horario lo señala)"
 
+
 # ─── (a) avena en las comidas fuertes ────────────────────────────────────────────────────────────────────────────────
-# Sin «arepitas» (léxico DO: `constants._DO_LEXICON_NEUTRAL`) y sin «el plan se rechaza»: en beta la regla de horario
-# de la cena es blanda y entrega con aviso desde el intento 1 (`_slot_appropriateness_advisory_decision`).
-AVENA_CIERRE_BETA = ("Nada de tortitas, bowls salados ni «avena al caldo» en las comidas fuertes: eso se lee como un "
-                     "desayuno fuera de hora, no como un almuerzo ni una cena, y el validador de horario lo señala.")
+def cierre_avena(cocina_do: bool, gate_do: bool) -> str:
+    """El cierre de la regla «la avena no es almuerzo ni cena».
+
+    La COCINA del día decide el gentilicio y «arepitas» (léxico DO: `constants._DO_LEXICON_NEUTRAL`); el GATE decide la
+    consecuencia. [ronda 1] Nunca «sólo lo señala»: aunque la regla de horario beta sea blanda, este patrón lo rechaza
+    el revisor cultural con severidad `high` también en beta (16 rechazos en 4 días en el journal, P1-OATS-NOT-A-DINNER).
+    Con gate DO además reintenta el validador de horario ⇒ «el plan se rechaza», el literal de siempre."""
+    lista = "tortitas, arepitas, bowls salados" if cocina_do else "tortitas, bowls salados"
+    mesa = "en la mesa dominicana " if cocina_do else ""
+    consecuencia = "el plan se rechaza" if gate_do else "el revisor lo rechaza"
+    return (f"Nada de {lista} ni «avena al caldo» en las comidas fuertes: {mesa}eso no es un almuerzo ni una cena, "
+            f"y {consecuencia}.")
+
+
+AVENA_CIERRE_DO = cierre_avena(True, True)
+AVENA_CIERRE_BETA = cierre_avena(False, False)
 
 # ─── (a) Salami dominicano en las proteínas prohibidas ──────────────────────────────────────────────────────────────
-# Sólo la ETIQUETA que ve el modelo; la clave y el emparejamiento contra el pool no cambian.
+# Sólo la ETIQUETA que ve el modelo; la clave y el emparejamiento contra el pool no cambian. Es un nombre de PRODUCTO
+# del catálogo DO ⇒ lo decide el mercado.
 _ETIQUETAS_PROTEINA_BETA = {"Salami dominicano": "Salami"}
 
 # ─── (c) la categoría A del desayuno ────────────────────────────────────────────────────────────────────────────────
 ENUM_DESAYUNO_A = "Mangú/Tubérculos"            # valor del esquema (schemas.py `breakfast_category`): NO se toca
-ETIQUETA_A_BETA_RESPALDO = "Tubérculos/plátano (preparación local)"   # la de antes, si el perfil no trae desayuno
 _ETIQUETA_A_BETA_CORTA = "Desayuno típico local"
+# [ronda 1] Cuando del desayuno típico no queda nada propio (US y PR: sus ítems son TODOS base de otra categoría; o la
+# alergia/dieta vetó el resto). Tubérculo y NO «cereal/tubérculo»: `desayuno_por_alergia.reasignar` usa la A como
+# REFUGIO del alérgico al gluten (gluten+huevo ⇒ Mangú/Tubérculos, Batido/Bowl, Mangú/Tubérculos), el vocabulario del
+# gluten no veta «cereal» y «cereal» es la base de la B. «Tubérculo» es además lo común a las otras tres definiciones de
+# la A (planner beta «tubérculo o plátano», §15a beta «cereal/tubérculo», regla 9 «Mangú/tubérculos»), sin el «plátano»
+# que una española lee como banana.
+ETIQUETA_A_BETA_RESPALDO = "Base de tubérculo local"
 # El aviso de las otras cuatro categorías: en DO «NO uses mangú/tubérculos…»; en beta la A ya no es un tubérculo, y
 # «NO uses tubérculo/plátano» le vetaba la banana del desayuno a quien lee «plátano» como banana.
 AVISO_DESAYUNO_BETA = "NO la cambies por la categoría de otro día"
+
+# [ronda 1] La A debe ser DISTINTA de las otras cuatro (schemas.py: «DEBE ser diferente para cada día»): fuera lo que ya
+# es la base de B (Avena/Cereales), C (Pan/Tostadas), D (Batido/Bowl, el yogur) y E (Revoltillo/Tortilla, el huevo).
+# «tortilla» NO está a propósito: el único perfil que la lista para el desayuno es MX, donde es la de MAÍZ, no la de
+# huevo de la E.
+_BASES_DE_OTRAS_CATEGORIAS = ("avena", "cereal", "granola", "pan", "tostada", "yogur", "yogurt", "batido", "bowl",
+                              "huevo", "revoltillo")
+# §15a beta: «DESAYUNO … PROHIBIDO: … sopas sustanciosas» (el «caldo» del desayuno colombiano).
+_NO_ES_DESAYUNO = ("caldo", "sopa")
 
 _EXCLUSIVOS_DO_RESPALDO = ("casabe",)
 
 
 def es_do(country) -> bool:
-    """La MISMA puerta que ya usa `build_day_assignment_context` (`canonicalize_country`, None ⇒ DO)."""
+    """La MISMA puerta que usa `build_day_assignment_context` (`canonicalize_country`, None ⇒ DO). Para UNA derivación;
+    dentro de un render se llama una vez y se pasa el booleano."""
     try:
         from constants import canonicalize_country
         return canonicalize_country(country) == "DO"
     except Exception:                                                          # noqa: BLE001
         return True
+
+
+def _norm(s) -> str:
+    try:
+        from constants import strip_accents
+        return strip_accents(str(s or "").casefold())
+    except Exception:                                                          # noqa: BLE001
+        return str(s or "").casefold()
+
+
+def _contiene(item, terminos) -> bool:
+    """¿El ítem nombra alguno de los términos? Palabra completa, con plural (`pan` ≠ `panqueque`)."""
+    t = _norm(item)
+    return any(re.search(rf"\b{re.escape(_norm(x))}(?:s|es)?\b", t) for x in terminos)
 
 
 def _exclusivos_do() -> tuple:
@@ -65,44 +120,95 @@ def _exclusivos_do() -> tuple:
         return _EXCLUSIVOS_DO_RESPALDO
 
 
-def sin_exclusivos_do(items, country) -> list:
-    """Sugerencias sin lo que el catálogo beta no vende. DO ⇒ la lista tal cual (mismo contenido, mismo orden)."""
+def sin_exclusivos_do(items, mercado_do: bool) -> list:
+    """Sugerencias sin lo que el catálogo beta no vende. Mercado DO ⇒ la lista tal cual (mismo contenido, mismo orden).
+
+    `mercado_do` es el del MERCADO (`country_for_form_data`), no el de la cocina del día: un usuario DO con un día de
+    cocina española sigue comprando en su catálogo DO, que sí vende casabe."""
     items = list(items or [])
-    if es_do(country):
+    if mercado_do:
         return items
-    import re
     excl = _exclusivos_do()
     return [i for i in items
             if not any(re.search(rf"\b{re.escape(e)}\b", str(i).casefold()) for e in excl)]
 
 
-def etiqueta_proteina(label: str, country) -> str:
-    if es_do(country):
+def etiqueta_proteina(label: str, mercado_do: bool) -> str:
+    if mercado_do:
         return label
     return _ETIQUETAS_PROTEINA_BETA.get(label, label)
 
 
+def legumbres_del_mercado(texto, mercado: str):
+    """«habichuelas/lentejas/garbanzos» (`constants.diet_protein_suggestions`) con la palabra del MERCADO.
+
+    DO ⇒ tal cual. Beta ⇒ «frijoles», salvo que «habichuelas» sea palabra del propio mercado (está en los staples de su
+    perfil: Puerto Rico). Dato, no un texto por país. `mercado` es un código YA canónico."""
+    if not texto or es_do(mercado):
+        return texto
+    try:
+        from cultural_profiles import PROFILES, profile_for_market
+        staples = (PROFILES.get(profile_for_market(mercado)) or {}).get("staples") or []
+        if any(_contiene(s, ("habichuela",)) for s in staples):
+            return texto
+    except Exception:                                                          # noqa: BLE001
+        pass
+    return texto.replace("habichuelas/", "frijoles/")
+
+
 def _desayuno_tipico(country) -> list:
     try:
-        from constants import canonicalize_country
         from cultural_profiles import PROFILES, profile_for_market
-        perfil = PROFILES.get(profile_for_market(canonicalize_country(country))) or {}
+        perfil = PROFILES.get(profile_for_market(country)) or {}
         return [str(x).strip() for x in ((perfil.get("slot_affinity") or {}).get("desayuno") or []) if str(x).strip()]
     except Exception:                                                          # noqa: BLE001
         return []
 
 
-def etiqueta_desayuno(categoria, country, detalle: bool = True) -> str:
+def _vetados_por_dieta(dieta) -> tuple:
+    """Lo que la dieta prohíbe, con el vocabulario del ESCÁNER de dieta (`graph_orchestrator._scan_diet_violations`),
+    no con una lista nueva. «caldo» se suma para veg*: la línea dura vegana prohíbe «caldos de origen animal»."""
+    try:
+        from constants import canonicalize_diet_type
+        canon = canonicalize_diet_type(dieta) if dieta else None
+    except Exception:                                                          # noqa: BLE001
+        canon = None
+    if canon not in ("vegan", "vegetarian", "pescatarian"):
+        return ()
+    try:
+        import graph_orchestrator as _go
+        carne = tuple(_go._DIET_FLESH_TERMS)
+        mar = tuple(_go._DIET_SEAFOOD_TERMS)
+        huevo, lacteo = tuple(_go._DIET_EGG_TERMS), tuple(_go._DIET_DAIRY_TERMS)
+        solo_vegano = tuple(__import__("vocabulario_dieta").SOLO_VEGANO)
+    except Exception:                                                          # noqa: BLE001
+        carne, mar = ("pollo", "res", "cerdo", "jamon", "salami", "carne"), ("pescado", "atun", "marisco")
+        huevo, lacteo, solo_vegano = ("huevo",), ("leche", "queso", "yogur", "yogurt"), ("miel",)
+    if canon == "pescatarian":
+        return carne
+    if canon == "vegetarian":
+        return carne + mar + ("caldo",)
+    return carne + mar + huevo + lacteo + solo_vegano + ("caldo",)
+
+
+def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None, dieta=None) -> str:
     """Etiqueta que VE el modelo para la categoría de desayuno asignada.
 
-    DO ⇒ la categoría tal cual. Beta ⇒ sólo la categoría A cambia: «Desayuno típico local (tostada, huevo, yogur,
-    fruta)» con el desayuno típico del perfil de cocina del país (`cultural_profiles.PROFILES[...]['slot_affinity']`).
-    `detalle=False` (el brief de los OTROS días) da sólo el nombre, sin la lista: la lista del día ajeno solapa con las
-    categorías propias (huevo, tostada) y leída como «ya lo usa otro día» le quitaría al día su propia base.
-    Sin desayuno en el perfil ⇒ la etiqueta neutra de antes."""
-    if es_do(country) or categoria != ENUM_DESAYUNO_A:
+    DO ⇒ la categoría tal cual. Beta ⇒ sólo la categoría A cambia: «Desayuno típico local (…)» con el desayuno típico del
+    perfil de cocina del país (`cultural_profiles.PROFILES[...]['slot_affinity']`), SIN
+      · lo que ya es la base de otra categoría (la A tiene que ser distinta de las otras cuatro),
+      · las sopas (§15a beta),
+      · lo que `vetado` (la puerta de alergias y rechazos de `day_generator._vetado`) o la `dieta` prohíben: la A es
+        el refugio de `desayuno_por_alergia.reasignar`, y un «⚠️ OBLIGATORIO … (avena, huevo, pan)» a un alérgico al
+        gluten y al huevo reabre el «ALÉRGENO DETECTADO» del lote 227.
+    Si no queda nada ⇒ `ETIQUETA_A_BETA_RESPALDO` (también en el brief). `detalle=False` (el brief de los OTROS días) da
+    sólo el nombre, sin la lista. `pais_cocina` es un código YA canónico: el de la cocina de ESE día."""
+    if categoria != ENUM_DESAYUNO_A or es_do(pais_cocina):
         return categoria
-    items = _desayuno_tipico(country)
+    prohibidos = _BASES_DE_OTRAS_CATEGORIAS + _NO_ES_DESAYUNO + _vetados_por_dieta(dieta)
+    items = [i for i in _desayuno_tipico(pais_cocina) if not _contiene(i, prohibidos)]
+    if vetado is not None:
+        items = [i for i in items if not vetado(i)]
     if not items:
         return ETIQUETA_A_BETA_RESPALDO
     return f"{_ETIQUETA_A_BETA_CORTA} ({', '.join(items)})" if detalle else _ETIQUETA_A_BETA_CORTA
