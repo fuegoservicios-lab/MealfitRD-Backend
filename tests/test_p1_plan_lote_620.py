@@ -49,18 +49,40 @@ def test_cifras_principales_y_subfilas(monkeypatch):
     destacados = {b["id"]: [f["etiqueta"] for f in b["filas"] if f.get("destacado")] for b in r["bloques"]
                   if b["tipo"] == "kpis"}
     assert destacados == {"uso": ["Activas en 7 días", "Comidas registradas"],
-                          "escaner": ["Fotos analizadas", "Corregidos por el usuario"],
+                          "escaner": ["Fotos analizadas", "Platos registrados con el escáner"],
                           "coach": ["Mensajes del usuario", "Tasa de 👎"],
                           "planes": ["Planes creados", "Alertas del sistema abiertas"]}
     esc = _filas(_bloque(r, "escaner"))
     assert esc["Cambió un ingrediente"]["nivel"] == 1 and esc["Tecleó las macros"]["nivel"] == 1
+    # una fila destacada se pinta aparte, arriba: sus subfilas quedarían colgando de la fila de encima. Por eso las
+    # subfilas siguen SIEMPRE a una fila normal, su total
+    for b in r["bloques"]:
+        if b["tipo"] != "kpis":
+            continue
+        previa = None
+        for f in b["filas"]:
+            if f.get("nivel") == 1:
+                assert previa is not None and not previa.get("destacado"), (b["id"], f["etiqueta"])
+            else:
+                previa = f
+    etiquetas = [f["etiqueta"] for f in _bloque(r, "escaner")["filas"]]
+    i = etiquetas.index("Corregidos por el usuario")
+    assert etiquetas[i + 1:i + 6] == ["Cambió un ingrediente", "«Descríbelo»", "Editó cantidades",
+                                      "Cambió la respuesta a una duda", "Tecleó las macros"]
     # ninguna etiqueta arrastra ya la marca de subfila dentro del texto
     assert not any(f["etiqueta"].startswith("·") for b in r["bloques"] if b["tipo"] == "kpis" for f in b["filas"])
+
+
+def test_el_escaner_pide_su_propia_fila(monkeypatch):
+    monkeypatch.setattr(am, "execute_sql_query", _fake620)
+    r = am.metricas(7)
+    assert [b["id"] for b in r["bloques"] if b.get("ancho")] == ["escaner"]
 
 
 def test_planes_y_cola_en_espanol(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake620)
     planes = _filas(_bloque(am.metricas(7), "planes"))
+    assert planes["Estado de los planes"]["valor"] == ""
     assert planes["Completos"]["valor"] == "3" and planes["Completos"]["nivel"] == 1
     assert planes["Parciales"]["valor"] == "1"
     assert planes["Bloques en cola"]["valor"] == "11"
@@ -95,6 +117,19 @@ def test_el_banco_dice_que_se_midio(monkeypatch):
     assert b["filas"][0] == ["2026-09-27 20:58", "linea base re-corrida (ruido del banco)", "29 %", "31 %", "84 %"]
     assert b["filas"][1][1] == "gemini-3.8-flash (no válida)"      # sin notas: el modelo; y avisa si no vale
     assert "±2-4 puntos" in b["nota"]
+
+
+def test_la_nota_larga_se_corta_en_una_palabra(monkeypatch):
+    def _f(query, params=None, **kw):
+        if "FROM public.analyzer_benchmark_runs" in query:
+            return [{"ran_at": dt.datetime(2026, 9, 27), "model": "m", "n": 1, "ok": 1,
+                     "notes": "P1-PLAN-LOTE-601 v2: lo denso se cuenta (frutos secos, tocineta, aceite visible)",
+                     "metrics": {"valida": True}}]
+        return _fake620(query, params, **kw)
+    monkeypatch.setattr(am, "execute_sql_query", _f)
+    corrida = _bloque(am.metricas(7), "analizador")["filas"][0][1]
+    assert corrida == "P1-PLAN-LOTE-601 v2: lo denso se cuenta (frutos secos…"
+    assert len(corrida) <= 61
 
 
 def test_el_escaner_avisa_desde_cuando_registra(monkeypatch):

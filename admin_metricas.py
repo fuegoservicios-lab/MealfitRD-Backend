@@ -60,7 +60,10 @@ _NOTA_LIBRE_PROHIBIDA = re.compile(r"\S*@\S*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 def _texto_de_nota(v) -> str:
     """Las notas del banco las escribe quien corre el banco, no un usuario; aun así, ni correos ni ids."""
     t = " ".join(_NOTA_LIBRE_PROHIBIDA.sub(" ", str(v or "")).split())
-    return t[:60]
+    if len(t) <= 60:
+        return t
+    corte = t[:60].rsplit(" ", 1)[0] if " " in t[:60] else t[:60]      # en una palabra entera, no a media
+    return corte.rstrip(" ,;:") + "…"
 
 
 def _estado_plan(v) -> str:
@@ -169,21 +172,23 @@ def bloque_escaner(dias: int) -> dict:
     def frac(k):
         return int(s.get(k) or 0) / n_s if n_s else None
 
+    # [P1-PLAN-LOTE-620] Una fila destacada se pinta aparte, arriba: si «Corregidos» lo fuera, sus cinco razones
+    # quedarían colgando de la fila de encima. Las subfilas siguen siempre a su total, que es una fila normal.
     return _kpis("escaner", "Escáner", [
         ("Fotos analizadas", _entero(n_v), _DESTACADO),
+        ("Platos registrados con el escáner", _entero(n_s), _DESTACADO),
         ("Análisis fallidos", _pct(int(v.get("fallidos") or 0) / n_v if n_v else None)),
         ("No era comida", _pct(int(v.get("no_comida") or 0) / n_v if n_v else None)),
         ("Sin totales (compra o etiqueta)", _pct(int(v.get("sin_totales") or 0) / n_v if n_v else None)),
         ("Tiempo de análisis (mediana / p90)", f"{_seg(v.get('p50'))} / {_seg(v.get('p90'))}"),
-        ("Platos registrados con el escáner", _entero(n_s)),
-        ("Corregidos por el usuario", _pct(frac("corregidos")), _DESTACADO),
+        ("Corregidos por el usuario", _pct(frac("corregidos"))),
         ("Cambió un ingrediente", _pct(frac("cambiar")), _SUBFILA),
         ("«Descríbelo»", _pct(frac("describelo")), _SUBFILA),
         ("Editó cantidades", _pct(frac("cantidades")), _SUBFILA),
         ("Cambió la respuesta a una duda", _pct(frac("dudas")), _SUBFILA),
         ("Tecleó las macros", _pct(frac("macros")), _SUBFILA),
         ("Desvío mediano de calorías (IA → registrado)", _pct(s.get("desvio"))),
-    ], nota)
+    ], nota) | {"ancho": True}   # [P1-PLAN-LOTE-620] el bloque largo, en su propia fila: los cortos llenan la primera
 
 
 def bloque_coach(dias: int) -> dict:
@@ -204,13 +209,14 @@ def bloque_planes(dias: int) -> dict:
     cola = _todos("SELECT status, COUNT(*) AS n FROM public.plan_chunk_queue "
                   f"WHERE created_at >= {_VENTANA} GROUP BY 1 ORDER BY 2 DESC", (dias,))
     alertas = _uno("SELECT COUNT(*) AS n FROM public.system_alerts WHERE resolved_at IS NULL")
-    filas = [("Planes creados", _entero(sum(int(r.get("n") or 0) for r in planes)), _DESTACADO)]
+    filas = [("Planes creados", _entero(sum(int(r.get("n") or 0) for r in planes)), _DESTACADO),
+             ("Alertas del sistema abiertas", _entero(alertas.get("n")), _DESTACADO),
+             ("Estado de los planes", "")]
     filas += [(_ETIQUETA_ESTADO_PLAN.get(k, k), _entero(g["n"]), _SUBFILA)
               for k, g in _agrupar(planes, "estado", _estado_plan, "n")]
     filas.append(("Bloques en cola", _entero(sum(int(r.get("n") or 0) for r in cola))))
     filas += [(_ETIQUETA_COLA.get(k, k), _entero(g["n"]), _SUBFILA)
               for k, g in _agrupar(cola, "status", _etiqueta_de_codigo, "n")]
-    filas.append(("Alertas del sistema abiertas", _entero(alertas.get("n")), _DESTACADO))
     return _kpis("planes", "Planes", filas)
 
 
