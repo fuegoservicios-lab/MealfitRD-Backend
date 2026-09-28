@@ -1367,9 +1367,12 @@ def test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo():
             # excusa cambia, este test la sigue sola. Escribir aquí un segundo `{"semola":
             # ("maiz",...)}` sería la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez.
             _n = constants.strip_accents(nombre).strip().lower()
-            if any(go._allergen_term_base_excused(_t, _n[len(_t):])
-                   for _t in getattr(go, "_ALLERGEN_TERM_BASE_EXCUSES", {})
-                   if _n.startswith(_t)):
+            # [catálogo RD · 2026-09-28] con el MISMO patrón que el backstop (`_patron_termino_alergeno`, plural incluido):
+            # `_n[len(_t):]` dejaba «s de maiz» como cola de «tostadas de maíz» y la excusa de base no casaba.
+            _ms = {_t: re.search(go._patron_termino_alergeno(_t), _n)
+                   for _t in getattr(go, "_ALLERGEN_TERM_BASE_EXCUSES", {})}
+            if any(_m is not None and _m.start() == 0 and go._allergen_term_base_excused(_t, _n[_m.end(): _m.end() + 18])
+                   for _t, _m in _ms.items()):
                 continue
             meal = {"name": "probe", "ingredients": [nombre]}
             if not go.clinical_backstop_for_meal(meal, allergies=[clase], diet_type=None):

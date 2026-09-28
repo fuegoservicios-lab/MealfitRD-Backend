@@ -160,9 +160,9 @@
     {
       "food": "Tomatillo",
       "verdict": "RESUELVE-BIEN",
-      "matched": "Tomillo",
-      "tier": "fuzzy",
-      "score": 0.875,
+      "matched": "Tomatillo",
+      "tier": "exact",
+      "score": null,
       "semantic_tier_status": "checked"
     },
     {
