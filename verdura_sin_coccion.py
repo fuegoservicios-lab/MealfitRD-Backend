@@ -48,6 +48,26 @@ _COCCION_540 = re.compile(
     r"|\b\d+(?:\s*[-–]\s*\d+)?\s*min", re.IGNORECASE)
 # un guiso o una salsa DE VERDAD: «tuesta el pan en una sartén seca» no es donde van las espinacas
 _GUISO_540 = re.compile(r"\b(?:guis\w*|salsa|sofri\w*|sofre\w*)\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-632 · 2026-09-28] Un participio o un adjetivo describe un ESTADO, no cuece. Validación del 592
+# (estudiante, día 3): «Lentejas guisadas… con plátano maduro, brócoli al vapor y pechuga de pollo» —el Mise separa el
+# brócoli, ningún paso lo cocina y el Montaje lo sirve «al lado»— quedaba sin su cocción previa porque esa misma frase
+# del Montaje decía «las lentejas guisadas»: `guis\w*` contaba el adjetivo de OTRO alimento como la cocción del brócoli.
+# Lo mismo con «las tortitas horneadas», «el pollo asado», «sirve caliente» y el «al vapor» que sólo repite el nombre en
+# la frase que sirve. tooltip-anchor: P1-PLAN-LOTE-632
+_DESCRIPTIVO_632 = re.compile(r"^(?:\w+(?:ad|id)[oa]s?|calientes?)$")
+_SIRVE_632 = re.compile(r"\b(?:montaje|sirve\w*|acompan\w*|emplat\w*)\b")
+
+
+def _cuece(f: str) -> bool:
+    """[P1-PLAN-LOTE-632] ¿La frase `f` (ya sin acentos) cuece algo? Un verbo o unos minutos sí; un participio
+    («guisadas», «horneado», «hervida») o «caliente» no, y «vapor» tampoco en la frase que sirve."""
+    servir = bool(_SIRVE_632.search(f))
+    for m in _COCCION_540.finditer(f):
+        t = m.group(0).lower()
+        if _DESCRIPTIVO_632.match(t) or (t == "vapor" and servir):
+            continue
+        return True
+    return False
 
 
 def _sa(s) -> str:
@@ -99,7 +119,7 @@ def cocer(meal) -> int:
             # clase —un añadido huérfano—, no una cocción que falta
             if not any(re.search(pat, f) for f in frases):
                 continue
-            if any(re.search(pat, f) and _COCCION_540.search(f) for f in frases):
+            if any(re.search(pat, f) and _cuece(f) for f in frases):   # [P1-PLAN-LOTE-632] verbo, no participio
                 continue
             previas.append("💡 Cocción previa: " + texto + ".")
         # las espinacas que el paso sirve frescas («Acompaña con las espinacas frescas», «al lado», «crudas») se quedan así
@@ -108,7 +128,7 @@ def cocer(meal) -> int:
         if any(_ESPINACA_540.search(x) for x in ings) and not ensalada and not frescas \
                 and any(_GUISO_540.search(_sa(p)) for p in toque) \
                 and any(_ESPINACA_540.search(f) for f in frases) \
-                and not any(_ESPINACA_540.search(f) and _COCCION_540.search(f) for f in frases):
+                and not any(_ESPINACA_540.search(f) and _cuece(f) for f in frases):
             finales.append("🥬 Añade las espinacas a la sartén o al guiso en los últimos 2-3 minutos, hasta que se "
                            "ablanden, y mézclalas antes de servir.")
         previas = [t for t in previas if t not in rec]

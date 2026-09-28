@@ -103,4 +103,67 @@ def separar(meal) -> int:
         return 0
 
 
-__all__ = ["separar"]
+# [P1-PLAN-LOTE-635 · 2026-09-28] El vaso sigue a la lista. Validación del 592 (estudiante, día 2): «Avena cremosa con
+# mango, maní y queso cottage» con «275 ml de leche descremada» en la lista y, en los pasos, «mide… 360 ml», «cocina la
+# avena con 150 ml de la leche» y «Sirve los 210 ml de leche restantes» (150 + 210 = 360: la lista de la PRIMERA pasada).
+# El shield reescala la lista y vuelve a correr la cola, pero `separar` ya ve el vaso y no hace nada, y el 308 no toca una
+# leche que tres pasos citan con tres cifras. Corpus posterior al 587: 1 de 1 vaso descuadrado. Aquí, si el vaso del 587
+# está, se rehace desde la lista: vaso = lista − cocción (y la cifra vieja del total, a la de la lista); si el resto ya no
+# llega a 100 ml, el vaso se va y la avena se cocina con toda la leche. tooltip-anchor: P1-PLAN-LOTE-635
+_VASO_587_RE = re.compile(r"\s*Sirve los (?P<n>\d+) ml de leche restantes en un vaso aparte\.")
+_COCCION_587_RE = re.compile(r"\b(?P<n>\d+) ml de la leche\b")
+
+
+def _leche_de_la_lista(meal) -> float:
+    import avena_liquido as al
+    total = 0.0
+    for ln in meal.get("ingredients") or []:
+        m = al._LINEA_RE.match(str(ln))
+        if not m:
+            continue
+        v, u, food = al._num(m.group("q")), al._sa(m.group("u")), al._sa(m.group("food"))
+        if v is not None and re.search(r"\bleche\b", food) and not al._NO_LIQUIDO_RE.search(food) and u in al.ML:
+            total += v * al.ML[u]
+    return total
+
+
+def resincronizar(meal) -> int:
+    """[P1-PLAN-LOTE-635] Nº de pasos reescritos para que cocción + vaso = la leche de la lista; 0 si no aplica."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list):
+            return 0
+        iv = next((i for i, p in enumerate(rec) if isinstance(p, str) and _VASO_587_RE.search(p)), None)
+        if iv is None:
+            return 0
+        vaso = int(_VASO_587_RE.search(rec[iv]).group("n"))
+        ic = next((i for i, p in enumerate(rec) if isinstance(p, str) and i != iv and _COCCION_587_RE.search(p)), None)
+        lista = _leche_de_la_lista(meal)
+        if ic is None or lista <= 0:
+            return 0
+        coccion = int(_COCCION_587_RE.search(rec[ic]).group("n"))
+        total_viejo, total = coccion + vaso, int(round(lista))
+        if abs(total - total_viejo) <= 2:
+            return 0
+        resto = total - coccion
+        antes = list(rec)
+        if resto >= RESTO_MIN_ML:
+            rec[iv] = _VASO_587_RE.sub(lambda m: f" Sirve los {resto} ml de leche restantes en un vaso aparte.", rec[iv], 1)
+            meal["_avena_leche_vaso"] = resto
+        else:                                   # ya no sobra un vaso: toda la leche a la olla
+            rec[iv] = _VASO_587_RE.sub("", rec[iv], 1).rstrip()
+            rec[ic] = _COCCION_587_RE.sub(f"{total} ml de la leche", rec[ic], 1)
+            meal.pop("_avena_leche_vaso", None)
+        for i, p in enumerate(rec):             # la cifra vieja del total (el Mise en place), a la de la lista
+            if isinstance(p, str) and i not in (iv, ic):
+                rec[i] = re.sub(rf"\b{total_viejo}(\s*ml de (?:la )?leche)\b", lambda m: f"{total}{m.group(1)}", p)
+        n = sum(1 for a, b in zip(antes, rec) if a != b)
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:
+        return 0
+
+
+__all__ = ["separar", "resincronizar"]

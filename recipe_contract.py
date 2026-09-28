@@ -925,6 +925,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("avena_liquido").ubicar_agua(meal)  # [P1-PLAN-LOTE-428] el agua donde se nombra el líquido
         __import__("avena_liquido").agua_en_la_coccion(meal)  # [P1-PLAN-LOTE-448] el agua medida va a la olla
         __import__("avena_con_su_leche").separar(meal)  # [P1-PLAN-LOTE-587] la leche que sobra, en un vaso
+        __import__("avena_con_su_leche").resincronizar(meal)  # [P1-PLAN-LOTE-635] el vaso sigue a la lista reescalada
         __import__("leche_infima").quitar(meal)  # [P1-PLAN-LOTE-614] la leche de una cucharadita no es un ingrediente
         __import__("pasos_cantidades").decimales_de_cocina(meal)  # [P1-PLAN-LOTE-312] «2.22 cdas» → «2¼ cdas»
         __import__("pasos_cantidades").frases_repetidas(meal)     # [P1-PLAN-LOTE-316] «Acompaña con X. Acompaña con X.»
@@ -963,6 +964,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("montaje_sin_eco").limpiar(meal)  # [P1-PLAN-LOTE-582] el Montaje no re-sirve lo ya servido
         __import__("coccion_sin_repetir").quitar(meal, index)  # [P1-PLAN-LOTE-586] lo ya cocido no se cuece otra vez
         __import__("queso_de_la_lista").alinear(meal)  # [P1-PLAN-LOTE-520] el queso que el texto nombra es el de la lista
+        __import__("yogur_de_la_lista").alinear(meal)  # [P1-PLAN-LOTE-636] y el yogur (griego ≠ natural), también
         __import__("pasos_cantidades").articulo_de_uno(meal)  # [P1-PLAN-LOTE-403] «las 1 rebanada» → «la rebanada»
         __import__("pasos_cantidades").uno_sin_de(meal)  # [P1-PLAN-LOTE-404] «1 de cebolla» → «1 cebolla»
         __import__("pasos_cantidades").claras_de_la_lista(meal)  # [P1-PLAN-LOTE-405] las claras también se cocinan
@@ -989,6 +991,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cerrador").ya_viene_concordado(meal)  # [P1-PLAN-LOTE-449] «(ya vienen cocidas)»
         __import__("pasos_cerrador").proteina_servida_una_vez(meal)  # [P1-PLAN-LOTE-449] lo que el cerrador sirve, una vez
         __import__("pasos_cerrador").acompanamientos_en_una_frase(meal)  # [P1-PLAN-LOTE-449] «Acompaña…» en una frase
+        __import__("doble_punto").limpiar(meal)  # [P1-PLAN-LOTE-634] «pollo..» → «pollo.»: lo último que toca los pasos
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
     if r["reescritas"] or r["sin_reparar"] or r.get("lista_reescrita") or r.get("estructura") or r.get("sin_lista") or r.get("repeticiones"):

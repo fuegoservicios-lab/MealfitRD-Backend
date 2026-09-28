@@ -22974,6 +22974,7 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
                         f"hervido explícito: {_must_cook_c} | meal={str(meal.get('name'))[:40]}")
             if not _rest_c:
                 return len(missing)
+        steps = __import__("complemento_viver").cocer(meal, steps, _rest_c)  # [P1-PLAN-LOTE-633] batata/papa/plátano: cocidos
         _list = ", ".join(_rest_c)
         # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] En una preparación LICUADA (batido/jugo/smoothie)
         # el ingrediente ausente va A LA LICUADORA, no "al plato": "Incorpora también X al plato
@@ -39013,6 +39014,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # fruta-dulce+salado (reincidía tras la directiva → advisory-final). Pre-motor:
             # el solver dimensiona el resultado (aguacate en vez de mango) correctamente.
             _fry_fixed = _dinner_fry_autofix(days)
+            __import__("tortitas_de_noche").renombrar(days)  # [P1-PLAN-LOTE-630] panqueques salados de almuerzo/cena → tortitas
             if _fry_fixed:
                 logger.info(f"🍳 [P1-APPETIT-AUTOFIX] {_fry_fixed} cena(s) de fritura pesada reescrita(s) "
                             f"a plancha/horno pre-reviewer.")

@@ -15,6 +15,16 @@ import re
 
 _NOTA_RE = re.compile(r"yema\s+y\s+clara\s+firmes|yema\s+y\s+clara\s+firme|cocina\s+el\s+huevo\s+por\s+completo", re.IGNORECASE)
 _NOTAS = ("⚠", "🤰", "⚕", "💡", "🌱")
+# [P1-PLAN-LOTE-631 · 2026-09-28] La yema «cremosa», «blanda» o «suave» es la misma yema líquida con otra palabra. Validación
+# del 592 (celíaco, día 2): «cuaja el huevo entero con 5 claras hasta que la clara esté firme y la yema siga cremosa» con
+# «⚠️ … cocina el huevo por completo (≥71°C, yema y clara firmes…)» en el mismo plato; corpus: 10 pasos así (3 en las
+# corridas recientes), la forma que el 565 no veía. Con la nota, el paso pide la yema firme. tooltip-anchor: P1-PLAN-LOTE-631
+_BLANDA_631 = r"(?:cremosa|blanda|suave|tierna|jugosa|semil[ií]quida|melosa|fluida|a\s+punto)"
+_CLARA_Y_YEMA_631 = re.compile(
+    r"hasta\s+que\s+la\s+clara\s+(?P<v>cuaje|est[eé]\s+(?:firme|cuajada))(?:\s+por\s+completo)?\s+y\s+la\s+yema\s+"
+    r"(?:(?:quede|siga|est[eé]|a[uú]n|todav[ií]a)\s+)?(?:ligeramente\s+|un\s+poco\s+)?" + _BLANDA_631 + r"\b", re.IGNORECASE)
+_YEMA_631 = re.compile(r"\b(?P<la>la\s+yema\s+)(?P<v>quede|siga|est[eé]|a[uú]n|todav[ií]a)\s+(?:ligeramente\s+|un\s+poco\s+)?"
+                       + _BLANDA_631 + r"\b", re.IGNORECASE)
 
 
 def _cambia(p: str) -> str:
@@ -25,6 +35,10 @@ def _cambia(p: str) -> str:
                "hasta que la clara y la yema cuajen", q, flags=re.IGNORECASE)
     q = re.sub(r"\(yema\s+l[ií]quida\)", "(yema firme)", q, flags=re.IGNORECASE)
     q = re.sub(r"\byema\s+l[ií]quida\b(?!\s*,\s*pero)", "yema firme", q, flags=re.IGNORECASE)
+    q = _CLARA_Y_YEMA_631.sub(lambda m: "hasta que la clara y la yema " + ("cuajen" if m.group("v").lower() == "cuaje"
+                                                                          else "estén firmes"), q)   # [P1-PLAN-LOTE-631]
+    q = _YEMA_631.sub(lambda m: m.group("la") + {"quede": "quede firme", "siga": "esté firme"}.get(
+        m.group("v").lower(), "esté firme" if m.group("v").lower().startswith("est") else "firme"), q)
     return q
 
 

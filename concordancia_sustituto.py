@@ -31,13 +31,13 @@ _GENERO = {
           "sardina tilapia merluza res manzana pera naranja toronja sandia uva ciruela calabaza lechuga col coliflor arepa "
           "tortilla galleta harina pasta salsa miel mantequilla stevia sal cebada cereza guayaba chinola parcha "
           "mandarina acelga remolacha alcachofa aceituna costilla chuleta longaniza salchicha mortadela clara yema "
-          "semilla hojuela almeja langosta"),
+          "semilla hojuela almeja langosta tortita"),  # [P1-PLAN-LOTE-630] tortita / panqueque
     "m": ("arroz mani guineo pollo pavo cerdo pescado filete salmon camaron kale brocoli aguacate tomate queso yogurt "
           "yogur casabe pan platano mango melon huevo edamame tofu atun bacalao mero chivo esparrago arandano pistacho "
           "garbanzo frijol gandul champinon ajonjoli sesamo bulgur cuscus maiz coco limon pepino repollo cangrejo pulpo "
           "calamar jamon chorizo salami higado requeson mascarpone azucar muslo lomo cordero conejo bistec churrasco "
           "solomillo tempeh seitan hongo pimiento aji ajo puerro apio berro cilantro oregano jengibre name mapuey "
-          "rabano nabo calabacin molondron durazno kiwi higo datil anacardo maranon cajuil"),
+          "rabano nabo calabacin molondron durazno kiwi higo datil anacardo maranon cajuil panqueque"),
 }
 _LEX = {w: g for g, ws in _GENERO.items() for w in ws.split()}
 _INVARIANTE_N = {"res", "cuscus", "anis", "maiz", "arroz", "tempeh"}
@@ -46,7 +46,7 @@ _INVARIANTE_N = {"res", "cuscus", "anis", "maiz", "arroz", "tempeh"}
 _ADJ = (r"fresc|median|madur|pequeñ|cortad|picad|rallad|laminad|pelad|cocid|asad|tostad|enter|triturad|machacad|majad|"
         r"hervid|trocead|rebanad|dorad|tibi|fri|frí|crud|sec|tiern|suelt|escurrid|saltead|reservad|opac|cremos|esponjos|"
         r"jugos|list|bland|cocinad|hornead|guisad|frit|desmenuzad|molid|derretid|remojad|enjuagad|limpi|lavad|"
-        r"sazonad|marinad|sellad|glasead|caramelizad|blanquead|cubiert|tapad|abiert|cerrad")
+        r"sazonad|marinad|sellad|glasead|caramelizad|blanquead|cubiert|tapad|abiert|cerrad|salad|fin|delgad|caser")
 #: adjetivos sin género: sólo cambian de número («tiernas pero verdes»)
 _INV = r"verde|suave|caliente|crujiente|firme|brillante|fragante|dulce"
 _ADJ_RX = re.compile(r"\b(?P<r>" + _ADJ + r")(?P<g>[aoAO])(?P<n>[sS]?)\b")

@@ -959,7 +959,21 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # total, códigos en español, barras del gasto y qué midió cada corrida del banco. (Frontend: 621.)
 # [P1-PLAN-LOTE-622 · 2026-09-27] (backend) El aviso de comida del coach nombra la comida en el idioma del usuario: en
 # inglés decía «go ahead and merendar now».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-622 · 2026-09-27"
+# [P1-PLAN-LOTE-630 · 2026-09-27] (backend) Los «panqueques salados» del almuerzo y la cena son tortitas: el horario los
+# rechazaba como desayuno y cada rechazo regeneraba el plan entero.
+# [P1-PLAN-LOTE-631 · 2026-09-28] (backend) La yema «cremosa/blanda/suave» del paso se alinea con la nota «yema y clara
+# firmes» del mismo plato (el 565 solo veía «yema líquida»).
+# [P1-PLAN-LOTE-632 · 2026-09-28] (backend) Un participio («las lentejas guisadas») o el eco «al vapor» del Montaje ya no
+# cuentan como la cocción de la verdura de al lado: el brócoli que nadie cocina recibe su cocción previa (lote 540).
+# [P1-PLAN-LOTE-633 · 2026-09-28] (backend) La batata, la papa, el plátano o la auyama que el complemento incorpora
+# («Incorpora también batata durante la preparación») reciben antes su cocción previa (al vapor si el nombre lo promete).
+# [P1-PLAN-LOTE-634 · 2026-09-28] (backend) Un paso no termina en «..»: «Acompaña con pechuga de pollo..» (6 de 4.231
+# comidas recientes) pasa a un punto al final del contrato de receta, en la cola del shield.
+# [P1-PLAN-LOTE-635 · 2026-09-28] (backend) El vaso de leche del 587 sigue a la lista cuando el shield la reescala
+# (275 ml en la lista, 150 + 210 = 360 en los pasos): vaso = lista − cocción, y el Mise en place con la cifra de la lista.
+# [P1-PLAN-LOTE-636 · 2026-09-28] (backend) El yogur que el texto nombra es el de la lista (griego ≠ natural): «Acompaña
+# con yogurt natural entero y yogurt griego entero» con un solo yogur en la lista (255 de 5.042 comidas del corpus).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-636 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
