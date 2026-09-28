@@ -33,6 +33,8 @@ def test_el_frontend_toma_la_region_del_pais():
     if not _FRONT.exists():
         pytest.skip("frontend ausente (repo hermano)")
     src = _FRONT.read_text(encoding="utf-8")
-    assert "export const formatRegionFor" in src
+    # [P1-PLAN-LOTE-708] la definición vive en `paisDelUsuario.js` (sin dependencias); aquí se importa y re-exporta
+    assert "export { formatRegionFor };" in src
+    assert "export const formatRegionFor" in (_FRONT.parent / "paisDelUsuario.js").read_text(encoding="utf-8")
     i = src.index("const _separadorDecimal")
     assert "formatRegionFor(pais, getLocale())" in src[i:i + 600]
