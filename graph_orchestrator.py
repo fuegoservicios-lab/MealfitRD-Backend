@@ -34136,8 +34136,8 @@ def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
                 for token, line, excludes in _ghosts:
                     if not _re.search(r"\b" + token, hay):
                         continue
-                    if _re.search(r"\b" + token, ing_hay):
-                        continue  # ya está en ingredientes
+                    if _re.search(r"\b" + token, ing_hay) or __import__("fantasma_presente").presente(token, ing_hay):
+                        continue  # ya está en ingredientes [P1-PLAN-LOTE-802: «lonjas de pan» ≡ «rebanada de pan»]
                     if any(ex in hay or ex in ing_hay for ex in excludes):
                         continue
                     if allergies:
