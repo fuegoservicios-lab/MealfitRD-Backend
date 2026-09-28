@@ -592,16 +592,23 @@ def _template_token_names_base(token: str, base_ascii: str, base_lower: str) -> 
         return False
 
 
-def _dish_template_class_counts(slot: str, field: str) -> dict:
-    """{token_de_clase: nº de plantillas} del slot, DERIVADO del JSON vivo. Fail-open → {}."""
+def _dish_template_class_counts(slot: str, field: str, country=None) -> dict:
+    """{token_de_clase: nº de plantillas} del slot, DERIVADO del JSON vivo. Fail-open → {}.
+
+    [P1-PLAN-LOTE-704] (G75) `country` elige la biblioteca del país (`_templates_path_for_country`, SSOT) y entra en
+    la clave de la caché: sin eso la primera lectura (RD) se servía a todos. Sin país, la RD de siempre."""
+    _path = ""
     try:
-        from dish_library import load_dish_templates
-        _tpls = load_dish_templates() or []
+        from dish_library import load_dish_templates, _templates_path_for_country, _TEMPLATES_PATH
+        _path = (_templates_path_for_country(country) if country else "") or ""
+        if _path == _TEMPLATES_PATH:
+            _path = ""
+        _tpls = (load_dish_templates(_path) if _path else load_dish_templates()) or []
     except Exception as _tc_e:
         logger.debug("[P3-SEEDER-TEMPLATE-COVERAGE] biblioteca no disponible: %s: %s",
                      type(_tc_e).__name__, str(_tc_e)[:160])
         return {}
-    _key = (slot, field)
+    _key = (slot, field, _path)
     _hit = _TEMPLATE_COVERAGE_CACHE.get(_key)
     if _hit is not None and _hit[0] == id(_tpls):
         return _hit[1]
@@ -619,13 +626,13 @@ def _dish_template_class_counts(slot: str, field: str) -> dict:
     return _counts
 
 
-def _template_coverage(base: str, field: str = "protein", slot: str = None) -> int:
+def _template_coverage(base: str, field: str = "protein", slot: str = None, country=None) -> int:
     """Nº de plantillas del slot principal que NOMBRAN a `base`.
 
     `field` es `'protein'` para el pool de proteínas y `'base'` para el de carbos (los dos campos
     que la plantilla declara). Devuelve **-1** cuando no hay biblioteca legible: "no sé" NO es
     "cero" — un 0 ahí penalizaría el pool entero por igual y disfrazaría la avería de decisión."""
-    _counts = _dish_template_class_counts(slot or _TEMPLATE_COVERAGE_MAIN_SLOT, field)
+    _counts = _dish_template_class_counts(slot or _TEMPLATE_COVERAGE_MAIN_SLOT, field, country)
     if not _counts:
         return -1
     _ascii = strip_accents(str(base or "").lower()).strip()
@@ -657,7 +664,7 @@ def _low_template_coverage_penalty() -> float:
         return 1.0
 
 
-def _apply_low_template_coverage_penalty(names, weights, field: str, factor: float):
+def _apply_low_template_coverage_penalty(names, weights, field: str, factor: float, country=None):
     """Devuelve `(pesos, nº penalizados)`. Multiplicador SUAVE, jamás exclusión.
 
     Sólo baja el peso de las bases con cobertura EXACTAMENTE 0; el resto queda byte-idéntico (es
@@ -666,11 +673,11 @@ def _apply_low_template_coverage_penalty(names, weights, field: str, factor: flo
     _w = list(weights)
     if factor >= 1.0 or not names:
         return _w, 0
-    if not _dish_template_class_counts(_TEMPLATE_COVERAGE_MAIN_SLOT, field):
+    if not _dish_template_class_counts(_TEMPLATE_COVERAGE_MAIN_SLOT, field, country):
         return _w, 0
     _out, _n = [], 0
     for _name, _wi in zip(names, _w):
-        if _template_coverage(_name, field) == 0:
+        if _template_coverage(_name, field, country=country) == 0:
             _out.append(_wi * factor)
             _n += 1
         else:
@@ -1910,12 +1917,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # rescate sobre Sardinas en lata). Encender esto sin re-medir T20 deshace parte de T20.
     # tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
     _tpl_factor = _low_template_coverage_penalty()
+    _tpl_country = form_data.get("country") if isinstance(form_data, dict) else None   # [P1-PLAN-LOTE-704] G75
     if _tpl_factor < 1.0:
         try:
             protein_weights, _tpl_np = _apply_low_template_coverage_penalty(
-                available_proteins, protein_weights, "protein", _tpl_factor)
+                available_proteins, protein_weights, "protein", _tpl_factor, country=_tpl_country)
             carb_weights, _tpl_nc = _apply_low_template_coverage_penalty(
-                available_carbs, carb_weights, "base", _tpl_factor)
+                available_carbs, carb_weights, "base", _tpl_factor, country=_tpl_country)
             if _tpl_np or _tpl_nc:
                 logger.info(
                     "🍽️ [P3-SEEDER-TEMPLATE-COVERAGE] %d proteína(s) y %d carbo(s) sin ninguna "
@@ -2590,7 +2598,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 ("carbohidrato", "base", _tpl_pantry_c, chosen_carbs)):
             for _tpl_b in _tpl_bases:
                 _tpl_days = sum(1 for _x in _tpl_chosen if _x == _tpl_b)
-                if _tpl_days >= 2 and _template_coverage(_tpl_b, _tpl_field) == 0:
+                if _tpl_days >= 2 and _template_coverage(_tpl_b, _tpl_field, country=_tpl_country) == 0:
                     logger.warning(
                         "🍽️ [P3-SEEDER-TEMPLATE-COVERAGE] la %s '%s' viene de la NEVERA, no tiene "
                         "NINGUNA plantilla de %s en la biblioteca y ocupa %d de %d día(s) del "
