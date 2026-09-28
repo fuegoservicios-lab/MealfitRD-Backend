@@ -13938,7 +13938,7 @@ _ALLERGEN_SYNONYMS = {
              # español que declaraba «cacahuete» obtenía 0 violaciones sobre un plato con
              # 'Mantequilla de maní'. Es el caso más grave del P-fix: el wizard no tiene chip de
              # maní, así que el texto libre es la ÚNICA vía y el desenlace es anafilaxia.
-             "cacahuete", "cacahuetes", "crema de cacahuete", "mantequilla de cacahuete"],
+             "cacahuete", "cacahuetes", "crema de cacahuete", "mantequilla de cacahuete", *__import__("vocabulario_alergenos").EXTRA["mani"]],
     "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
                      "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
                      "nutella", "praline", "turron", "pesto", "crema de avellana",
@@ -14174,7 +14174,7 @@ _ALLERGEN_DECLARATION_ALIASES = {
                      # fr / it / pt
                      "fruits a coque", "fruits secs", "noix",
                      "frutta a guscio", "frutta secca", "noci",
-                     "oleaginosas", "nozes", "castanhas"],
+                     "oleaginosas", "nozes", "castanhas", *__import__("vocabulario_alergenos").DECLARACIONES["frutos secos"]],
     "mariscos": ["shellfish", "shellfish allergy", "seafood", "seafood allergy", "crustacean", "crustaceans", "mollusc",  # [P1-PLAN-LOTE-210] «seafood» = pez Y marisco
                  "molluscs", "mollusk", "mollusks",
                  # Categorías del Reglamento UE 1169/2011 (nº 2 crustáceos, nº 14 moluscos):
@@ -14191,7 +14191,7 @@ _ALLERGEN_DECLARATION_ALIASES = {
                 # fr / it / pt
                 "produits laitiers", "produit laitier", "laitier", "laitiers", "lait",
                 "latticini", "latte",
-                "laticinios", "leite", "caseina"],
+                "laticinios", "leite", "caseina", *__import__("vocabulario_alergenos").DECLARACIONES["lacteos"]],
     "lactosa": ["lactose", "lactose intolerance", "lactose intolerant",
                 "intolerancia a la lactosa", "intolerante a la lactosa",
                 # fr / it / pt
@@ -14470,6 +14470,7 @@ _ALLERGEN_TERM_BASE_EXCUSES = {
     # «tostada integral» y «tostadas de trigo» siguen marcadas, y «tostada» desnuda también.
     "tostada": ("casabe", "yuca", "maiz", "arroz", "platano"),
     "cuchuco": ("maiz",), "cracker": ("arroz", "maiz", "yuca", "casabe"),  # [P1-PLAN-LOTE-796] cuchuco de maíz · crackers de arroz
+    **__import__("vocabulario_alergenos").EXCUSAS_DE_BASE,  # [P1-PLAN-LOTE-796 · revisión] mole de olla · pastelito de yuca
 }
 _ALLERGEN_TERM_BASE_EXCUSE_RX = {
     _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
@@ -14666,7 +14667,8 @@ def _scan_allergen_violations(plan: dict, allergies, terminos=None) -> list:
                         if (f in _ALLERGEN_GLUTEN_TERM_SET
                                 and f not in _GLUTEN_NO_GF_VARIANT_TERMS
                                 and _GLUTEN_FORWARD_EXCUSE_RX.match(
-                                    ing_low[_m_al.end(): _m_al.end() + 40])):
+                                    ing_low[_m_al.end(): _m_al.end() + 40])
+                                and not __import__("termino_compartido").otra_clase_lo_prohibe(f, forbidden)):  # [P1-PLAN-LOTE-796]
                             continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break

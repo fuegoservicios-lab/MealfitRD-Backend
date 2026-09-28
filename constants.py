@@ -4379,6 +4379,25 @@ except Exception:  # pragma: no cover
     BETA_VEG_PROTEIN_FLOOR = 6
 
 
+def _restricciones_de_la_alergia(allergies) -> tuple:
+    """[P1-PLAN-LOTE-796] (clases, términos) que el escáner de alérgenos deriva de estas alergias: las clases con
+    `dish_registry.clases_de_alergia` y los términos con `_expand_allergy_declarations`. Si el vocabulario no carga,
+    nada: queda el catch-all del chip."""
+    decl = [str(a) for a in (allergies or ()) if str(a or "").strip()]
+    if not decl:
+        return [], []
+    try:
+        from graph_orchestrator import _expand_allergy_declarations
+        from dish_registry import clases_de_alergia
+        return ([str(c).lower() for c in sorted(clases_de_alergia(decl)) if str(c or "").strip()],
+                [str(t).lower() for t in sorted(_expand_allergy_declarations(decl)) if str(t or "").strip()])
+    except Exception as _e:                                                     # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(
+            f"[P1-PLAN-LOTE-796] alergias sin resolver a su clase ({type(_e).__name__}): sólo el catch-all del chip")
+        return [], []
+
+
 def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None,
                                 market_extras: bool = False, culture_country: str = None):
     """Filtra el catálogo [dominicano|del país beta] basado en restricciones del usuario O(N)
@@ -4447,6 +4466,15 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     # de pasta", así que el `\bpan\b`/`\bpasta\b` del catch-all de gluten excluía dos alimentos SIN
     # gluten del pool de un celíaco. tooltip-anchor: P2-CATALOG-FILTER-SSOT
     _user_named_restrictions = list(normalized_restrictions)
+    # [P1-PLAN-LOTE-796 · 2026-09-28] Los catch-alls de abajo disparan por IGUALDAD con una lista escrita a mano: sólo el
+    # chip exacto. «celiaquía», «leche», «camarones», «atún», «almendras» o «frutos de cáscara» escritos a mano (campo
+    # «Otra…», el coach) dejaban en el pool —y en la sugerencia del swap— lo que el escáner prohíbe. La ALERGIA se
+    # resuelve con el SSOT del escáner: su CLASE dispara aquí el catch-all del chip y sus TÉRMINOS entran al patrón
+    # DESPUÉS de los catch-alls (un término no es un chip: «frutos secos», término del maní por la mezcla, no puede
+    # disparar el catch-all de frutos secos y quitarle las almendras). Los «no me gusta» no se expanden: quien no quiere
+    # camarones puede querer pulpo. tooltip-anchor: P1-PLAN-LOTE-796-CATALOGO-POR-CLASE
+    _clases_alergia, _terminos_alergia = _restricciones_de_la_alergia(allergies)
+    normalized_restrictions.extend(_clases_alergia)
 
 
     # Reglas genéricas CATCH-ALL de mariscos y carnes
@@ -4491,7 +4519,9 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
                                         *__import__("vocabulario_alergenos").EXTRA["lacteos"],  # [P1-PLAN-LOTE-252]
                                         # [P1-PLAN-LOTE-796] «Suero costeño» (CO) sobrevivía al chip de lácteos
                                         "suero costeno", "arequipe", "cuajada", "nata", "kefir", "ghee", "cottage",
-                                        *__import__("vocabulario_alergenos").LACTOSA_EXTRA])
+                                        *__import__("vocabulario_alergenos").LACTOSA_EXTRA,
+                                        *__import__("vocabulario_alergenos").OCULTOS["lacteos"],  # [P1-PLAN-LOTE-796]
+                                        *__import__("vocabulario_alergenos").OCULTOS["lactosa"]])
     # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F13/F29/F14) Estas tres expansiones estaban
     # DRIFTEADAS respecto a `graph_orchestrator._ALLERGEN_SYNONYMS`, que es el vocabulario que usa el
     # escáner de seguridad: el catch-all de gluten listaba 5 términos contra ~24 del canónico, así que
@@ -4504,16 +4534,21 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
         normalized_restrictions.extend(["almendra", "almendras", "nuez", "nueces", "maranon",
                                         "pistacho", "pistachos", "avellana", "merey", "anacardo",
                                         "marzipan", "mazapan", "nutella", "praline", "turron", "pesto",
-                                        *__import__("vocabulario_alergenos").EXTRA["frutos secos"]])
+                                        *__import__("vocabulario_alergenos").EXTRA["frutos secos"],
+                                        *__import__("vocabulario_alergenos").OCULTOS["frutos secos"]])  # [P1-PLAN-LOTE-796]
     if any(r in ["mani", "cacahuate", "cacahuete", "peanut", "peanuts"] for r in normalized_restrictions):
         normalized_restrictions.extend(["mani", "cacahuate", "peanut", "mantequilla de mani",
                                         "crema de mani", "salsa de mani",
-                                        "cacahuete", "crema de cacahuete", "mantequilla de cacahuete"])  # [P1-PLAN-LOTE-796]
+                                        "cacahuete", "crema de cacahuete", "mantequilla de cacahuete",  # [P1-PLAN-LOTE-796]
+                                        # [P1-PLAN-LOTE-796 · revisión] la mezcla de frutos secos lleva maní
+                                        *__import__("vocabulario_alergenos").EXTRA["mani"],
+                                        *__import__("vocabulario_alergenos").OCULTOS["mani"]])
     # [P1-PLAN-LOTE-796] El chip «Sésamo» no tenía catch-all: sólo la palabra literal salía del pool.
     if any(r in ["sesamo", "ajonjoli", "sesame"] for r in normalized_restrictions):
         normalized_restrictions.extend(["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
                                         "semillas de sesamo", "gomasio", "halva",
-                                        *__import__("vocabulario_alergenos").EXTRA["sesamo"]])
+                                        *__import__("vocabulario_alergenos").EXTRA["sesamo"],
+                                        *__import__("vocabulario_alergenos").OCULTOS["sesamo"]])  # [P1-PLAN-LOTE-796]
     if any(r in ["huevo", "huevos", "egg", "eggs"] for r in normalized_restrictions):
         normalized_restrictions.extend(["huevo", "huevos", "clara", "claras", "yema", "yemas",
                                         "mayonesa", "merengue", "aioli", "alioli", "holandesa",
@@ -4555,6 +4590,7 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
                                         "proteina vegetal texturizada", "tvp",
                                         *__import__("vocabulario_alergenos").EXTRA["soya"]])
 
+    normalized_restrictions.extend(_terminos_alergia)  # [P1-PLAN-LOTE-796] ver arriba: tras los catch-alls
     # [OPTIMIZACIÓN O(1)] Compilar un único patrón maestro ultra veloz
     import re
     or_pattern = '|'.join(map(re.escape, normalized_restrictions))

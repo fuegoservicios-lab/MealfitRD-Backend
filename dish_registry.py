@@ -803,13 +803,33 @@ def _clases_vivas(nombres: tuple) -> frozenset:
     return frozenset(_norm(c) for c in allergen_classes_for(nombres))
 
 
+# [P1-PLAN-LOTE-796 · revisión] Lo que sólo se ve por un término OCULTO (`vocabulario_alergenos.OCULTOS`: la mezcla de
+# frutos secos para el maní, el mole, la tortilla española, el empanizado): `allergen_classes_for` compila el snapshot
+# con los sinónimos y no los busca. Se buscan con el escáner (sus plurales y sus excusas: «mole de olla» no) en los
+# constituyentes Y en el NOMBRE de la plantilla — «Mole ligero de pollo con arroz» no lista la pasta pero el modelo la
+# escribe, y el registry se lo nombraba al alérgico al maní, al ajonjolí, a los frutos secos y al gluten.
+@functools.lru_cache(maxsize=8192)
+def _clases_ocultas(textos: tuple) -> frozenset:
+    try:
+        from graph_orchestrator import _scan_allergen_violations
+        from vocabulario_alergenos import OCULTOS
+    except Exception as _e:                                                     # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-796] términos ocultos no disponibles ({type(_e).__name__})")
+        return frozenset()
+    plan = {"days": [{"meals": [{"name": "_t", "ingredients": list(textos)}]}]}
+    return frozenset(_norm(c) for c, terminos in OCULTOS.items()
+                     if _scan_allergen_violations(plan, (), terminos={_norm(x) for x in terminos}))
+
+
 def _excluida_por_alergia(t: dict, ex: set) -> bool:
     """Etiquetas del snapshot primero; si no bastan, las del vocabulario vivo (memoizadas por constituyentes)."""
     if ex.intersection(_norm(a) for a in ((t.get("intrinsic_risk_attributes") or {}).get("allergens") or [])):
         return True
     nombres = tuple(sorted({str(c.get(k) or "") for c in (t.get("constituents") or []) for k in ("name", "canonical")}
                            - {""}))
-    return bool(ex.intersection(_clases_vivas(nombres)))
+    if ex.intersection(_clases_vivas(nombres)):
+        return True
+    return bool(ex.intersection(_clases_ocultas(nombres + (str(t.get("name") or ""),))))  # [P1-PLAN-LOTE-796]
 
 
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,

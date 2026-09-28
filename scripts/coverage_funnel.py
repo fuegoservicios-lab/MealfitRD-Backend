@@ -123,9 +123,12 @@ def embudo(country: str, slot: str, dieta: str, alergias: tuple, need_days, free
     _filtrar("compilado ok", lambda t: t.get("status") == "ok")
     _filtrar("franja", lambda t: slot in (t.get("slots") or []))
 
-    ex = {a.lower() for a in alergias}
-    _filtrar("alergias", lambda t: not ex.intersection(
-        {a.lower() for a in (t.get("intrinsic_risk_attributes") or {}).get("allergens", [])}) if ex else True)
+    # [P1-PLAN-LOTE-796 · 2026-09-28] La MISMA exclusión que el selector (`dish_registry._excluida_por_alergia`: clase
+    # por el vocabulario del escáner, etiquetas vivas, términos ocultos y el nombre del plato), no una copia que sólo
+    # mira las etiquetas compiladas: la copia contaba «Croquetas de atún y yuca» como elegible para un alérgico a la leche.
+    from dish_registry import _excluida_por_alergia, clases_de_alergia
+    ex = clases_de_alergia(alergias)
+    _filtrar("alergias", lambda t: not _excluida_por_alergia(t, ex) if ex else True)
 
     # La guarda REAL, sobre todos los constituyentes — no la etiqueta `protein`.
     _filtrar("dieta", lambda t: not any(_diet_pool_item_banned(x, dieta) for x in _cons(t)))

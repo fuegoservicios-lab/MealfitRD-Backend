@@ -1350,8 +1350,20 @@ def _vetado(item: str, vetos: list) -> bool:
         return True
 
 
+# [P1-PLAN-LOTE-796 · 2026-09-28] «frutos secos» es una MEZCLA y la mezcla lleva maní («Nueces mixtas» se dio de alta
+# como «mixed nuts, with peanuts»): al alérgico al maní se le veta, pero el fruto seco suelto no. El relevo sólo entra
+# cuando la sugerencia genérica cae y él mismo pasa la puerta, así que sin esas alergias el texto es byte-idéntico.
+_RELEVOS = {"frutos secos": "almendras", "frutos secos con fruta": "almendras con fruta"}
+
+
 def _sin_vetados(items, vetos) -> list:
-    return [i for i in items if not _vetado(i, vetos)]
+    out = []
+    for i in items:
+        if not _vetado(i, vetos):
+            out.append(i)
+        elif _RELEVOS.get(i) and _RELEVOS[i] not in out and not _vetado(_RELEVOS[i], vetos):
+            out.append(_RELEVOS[i])
+    return out
 
 
 def _lacteo_vetado(vetos) -> bool:

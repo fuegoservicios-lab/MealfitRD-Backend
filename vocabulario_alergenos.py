@@ -20,7 +20,10 @@ tooltip-anchor: P1-PLAN-LOTE-252-VOCABULARIO-ALERGENOS
 QUESOS_Y_DULCES_DE_LECHE = ("gouda", "cheddar", "provolone", "edam", "manchego", "emmental", "gruyere", "mascarpone",
                             "feta", "brie", "camembert", "burrata", "pecorino", "quesito", "manjar blanco", "cajeta",
                             "atollabuey")
-LACTOSA_EXTRA = ("cottage", "biscuit", *QUESOS_Y_DULCES_DE_LECHE)  # el biscuit (US) se hace con mantequilla y suero
+# [P1-PLAN-LOTE-796 · revisión] Lácteos por el nombre del PREPARADO: el quesillo (flan de DO / queso Oaxaca de MX), el
+# kumis (CO), el capuchino y el latte, la bechamel. Sin «queso» ni «leche» en la línea, el escáner no los veía.
+LACTEOS_PREPARADOS = ("quesillo", "kumis", "capuchino", "cappuccino", "latte", "bechamel")
+LACTOSA_EXTRA = ("cottage", "biscuit", *QUESOS_Y_DULCES_DE_LECHE, *LACTEOS_PREPARADOS)  # el biscuit (US): mantequilla y suero
 
 EXTRA = {
     "gluten": ("granola", "teriyaki", "wrap", "espelta", "kamut", "farro", "triticale", "semolina", "pita", "croissant",
@@ -33,21 +36,30 @@ EXTRA = {
                # llevan excusa de base (de maíz / de arroz) en `graph_orchestrator._ALLERGEN_TERM_BASE_EXCUSES`.
                "harina blanca", "harina de todo uso", "harina todo uso", "harina para todo uso", "harina multiuso",
                "harina quaker", "burgol", "bulghur", "cuchuco", "sobao", "muffin", "biscuit", "hotcake", "gravy",
-               "corteza de pie", "cracker", "saltine", "quipe", "kipe", "tipili"),  # quipe/tipilí (DO): bulgur
+               "corteza de pie", "cracker", "saltine", "quipe", "kipe", "tipili",  # quipe/tipilí (DO): bulgur
+               # [P1-PLAN-LOTE-796 · revisión] préstamos que en DO/MX/CO/PR se escriben así («waffles» y «spaghetti» son
+               # alias de Wafles y Espaguetis), y el pastelito dominicano (masa de trigo; el de yuca lo excusa la base).
+               "waffle", "spaghetti", "pancake", "hot cake", "hot-cake", "panqueca", "pastelito"),
     "huevo": ("revoltillo", "omelette", "omelet", "frittata", "huevito", "flan", "natilla",
               # [P1-PLAN-LOTE-268] con mayonesa: «Ensalada de macarrones» (alias «ensalada de pasta con mayonesa»)
               "ensalada de macarrones", "ensalada de coditos", "ensalada rusa",
               "cesar",  # [P1-PLAN-LOTE-270] el aderezo César lleva yema
               "ajoaceite"),  # [P1-PLAN-LOTE-796] alias de la fila «Alioli»
-    "lacteos": ("lactosuero", "cesar", "biscuit", *QUESOS_Y_DULCES_DE_LECHE),  # [P1-PLAN-LOTE-270] el aderezo César lleva parmesano
+    "lacteos": ("lactosuero", "cesar", "biscuit", *QUESOS_Y_DULCES_DE_LECHE,  # [P1-PLAN-LOTE-270] el César lleva parmesano
+                *LACTEOS_PREPARADOS),
     # [P1-PLAN-LOTE-796] «frutos secos» / «fruto seco» es como la IA escribe la mezcla («10 g de frutos secos mixtos sin
     # sal», batería rdfinal) y el alias de la fila «Nueces mixtas»: sin el nombre GENÉRICO el pool del esqueleto, las
     # sugerencias del prompt y el backstop se lo daban al alérgico. Más los nombres locales: cajuil (DO), pajuil (PR),
     # cajú, pistache (MX), pacana (ES), y los platos cuyo nombre esconde el fruto seco (nogada, romesco, ajoblanco).
     "frutos secos": ("macadamia", "pecana", "castana", "frutos secos", "fruto seco", "cajuil", "pajuil", "caju",
-                     "pistache", "pacana", "nogada", "romesco", "ajoblanco"),
+                     "pistache", "pacana", "nogada", "romesco", "ajoblanco",
+                     "alfoncigo"),  # [revisión] el pistacho con su nombre del Reglamento UE 1169/2011 (anexo II)
     "soya": ("tamari", "shoyu"),
-    "sesamo": ("tahin", "zaatar", "humus"),  # [P1-PLAN-LOTE-796] «humus»: grafía del alias de la fila «Hummus»
+    # [P1-PLAN-LOTE-796] «humus»: grafía del alias de la fila «Hummus». [revisión] el za'atar con su apóstrofo: el
+    # escáner no quita la puntuación y «zaatar» no casaba con «za'atar».
+    "sesamo": ("tahin", "zaatar", "humus", "za'atar", "za’atar", "za atar"),
+    # [P1-PLAN-LOTE-796 · revisión] «manises» (el plural caribeño: el patrón da manis/manies) y el pollo encacahuatado.
+    "mani": ("manises", "encacahuatado", "encacahuatada"),
 }
 
 # Términos que se BUSCAN en el plato cuando la clase ya está declarada, pero que NO resuelven una declaración a esa clase.
@@ -55,13 +67,45 @@ EXTRA = {
 # chip «Soya» se quedaba sin pan, pasta ni avena (lo cazó `test_paridad_filtro_vs_escaner_canonico[Soya]`). Por lo mismo
 # no entran «tortilla de papas / española» (quien rechaza «papas» o «tortilla» perdería el huevo). Los consume
 # `graph_orchestrator._expand_allergy_declarations`, `_ALLERGEN_GLUTEN_TERM_SET` (la excusa «sin gluten») y el filtro de
-# catálogo de `constants`.
+# catálogo de `constants`; desde la revisión del 796 también `dish_registry._clases_ocultas` (constituyentes y nombre de
+# la plantilla) y `termino_compartido` (la excusa «sin gluten» no absuelve un término que otra clase declarada prohíbe).
+# [P1-PLAN-LOTE-796 · revisión] Los PLATOS que esconden el alérgeno en la preparación (nadie los declara como alergia):
+# el empanizado/rebozado/milanesa/croqueta lleva pan rallado o harina Y huevo; la croqueta y la pizza, lácteo; el MOLE, la
+# pasta con cacahuate, ajonjolí, almendra y pan o galleta (el «de olla» no: lo excusa `EXCUSAS_DE_BASE`); la salsa
+# macha, cacahuate y ajonjolí. Y la MEZCLA de frutos secos para el alérgico al maní: «Nueces mixtas» es «mixed nuts, dry
+# roasted, with peanuts» (su alta de catálogo) y las mezclas de DO/US/ES suelen llevar maní — el fruto seco suelto
+# («almendras», «nueces») no entra aquí. La granola de la fila (FDC 171646, «granola, homemade»: 11 mg de vitamina E
+# por 100 g, la firma de la almendra y la semilla) y la comercial llevan fruto seco.
+_EMPANIZADOS = ("croqueta", "milanesa", "empanado", "empanizado", "empanizada", "apanado", "apanada", "rebozado",
+                "rebozada")
 OCULTOS = {
     "gluten": ("salsa de soya", "salsa de soja", "frituras de bacalao",  # [P1-PLAN-LOTE-796] ver abajo
-               "salsa cremosa de salchicha"),  # [P1-PLAN-LOTE-796] alias de «Salsa de salchicha» (gravy con harina)
+               "salsa cremosa de salchicha",  # [P1-PLAN-LOTE-796] alias de «Salsa de salchicha» (gravy con harina)
+               *_EMPANIZADOS, "bechamel", "pizza", "mole"),  # [revisión]
     # [P1-PLAN-LOTE-796] la tortilla de papas ES huevo; se busca sin que «papas» o «tortilla» declaren la clase.
-    "huevo": ("tortilla espanola", "tortilla de papa", "tortilla de patata"),
+    # [revisión] la francesa (sólo huevo, ES) y el quesillo dominicano (flan: huevo y leche).
+    "huevo": ("tortilla espanola", "tortilla de papa", "tortilla de patata", "tortilla francesa", "quesillo",
+              *_EMPANIZADOS),
+    "lacteos": ("croqueta", "pizza"),  # [revisión] la bechamel ya es lácteo por su nombre (LACTEOS_PREPARADOS)
+    "lactosa": ("croqueta", "pizza"),
+    "mani": ("frutos secos", "fruto seco", "nueces mixtas", "nueces surtidas", "mixed nuts", "mole", "salsa macha"),
+    "frutos secos": ("granola", "mole"),
+    "sesamo": ("mole", "salsa macha"),
     # [P1-PLAN-LOTE-796] alias de «Bacalaítos» (masa de trigo, arriba) y de «Vieira»: como compuestos resolverían
     # «bacalao» a gluten y «concha» (el pan) a mariscos, así que se BUSCAN sin declarar la clase.
     "mariscos": ("concha de abanico",),
 }
+
+# [P1-PLAN-LOTE-796 · revisión] Formas de DECLARAR la clase que no son nombres de comida (las consume
+# `graph_orchestrator._ALLERGEN_DECLARATION_ALIASES`): «frutos de cáscara» es el nombre LEGAL de la clase en España
+# (Reglamento UE 1169/2011, el que sale en cada etiqueta) y «frutos de casca rija» el de Portugal; APLV/PLV/CMPA, la
+# alergia a la proteína de la leche de vaca.
+DECLARACIONES = {
+    "frutos secos": ("frutos de cascara", "fruto de cascara", "frutos de casca rija", "fruto de casca rija",
+                     "frutos de casca dura"),
+    "lacteos": ("aplv", "plv", "cmpa", "proteina de leche de vaca", "proteina de la leche de vaca"),
+}
+
+# [P1-PLAN-LOTE-796 · revisión] Excusa de BASE acotada al término (`graph_orchestrator._ALLERGEN_TERM_BASE_EXCUSES`):
+# el mole de olla y el de caderas son caldos sin pasta; el pastelito de yuca (catibía) no lleva trigo.
+EXCUSAS_DE_BASE = {"mole": ("olla", "caderas"), "pastelito": ("yuca", "platano", "maiz", "casabe")}

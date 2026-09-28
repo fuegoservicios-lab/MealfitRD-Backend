@@ -67,8 +67,11 @@ def test_la_linea_dura_no_ofrece_frutos_secos_al_alergico():
     linea = allergy_hard_line(["lácteos", "frutos secos"])
     alternativas = linea.split("Sin lácteos:", 1)[1]
     assert "frutos secos" not in alternativas and "casabe con aguacate" in alternativas, alternativas
-    # y a quien NO es alérgico a frutos secos se le siguen ofreciendo (maní ≠ frutos secos en este sistema)
-    assert "frutos secos con fruta" in allergy_hard_line(["Lacteos", "Maní"])
+    # [revisión] al alérgico al MANÍ tampoco: la mezcla lleva maní («Nueces mixtas» = mixed nuts WITH peanuts); se le
+    # ofrece el fruto seco suelto. Sin alergia al maní ni a frutos secos, la sugerencia de siempre.
+    assert "almendras con fruta" in allergy_hard_line(["Lacteos", "Maní"])
+    assert "frutos secos con fruta" not in allergy_hard_line(["Lacteos", "Maní"])
+    assert "frutos secos con fruta" in allergy_hard_line(["Lacteos", "Huevo"])
 
 
 def _sugerencias(ctx):
@@ -83,7 +86,8 @@ def test_al_alergico_a_frutos_secos_la_asignacion_no_se_los_sugiere():
     for decl in ("Frutos Secos", "nueces"):
         ctx = build_day_assignment_context(_esqueleto(), 1, allergies=[decl], dislikes=["Ninguno"])
         assert "frutos secos" not in _sugerencias(ctx), (decl, _sugerencias(ctx))
-    assert "frutos secos" in _sugerencias(build_day_assignment_context(_esqueleto(), 1, allergies=["Mani"]))
+    assert "frutos secos" not in _sugerencias(build_day_assignment_context(_esqueleto(), 1, allergies=["Mani"]))
+    assert "frutos secos" in _sugerencias(build_day_assignment_context(_esqueleto(), 1, allergies=["Huevo"]))
 
 
 @pytest.mark.parametrize("chip", CHIPS)
@@ -192,20 +196,22 @@ def test_el_plural_compuesto_no_arrastra_otra_clase():
 # busca sinónimos españoles; los alias en inglés del catálogo son para ENTENDER lo que el usuario escribe, no para el
 # plato. Si mañana entra un alias en español que el escáner no ve, este test lo nombra.
 _ALIAS_EN_INGLES = {
-    "waffles", "scallops", "nougat", "buttermilk", "canned sardines", "sardine", "sausage gravy", "provolone",
+    "scallops", "nougat", "buttermilk", "canned sardines", "sardine", "sausage gravy", "provolone",
     "gouda cheese", "string cheese", "cream cheese", "cheddar cheese", "octopus", "pine nuts", "pistachio",
     "pistachios", "goose barnacles", "english muffins", "buttermilk biscuits", "breadcrumbs", "cornbread", "walnuts",
-    "english walnut", "pecans", "mixed nuts", "heavy cream", "pancake mix", "grouper", "cashew", "mussels",
+    "english walnut", "pecans", "mixed nuts", "heavy cream", "grouper", "cashew", "mussels",
     "blue mussels", "pie crust", "almond butter", "butter", "evaporated milk", "soy milk", "goat milk powder",
     "oat milk", "oatmilk", "almond milk", "deviled eggs", "all-purpose flour", "prawns", "crackers", "saltines",
-    "soda crackers", "graham crackers", "spaghetti", "macaroni salad", "half and half", "sour cream", "elbow macaroni",
+    "soda crackers", "graham crackers", "macaroni salad", "half and half", "sour cream", "elbow macaroni",
     "barley", "pearled barley", "crab", "blue crab", "squid", "cod fish", "oats", "herring", "kippered herring",
     "marcona almonds", "clams", "sesame seeds", "sesame", "creamy wheat", "cream of wheat", "pie crust refrigerada",
 }
 # Alias que NO nombran el alérgeno de su fila a propósito: el alias es de otra cosa que la fila también es.
 _ALIAS_NO_ALERGENO = {("Gluten", "soya"),        # «Salsa de soya» (trigo) también se busca por «soya», que no es trigo
                       ("Gluten", "harina"),      # «harina» sola: 46 líneas reales son «harina de maíz» (lote 252)
-                      ("Lactosa", "parmesano")}  # queso curado sin lactosa; la clase lactosa es estrecha a propósito
+                      ("Lactosa", "parmesano"),  # queso curado sin lactosa; la clase lactosa es estrecha a propósito
+                      # [revisión] «Nueces mixtas» lleva maní (la mezcla), pero «nueces»/«nuez» nombran el fruto seco suelto
+                      ("Mani", "nueces"), ("Mani", "nuez")}
 
 
 def test_cada_alias_espanol_del_catalogo_hereda_la_alergia_de_su_fila():
@@ -241,7 +247,7 @@ def test_el_catalogo_del_pais_no_ofrece_lo_que_el_escaner_prohibe(chip, pais):
 @pytest.mark.parametrize("decl", ["Mani", "maní", "cacahuete", "Frutos Secos", "nueces", "almendras", "Lacteos",
                                   "lácteos", "leche", "Gluten", "trigo", "celiaco", "Huevo", "huevos", "Sesamo",
                                   "sésamo", "ajonjolí", "Soya", "soja", "Mariscos", "camarones", "Pescado", "atún",
-                                  "Lactosa"])
+                                  "Lactosa", "frutos de cáscara", "APLV", "celiaquía", "crustáceos"])
 def test_el_registry_excluye_la_alergia_escrita_a_mano(decl):
     import dish_registry as dr
     terminos = go._expand_allergy_declarations([decl])

@@ -62,6 +62,14 @@ _TOSTADA_RX = re.compile(r"(?<![a-z0-9])tostadas?(?![a-z0-9])")
 # «de maple» absolvería al «tocino de maple»).
 _GELATINA_VEGETAL_RX = re.compile(r"^\s*(?:de\s+)?(?:agar(?:[\s-]*agar)?|pectina|vegetal|vegana|origen\s+vegetal)\b")
 _MIEL_VEGETAL_RX = re.compile(r"^\s*de\s+(?:agave|cana|maple|arce|palma|datil(?:es)?|coco|yacon)\b")
+# [P1-PLAN-LOTE-796 · 2026-09-28] «manchego» suelto es el queso («30 g de manchego»), pero en «pisto manchego» es el
+# gentilicio de un sofrito de verduras sin lácteo: lo marcaba como lácteo/lactosa y como no vegano.
+_PISTO_RX = re.compile(r"\bpistos?\s+$")
+# Y «macha» es una almeja chilena (vocabulario_mar), pero la «salsa macha» mexicana es aceite de chile con cacahuate.
+_SALSA_RX = re.compile(r"\bsalsas?\s+$")
+# El chocolate o el chile «para mole» (alias de la fila «Chocolate de mesa») es un INGREDIENTE del mole, no su pasta:
+# «2 cdas de pasta para mole» sigue siendo mole.
+_PARA_MOLE_RX = re.compile(r"\b(?:chocolates?|chiles?)(?:\s+(?!pastas?\b|salsas?\b|y\b|e\b|con\b)[a-z]+){0,3}\s+para\s+$")
 
 
 def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
@@ -84,6 +92,12 @@ def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
             return bool(_GELATINA_VEGETAL_RX.match(s[fin:]))
         if t == "miel":                                        # [P1-PLAN-LOTE-269] miel de agave/caña/maple
             return bool(_MIEL_VEGETAL_RX.match(s[fin:]))
+        if t == "manchego":                                    # [P1-PLAN-LOTE-796] el pisto manchego
+            return bool(_PISTO_RX.search(s[:ini]))
+        if t == "macha":                                       # [P1-PLAN-LOTE-796] la salsa macha no es la almeja
+            return bool(_SALSA_RX.search(s[:ini]))
+        if t == "mole":                                        # [P1-PLAN-LOTE-796] chocolate para mole
+            return bool(_PARA_MOLE_RX.search(s[:ini]))
         return False
     except Exception:
         return False
