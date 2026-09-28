@@ -7385,13 +7385,18 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # única diferencia entre planes son las CANTIDADES de créditos
     # (auth._TIER_LIMITS). Pre-fix: sentimiento solo plus+ y RAG excluía a
     # gratis. Guests (sin cuenta) siguen fuera del RAG: no tienen user_facts.
-    # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz: ni clasificador de sentimiento (el prompt de voz ya fija el tono,
-    # y es solo tono: no tiene papel de seguridad) ni el LLM del router de RAG (`_rag_sin_router` decide sin él).
-    # Medido en el turno de voz del dueño: 1,00 s y 1,75 s en paralelo antes del primer token.
-    _do_sentiment = not is_call_mode
+    _do_sentiment = True
     _do_rag = bool(user_id) and user_id != "guest"
-    _do_rag_router = _do_rag and not is_call_mode
-    rag_decision = _rag_sin_router(prompt) if (_do_rag and is_call_mode) else None
+    _do_rag_router = _do_rag
+    rag_decision = None
+    # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz (para TODOS los tiers: la paridad de arriba no cambia): ni clasificador
+    # de sentimiento (el prompt de voz ya fija el tono, y es solo tono: no tiene papel de seguridad) ni el LLM del
+    # router de RAG (`_rag_sin_router` decide sin él). Medido en el turno de voz del dueño: 1,00 s y 1,75 s en
+    # paralelo antes del primer token.
+    if is_call_mode:
+        _do_sentiment = False
+        _do_rag_router = False
+        rag_decision = _rag_sin_router(prompt) if _do_rag else None
     if _do_sentiment or _do_rag_router:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
             _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
