@@ -985,7 +985,19 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-658..659 · 2026-09-28] (backend) «Tu plan parece atrasado» solo pide la zona horaria a quien no la
 # tiene (con texto traducible); chunk_lag_excessive no cuenta el tiempo congelado. [P1-PLAN-LOTE-700] (backend) al
 # descongelar, las pestañas dicen el día de la semana correcto.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-659 · 2026-09-28"
+# [P1-PLAN-LOTE-660 · 2026-09-28] (backend) Con la Nevera exigida, 1-2 compras pequeñas (≤120 g o ≤1 pieza cada una)
+# ya no rechazan ni pausan el bloque: misma regla en el revisor y en las guardas del worker; el plato lleva su 🛒.
+# [P1-PLAN-LOTE-661 · 2026-09-28] (backend) «Día N omitió proteínas clave asignadas» es un aviso, no un rechazo, si el
+# día cumple su proteína (mismo cálculo que el gate de proteína): no se regenera el plan por eso.
+# [P1-PLAN-LOTE-662 · 2026-09-28] (backend) El tiempo que el backstop añade va tras la frase que hace esa técnica, no al
+# final del paso: «removiendo hasta que cuajen (~18-20 min a 180 °C)» era el horno del plátano pegado a unos huevos.
+# [P1-PLAN-LOTE-663 · 2026-09-28] (backend) El «fresco» del queso de al lado ya no deja crudo el brócoli que ningún paso
+# cocina: «crudo/fresco» cuenta sólo pegado a la verdura (o en una ensalada).
+# [P1-PLAN-LOTE-664 · 2026-09-28] (backend) Los gramos entre paréntesis de un paso siguen a la línea casera de la lista
+# («⅓ taza de yogurt (155 g)» → ≈80 g, los que cuentan los macros) cuando se desvían >40 % y >15 g.
+# [P1-PLAN-LOTE-665 · 2026-09-28] (backend) La fusión de líneas duplicadas ya no junta formas que cambian la base del
+# número: leche + leche en polvo, legumbre/grano seco + cocido (plan vivo 6594aae1: 100 g de polvo contados como líquido).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-665 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

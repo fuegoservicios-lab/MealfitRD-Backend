@@ -23517,7 +23517,7 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                     if any(t in hay for t in tokens):
                         default = technique_default
                         break
-            rec[i] = step.rstrip().rstrip(".") + f" (~{default})."
+            rec[i] = __import__("tiempo_en_su_frase").insertar(step, default)  # [P1-PLAN-LOTE-662] en la frase de su técnica
             meal["_recipe_timetemp_injected"] = True
             return True
         return False
@@ -31953,7 +31953,7 @@ def _merge_duplicate_food_lines(days: list) -> list:
                         qty, unit, canon = parsed
                         if not canon or not qty:
                             continue
-                        groups.setdefault(_sa_dm(str(canon).lower()), []).append(
+                        groups.setdefault((_sa_dm(str(canon).lower()), __import__("formas_de_base").clave(line)), []).append(  # [P1-PLAN-LOTE-665] leche ≠ en polvo, seco ≠ cocido
                             (idx, float(qty), str(unit), str(canon)))
                     drop: set = set()
                     for _k, members in groups.items():
@@ -43694,6 +43694,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _emit_shopping_guard_unevaluable_alert(state, _coh_unev)
 
     skeleton_fidelity_errors = plan.get("_skeleton_fidelity_errors", [])
+    skeleton_fidelity_errors = __import__("fidelidad_proteina").filtrar(plan, skeleton_fidelity_errors, form_data)  # [P1-PLAN-LOTE-661] día con su proteína: aviso
     coherence_errors = plan.get("_recipe_coherence_errors", [])
 
     # Separar errores cosméticos (ingrediente listado sin aparecer en instrucciones) de errores estructurales.
@@ -43988,6 +43989,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     all_ingredients, clean_pantry, strict_quantities=False,
                     country=country_for_form_data(form_data),
                 )
+                val_result = __import__("compras_pequenas").tolerar(val_result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
                 if val_result is not True:
                     approved = False
                     issues.append(val_result)  # val_result es el string de error generado por constants.py
@@ -43996,6 +43998,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     logger.error(f"🚨 [PANTRY GUARD] Validación fallida en Revisor Médico.")
                 else:
                     logger.info(f"✅ [PANTRY GUARD] Todos los ingredientes cumplen con la despensa.")
+                    __import__("compras_pequenas").marcar(plan.get("days"), clean_pantry, country_for_form_data(form_data))  # [P1-PLAN-LOTE-660]
 
     # 2. Validación Anti-Repetición
     if approved:

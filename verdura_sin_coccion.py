@@ -70,6 +70,18 @@ def _cuece(f: str) -> bool:
     return False
 
 
+def _servida_cruda_663(pat: str, f: str) -> bool:
+    """[P1-PLAN-LOTE-663 · 2026-09-28] ¿La frase sirve ESTA verdura cruda? Una ensalada, o «crudo/fresco» pegado a la
+    verdura («el brócoli crudo», «coliflor fresca»). Batería real del 28-sep sobre el 636 (estudiante, día 3): «Canoas…
+    rellenas de queso fresco y brócoli al ajo» con «…con el queso blanco fresco y el brócoli al ajo como relleno» — el
+    «fresco» era del QUESO y el brócoli (250 g, que ningún paso cocinaba) salía crudo sin su cocción previa.
+    tooltip-anchor: P1-PLAN-LOTE-663"""
+    if re.search(r"\bensalada\b", f):
+        return True
+    return bool(re.search(r"(?:" + pat + r")(?:\s+[a-z]+){0,2}?\s+(?:crud|fresc)[oa]s?\b", f)
+                or re.search(r"\b(?:crud|fresc)[oa]s?\s+(?:de\s+)?(?:" + pat + r")", f))
+
+
 def _sa(s) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", str(s or "")) if unicodedata.category(c) != "Mn").lower()
 
@@ -112,7 +124,7 @@ def cocer(meal) -> int:
             if not any(re.search(pat, x) for x in ings):
                 continue
             # [P1-PLAN-LOTE-560] la ensalada también la dicen los PASOS («combina la tayota… en una ensalada»)
-            if clave in _CRUDO_OK_540 and (ensalada or any(re.search(pat, f) and _ENSALADA_560.search(f)
+            if clave in _CRUDO_OK_540 and (ensalada or any(re.search(pat, f) and _servida_cruda_663(pat, f)
                                                            for f in frases)):
                 continue
             # la receta tiene que usarla (el Mise la corta, un paso la nombra): una línea que ningún paso nombra es otra

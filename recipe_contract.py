@@ -920,6 +920,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").pieza_del_catalogo(meal, db)  # [P1-PLAN-LOTE-356] «¼ filete» y «90 g de tilapia»
         __import__("pasos_cantidades").peso_de_la_pieza(meal, db)  # [P1-PLAN-LOTE-370] «¼ filete de pescado (≈55 g)»
         __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»
+        __import__("pista_de_la_linea").sincronizar(meal)  # [P1-PLAN-LOTE-664] «⅓ taza de yogurt (155 g)» → los del motor
         __import__("pasos_cantidades").lo_que_dice_la_lista(meal)  # [P1-PLAN-LOTE-328..331] piezas, porciones, pizcas
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
         __import__("avena_liquido").ubicar_agua(meal)  # [P1-PLAN-LOTE-428] el agua donde se nombra el líquido

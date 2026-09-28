@@ -12241,6 +12241,7 @@ def _validate_merged_days_against_pantry(
             ingredients, pantry_ingredients, strict_quantities=True,
             tolerance=1.0, country=country,
         )
+        result = __import__("compras_pequenas").tolerar(result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
         if result is not True:
             violations.append({"day": day_num, "error": str(result)[:500]})
 
@@ -13051,6 +13052,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
             gen_ings, pantry_ingredients, strict_quantities=False,
             country=_pantry_country,
         )
+        existence = __import__("compras_pequenas").tolerar(existence)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
         if existence is not True:
             last_violation = str(existence)[:1000]
             audit["last_violation"] = last_violation
@@ -13126,6 +13128,7 @@ def _validate_and_retry_initial_chunk_against_pantry(
             gen_ings, pantry_ingredients, strict_quantities=True,
             tolerance=tolerance, country=_pantry_country,
         )
+        qty_check = __import__("compras_pequenas").tolerar(qty_check)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
         if qty_check is True:
             audit["validated_ok"] = True
             audit["last_violation"] = None
@@ -31129,6 +31132,7 @@ __PLAN_MODE_GATE__
                             _all_gen_ing, fresh_live_inv, strict_quantities=True,
                             tolerance=1.0, country=_pantry_guard_country,
                         )
+                        _live_check = __import__("compras_pequenas").tolerar(_live_check)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
                         
                         logger.info(f"[P0-2/LIVE-VALIDATION] plan={meal_plan_id} chunk={week_number} drift={drift_pct*100:.1f}% live_check_failed={not _live_check}")
                         
@@ -31311,6 +31315,7 @@ __PLAN_MODE_GATE__
                                 _all_gen_ing, _pantry_snapshot,
                                 strict_quantities=False, country=_pantry_guard_country,
                             )
+                            _val_result = __import__("compras_pequenas").tolerar(_val_result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
                             if _val_result is True:
                                 # [P0-B] Existencia OK. Validamos cantidades según el modo configurado.
                                 #   off      → aceptar tal cual.
@@ -31364,6 +31369,7 @@ __PLAN_MODE_GATE__
                                     strict_quantities=True, tolerance=_tolerance,
                                     country=_pantry_guard_country,
                                 )
+                                _qty_result = __import__("compras_pequenas").tolerar(_qty_result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
                                 if _qty_result is True:
                                     _final_validation = _finalize_live_pantry_validation(
                                         "Inventario actualizado durante generación. Por favor, ajusta el plan."
@@ -31546,6 +31552,7 @@ __PLAN_MODE_GATE__
                                     _all_gen_ing, live_inv, strict_quantities=True,
                                     country=_pantry_guard_country,
                                 )
+                                _safe = __import__("compras_pequenas").tolerar(_safe)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
                                 if _safe is not True:
                                     logger.warning(f"[P0-2] Chunk {week_number} generado con flexible_mode falló validación vs live inventory. Pausando chunk.")
 
@@ -32222,6 +32229,7 @@ __PLAN_MODE_GATE__
                         # Solo validamos los días NUEVOS del chunk actual; días pre-existentes
                         # no se re-validan para no romper planes históricos cuya nevera ya cambió.
                         _p04_pantry = form_data.get("current_pantry_ingredients", []) or []
+                        __import__("compras_pequenas").marcar([_d for _d in merged_days if isinstance(_d, dict) and int(_d.get("day") or 0) > int(prior_count)], _p04_pantry, _pantry_guard_country)  # [P1-PLAN-LOTE-660]
                         # [P0-5] Skip the post-merge hard pantry guard when the chunk already
                         # accepted a quantity violation under advisory/hybrid policy. Otherwise
                         # `_validate_merged_days_against_pantry` re-runs the same `strict_quantities=True`
