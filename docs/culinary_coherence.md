@@ -1575,7 +1575,7 @@ espejo y no cambió ninguna decisión.
   «no requiere remojo», «guarda en la nevera») no. «Reposa a temperatura ambiente 1 hora», el remojo de la víspera y
   la avena de «la noche anterior» siguen disparando.
 - **V2**: el estado «ya viene/ya está cocido» es de su dueño: el alimento que lo PRECEDE en su oración saltando
-  condimentos (y, si ese no es listo-para-comer y va tras «con», también aquel al que acompaña); si nada lo precede, el
+  condimentos (y, si ese no es listo-para-comer y va tras «con» o «y», también aquel al que acompaña); si nada lo precede, el
   sujeto pospuesto («ya viene cocido el filete»); si la oración no nombra ninguno, el último de la oración anterior. En
   los dos corpus todos los dueños eran el atún en agua (listo para comer). El pescado FRESCO «(ya viene cocido)» de
   P1-CLOSER-NOTE-FUSED-FRESHCOCIDO sigue disparando.
@@ -1623,7 +1623,7 @@ llevan ahora su test en `tests/test_p1_plan_lote_745.py` (sección «ronda 1»):
   hornea el queso de hoja» dispara) y a nadie si no es del catálogo (el caso del corpus: «… mientras se hornean [las
   papas]»).
 - **V2**: el dueño salta condimentos («la pechuga con sal y pimienta (ya está cocida)»), sube al alimento al que
-  acompaña tras «con» cuando el más cercano no es listo-para-comer («la pechuga … con la cebolla (ya viene cocida)»),
+  acompaña tras «con» o «y» cuando el más cercano no es listo-para-comer («la pechuga … con la cebolla (ya viene cocida)»),
   toma el sujeto pospuesto y, si la oración no nombra a nadie, el último alimento de la anterior («Incorpora el filete
   de pescado blanco. Ya viene cocido, …»). El atún en agua con acompañante («el huevo revuelto con atún en agua (ya viene
   cocido)») sigue sin acusar al huevo.
