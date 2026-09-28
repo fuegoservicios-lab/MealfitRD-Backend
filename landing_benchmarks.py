@@ -654,7 +654,9 @@ def classify_remote_error(message: str) -> str:
     msg = str(message or "")
     if re.search(r"code=(critical_restriction|llm_unavailable)\b", msg):
         return "discarded_fallback"
-    m = re.search(r"HTTP (\d{3}) en /api/plans/analyze\b:?\s*(.*)", msg, re.DOTALL)
+    # [ronda 2] El stream también se clasifica por su `detail`: un rechazo suyo ya no se reenvía
+    # al síncrono (scripts/landing_benchmark.py::_remote_generate_stream).
+    m = re.search(r"HTTP (\d{3}) en /api/plans/analyze(?:/stream)?\b:?\s*(.*)", msg, re.DOTALL)
     if not m:
         return "error"
     status, body = m.group(1), m.group(2)
@@ -937,6 +939,38 @@ def engine_identity(start, end) -> dict:
     return {"engine_commit": a, "engine_commit_status": "verified"}
 
 
+# [P1-PLAN-LOTE-749 · ronda 2] Claves de `/health/version` que cambian con un deploy o un reinicio.
+# `cambio_durante_la_corrida` se decidía solo con `git_sha`, y prod publica `git_sha:"unknown"`
+# (el deploy aún no inyecta `GIT_SHA`): un redeploy a mitad de corrida salía `false`.
+_SERVER_CHANGE_KEYS = ("git_sha", "deploy_timestamp", "last_known_pfix", "process_started_at")
+_NOT_EXPOSED = ("", "unknown", "none", "null")
+
+
+def server_change_during_run(start, end) -> dict:
+    """¿Cambió el servidor entre el `/health/version` del inicio y el del final? Compara cada clave
+    de `_SERVER_CHANGE_KEYS` que los DOS extremos publican con un valor real (no «unknown»).
+    `cambio`: True si alguna difiere (`claves` dice cuáles), False si hubo al menos una comparable y
+    ninguna difiere, None si no se puede verificar (extremo ilegible o nada comparable) — nunca un
+    `false` que nadie comprobó. tooltip-anchor: P1-PLAN-LOTE-749-RUN"""
+    if not isinstance(start, dict) or not isinstance(end, dict) or "error" in start or "error" in end:
+        return {"cambio": None, "claves": []}
+
+    def _val(v, k):
+        s = str(v.get(k) if v.get(k) is not None else "").strip()
+        return None if s.lower() in _NOT_EXPOSED else s
+    comparables, distintas = 0, []
+    for k in sorted(_SERVER_CHANGE_KEYS):
+        a, b = _val(start, k), _val(end, k)
+        if a is None or b is None:
+            continue
+        comparables += 1
+        if a != b:
+            distintas.append(k)
+    if distintas:
+        return {"cambio": True, "claves": distintas}
+    return {"cambio": False if comparables else None, "claves": []}
+
+
 def build_run_meta(*, mode: str, started_at: str, finished_at: str, source_commit, source_dirty,
                    architecture: str, protocol_version: str, country_scope: list,
                    profile_ids: list, full_profile_ids: list, parameters: dict,
@@ -1034,6 +1068,39 @@ def _delivered_surface_sql() -> str:
     return f"({exact} OR {pref})"
 
 
+# ── [P1-PLAN-LOTE-749 · ronda 2] El TIPO de una entrega sale de su SUPERFICIE ──
+# La ronda 1 lo decidía con `session_id = 'unknown'` de la corrida. Eso solo aparta los
+# `rolling_refill` (su form no lleva sesión): los bloques `chunk_kind='initial_plan'` —los días 8-30
+# del horizonte, generados días después y CON la sesión del formulario— salían «plan inicial».
+# Re-verificado en prod (solo lectura, 28-sep): los 5 «planes iniciales por chunk-T1» eran bloques de
+# semana 2-3 generados 3-8 días después de crear el plan; ninguna fila «chunk-T1 semana 1».
+# Plan inicial = `pre-INSERT` (el INSERT del plan, y también el relleno del placeholder del Bloque 1
+# por la cola: `fill_placeholder_meal_plan_atomic` finaliza con la superficie por defecto) o
+# `chunk-T1 semana 1` (defensivo: hoy no se emite). Cualquier otro `chunk-T1 semana N` es un bloque
+# posterior. tooltip-anchor: P1-PLAN-LOTE-749-DELIVERY-KIND
+INITIAL_DELIVERY_SURFACES = ("pre-INSERT", "chunk-T1 semana 1")
+
+
+def delivery_kind(surface):
+    """`plan_inicial` · `bloque_posterior` · None (no es una superficie de entrega). Espejo en
+    Python de `delivery_kind_sql` (el test evalúa las dos con las mismas superficies)."""
+    s = str(surface or "")
+    if s in INITIAL_DELIVERY_SURFACES:
+        return "plan_inicial"
+    if any(s.startswith(p) for p in DELIVERED_BAND_SURFACE_PREFIXES):
+        return "bloque_posterior"
+    return None
+
+
+def delivery_kind_sql(col: str) -> str:
+    """Expresión CASE (SQL estándar: `IN` + `LIKE`) con el tipo de entrega de la columna `col`,
+    que guarda la superficie. tooltip-anchor: P1-PLAN-LOTE-749-DELIVERY-KIND"""
+    ini = ", ".join(f"'{s}'" for s in INITIAL_DELIVERY_SURFACES)
+    pref = " OR ".join(f"{col} LIKE '{p}%%'" for p in DELIVERED_BAND_SURFACE_PREFIXES)
+    return (f"CASE WHEN {col} IN ({ini}) THEN 'plan_inicial' "
+            f"WHEN {pref} THEN 'bloque_posterior' ELSE 'otra' END")
+
+
 # ── [P1-PLAN-LOTE-749 · ronda 1] Emparejar cada fila de banda con la CORRIDA que la produjo ──
 # La primera versión filtraba por superficie y daba por hecho que toda fila `pre-INSERT` era una
 # entrega. Medido en prod (solo lectura, 28-sep, ventana de 30 días): de 81 filas `pre-INSERT`, 67
@@ -1041,8 +1108,8 @@ def _delivered_surface_sql() -> str:
 # `user_id` NULL y sesión `post-finalize`, que es exactamente lo que deja CUALQUIER llamada a
 # `db_plans._finalize_plan_data_for_insert` fuera de una generación (tests, scripts). Su media
 # (0,95) tapaba la de las entregas reales. Y la latencia promediaba 49 corridas de pipeline cuando
-# hubo 14 planes iniciales: entraban los bloques en segundo plano (`session_id='unknown'`, el
-# pipeline del chunk worker) y los reintentos que nunca se fusionaron.
+# hubo 14 planes iniciales: entraban los bloques del chunk worker y los reintentos que nunca se
+# fusionaron.
 #
 # Regla: una fila de banda es una entrega si hay una corrida `clinical_band` del MISMO usuario
 # ≤ `_PAIR_WINDOW` antes. `pre-INSERT` guarda `user_id` NULL (el dict que recibe el finalize no lo
@@ -1050,8 +1117,9 @@ def _delivered_surface_sql() -> str:
 # esa corrida y el INSERT. Medido: fila↔corrida a 1-21 s en pre-INSERT y a 3-48 s en chunk-T1;
 # `meal_plans.created_at` ≈ arranque de la corrida (el plan nace al empezar a generar). Un invitado
 # no persiste su plan: su corrida no tiene fila de entrega y se cuenta aparte, sin inventarla.
-# El tipo (plan inicial / bloque posterior) sale de la CORRIDA, no de la superficie: desde el
-# lifecycle 2.5 un plan inicial también se entrega por el merge T1 (`chunk_kind='initial_plan'`).
+# El tipo (plan inicial / bloque posterior) sale de la SUPERFICIE de la entrega (`delivery_kind_sql`),
+# no de la sesión de la corrida [ronda 2]: `chunk_kind='initial_plan'` son los días 8-30 del horizonte
+# (bloques posteriores, con sesión), no el Bloque 1.
 _PAIR_WINDOW = "5 minutes"
 
 
@@ -1099,9 +1167,6 @@ def telemetry_queries(days: int) -> dict:
     mezclado con lo entregado. tooltip-anchor: P1-PLAN-LOTE-749-TELEMETRY"""
     d = (int(days),)
     win = "created_at >= NOW() - make_interval(days => %s)"
-    def _tipo(alias):  # plan inicial vs bloque en segundo plano, según la CORRIDA
-        return (f"CASE WHEN {alias}.session_id = 'unknown' THEN 'bloque_posterior' "
-                "ELSE 'plan_inicial' END")
     ctes = _delivery_pairing_ctes()
     return {
         # [P1-CHANGE-OUTCOME-TELEMETRY] ¿los cambios de plato salen a la primera?
@@ -1112,10 +1177,10 @@ def telemetry_queries(days: int) -> dict:
                FROM pipeline_metrics
                WHERE node IN ('change_swap','change_regen_day') AND {win}
                GROUP BY 1, 2 ORDER BY 1, 2""", d),
-        # Banda de lo ENTREGADO: solo filas emparejadas con su corrida; tipo según la corrida.
+        # Banda de lo ENTREGADO: solo filas emparejadas con su corrida; tipo según la SUPERFICIE.
         "banda_entregada": (
             f"""{ctes}
-               SELECT {_tipo('p')} AS entrega,
+               SELECT {delivery_kind_sql('p.surface')} AS entrega,
                       COUNT(*) AS n, ROUND(AVG(p.confidence)::numeric, 3) AS media,
                       ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY p.confidence)::numeric, 3) AS p50
                FROM pares p
@@ -1136,29 +1201,42 @@ def telemetry_queries(days: int) -> dict:
                             / NULLIF(COUNT(*), 0), 3) AS rate
                FROM meal_plans
                WHERE {win}""", d),
-        # Latencia del pipeline de las corridas que SÍ se entregaron (emparejadas), por tipo. Una
-        # reparación parcial entregada cuenta (llegó al usuario); un fallback descartado no tiene
-        # fila de entrega y no entra.
+        # Latencia del pipeline de las corridas que SÍ se entregaron (emparejadas), tipadas por la
+        # SUPERFICIE de su entrega (ronda 2). Una reparación parcial entregada cuenta (llegó al
+        # usuario); un fallback descartado no tiene fila de entrega y no entra. DISTINCT ON: una
+        # corrida cuenta una vez aunque casara con dos filas de entrega.
         "generacion_latencia": (
             f"""{ctes}
-               SELECT {_tipo('c')} AS tipo, COUNT(*) AS n,
+               SELECT {delivery_kind_sql('pe.surface')} AS tipo, COUNT(*) AS n,
                       ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY c.duration_ms) / 1000.0)::numeric) AS p50_s,
                       ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY c.duration_ms) / 1000.0)::numeric) AS p95_s
-               FROM corridas c, win
+               FROM corridas c
+               JOIN (SELECT DISTINCT ON (p.corrida_id) p.corrida_id, p.surface
+                     FROM pares p ORDER BY p.corrida_id, p.surface DESC) pe
+                 ON pe.corrida_id = c.id, win
                WHERE c.created_at >= win.desde
-                 AND c.id IN (SELECT corrida_id FROM pares)
                GROUP BY 1 ORDER BY 1""", d),
-        # Denominador honesto: TODAS las corridas del pipeline por tipo, con y sin entrega. Antes
+        # Denominador honesto: TODAS las corridas del pipeline, con y sin entrega. Antes
         # `no_entregados` contaba solo las marcadas fallback (0/49) cuando ≥23 no se entregaron.
+        # [ronda 2] Una corrida SIN entrega no tiene superficie, así que su tipo no se puede probar:
+        # las filas se agrupan por lo que SÍ se mide (`origen`) y el tipo de entrega va en columnas.
+        #   · `sin_usuario`: `user_id` NULL — invitado o script (no se distinguen desde aquí).
+        #   · `sesion_unknown`: el form de la corrida no llevaba sesión (p. ej. el relleno rolling
+        #     del chunk worker).
+        #   · `con_sesion`: el resto — planes iniciales Y bloques `initial_plan` (días 8-30).
         "corridas_por_entrega": (
             f"""{ctes}
-               SELECT CASE WHEN c.session_id = 'unknown' THEN 'bloque_posterior'
-                           WHEN c.user_id IS NULL THEN 'invitado'
-                           ELSE 'plan_inicial' END AS tipo,
+               SELECT CASE WHEN c.user_id IS NULL THEN 'sin_usuario'
+                           WHEN c.session_id = 'unknown' THEN 'sesion_unknown'
+                           ELSE 'con_sesion' END AS origen,
                       COUNT(*) AS corridas,
-                      COUNT(*) FILTER (WHERE c.id IN (SELECT corrida_id FROM pares)) AS con_entrega,
-                      COUNT(*) FILTER (WHERE c.id NOT IN (SELECT corrida_id FROM pares)) AS sin_entrega,
-                      COUNT(*) FILTER (WHERE c.con_fallback) AS con_fallback
+                      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM pares p WHERE p.corrida_id = c.id
+                          AND {delivery_kind_sql('p.surface')} = 'plan_inicial')) AS entregadas_plan_inicial,
+                      COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM pares p WHERE p.corrida_id = c.id
+                          AND {delivery_kind_sql('p.surface')} = 'bloque_posterior')) AS entregadas_bloque_posterior,
+                      COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM pares p WHERE p.corrida_id = c.id)) AS sin_entrega,
+                      COUNT(*) FILTER (WHERE c.con_fallback) AS con_fallback,
+                      MIN(c.created_at)::date AS desde, MAX(c.created_at)::date AS hasta
                FROM corridas c, win
                WHERE c.created_at >= win.desde
                GROUP BY 1 ORDER BY 1""", d),

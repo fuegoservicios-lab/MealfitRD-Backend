@@ -48,7 +48,7 @@ ejercita EXACTAMENTE ese espacio — cada chip literal, con la forma de payload 
 |---|---|---|---|
 | `structural` | nada (DB opcional) | hechos contables: reglas clínicas, micros DRI, catálogo | `structural` |
 | `live [N] --conc 2 [--changes] [--save-plans] [--provider openai]` | claves LLM + Neon | genera los planes reales de la matriz (N=0 por defecto = **los 25**) y puntúa seguridad + nutrición + gym + latencia + entrega; `--changes` ejercita swap individual y bucle de día. `--provider openai` fuerza a OpenAI los 4 knobs del pipeline (`_OPENAI_FORCE_KNOBS`: GPT-6 Luna en `MEALFIT_FLASH_MODEL`, `MEALFIT_MODEL_FREE_TIER`, `MEALFIT_MODEL_PAID_TIER`, `MEALFIT_PRO_MODEL`); requiere `OPENAI_API_KEY`, fail-loud sin ella. NO reintroduce el override global eliminado (P1-SINGLE-PROVIDER-RESTORE): reviewer/day-gen/swap conservan su routing propio por tier (OpenAI por defecto, pero un knob per-feature del entorno lo cambia), así que la corrida **no** afirma que ningún nodo use GLM | `run`, `structural`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
-| `remote [N] --api-base URL [--conc 2] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` (N=0 por defecto = **los 25**) y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el SERVIDOR con los knobs de su deploy ([`llm_tier_routing.md`](llm_tier_routing.md)); el reporte no afirma un modelo: guarda el `/health/version` AL EMPEZAR y AL TERMINAR (`meta.server_version.inicio/fin`, con `git_sha`) y de ahí sale `run.engine_commit` (ver `run`). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): el workflow corre con conc 2 (default del CLI 1), backoff ante 429 | `run`, `meta`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
+| `remote [N] --api-base URL [--conc 2] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` (N=0 por defecto = **los 25**) y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el SERVIDOR con los knobs de su deploy ([`llm_tier_routing.md`](llm_tier_routing.md)); el reporte no afirma un modelo: guarda el `/health/version` AL EMPEZAR y AL TERMINAR (`meta.server_version.inicio/fin`, con `git_sha`) y de ahí sale `run.engine_commit` (ver `run`); `meta.server_version.cambio_durante_la_corrida` compara `git_sha`, `deploy_timestamp`, `last_known_pfix` y `process_started_at` (`claves_que_cambiaron`), y vale `null` si nada es comparable — con `git_sha:"unknown"` un redeploy a mitad salía `false` (ronda 2). Transporte SSE: solo cae al síncrono si el deploy no sirve el stream (404/405/501 o 200 sin `text/event-stream`); un 503 `server_busy_generating`, un 422 o un 5xx del stream es un fallo de ESA petición, clasificado por su `detail` (reenviarlo se saltaba el tope de concurrencia, que el síncrono no tiene). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): el workflow corre con conc 2 (default del CLI 1), backoff ante 429 | `run`, `meta`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
 | `telemetry --days 30` | Neon | series de PROD, **solo lo entregado**: éxito de cambios a la primera; banda de las filas de entrega (`pre-INSERT` + `chunk-T1 semana N`) **emparejadas con la corrida que las produjo**; latencia de esas corridas, por tipo (plan inicial / bloque en segundo plano); fallback de los planes persistidos; lo que no se empareja, aparte (`banda_excluida_sin_corrida`, `corridas_por_entrega`); PQI, costo por nodo | `run`, `telemetry` |
 | `score --plans f.json` · `score --plans-glob G --forms-root R` | nada (sin LLM) | re-puntúa planes guardados: los de una corrida `live/remote --save-plans` (el denominador sale de `attempted_ids`) o un **corpus real** (un fichero por plan con `final_plan`; el formulario del propio fichero o, con la convención `<dir>__<fichero>.json` de `cola_corpus`, de `<R>/<dir>/<fichero>.json`; perfil con la MISMA unión de texto libre que producción —`corpus_profile`— y expectativas clínicas por `derive_expectations`) | `run`, `safety`, `nutrition`, `gym` |
 
@@ -114,13 +114,23 @@ landing (`bioboros-cinematic/benchmark_import.py` + `contract/benchmark-v22.json
   sesión `post-finalize`, sin corrida `clinical_band` ni `meal_plans` detrás (lo que deja cualquier
   llamada a `_finalize_plan_data_for_insert` fuera de una generación). Ahora cada fila de entrega se
   empareja con la corrida del MISMO usuario ≤5 min antes (para `pre-INSERT`, que no guarda
-  `user_id`, por la fila de `meal_plans` de ese usuario); el tipo sale de la corrida (desde el
-  lifecycle 2.5 un plan inicial también se entrega por `chunk-T1`). Medido el 28-sep (30 días, solo
-  SELECT): banda plan inicial **n=19, media 0,904** (antes n=81, 0,954), bloque posterior n=7, 0,977;
-  67 filas sin corrida aparte (0,964); latencia plan inicial **p50 226 s, p95 456 s (n=19)**, bloque
-  posterior p50 436 s (n=7) — antes 49 corridas mezcladas, p50 347 s; corridas sin entrega: 1 de 20
-  iniciales, 15 de 22 bloques (reintentos), 7 de 7 de invitado (su plan no se persiste: no hay fila
-  que lo pruebe, no entra en la latencia).
+  `user_id`, por la fila de `meal_plans` de ese usuario). El **tipo sale de la superficie de la
+  entrega** (`delivery_kind_sql`, ronda 2): `pre-INSERT` o `chunk-T1 semana 1` = plan inicial,
+  `chunk-T1 semana ≥2` = bloque posterior. La ronda 1 lo sacaba de `session_id = 'unknown'`, que
+  solo aparta los `rolling_refill`: los bloques `chunk_kind='initial_plan'` (los días 8-30 del
+  horizonte, CON sesión, generados días después) salían «plan inicial». Cruce con
+  `plan_chunk_queue` el 28-sep: las 12 entregas `chunk-T1` de la ventana son semana 2-9 (5
+  `initial_plan`, 7 `rolling_refill`), ninguna «semana 1» — el Bloque 1 por la cola rellena su
+  placeholder con `fill_placeholder_meal_plan_atomic`, que finaliza como `pre-INSERT`. Medido el
+  28-sep (30 días, sesión `transaction_read_only`): banda plan inicial **n=14, media 0,905** (antes
+  n=81, 0,954), bloque posterior **n=12, media 0,945**; 67 filas `pre-INSERT` sin corrida aparte
+  (0,964, 2-7 sep); latencia plan inicial **p50 226 s, p95 397 s (n=14)**, bloque posterior **p50
+  397 s, p95 645 s (n=12)** — antes 49 corridas mezcladas, p50 347 s. `corridas_por_entrega` agrupa
+  por lo que SE MIDE de la corrida (`origen`), porque una corrida sin entrega no tiene superficie y
+  su tipo no se puede probar: `con_sesion` 20 (14 entregas de plan inicial + 5 de bloque, 1 sin
+  entrega), `sesion_unknown` 20 (7 bloques entregados, 13 sin entrega), `sin_usuario` 9 (invitado o
+  script — `user_id` NULL no distingue; todas del 4-8 sep, 0 entregas: un plan sin usuario no se
+  persiste y no entra en la latencia).
 - **`--save-plans`** guarda también `attempted_ids` y el estado de entrega, para que `score` reproduzca
   el denominador sin pagar LLM.
 

@@ -79,6 +79,7 @@ from landing_benchmarks import (
     plan_delivery_state,
     score_plan_nutrition,
     score_plan_safety,
+    server_change_during_run,
     strip_benchmark_meta,
     structural_facts,
     telemetry_queries,
@@ -450,6 +451,11 @@ def _remote_post(api_base, path, payload, timeout_s, max_429_retries=4):
     raise RuntimeError(f"rate-limit persistente en {path} tras {max_429_retries} reintentos")
 
 
+# Estados con los que el deploy dice que NO sirve `/analyze/stream` (ruta ausente o método no
+# permitido): solo entonces el runner cae al síncrono. tooltip-anchor: P1-PLAN-LOTE-749-SSE
+_STREAM_ABSENT_STATUS = (404, 405, 501)
+
+
 def _remote_generate_stream(api_base, payload, timeout_s, max_429_retries=4):
     """[P1-LANDING-BENCH-3 · 2026-08-07] Genera vía /analyze/stream (SSE) — el MISMO transporte
     del frontend. El endpoint síncrono corta generaciones largas (proxy_read_timeout de nginx:
@@ -470,10 +476,20 @@ def _remote_generate_stream(api_base, payload, timeout_s, max_429_retries=4):
                 time.sleep(wait)
                 continue
             ctype = r.headers.get("content-type", "")
-            if r.status_code != 200 or "text/event-stream" not in ctype:
+            # [P1-PLAN-LOTE-749 · ronda 2] Solo es «stream no disponible» (→ el caller cae al
+            # síncrono) si el deploy NO sirve la ruta (404/405/501) o responde 200 sin SSE. Antes
+            # CUALQUIER no-200 caía al síncrono: el 503 `server_busy_generating` (el tope de
+            # concurrencia, que solo existe en el stream) se lo saltaba y la corrida contaba una
+            # segunda generación; un 422 de validación se repetía. Ahora es un error de ESTA
+            # petición, clasificado por su `detail` como el del síncrono.
+            if r.status_code in _STREAM_ABSENT_STATUS or (
+                    r.status_code == 200 and "text/event-stream" not in ctype):
                 r.read()
                 raise RuntimeError(
                     f"stream no disponible (HTTP {r.status_code}, {ctype[:40]}): {r.text[:200]}")
+            if r.status_code != 200:
+                r.read()
+                raise RuntimeError(f"HTTP {r.status_code} en /api/plans/analyze/stream: {r.text[:400]}")
             deadline = time.time() + timeout_s
             for line in r.iter_lines():
                 if time.time() > deadline:
@@ -530,7 +546,8 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s, transport="sse", b
             except RuntimeError as _sse_e:
                 if "stream no disponible" not in str(_sse_e):
                     raise
-                # Deploy sin SSE utilizable → mismo fallback que el frontend: endpoint síncrono.
+                # Deploy sin SSE utilizable (ruta ausente o 200 sin event-stream) → endpoint
+                # síncrono. Un rechazo del stream (503 del tope, 422, 5xx) NO llega aquí (ronda 2).
                 print(f"  (aviso) SSE no disponible, cayendo al síncrono: {str(_sse_e)[:120]}")
                 plan = _remote_post(api_base, "/api/plans/analyze", payload, timeout_s)
         else:
@@ -616,6 +633,7 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
             profiles))
     server_end = _server_version(api_base)
     engine = engine_identity(server_start, server_end)
+    server_change = server_change_during_run(server_start, server_end)
 
     if save_plans_path:
         _save_plans(save_plans_path, rows, [p["_id"] for p in profiles])
@@ -644,9 +662,12 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
             "routing": ("modelos decididos por el SERVIDOR (knobs del deploy: proveedor por "
                         "defecto + router por tier + overrides per-feature, ver "
                         "docs/llm_tier_routing.md); este reporte no afirma un modelo concreto"),
+            # [ronda 2] El cambio se decide con TODAS las claves que el servidor publica (sha,
+            # deploy, P-fix, arranque del proceso), no solo con `git_sha` — que hoy vale
+            # "unknown" y daba `false` ante un redeploy. `None` = no verificable.
             "server_version": {"inicio": server_start, "fin": server_end,
-                               "cambio_durante_la_corrida":
-                                   engine["engine_commit_status"] == "changed_during_run"},
+                               "cambio_durante_la_corrida": server_change["cambio"],
+                               "claves_que_cambiaron": server_change["claves"]},
             # `run.source_commit` es el del runner y sus scorers; el del motor medido es
             # `run.engine_commit` (None mientras el servidor no publique su `git_sha`).
             "source_commit_es": "commit de los scorers/runner, NO del motor medido",

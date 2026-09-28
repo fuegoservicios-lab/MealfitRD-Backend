@@ -86,8 +86,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Descubrir API base del deploy
         id: discover
+        # [P1-PLAN-LOTE-749 · ronda 2] También este input viaja por `env:`: interpolado dentro del
+        # script, un `api_base` con `"; …` se ejecutaba como shell (la ronda 1 solo cubrió el paso
+        # del benchmark).
+        env:
+          IN_API_BASE: ${{ github.event.inputs.api_base }}
         run: |
-          BASE="${{ github.event.inputs.api_base }}"
+          BASE="$IN_API_BASE"
           if [ -z "$BASE" ]; then
             for host in https://app.bioboros.com https://mealfitrd.com https://www.mealfitrd.com https://bioboros.com; do
               code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$host/health" || true)

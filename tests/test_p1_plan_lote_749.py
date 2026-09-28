@@ -308,7 +308,7 @@ def test_telemetria_solo_cuenta_lo_entregado():
     # defecto (entraban bloques en segundo plano y reintentos no entregados). Ahora la latencia sale
     # de las corridas EMPAREJADAS con una entrega (test_latencia_solo_de_corridas_con_entrega_y_por_tipo).
     lat_sql = q["generacion_latencia"][0]
-    assert "SELECT corrida_id FROM pares" in lat_sql
+    assert "FROM pares p" in lat_sql and "ON pe.corrida_id = c.id" in lat_sql
     fb_sql = q["fallback_rate"][0]
     assert "meal_plans" in fb_sql and "_is_fallback" in fb_sql, (
         "el fallback ENTREGADO sale de los planes persistidos, no de las corridas del pipeline")
@@ -475,7 +475,7 @@ def test_banda_entregada_exige_una_corrida_real_detras():
     2-7 sep) no tenían corrida `clinical_band` ni `meal_plans` detrás (no eran entregas: todas con
     `user_id` NULL y sesión `post-finalize`, que es lo que deja cualquier llamada a
     `_finalize_plan_data_for_insert` fuera de una generación). La media 0,954 salía casi toda de
-    ellas (emparejadas: plan inicial n=19, media 0,904). Cada
+    ellas (emparejadas y tipadas por superficie —ronda 2—: plan inicial n=14, media 0,905). Cada
     fila de banda se empareja ahora con la corrida del pipeline que la produjo (mismo usuario —
     para `pre-INSERT`, vía el `meal_plans` de ese usuario—, ≤5 min antes); las que no tienen
     corrida se cuentan APARTE."""
@@ -488,15 +488,20 @@ def test_banda_entregada_exige_una_corrida_real_detras():
 
 
 def test_latencia_solo_de_corridas_con_entrega_y_por_tipo():
-    """49 corridas contra 14 planes iniciales + 12 merges T1: entraban bloques en segundo plano
-    (sesión `unknown`) y reintentos que nunca se entregaron. La latencia cuenta solo corridas con
-    una entrega emparejada y separa plan inicial de bloque en segundo plano."""
+    """49 corridas contra 14 planes iniciales + 12 merges T1: entraban los bloques del chunk worker
+    y reintentos que nunca se entregaron. La latencia cuenta solo corridas con una entrega
+    emparejada y separa plan inicial de bloque posterior — por la SUPERFICIE de la entrega (ronda 2:
+    la sesión `unknown` solo apartaba los `rolling_refill`; ver test_tipo_de_entrega_por_superficie)."""
     q = telemetry_queries(30)
     sql = q["generacion_latencia"][0]
-    assert "FROM pares" in sql and "session_id = 'unknown'" in sql and "bloque_posterior" in sql
+    assert "FROM pares p" in sql and "bloque_posterior" in sql and "plan_inicial" in sql
+    from landing_benchmarks import _delivery_pairing_ctes
+    assert "session_id" not in sql.replace(_delivery_pairing_ctes(), ""), (
+        "el tipo no sale de la sesión de la corrida")
     assert "no_entregados" not in q, "el nombre mentía: contaba corridas CON fallback, no no-entregas"
     cpe = q["corridas_por_entrega"][0]
-    for col in ("con_entrega", "sin_entrega", "con_fallback", "invitado"):
+    for col in ("entregadas_plan_inicial", "entregadas_bloque_posterior", "sin_entrega",
+                "con_fallback", "sin_usuario"):
         assert col in cpe, col
 
 
@@ -686,3 +691,192 @@ def test_doc_del_replay_reproducible():
     assert "481/481" not in _DOC, "481 contaba dos veces los 67 del corpus reciente; únicos = 414"
     assert "cero GLM" not in _DOC and "cero GLM" not in _WF_OPENAI, (
         "no se afirma «cero GLM» mientras reviewer/day-gen/swap dependen de los knobs del entorno")
+
+
+
+# ===========================================================================
+# RONDA 2 DE LA REVISIÓN (2026-09-28). Cada test reproduce lo que la re-verificación encontró en la
+# ronda 1 — y fallaba contra ella (`b981255c`).
+# tooltip-anchor: P1-PLAN-LOTE-749-R2
+# ===========================================================================
+import sqlite3
+
+
+def _sqlite_case(case_sql: str, surface: str):
+    """Evalúa la expresión CASE que va al SQL de producción con un `p.surface` dado. Usa solo
+    SQL estándar (`IN`, `LIKE`), así que sqlite la evalúa igual que Postgres (el `%%` de psycopg es
+    en sqlite dos comodines seguidos: el mismo patrón)."""
+    con = sqlite3.connect(":memory:")
+    try:
+        return con.execute(f"SELECT {case_sql} FROM (SELECT ? AS surface) p", (surface,)).fetchone()[0]
+    finally:
+        con.close()
+
+
+# --- R2-1 (IMPORTANTE): el tipo de entrega sale de la SUPERFICIE, no de la sesión ------------------
+@pytest.mark.parametrize("surface, tipo", [
+    ("pre-INSERT", "plan_inicial"),
+    ("chunk-T1 semana 1", "plan_inicial"),
+    ("chunk-T1 semana 2", "bloque_posterior"),
+    ("chunk-T1 semana 3", "bloque_posterior"),
+    ("chunk-T1 semana 10", "bloque_posterior"),
+    ("chunk-T1 semana 12", "bloque_posterior"),
+])
+def test_tipo_de_entrega_por_superficie(surface, tipo):
+    """`session_id='unknown'` solo aparta los `rolling_refill` (su form no lleva sesión). Medido en
+    prod por la re-verificación: los 5 «planes iniciales entregados por chunk-T1» eran bloques de
+    semana 2-3 con `chunk_kind='initial_plan'` (los días 8-30 del horizonte, CON sesión), generados
+    3-8 días después de crear el plan. El bloque 1 por la cola (`chunk_kind='initial'`) se rellena
+    por `fill_placeholder_meal_plan_atomic` → superficie `pre-INSERT`."""
+    from landing_benchmarks import delivery_kind, delivery_kind_sql
+    assert delivery_kind(surface) == tipo
+    assert _sqlite_case(delivery_kind_sql("p.surface"), surface) == tipo
+
+
+def test_telemetria_no_clasifica_por_sesion():
+    from landing_benchmarks import delivery_kind_sql
+    q = telemetry_queries(30)
+    for name in ("banda_entregada", "generacion_latencia", "corridas_por_entrega"):
+        assert "session_id = 'unknown' THEN 'bloque_posterior'" not in q[name][0], name
+    assert delivery_kind_sql("p.surface") in q["banda_entregada"][0]
+    assert delivery_kind_sql("pe.surface") in q["generacion_latencia"][0], (
+        "la latencia se tipa por la superficie de la ENTREGA emparejada con la corrida")
+    assert "DISTINCT ON (p.corrida_id)" in q["generacion_latencia"][0], (
+        "una corrida cuenta una vez en la latencia aunque casara con dos filas")
+
+
+def test_corridas_por_entrega_nombra_lo_que_mide():
+    """R2-1 + R2-4: sin entrega no hay superficie, así que una corrida sin entrega no tiene tipo que
+    se pueda probar. Las filas se agrupan por lo que SÍ se mide (`origen`: sin usuario / sesión
+    `unknown` / con sesión) y el tipo va en columnas, solo para las que tienen entrega. La
+    categoría `invitado` solo significaba `user_id IS NULL`: sus 7 filas caían en la misma ventana
+    del 2-7 sep que las de scripts."""
+    cpe = telemetry_queries(30)["corridas_por_entrega"][0]
+    assert "'invitado'" not in cpe
+    assert "'sin_usuario'" in cpe and "AS origen" in cpe
+    for col in ("entregadas_plan_inicial", "entregadas_bloque_posterior", "sin_entrega",
+                "con_fallback"):
+        assert col in cpe, col
+
+
+def test_doc_y_comentarios_sin_la_clasificacion_por_sesion():
+    lb = (_BACKEND / "landing_benchmarks.py").read_text(encoding="utf-8")
+    for nombre, src in (("doc", _DOC), ("landing_benchmarks.py", lb)):
+        assert "un plan inicial también se entrega por" not in src, nombre
+    assert "n=19, media 0,904" not in _DOC and "0,977" not in _DOC
+
+
+# --- R2-2 (MENOR): `cambio_durante_la_corrida` con `git_sha:"unknown"` -----------------------------
+_V0 = {"git_sha": "unknown", "git_short_sha": "unknown", "deploy_timestamp": "unknown",
+       "process_started_at": "2026-09-28T10:00:00+00:00",
+       "last_known_pfix": "P1-PLAN-LOTE-765 · 2026-09-28"}
+
+
+def test_cambio_de_servidor_sin_git_sha():
+    from landing_benchmarks import server_change_during_run
+    r = server_change_during_run(_V0, dict(_V0, process_started_at="2026-09-28T11:30:00+00:00"))
+    assert r["cambio"] is True and r["claves"] == ["process_started_at"]
+    r = server_change_during_run(_V0, dict(_V0, last_known_pfix="P1-PLAN-LOTE-766 · 2026-09-28"))
+    assert r["cambio"] is True and r["claves"] == ["last_known_pfix"]
+    assert server_change_during_run(_V0, dict(_V0)) == {"cambio": False, "claves": []}
+    # Nada comparable (todo «unknown») o un extremo ilegible: NO se puede afirmar que no cambió.
+    assert server_change_during_run({"git_sha": "unknown"}, {"git_sha": "unknown"})["cambio"] is None
+    assert server_change_during_run({"error": "HTTP 502"}, _V0)["cambio"] is None
+    assert server_change_during_run(None, _V0)["cambio"] is None
+
+
+def test_remote_marca_un_redeploy_a_mitad_aunque_no_haya_git_sha(monkeypatch):
+    mod = _load_runner()
+    versiones = iter([_V0, dict(_V0, process_started_at="2026-09-28T11:30:00+00:00",
+                               last_known_pfix="P1-PLAN-LOTE-766 · 2026-09-28")])
+    monkeypatch.setattr(mod, "_server_version", lambda api_base: next(versiones))
+    monkeypatch.setattr(mod, "_run_one_remote", lambda api_base, p, *a, **k: {
+        "id": p["_id"], "label": p["_label"], "delivery": "error", "duration_s": 1.0, "error": "x"})
+    sections, ctx = mod._remote_sections("https://x", 1, 1, False, None, 10)
+    sv = sections["meta"]["server_version"]
+    assert sv["cambio_durante_la_corrida"] is True
+    assert sv["claves_que_cambiaron"] == ["last_known_pfix", "process_started_at"]
+    assert ctx["engine"]["engine_commit_status"] == "not_exposed"
+
+
+# --- R2-3 (MENOR): ningún input del dispatch dentro de un script del shell --------------------------
+def test_ningun_input_del_dispatch_se_interpola_en_un_script():
+    """`BASE="${{ github.event.inputs.api_base }}"` seguía en el paso «Descubrir API base»; el test
+    de la ronda 1 solo miraba el paso del benchmark. Todo input viaja por `env:` (una línea
+    `NOMBRE: ${{ ... }}`), en TODO el workflow."""
+    env_line = re.compile(r"\s+[A-Z][A-Z0-9_]*:\s*\$\{\{\s*(?:github\.event\.inputs|inputs)\.\w+\s*\}\}\s*")
+    for nombre, wf in (("remote.yml", _WF_REMOTE), ("openai.yml", _WF_OPENAI)):
+        for ln in wf.splitlines():
+            if re.search(r"\$\{\{\s*(?:github\.event\.inputs|inputs)\.", ln):
+                assert env_line.fullmatch(ln), f"{nombre}: input interpolado fuera de env: {ln.strip()}"
+    paso = _run_step(_WF_REMOTE, "Descubrir API base del deploy")
+    assert 'BASE="$IN_API_BASE"' in paso
+
+
+# --- R2-5 (MENOR): con SSE, un rechazo real del stream no se reenvía al síncrono --------------------
+class _StreamResp:
+    def __init__(self, status, body, ctype="application/json"):
+        self.status_code = status
+        self.headers = {"content-type": ctype}
+        self.text = body
+
+    def read(self):
+        return self.text.encode("utf-8")
+
+    def iter_lines(self):
+        return iter(())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _run_sse(monkeypatch, status, body, ctype="application/json"):
+    import httpx
+    mod = _load_runner()
+    sync = []
+
+    def _post(api_base, path, payload, timeout_s, *a, **k):
+        sync.append(path)
+        raise RuntimeError("HTTP 500 en /api/plans/analyze: sync-llamado")
+
+    monkeypatch.setattr(httpx, "stream", lambda *a, **k: _StreamResp(status, body, ctype))
+    monkeypatch.setattr(mod, "_remote_post", _post)
+    prof = build_landing_profiles()[0]
+    row = mod._run_one_remote("https://x", prof, False, 10, transport="sse", band=None)
+    return row, sync
+
+
+@pytest.mark.parametrize("status, body, esperado", [
+    (503, '{"detail":{"code":"server_busy_generating","message":"Estamos generando muchos planes"}}',
+     "error"),
+    (422, '{"detail":{"code":"missing_required_fields","missing_fields":["age"]}}', "rejected_request"),
+    (422, '{"detail":{"code":"budget_insufficient"}}', "rejected_request"),
+    (502, "<html><body>502 Bad Gateway</body></html>", "error"),
+])
+def test_sse_no_reenvia_un_rechazo_del_stream_al_sincrono(monkeypatch, status, body, esperado):
+    """El síncrono no tiene el tope de concurrencia (`server_busy_generating` solo existe en el
+    stream, routers/plans.py): reenviar ahí se salta el tope y cuenta una SEGUNDA generación. Solo
+    se cae al síncrono si el deploy no sirve el stream (404/405/501 o un 200 que no es SSE)."""
+    row, sync = _run_sse(monkeypatch, status, body)
+    assert sync == [], f"reenviado al síncrono: {sync}"
+    assert row["delivery"] == esperado, row
+
+
+@pytest.mark.parametrize("status, ctype", [(404, "application/json"), (405, "application/json"),
+                                           (200, "text/html")])
+def test_sse_cae_al_sincrono_solo_si_no_hay_stream(monkeypatch, status, ctype):
+    row, sync = _run_sse(monkeypatch, status, '{"detail":"Not Found"}', ctype)
+    assert sync == ["/api/plans/analyze"]
+
+
+@pytest.mark.parametrize("msg, esperado", [
+    ('RuntimeError: HTTP 503 en /api/plans/analyze/stream: {"detail":{"code":"server_busy_generating"}}',
+     "error"),
+    ('RuntimeError: HTTP 422 en /api/plans/analyze/stream: {"detail":{"code":"budget_insufficient"}}',
+     "rejected_request"),
+])
+def test_clasificacion_de_errores_del_stream(msg, esperado):
+    assert classify_remote_error(msg) == esperado
