@@ -270,21 +270,40 @@ def _valor_de_campo_para_perfil(field: str, new_value):
     _raw = str(new_value or "").strip()
     if not _raw:
         return False, None
-    _canon = canonicalize_country(_raw)
-    if _canon != "DO" or _raw.upper() == "DO":
+    # [P1-PLAN-LOTE-642] un CÓDIGO se mira antes de canonicalizar: `canonicalize_country` registra «no canónico
+    # descartado» para todo lo que no lo es, y «España» no es una corrupción, es un nombre que se resuelve abajo.
+    if _raw.upper() in COUNTRY_PROFILES:
+        _canon = canonicalize_country(_raw)
         try:
             return True, assert_supported_country(_canon)
         except UnsupportedCountryError:
             return False, None
-    # No era un código: ¿es el NOMBRE de alguno de los países del SSOT?
-    _obj = strip_accents(_raw.lower())
+    # No era un código: ¿es el NOMBRE de alguno de los países del SSOT? [P1-PLAN-LOTE-642] en cualquiera de los
+    # cinco idiomas de la app: con la app en inglés, «I moved to Spain» llega como `Spain`.
+    _obj = " ".join(strip_accents(_raw.lower()).replace("-", " ").split())
     for _cc, _perfil in COUNTRY_PROFILES.items():
-        if strip_accents(str(_perfil.get("name_es") or "").lower()) == _obj:
+        _nombres = {strip_accents(str(_perfil.get("name_es") or "").lower())}
+        _nombres |= {strip_accents(n.lower()) for n in _NOMBRES_DE_PAIS.get(_cc, ())}
+        if _obj in _nombres:
             try:
                 return True, assert_supported_country(_cc)
             except UnsupportedCountryError:
                 return False, None
     return False, None
+
+
+# [P1-PLAN-LOTE-642 · 2026-09-27] (G63) Cómo nombra el usuario cada país en los otros cuatro idiomas de la app. Solo
+# para ENTENDER lo que dice al coach: el código sigue saliendo de `COUNTRY_PROFILES` (SSOT) y lo que no esté aquí ni
+# allí se rechaza. Un país nuevo en el SSOT sin fila aquí se entiende solo en español (la paridad la vigila el test).
+_NOMBRES_DE_PAIS = {
+    "DO": ("Dominican Republic", "Republica Dominicana", "Republique dominicaine", "Repubblica Dominicana", "RD"),
+    "ES": ("Spain", "Espagne", "Espanha", "Spagna"),
+    "US": ("United States", "USA", "United States of America", "Etats Unis", "EUA", "Estados Unidos da America",
+           "Stati Uniti", "EE UU", "EEUU"),
+    "MX": ("Mexico", "Mexique", "Messico"),
+    "PR": ("Porto Rico", "Portorico"),
+    "CO": ("Colombie", "Colombia"),
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -474,6 +493,7 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
     - 'budget': "low", "medium", "high", o "unlimited"
     - 'cookingTime': "none", "30min", "1hour", o "plenty"
     - 'allergies', 'medicalConditions', 'dislikes', 'struggles': Listas separadas por coma (Ej: "Lacteos, Gluten")
+    - 'country': el país donde vive y compra: "DO", "ES", "US", "MX", "PR" o "CO" (también vale el nombre del país)
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
