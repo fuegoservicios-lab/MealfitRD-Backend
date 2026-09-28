@@ -13501,14 +13501,14 @@ def api_blocked_reasons(
                 "url": "/dashboard?action_required=missing_lessons",
             },
             "restore_overwrite": {
-                "title": "Chunk cancelado por restore",
-                "body": "Este chunk fue cancelado al reactivar otro plan archivado. No requiere acción.",
+                "title": "Bloque cancelado al reactivar otro plan",
+                "body": "Este bloque se canceló al reactivar otro plan archivado. No tienes que hacer nada.",
                 "cta": None,
                 "url": None,
             },
             "restore_source_archived": {
-                "title": "Chunk cancelado al archivar",
-                "body": "Este chunk fue cancelado cuando el plan se reactivó como archivado. No requiere acción.",
+                "title": "Bloque cancelado al archivar",
+                "body": "Este bloque se canceló cuando el plan se reactivó como archivado. No tienes que hacer nada.",
                 "cta": None,
                 "url": None,
             },
@@ -13527,7 +13527,7 @@ def api_blocked_reasons(
             },
             "stuck_stale": {
                 "title": "Reanudando un bloque del plan",
-                "body": "Un bloque del plan quedó marcado para reanudar tras una interrupción del worker. El cron lo retomará automáticamente.",
+                "body": "Un bloque del plan se interrumpió en el servidor y quedó pendiente. El sistema lo retomará solo.",
                 "cta": None,
                 "url": None,
             },
@@ -13539,7 +13539,7 @@ def api_blocked_reasons(
         # Este fallback genérico no especula la causa.
         _UNKNOWN_REASON_TEMPLATE = {
             "title": "Bloqueo sin clasificar",
-            "body": "El sistema marcó este chunk como bloqueado pero no logramos identificar la causa. Si persiste, contacta soporte.",
+            "body": "Este bloque está detenido y no logramos identificar la causa. Si sigue así, contacta a soporte.",
             "cta": None,
             "url": None,
         }

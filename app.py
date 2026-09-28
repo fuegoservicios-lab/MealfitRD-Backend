@@ -1001,7 +1001,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # ajuste en `vision`, `respuestas_de_la_foto.py`), «Mi cena» + foto es el rótulo del plato y el grafo reintenta UNA vez
 # si el turno de anotar la foto acaba sin registro; push «Bioboros te respondió» (`aviso_respuesta_chat.py`); el aviso de
 # comida ya no interroga a quien sí come esa comida (`tono_del_aviso.py`); «¿lo comiste?» una sola vez por conversación.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-697 · 2026-09-28"
+# [P1-PLAN-LOTE-710..713 · 2026-09-28] (frontend + backend) Legibilidad: piso de 12 px, contraste AA, copy sin jerga;
+# en el backend, las frases de `/blocked-reasons` dejan de decir «chunk», «worker», «cron» y «restore».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-713 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
