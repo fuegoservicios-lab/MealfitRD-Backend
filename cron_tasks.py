@@ -31089,6 +31089,7 @@ __PLAN_MODE_GATE__
                     # marcar 'failed' provocaría un loop con _recover_failed_chunks_for_long_plans
                     # quemando tokens contra la misma nevera. La constante vive en
                     # `constants.CHUNK_PANTRY_MAX_RETRIES` (override por env var).
+                    if __import__("nevera_refutada").prechequeo(task_id=task_id, user_id=user_id, meal_plan_id=meal_plan_id, week_number=week_number, chunk_kind=chunk_kind, snap=snap, form_data=form_data, plan_data=prior_plan_data, country=_pantry_guard_country): return  # [P1-PLAN-LOTE-747] Nevera ya refutada y sin cambios ⇒ la pausa de siempre, sin 3 corridas del LLM
                     _PANTRY_MAX_RETRIES = CHUNK_PANTRY_MAX_RETRIES
                     _pantry_ok = False
                     result = {}
@@ -31489,6 +31490,7 @@ __PLAN_MODE_GATE__
                                 # Persistir el feedback final para diagnóstico operacional y
                                 # para que el frontend pueda mostrar al usuario qué ingredientes
                                 # el LLM no pudo resolver tras varios intentos.
+                                __import__("nevera_refutada").registrar(meal_plan_id, user_id, week_number, chunk_kind, (form_data.get("_pantry_correction"), _val_result))  # [P1-PLAN-LOTE-747] evidencia para el pre-chequeo del próximo bloque
                                 form_data["_pantry_correction"] = str(_val_result)[:1000]
                                 _pause_chunk_for_pantry_refresh(
                                     task_id,
