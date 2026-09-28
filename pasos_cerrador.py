@@ -950,7 +950,10 @@ def acompanamientos_en_una_frase(meal) -> int:
             agua = [m.group("obj") for m in grupo if re.search(r"\bagua\b", _sa(m.group("obj")))]
             resto = [m.group("obj") for m in grupo if m.group("obj") not in agua]
             objs = resto + agua                            # el agua, al final: «con edamame y agua»
-            lista = objs[0] if len(objs) == 1 else ", ".join(objs[:-1]) + f" {_y_449(objs[-1])} " + objs[-1]
+            # [P1-PLAN-LOTE-709] el mismo objeto una vez: «Acompaña con yogurt. Acompaña con yogurt.» no es «yogurt y yogurt»
+            _vistos: set = set()
+            objs = [o for o in objs if not (_sa(o).strip() in _vistos or _vistos.add(_sa(o).strip()))]
+            lista =objs[0] if len(objs) == 1 else ", ".join(objs[:-1]) + f" {_y_449(objs[-1])} " + objs[-1]
             rec[i] = p[:grupo[0].start()] + f"{cab} con {lista}." + p[grupo[-1].end():]
             n += 1
         if n:
