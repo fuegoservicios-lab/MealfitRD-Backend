@@ -1042,7 +1042,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # en la lista y ningún paso que las cocine (perfil sin tiempo): el 407 no conocía «marina» ni «acompaña». Cocción previa.
 # [P1-PLAN-LOTE-785 · 2026-09-28] (backend) Embarazo: el pescado fresco cambiado por pavo conservaba su punto —«…y
 # pechuga de pavo alcance 63 °C»—; el ave pide 74 °C y la carne 71 °C, en la frase que nombra al sustituto.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-785 · 2026-09-28"
+# [P1-PLAN-LOTE-786 · 2026-09-28] (backend) «¼ pedazo mediano de yuca (≈173 g)» (bloque 3 real de 6594aae1): el motor lee
+# los 173 g, así que la fracción mentía. La cuenta de una pieza vaga sigue a su peso (27 líneas del corpus 744).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-786 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

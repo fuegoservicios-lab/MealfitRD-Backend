@@ -921,6 +921,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").peso_de_la_pieza(meal, db)  # [P1-PLAN-LOTE-370] «¼ filete de pescado (≈55 g)»
         __import__("pasos_cantidades").pesos_de_la_lista(meal)    # [P1-PLAN-LOTE-310] «¾ manzana (≈120 g)»
         __import__("pista_de_la_linea").sincronizar(meal)  # [P1-PLAN-LOTE-664] «⅓ taza de yogurt (155 g)» → los del motor
+        __import__("pieza_sigue_al_peso").ajustar(meal)  # [P1-PLAN-LOTE-786] «¼ pedazo de yuca (≈173 g)»: la cuenta sigue al peso
         __import__("pasos_cantidades").lo_que_dice_la_lista(meal)  # [P1-PLAN-LOTE-328..331] piezas, porciones, pizcas
         __import__("obtener_de_la_lista").sincronizar(meal)  # [P1-PLAN-LOTE-733] «para obtener ½ taza» con la taza de la lista
         __import__("avena_liquido").completar(meal)               # [P1-PLAN-LOTE-311] la avena cocida lleva líquido
