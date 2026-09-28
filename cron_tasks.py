@@ -35962,6 +35962,23 @@ def _shift_plan_dates_for_freeze(plan_id: str, user_id: str, days: int) -> int:
     return applied
 
 
+def _reetiquetar_dias_tras_descongelar(plan_data: dict, tz_offset_min) -> dict:
+    """[P1-PLAN-LOTE-700 · 2026-09-28] `days[i].day_name`/`date` desde la fecha LOCAL de la nueva ancla (día 0 = ancla).
+    Sin ancla legible no toca nada. Muta y devuelve `plan_data` (mutador de `update_plan_data_atomic`)."""
+    try:
+        from constants import fecha_local_del_ancla
+        inicio = fecha_local_del_ancla(plan_data.get("grocery_start_date"), tz_offset_min)
+    except Exception:
+        return plan_data
+    dias_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    for i, dia in enumerate(plan_data.get("days") or []):
+        if isinstance(dia, dict):
+            fecha = inicio + timedelta(days=i)
+            dia["day_name"] = dias_es[fecha.weekday()]
+            dia["date"] = fecha.isoformat()
+    return plan_data
+
+
 def _resume_frozen_plan(plan_id: str, user_id: str, frozen_at_iso: str) -> bool:
     """Descongela: corre fechas por los días congelados, limpia flags, reanuda
     chunks pausados y notifica. Idempotente (flag-guard en el caller)."""
@@ -35971,6 +35988,15 @@ def _resume_frozen_plan(plan_id: str, user_id: str, frozen_at_iso: str) -> bool:
             _frozen_dt = _frozen_dt.replace(tzinfo=timezone.utc)
         _days_frozen = max(0, (datetime.now(timezone.utc) - _frozen_dt).days)
         _shift_plan_dates_for_freeze(plan_id, user_id, _days_frozen)
+        # [P1-PLAN-LOTE-700] …y las pestañas dicen el día correcto (92328ff7: «Jueves 17» con el ancla en el 22).
+        if _days_frozen > 0:
+            try:
+                from db_plans import update_plan_data_atomic
+                _tz_des = _get_user_tz_minutes_optional(user_id)
+                update_plan_data_atomic(plan_id, lambda _pd: _reetiquetar_dias_tras_descongelar(
+                    _pd, 240 if _tz_des is None else _tz_des), user_id=user_id)
+            except Exception as _rt_e:
+                logger.warning(f"[P1-PLAN-LOTE-700] no se reetiquetaron los días de {plan_id}: {_rt_e!r}")
         execute_sql_write(
             "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set("
             "(plan_data - '_frozen_at' - '_freeze_reminder_at'), '{_last_unfrozen_at}', to_jsonb(%s::text))"
