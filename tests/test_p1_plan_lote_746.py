@@ -178,18 +178,184 @@ HUECO_227 = [
 
 
 def test_la_regla_del_227_sigue_rebajando_lo_que_se_niega_solo():
-    """Lo que el 227 rebaja por diseño sigue igual: el veredicto sobre lo mismo que se describe, y la ausencia sin
-    ninguna afirmación de contenido (con «no» delante, «no contiene» no afirma)."""
+    """Lo que el 227 rebaja por diseño sigue igual: el veredicto sobre lo mismo que se describe, y la ausencia de lo
+    que el paciente DECLARÓ rechazar (revisión 2: la ausencia sin declaración ya no absuelve, ver abajo)."""
     for t in ("Día 1 | Cena: contiene queso mozzarella (lácteo) — sin alergia a lácteos declarada, no es violación.",
               # corpus de baterías: el veredicto va tras «;», en la MISMA oración
               "Día 1 | Merienda y Día 2 | Merienda: contienen mantequilla de maní; sin alergia declarada, no constituye "
               "violación.",
               "Los rechazos declarados son Pescado y Berenjena, y ninguno aparece en el plan. El plan es seguro.",
-              "El plan no contiene pescado ni berenjena; ninguno aparece en el plan.",
+              "Los rechazos declarados son Pescado y Berenjena, y ninguno aparece en el plan.",
+              "El paciente rechazó el pescado y la berenjena; ninguno aparece en el plan.",
               "El paciente rechazó la berenjena; no se incluye berenjena y no aparece en el plan."):
         ok, issues, sev, avisos = rnd._downgrade_reviewer_non_issues(False, [t], "minor")
         assert (ok, issues, sev, avisos) == (True, [], "low", [t]), t
 NO_SE_DESCARTAN += DEFECTO_1_SIN_PROBLEMA + DEFECTO_2_TEXTO_LIBRE + DEFECTO_3_RESTRICCION + HUECO_227
+
+
+# ─── [revisión 2 · 2026-09-28] Huecos de la MISMA clase que la ronda 1 dejó abiertos (todos aprobados con `critical`) ───
+# (1) CRÍTICO, regresión frente a main: la cola libre («en/de/para/por/con…»), el objeto libre de «el plan respeta/
+#     cumple…» y el de «es seguro/adecuado/compatible para/con…» admitían el ALCANCE PARCIAL («en la mitad de las
+#     comidas», «en la semana uno», «en la mayoría…»). En main rechazaban todas. Renal, sodio, potasio y warfarina solo
+#     los ve el LLM: ningún guard determinista las rescata. Ahora solo formas CERRADAS.
+R2_DEFECTO_1_ALCANCE_ABIERTO = [
+    # los diez de la re-verificación
+    "La dieta renal se cumple en la mitad de las comidas.",
+    "El plan respeta la restricción de potasio en la semana uno.",
+    "El menú cumple con la restricción de sodio en la primera mitad de la semana.",
+    "No hay interacción con la warfarina en la mayoría de las comidas.",
+    "La dieta vegetariana se respeta en la mayoría de las comidas.",
+    "El plan respeta la dieta vegetariana en la primera semana únicamente.",
+    "El plan respeta la dieta vegetariana con pollo del martes.",
+    "El plan es adecuado para un adulto sano sin diabetes.",
+    "La dieta 'baja en sodio' se cumple en dos de las cinco comidas.",
+    "No se detectan alérgenos en la mayoría de las comidas.",
+    # sondas de la re-verificación (casos1/casos2) de la misma clase
+    "La dieta vegetariana se respeta en algunas comidas.",
+    "La dieta DASH se respeta en pocas comidas.",
+    "El plan respeta la restricción de sodio en la mayoría de las comidas.",
+    "El plan cumple con las calorías objetivo en la mitad de la semana.",
+    "El plan es compatible con la dieta vegetariana en la mayoría de las comidas.",
+    "El plan respeta la dieta vegetariana en tres de siete jornadas.",
+    "Dieta vegetariana respetada en la mayoría de las comidas.",
+    "El plan respeta las restricciones declaradas en ciertas comidas.",
+    "El plan respeta las restricciones declaradas en varias comidas.",
+    "El plan respeta las restricciones con pan de trigo.",
+    "No se detectan alérgenos declarados (paciente sin alergias, maní en el postre).",
+    "No se detectan violaciones de condiciones médicas (paciente sin diabetes, azúcar en el postre).",
+    "No hay interacciones con la warfarina por la espinaca diaria.",
+    "No se detectan violaciones de la dieta vegetariana por el pollo del martes.",
+    "No se detectan alérgenos declarados con maní en el postre.",
+    "No se detectan alérgenos declarados en las comidas principales.",
+    "No se detectan violaciones de la restricción de sodio en las comidas calientes.",
+    "No hay riesgo de hipoglucemia en la mañana.",
+    "Ningún alimento rechazado en las comidas de la semana uno.",
+    "El plan respeta la restricción de purinas en las comidas frías.",
+    "La dieta cetogénica se cumple en la primera semana.",
+    "La dieta 'renal' se respeta en la semana uno.",
+    "El plan es compatible con una dieta estándar para adultos sanos.",
+    "El plan respeta las preferencias del paciente en la mayoría de los casos.",
+    "Dieta 'vegetariana' respetada en la mayoría de los platos.",
+    "Dieta keto respetada en la mitad de los platos.",
+    "No se detectan violaciones severas.",
+]
+# (2) IMPORTANTE (ya en main): la regla del 227 absolvía con «no aparece en el plan» mientras OTRA oración afirmaba el
+#     defecto con un verbo fuera de su lista («aparece en», «hay», «está presente», o sin verbo). Invertida: cada
+#     oración trae su propio veredicto, o cada cláusula suya es confirmación, declaración de rechazo/alergia del paciente
+#     o la AUSENCIA DE LO DECLARADO. Sin listas de verbos.
+R2_DEFECTO_2_HUECO_227 = [
+    # los cinco de la re-verificación
+    "El almuerzo del Día 4: pan de trigo, prohibido temporalmente en el perfil. El pescado no aparece en el plan.",
+    "Anemia: leche con avena en el desayuno del Día 2 inhibe la absorción de hierro. El hígado no aparece en el plan.",
+    "Día 3 con 4200 mg de potasio para paciente renal. El plátano no aparece en el plan.",
+    "Hay pollo en la cena del Día 2 con dieta vegetariana. El pescado no aparece en el plan.",
+    "El hígado encebollado, que el paciente rechazó, aparece en la cena del Día 3. La berenjena no aparece en el plan.",
+    # sondas de la re-verificación
+    "Hígado encebollado en la cena del Día 3, rechazado por el paciente. La berenjena no aparece en el plan.",
+    "Pan de trigo en el almuerzo del Día 4 (prohibido temporalmente en el perfil). El pescado no figura en el plan.",
+    "El Día 2 está presente el pollo en dieta vegetariana. El pescado no aparece en el plan.",
+    # el veredicto GLOBAL («el plan es seguro») tampoco absuelve otra cláusula
+    "Hay pollo en la cena del Día 2 con dieta vegetariana. El plan es seguro.",
+    "Hay pollo en la cena del Día 2 con dieta vegetariana; el plan es seguro.",
+    # la ausencia de algo que el paciente NO declaró rechazar puede ser un defecto (hierro hemo con anemia)
+    "La paciente tiene anemia. El hierro hemo no aparece en el plan.",
+    "El paciente declaró que NO le gusta la berenjena. El hierro hemo no aparece en el plan.",
+    "El hierro hemo no aparece en el plan.",
+    "El paciente rechazó el hígado y la berenjena. La berenjena no aparece en el plan.",
+    # sin declaración, la ausencia no dice si falta algo bueno: se queda (un reintento de más)
+    "El plan no contiene pescado ni berenjena; ninguno aparece en el plan.",
+]
+# (3) MENOR, regresión frente a main: «restricción … declarada» + «en el plan» se lee como que el plan NO la aplica.
+R2_DEFECTO_3_RESTRICCION_EN_EL_PLAN = [
+    "No se detectan restricciones de sodio declaradas en el plan.",
+    "No se observan restricciones de gluten declaradas en el menú.",
+    "No se encuentran restricciones de gluten declaradas en el menú.",
+    "Sin restricciones de sodio declaradas en el plan.",
+    "No se registran restricciones de purinas declaradas en el plan.",
+]
+# (4) MENOR: en la regla 4 lo negado tiene que ser LO MISMO que el paciente declaró rechazar (negar algo bueno es un
+#     defecto), y la declaración es de rechazo o alergia, no de una condición («indicó anemia ferropénica severa»).
+R2_DEFECTO_4_LO_NEGADO = [
+    "La paciente indicó anemia ferropénica severa; no aparece hierro hemo en el plan (sin problema en este punto).",
+    "Hígado presente y berenjena no aparece en el plan (sin problema en este punto).",
+    "Hígado servido y berenjena no aparece en el plan (sin problema en este punto).",
+    "Pan de trigo prohibido presente; berenjena no aparece en el plan (sin problema en este punto).",
+    "El paciente rechazó el hígado encebollado del martes; no aparece berenjena en el plan (sin problema en este punto).",
+    "El paciente declaró anemia; fuente de hierro hemo no aparece en el plan (sin problema en este punto).",
+    "Proteína suficiente no aparece en el plan (sin problema en este punto).",
+    "El paciente declaró que NO le gusta la berenjena; no aparece hierro hemo en el plan (sin problema en este punto).",
+    "El paciente rechazó el hígado y la berenjena; no aparece berenjena en el plan (sin problema en este punto).",
+]
+# Misma clase, abierta YA en main (el veredicto del 227 con alcance/objeto libre): se cierra con la misma regla.
+R2_MISMA_CLASE_EN_MAIN = [
+    "El plan es seguro para un paciente sin insuficiencia renal.",
+    "El plan es seguro para un adulto sano sin enfermedad renal.",
+    "No hay violaciones en las comidas principales.",
+    "No hay violaciones de la dieta vegetariana en la primera semana.",
+]
+# Sondas propias de la misma clase: el nombre de la dieta entre comillas no puede llevar un alimento, y «respetando los
+# rechazos» describe SU cláusula (lo ausente es lo declarado), no absuelve otra cláusula de la oración.
+R2_SONDAS_PROPIAS = [
+    "Dieta 'vegetariana con pollo' respetada.",
+    "El plan respeta la dieta 'vegetariana y pescado'.",
+    "El Día 2 incluye pescado, que el paciente rechazó, y el resto se generó respetando los rechazos del paciente.",
+    "Hay pollo en la cena del Día 2, respetando las preferencias del paciente.",
+]
+_R2_RECHAZAN = (R2_DEFECTO_1_ALCANCE_ABIERTO + R2_DEFECTO_2_HUECO_227 + R2_DEFECTO_3_RESTRICCION_EN_EL_PLAN
+                + R2_DEFECTO_4_LO_NEGADO + R2_MISMA_CLASE_EN_MAIN + R2_SONDAS_PROPIAS)
+NO_SE_DESCARTAN += _R2_RECHAZAN
+
+# Las formas CERRADAS siguen descartándose por el camino completo (lo que el 227/746 rebajan sin defecto).
+R2_SIGUEN_DESCARTANDOSE = [
+    "No se detectan alérgenos ni violaciones de condiciones médicas. El plan es seguro.",   # corpus de baterías
+    "El paciente rechazó la berenjena; la berenjena no aparece en el plan (sin problema en este punto).",
+    "El paciente rechazó el hígado y la berenjena; no aparecen hígado ni berenjena en el plan (sin problema en este "
+    "punto).",
+    "El paciente es alérgico al maní; el maní no aparece en el plan.",
+    "La dieta vegetariana se respeta en todas las comidas.",
+    "La dieta vegetariana se respeta en todo el plan.",
+    "El plan respeta la dieta vegetariana en todas las comidas.",
+    "El plan es seguro para el paciente.",
+    "No hay violaciones de la dieta vegetariana.",
+    "No hay interacciones con los medicamentos declarados.",
+    "No se detectan violaciones de las restricciones declaradas en el plan.",
+    "La dieta 'baja en sodio' se respeta en todas las comidas.",
+    "El plan no contiene pescado ni berenjena, respetando los rechazos del paciente.",   # corpus de baterías
+]
+
+
+def test_r2_los_huecos_de_la_revision_2_rechazan_con_su_severidad():
+    """Camino completo (227 + 746) con severidad `critical`: plan rechazado y razón intacta."""
+    malos = [t for t in _R2_RECHAZAN
+             if rnd._downgrade_reviewer_non_issues(False, [t], "critical") != (False, [t], "critical", [])]
+    assert not malos, malos
+
+
+def test_r2_ninguno_es_confirmacion_para_el_746():
+    assert not [t for t in _R2_RECHAZAN if rc.motivo(t)]
+
+
+def test_r2_las_formas_cerradas_se_siguen_descartando():
+    for t in R2_SIGUEN_DESCARTANDOSE:
+        ok, issues, sev, avisos = rnd._downgrade_reviewer_non_issues(False, [t], "critical")
+        assert (ok, issues, sev, avisos) == (True, [], "low", [t]), t
+
+
+def test_r2_la_inversion_del_227_no_depende_del_knob_del_746(monkeypatch):
+    """El hueco del 227 estaba en main: su cierre no se apaga con `MEALFIT_REVIEWER_CONFIRMATIONS_DISCARD`."""
+    monkeypatch.setenv("MEALFIT_REVIEWER_CONFIRMATIONS_DISCARD", "false")
+    for t in R2_DEFECTO_2_HUECO_227:
+        assert rnd._downgrade_reviewer_non_issues(False, [t], "critical")[:2] == (False, [t]), t
+    t = "El paciente rechazó la berenjena; no se incluye berenjena y no aparece en el plan."
+    assert rnd._downgrade_reviewer_non_issues(False, [t], "minor")[0] is True
+
+
+def test_r2_sin_listas_de_verbos_en_la_regla_del_227():
+    src = (_BACKEND / "revisor_no_defectos.py").read_text(encoding="utf-8")
+    assert "_AFFIRMS_CONTENT_RX" not in src and "_content_affirmed_without_verdict" not in src
+    assert '__import__("revisor_confirmaciones").oraciones_sin_hallazgo(t)' in src
+    mod = (_BACKEND / "revisor_confirmaciones.py").read_text(encoding="utf-8")
+    assert "tooltip-anchor: P1-PLAN-LOTE-746-FORMAS-CERRADAS" in mod
 
 
 def test_lo_que_no_es_una_confirmacion_se_queda():
@@ -251,13 +417,30 @@ def test_replay_de_los_140_rechazos_solo_cambia_la_revision_del_25_sep(monkeypat
 
 
 def test_corpus_de_baterias_solo_descarta_las_dos_sin_defecto():
-    """Los 135 textos del revisor en los 919 planes de batería del VPS: solo dos se descartan, ambos sin defecto."""
+    """Los 135 textos del revisor en los 919 planes de batería del VPS: solo tres se descartan, los tres sin defecto.
+    [revisión 2] El tercero («… alérgenos NI violaciones …. El plan es seguro.») lo rebaja el 227 en main y en todas las
+    versiones; ahora también esta regla, porque la inversión del 227 exige que «No se detectan alérgenos ni violaciones
+    de condiciones médicas» sea una confirmación (la lista con «ni» es una forma cerrada)."""
     corpus = [x["t"] for x in _FIX["corpus_baterias"]]
     assert len(corpus) == 135
     assert sorted(t for t in corpus if rc.motivo(t)) == [
         "El paciente declaró que NO le gusta la berenjena; no aparece berenjena en el plan (sin problema en este punto).",
         "No se detectan alérgenos declarados (el paciente no reporta alergias).",
+        "No se detectan alérgenos ni violaciones de condiciones médicas. El plan es seguro.",
     ]
+    # y por el camino completo (227 + 746) no cambia NADA frente a la ronda 1: ver el test de abajo
+
+
+def test_r2_el_camino_completo_sobre_las_188_razones_no_cambia():
+    """[revisión 2] Las 188 razones del fixture (38 del LLM + 15 deterministas + 135 del corpus) por el camino completo
+    con severidad `critical`: rebaja las 7 «no_problema» del LLM y nada más de producción, ninguna determinista, y 17
+    del corpus — las mismas 24 que la ronda 1 (medido contra `aabef1a7`)."""
+    def rebaja(t):
+        return rnd._downgrade_reviewer_non_issues(False, [t], "critical")[0]
+    assert sorted(x["n"] for x in _LLM if rebaja(x["texto"])) == sorted(
+        x["n"] for x in _LLM if x["clase"] == "no_problema") == [4, 20, 34, 35, 36, 37, 38]
+    assert not [t for t in _FIX["deterministas"] if rebaja(t)]
+    assert sum(rebaja(x["t"]) for x in _FIX["corpus_baterias"]) == 17
 
 
 def test_la_regla_depende_del_knob_del_227(monkeypatch):
@@ -549,6 +732,16 @@ def test_la_fila_clinical_band_lleva_su_clave_de_entrega():
     assert '"entrega": __import__("entregas_revisadas").clave_de_entrega(actual_form_data)' in bloque
     mod = (_BACKEND / "entregas_revisadas.py").read_text(encoding="utf-8")
     assert "tooltip-anchor: P1-PLAN-LOTE-746-ENTREGAS" in mod and "MEALFIT_REVFAIL_COUNT_DELIVERIES" in mod
+
+
+def test_r2_la_transicion_de_7_dias_queda_escrita_en_el_sop():
+    """[revisión 2, punto 5] Con 168 h las filas viejas sin `entrega` (una por corrida) inflan la tasa hasta 7 días tras
+    desplegar, no 3: escrito en el módulo y en la tabla de alertas, con cómo leer una alerta de esa semana."""
+    mod = (_BACKEND / "entregas_revisadas.py").read_text(encoding="utf-8")
+    assert "TRANSICIÓN TRAS DESPLEGAR" in mod and "7 DÍAS" in mod and "n_corridas" in mod
+    tabla = (_BACKEND / "docs" / "system_alerts_resolution_table.md").read_text(encoding="utf-8")
+    fila = [ln for ln in tabla.splitlines() if ln.startswith("| `review_failed_delivered_rate_high`")]
+    assert len(fila) == 1 and "SOP tras desplegar P1-PLAN-LOTE-746: durante 7 días" in fila[0]
 
 
 def test_los_ficheros_con_tope_no_crecen():

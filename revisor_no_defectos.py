@@ -38,26 +38,15 @@ _ISSUE_CONTINUES_RX = re.compile(
     re.IGNORECASE)
 # [P1-PLAN-LOTE-746 · 2026-09-28] La negación suelta se buscaba en CUALQUIER parte: «El Día 3 incluye hígado
 # encebollado, que el paciente rechazó. La berenjena no aparece en el plan.» salía APROBADA con severidad `critical`
-# (también con el knob del 746 apagado). Ahora la razón se queda si alguna oración AFIRMA contenido del plan («incluye/
-# contiene/aporta…», sin «no» delante) y esa oración no trae su propio VEREDICTO («…, no es violación», «el plan es
-# seguro»): la ausencia de OTRO alimento («no aparece en el plan») no absuelve lo que se afirma. El caso del 227
-# («contiene queso mozzarella — sin alergia a lácteos declarada, no es violación») no cambia, ni la regla de la
-# conclusión (`_SELF_NEGATING_TAIL_RX`, la del 25-sep).
-_AFFIRMS_CONTENT_RX = re.compile(
-    r"(?<!\bno )(?<!\bno se )(?<!\bni )\b(?:incluye|incluyen|incluy[oó]|contiene|contienen|aporta|aportan|combina|"
-    r"combinan|lleva|llevan|tiene|tienen|usa|usan|agrega|agregan|añade|añaden|trae|traen|sirve|sirven)\b",
-    re.IGNORECASE)
-_VERDICT_RX = re.compile(
-    r"no (?:es|constituye|representa|supone|implica) (?:una |ninguna )?violaci[oó]n|no hay (?:ninguna )?violaci[oó]n|"
-    r"el plan es seguro|respetando (?:los|las|sus) (?:rechazos|restricciones|preferencias)",
-    re.IGNORECASE)
-
-
-def _content_affirmed_without_verdict(t: str) -> bool:
-    # Por ORACIÓN (. ! ?), no por «;»: «…contienen mantequilla de maní; sin alergia declarada, no constituye violación»
-    # (corpus de baterías) es un veredicto sobre lo mismo que describe.
-    return any(_AFFIRMS_CONTENT_RX.search(s) and not _VERDICT_RX.search(s)
-               for s in re.split(r"(?<=[.!?])\s+", t.strip()) if s.strip())
+# (también con el knob del 746 apagado). La revisión 1 lo cerró con una lista de verbos («incluye/contiene/aporta…») y
+# se le escapaban «aparece en», «hay», «está presente» y las frases sin verbo («Día 3 con 4200 mg de potasio para
+# paciente renal. El plátano no aparece en el plan.»). [revisión 2] Invertida, sin listas de verbos
+# (`revisor_confirmaciones.oraciones_sin_hallazgo`): absuelve solo si CADA oración trae su propio veredicto («…, no es
+# violación», con lo que le sigue cerrado) o CADA cláusula suya es confirmación, declaración de rechazo/alergia del
+# paciente o la AUSENCIA DE LO DECLARADO. «El plan es seguro» ya no absuelve otra cláusula de su oración, y la ausencia
+# de algo que nadie declaró rechazar («el hierro hemo no aparece en el plan») puede ser algo bueno que falta: se queda.
+# El caso del 227 («contiene queso mozzarella — sin alergia a lácteos declarada, no es violación») no cambia, ni la regla
+# de la conclusión (`_SELF_NEGATING_TAIL_RX`, la del 25-sep). No depende del knob del 746: el hueco estaba en main.
 # [P1-PLAN-LOTE-255 · 2026-09-25] «Posible reactividad cruzada» con un alimento que el usuario NO declaró no es un
 # defecto: batería rd252 (maní + sésamo + «piña» escrita a mano) — el revisor rechazó como CRÍTICO la linaza «por el
 # sésamo», el edamame «por el maní» y la lechosa y el guineo «por la piña», dos veces, y el usuario recibió el PLAN DE
@@ -86,7 +75,7 @@ def _downgrade_reviewer_non_issues(approved, issues, severity):
             t = str(it)
             _ultima = [s for s in re.split(r"(?<=[.;!?])\s+", t.strip()) if s.strip()][-1:] or [""]
             _niega = ((_SELF_NEGATING_ISSUE_RX.search(t) and not _ISSUE_CONTINUES_RX.search(t)
-                       and not _content_affirmed_without_verdict(t))   # [P1-PLAN-LOTE-746 · 2026-09-28]
+                       and __import__("revisor_confirmaciones").oraciones_sin_hallazgo(t))  # [P1-PLAN-LOTE-746 · rev. 2]
                       or bool(_SELF_NEGATING_TAIL_RX.search(_ultima[0]))
                       or bool(_CROSS_REACTIVITY_RX.search(t))   # [P1-PLAN-LOTE-255]
                       or __import__("revisor_confirmaciones").es_confirmacion_sin_defecto(t))  # [P1-PLAN-LOTE-746]

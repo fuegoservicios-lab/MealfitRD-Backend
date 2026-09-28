@@ -34,6 +34,11 @@ como antes (y ventana de 72 h).
     le atribuye su revisión. El chunk inicial no estampa `quality_tier` (NULL = llm).
   · LÍMITE CONOCIDO: `plan_chunk_queue.meal_plan_id` es ON DELETE CASCADE — si se borra el plan o la cuenta, sus
     entregas salen de la cuenta (por eso un replay desde el journal da más entregas que las filas `completed` de hoy).
+  · TRANSICIÓN TRAS DESPLEGAR (revisión 2): las filas `clinical_band` sin `entrega` (anteriores al despliegue) siguen
+    contando UNA POR CORRIDA hasta salir de la ventana, y con la ventana de 168 h eso son hasta 7 DÍAS, no 3: durante
+    esa semana la tasa puede salir inflada por los reintentos (el caso del 27-sep: 4 corridas, 1 entrega). SOP: una
+    alerta `review_failed_delivered_rate_high` en los 7 días siguientes al despliegue se lee con el `n_corridas` de su
+    metadata — si `n_corridas` supera con mucho a `n_delivered`, es el conteo heredado; no se toca el umbral.
 tooltip-anchor: P1-PLAN-LOTE-746-ENTREGAS
 """
 from __future__ import annotations
