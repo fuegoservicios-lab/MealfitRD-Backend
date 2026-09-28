@@ -1003,7 +1003,12 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # comida ya no interroga a quien sí come esa comida (`tono_del_aviso.py`); «¿lo comiste?» una sola vez por conversación.
 # [P1-PLAN-LOTE-710..713 · 2026-09-28] (frontend + backend) Legibilidad: piso de 12 px, contraste AA, copy sin jerga;
 # en el backend, las frases de `/blocked-reasons` dejan de decir «chunk», «worker», «cron» y «restore».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-713 · 2026-09-28"
+# [P1-PLAN-LOTE-701..709, 740..744, 629 · 2026-09-28] (backend + frontend) Idiomas, países y generación: el coste LLM de
+# cada chunk lleva su plan (701); el worker espera al pipeline su presupuesto global (707); la siembra de micros pasa al
+# Montaje (709, con readiness); separador decimal y onzas por país (703/708); cobertura de plantillas por país (704); G59/
+# G67 comprobados contra producción y USDA (705/740); el coach da el número de emergencias del país (741); vitest y
+# Playwright prueban el sistema de países encendido (706/743/744); el JS de arranque vuelve a 147,5/148 kB (629/702/742).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-744 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
