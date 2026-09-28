@@ -1050,7 +1050,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # en la frase: «saltea la cebolla hasta que esté opaca y añade la pechuga» habla de la cebolla.
 # [P1-PLAN-LOTE-789 · 2026-09-28] (backend) El Montaje no re-sirve lo servido aunque la frase no sea la última («…
 # Acompaña con queso mozzarella… Espolvorea la linaza») ni use el mismo nombre («el pescado» / «filete de pescado blanco»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-789 · 2026-09-28"
+# [P1-PLAN-LOTE-800 · 2026-09-28] (backend) V7f no acredita a un víver la cocción de otro: «hierve el plátano…» o
+# «revuelve hasta que cuajen» no cocían la batata que el autocorrector de fruta dulce puso «fresca aparte» (cruda).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-800 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
