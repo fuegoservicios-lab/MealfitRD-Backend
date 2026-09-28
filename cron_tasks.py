@@ -35082,6 +35082,9 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                         return False
 
                     plan_data = plan_record.get("plan_data", {})
+                    # [P1-PLAN-LOTE-653] Gemela del endpoint: un plan congelado no avanza (ver `api_shift_plan`).
+                    if plan_data.get("_frozen_at"):
+                        return False
                     days = plan_data.get("days", [])
 
                     # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Antes del `if not
@@ -35912,12 +35915,17 @@ def _shift_plan_dates_for_freeze(plan_id: str, user_id: str, days: int) -> int:
     for _key in ("_plan_start_date", "plan_start_date", "grocery_start_date", "cycle_start_date"):
         try:
             execute_sql_write(
-                "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, %s::text[], "
-                "to_jsonb((((plan_data->>%s)::timestamptz) + make_interval(days => %s))::text))"
+                # [P1-PLAN-LOTE-653] ISO con `T` y `+00:00` (el `::text` de Postgres daba «2026-09-22 15:47:33+00»,
+                # que `new Date()` de WebKit no garantiza), y una fecha sola sigue siendo fecha sola.
+                "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, %s::text[], to_jsonb("
+                "CASE WHEN (plan_data->>%s) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' "
+                "THEN (((plan_data->>%s)::date) + %s)::text "
+                "ELSE to_char((((plan_data->>%s)::timestamptz) + make_interval(days => %s)) AT TIME ZONE 'UTC', "
+                "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"+00:00\"') END))"
                 ", '{_plan_modified_at}', to_jsonb(NOW()::text)) "
                 "WHERE id = %s AND user_id = %s AND plan_data ? %s "
                 "AND (plan_data->>%s) ~ '^[0-9]{4}-'",
-                ("{" + _key + "}", _key, days, plan_id, user_id, _key, _key),
+                ("{" + _key + "}", _key, _key, days, _key, days, plan_id, user_id, _key, _key),
             )
             applied += 1
         except Exception as _sh_e:

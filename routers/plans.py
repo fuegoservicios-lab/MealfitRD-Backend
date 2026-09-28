@@ -2746,6 +2746,12 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     if not plan_record:
                         return {"success": False, "message": "El plan fue eliminado durante la operación. Reintentá."}
                     plan_data = plan_record.get("plan_data", {})
+                    # [P1-PLAN-LOTE-653] Un plan CONGELADO (Nevera vacía, P1-PLAN-FREEZE) no avanza: al descongelar,
+                    # `_shift_plan_dates_for_freeze` ya corre las anclas los días congelados, y archivar aquí también
+                    # descontaba esos días DOS veces (dea00a2f: 0 días vivos). Antes de tocar nada, rebase incluido.
+                    if plan_data.get("_frozen_at"):
+                        return {"success": False, "reason_code": "plan_frozen",
+                                "message": "El plan está en pausa hasta que repongas la Nevera."}
                     days = plan_data.get("days", [])
                     total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
                     
