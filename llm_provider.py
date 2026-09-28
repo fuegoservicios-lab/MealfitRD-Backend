@@ -108,6 +108,44 @@ class ChatOpenAI(_LangChainChatOpenAI):
             payload["reasoning_effort"] = "none"   # [P1-PLAN-LOTE-600] tools + esfuerzo ⇒ 400 en chat completions
         return payload
 
+    # [P1-PLAN-LOTE-654 · 2026-09-27] Un proveedor sin saldo (Z.ai 1113, OpenAI insufficient_quota, DeepSeek 402) deja
+    # un `system_alert`; el error se re-lanza tal cual, así que breaker, reintentos y red cruzada deciden como antes.
+    def _avisar_saldo(self, exc) -> None:
+        try:
+            import saldo_proveedor
+            saldo_proveedor.avisar_si_saldo_agotado(exc, str(self.model_name or ""))
+        except Exception:  # noqa: BLE001 — avisar nunca puede tapar el error original
+            pass
+
+    def _generate(self, *args, **kwargs):
+        try:
+            return super()._generate(*args, **kwargs)
+        except Exception as exc:
+            self._avisar_saldo(exc)
+            raise
+
+    async def _agenerate(self, *args, **kwargs):
+        try:
+            return await super()._agenerate(*args, **kwargs)
+        except Exception as exc:
+            self._avisar_saldo(exc)
+            raise
+
+    def _stream(self, *args, **kwargs):
+        try:
+            yield from super()._stream(*args, **kwargs)
+        except Exception as exc:
+            self._avisar_saldo(exc)
+            raise
+
+    async def _astream(self, *args, **kwargs):
+        try:
+            async for trozo in super()._astream(*args, **kwargs):
+                yield trozo
+        except Exception as exc:
+            self._avisar_saldo(exc)
+            raise
+
 # [P0-GLM-MIGRATION · 2026-09-02] IDs oficiales del API Z.ai (docs.z.ai, verificados
 # EN VIVO 2026-09-02): `glm-5.3-flash` (320B MoE/18B activos, multimodal, 1M ctx,
 # $0.15/$0.50 por 1M in/out) y `glm-5.3` (flagship, $1.4/$4.4). Los dos piensan

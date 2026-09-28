@@ -149,7 +149,9 @@ def test_marker_doc_and_env_example():
 # ── El proveedor vuelve solo por knob y solo en sus superficies ──────────────────────────────────
 
 SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "docs/llm_tier_routing.md",
-               "docs/coach_bateria_2026_09_15.md"}   # [P1-PLAN-LOTE-77] la batería del coach medida con el proveedor alterno
+               "docs/coach_bateria_2026_09_15.md",   # [P1-PLAN-LOTE-77] la batería del coach medida con el proveedor alterno
+               # [P1-PLAN-LOTE-654] reconocer su falta de saldo (402 «Insufficient Balance») y documentar su alerta
+               "saldo_proveedor.py", "docs/system_alerts_resolution_table.md"}
 
 
 def _menciones(token: str) -> set:

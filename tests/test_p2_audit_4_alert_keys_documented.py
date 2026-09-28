@@ -74,6 +74,8 @@ _EMITTER_FILES = (
     # `_persist_billing_alert` en billing.py que emite
     # `billing_old_sub_cancel_failed:<>:<>` y `billing_cancel_failed:<>:<>`.
     _BACKEND / "routers" / "billing.py",
+    # [P1-PLAN-LOTE-654 · 2026-09-27] El proveedor de IA sin saldo: `llm_provider_balance_exhausted:<proveedor>`.
+    _BACKEND / "saldo_proveedor.py",
     # [P3-CHAT-OBSERVABILITY · 2026-05-20] Añadido tras introducir
     # `_emit_checkpoint_pool_split_missing_alert_best_effort` en
     # agent.py que emite `chat_checkpoint_pool_split_missing` cuando
