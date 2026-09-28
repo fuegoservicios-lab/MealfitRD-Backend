@@ -53,3 +53,22 @@ def test_la_oferta_va_en_usd_como_el_apex(bloques):
 
 def test_ninguna_moneda_dominicana_en_los_datos_estructurados(bloques):
     assert "DOP" not in json.dumps(bloques)
+
+
+# ── [P1-PLAN-LOTE-793 · ronda 1] (revisión, defecto 8) El test invertido no puede seguir diciendo lo contrario ──
+
+_HREFLANG = Path(__file__).resolve().parent / "test_p2_seo_hreflang.py"
+
+
+def test_el_test_de_hreflang_ya_no_dice_que_el_dop_no_se_toca():
+    """`test_p2_seo_hreflang.py` se invirtió (ahora exige USD) pero su docstring seguía diciendo «No se
+    toca el precio en DOP» y el test invertido seguía bajo la cabecera «Lo que NO se toca». Un test cuyo
+    texto dice lo contrario de lo que comprueba invita a «arreglarlo» devolviendo el DOP."""
+    src = _HREFLANG.read_text(encoding="utf-8")
+    assert "No se toca el precio en DOP" not in src
+    cabecera = src.find("# ── Lo que NO se toca")
+    usd = src.find("def test_la_moneda_del_offer_es_la_del_apex_usd")
+    assert usd != -1, "desapareció el test que fija USD en el Offer"
+    assert not (cabecera != -1 and cabecera < usd and "# ──" not in src[cabecera + 5: usd]), (
+        "el test que exige USD sigue bajo la cabecera «Lo que NO se toca»"
+    )

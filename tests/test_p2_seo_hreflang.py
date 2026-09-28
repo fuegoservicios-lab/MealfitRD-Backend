@@ -11,9 +11,12 @@ factual en datos estructurados —lo que los buscadores leen como declaración d
 producto contradice en su primera pantalla.
 
 QUÉ SE CORRIGE Y QUÉ NO, porque la línea importa. Se corrige lo que es **falso**: el área de
-servicio y las dos frases que la repetían. No se toca el precio en DOP, ni el copy de marketing, ni
-se añade una promesa nueva — esas son decisiones del dueño que la auditoría lista aparte como P1-27
-y P1-28, y meterlas aquí sería colar una decisión de producto dentro de un arreglo técnico.
+servicio y las dos frases que la repetían. Este P-fix no tocó la moneda de la oferta, ni el copy de
+marketing, ni añadió una promesa nueva — esas son decisiones del dueño que la auditoría lista aparte
+como P1-27 y P1-28, y meterlas aquí habría sido colar una decisión de producto dentro de un arreglo
+técnico. [P1-PLAN-LOTE-793 · 2026-09-28] La de la moneda (P1-28) ya la tomó el dueño (G95): la
+oferta va en USD, como el apex; el test que fijaba la moneda vieja se invirtió y vive en su propia
+sección, más abajo.
 
 POR QUÉ NO SE AÑADE `hreflang`, que es la otra mitad del gap. `hreflang` declara que existe una URL
 ALTERNATIVA por idioma o región. Aquí no existe: la app es una SPA servida desde una sola URL y el
@@ -91,7 +94,7 @@ def test_las_descripciones_no_acotan_el_servicio_a_un_pais(html):
         )
 
 
-# ── Lo que NO se toca ───────────────────────────────────────────────────────────────────────────
+# ── Lo que decidió el dueño aparte (P1-28 → G95, P1-PLAN-LOTE-793) ─────────────────────────────
 
 def test_la_moneda_del_offer_es_la_del_apex_usd(html):
     """[P1-PLAN-LOTE-793 · 2026-09-28] Antes este test fijaba DOP: P1-28 era una decisión del dueño
@@ -105,6 +108,8 @@ def test_la_moneda_del_offer_es_la_del_apex_usd(html):
         "volvió el DOP al Offer: dos datos estructurados del mismo producto con dos monedas"
     )
 
+
+# ── Lo que NO se toca ───────────────────────────────────────────────────────────────────────────
 
 def test_no_se_anadio_hreflang_sin_urls_por_idioma(html):
     """`hreflang` declara que existe una URL ALTERNATIVA por idioma. Aquí no existe: SPA de una

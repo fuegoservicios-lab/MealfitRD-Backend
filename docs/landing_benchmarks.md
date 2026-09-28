@@ -101,13 +101,13 @@ dueño → editar el SSOT frontend → los guard-tests validan. Los SSOT fronten
 - [`frontend/src/data/benchmark.js`](../../frontend/src/data/benchmark.js) — cifras **medidas**
   (MAPE, en-banda, versus). Guard: `test_p1_paper_benchmark_ssot.py`.
 - [`frontend/src/data/systemFacts.js`](../../frontend/src/data/systemFacts.js) — hechos
-  **estructurales** (17 micros, 200+ alimentos, 3-6 comidas, ciclos 7/15/30). Guard: sección
+  **estructurales** (17 micros, 300+ alimentos, 3-6 comidas, ciclos 7/15/30). Guard: sección
   de-drift de `test_p1_landing_bench_1_anchors.py`. Se refrescan con el modo `structural`.
 
 | Métrica del reporte | Claim del landing que alimenta | Estado |
 |---|---|---|
 | `structural.micronutrientes_dri` | «17 micronutrientes vs DRI» (`systemFacts.MICROS_TRACKED`) | derivado de `micronutrients.dri_targets` |
-| `structural.alimentos_catalogo` | «200+ alimentos verificados» (`systemFacts.VERIFIED_FOODS_LABEL`) | medido 252 (2026-07-02); label público redondea abajo |
+| `structural.alimentos_catalogo` | «300+ alimentos verificados» (`systemFacts.VERIFIED_FOODS_LABEL`) | medido 354 (2026-09-28, P1-PLAN-LOTE-795; antes 252 el 2026-07-02); label público redondea abajo |
 | `safety.plans_sin_violaciones_pct` | CAPS «Se ajusta a tus condiciones» — pasar de capacidad a **cifra medida** | pendiente de 1ª corrida live |
 | `safety.min_meals_compliance_pct` | «5-6 tomas en hipoglucemia, insulina o cirugía bariátrica» (FeaturesPage) | pendiente de 1ª corrida live |
 | `changes.swap.ok_pct` / `telemetry.changes` | futura cifra «cambios de plato que salen a la primera» | serie prod nació 2026-08-05 |
@@ -163,6 +163,10 @@ deploy, re-correr los ids `3,4,9,10,13,17,19,20` y comparar contra la línea bas
    (`CLINICAL`, 20 perfiles, agosto) no incluye renal. Por eso el sub de CAPS pasó a
    «DM2 · HTA · colesterol · alergias» y el ejemplo «Verificado» de `/funciones` a «DM2 + HTA +
    colesterol» (perfil 12). Cuando una corrida con el 21 entre en `CLINICAL`, renal puede volver.
+   Comprobado que el perfil 12 (`combo_cap3`) se ENTREGÓ, no sólo que estaba en la matriz: en los
+   logs de GitHub Actions de las corridas `31264465719` y `31311796944` sale con `safe: true`,
+   `safety_violations: []` y `professional_review_flagged: true` (2 de 4; en `31290118080` y
+   `31304538636` el log trunca el JSON antes del perfil 12 y los artefactos ya caducaron).
 2. ~~**Medicamentos fuera de los 14 chips quedan sin capturar en silencio.**~~ **CERRADO
    [P1-MEDICAL-SCOPE-GATE · 2026-08-09]**: ya no es silencio. Lo no listado se declara con los chips
    `Otra condición` / `Otro medicamento`, y esa señal **bloquea la generación** (422

@@ -4,10 +4,12 @@
 1. «Multi-condición clínica … (p. ej. DM2 + renal) … Verificado en agosto»: la matriz medida en agosto
    (`CLINICAL.n` = 20 perfiles, `docs/landing_benchmarks.md`) NO tuvo perfil renal — los perfiles 21-25
    (`renal_hta` incluido) se añadieron después y no se han corrido. El ejemplo pasa a una combinación que
-   SÍ se midió (perfil 12, DM2 + HTA + colesterol).
+   SÍ se midió (perfil 12, DM2 + HTA + colesterol) y se ENTREGÓ: `safe: true`, 0 violaciones y revisión
+   profesional marcada en las corridas 31264465719 y 31311796944 (logs de GitHub Actions, ronda 1).
 2. El sub de la fila clínica de CAPS («DM2 · renal · HTA · alergias») nombraba renal: mismo motivo.
-3. «Tu primer plan, calculado, en cinco minutos»: lo medido es bloque 1 p50 ~4 min y hasta ~10. Un
-   número en el titular sería falso para la mitad de los usuarios.
+3. «Tu primer plan, calculado, en cinco minutos»: P2-LOADING-ETA-HONEST midió el bloque 1 con mediana
+   ~10 min y p90 ~15; la matriz clínica de agosto, p50 ~6. Un número en el titular sería falso para casi
+   todos los usuarios.
 4. `VERIFIED_FOODS_LABEL` decía «200+» con 354 filas en `master_ingredients` (SELECT del 28-sep).
 5. El Aviso Médico (§6) sólo nombraba el 9-1-1 de RD: a un usuario de España (112) o de Colombia (123)
    le daba un número que allí no es el de emergencias. Texto nuevo de G94, el mismo que el landing,
@@ -116,3 +118,39 @@ def test_catalogo_300_mas_con_su_medicion():
     facts = _leer("data/systemFacts.js")
     assert "export const VERIFIED_FOODS_LABEL = '300+';" in facts
     assert "354" in facts and "2026-09-28" in facts, "el label debe citar el conteo y la fecha de la medición"
+
+
+# ── [P1-PLAN-LOTE-795 · ronda 1] (revisión, defectos 9 y 10) ────────────────────────────────────────
+
+_DOCS = Path(__file__).resolve().parent.parent / "docs"
+_TESTS = Path(__file__).resolve().parent
+
+
+def test_el_doc_de_benchmarks_cita_el_label_vigente_del_catalogo():
+    """`docs/landing_benchmarks.md` es el mapa métrica → claim. Seguía diciendo «200+ alimentos… medido
+    252» con `VERIFIED_FOODS_LABEL` ya en '300+' (354 filas, 2026-09-28): el mapa contradecía al SSOT."""
+    facts = _leer("data/systemFacts.js")
+    m = re.search(r"export const VERIFIED_FOODS_LABEL = '([^']+)';", facts)
+    assert m, "no se encontró VERIFIED_FOODS_LABEL"
+    label = m.group(1)
+    doc = (_DOCS / "landing_benchmarks.md").read_text(encoding="utf-8")
+    citados = set(re.findall(r"(\d+\+) alimentos", doc))
+    assert citados == {label}, f"el doc cita {sorted(citados)} alimentos; el SSOT dice {label}"
+    fila = next((l for l in doc.splitlines() if "structural.alimentos_catalogo" in l), "")
+    assert "354" in fila and "2026-09-28" in fila, f"la fila del catálogo no cita la medición vigente: {fila}"
+
+
+def test_el_cierre_cita_la_latencia_que_su_fuente_midio():
+    """El comentario del cierre (y el docstring de este fichero) atribuían «p50 de cuatro minutos y hasta diez» a
+    P2-LOADING-ETA-HONEST, que midió mediana ~10 min y p90 ~15 (34 bloques 1). Una cita que no coincide
+    con su fuente es peor que ninguna: se copia."""
+    fuente = (_TESTS / "test_p2_loading_eta_honest.py").read_text(encoding="utf-8")
+    assert "(~10 min)" in fuente and "(~15 min)" in fuente, "cambió la medición de P2-LOADING-ETA-HONEST"
+    cierre = _leer("components/home/ClosingBand.jsx")
+    propio = Path(__file__).read_text(encoding="utf-8")
+    prohibido = "p50 ~" + "4 min"   # partido: este mismo fichero se inspecciona
+    for nombre, texto in (("ClosingBand.jsx", cierre), ("test_p1_plan_lote_795.py", propio)):
+        assert prohibido not in texto, f"{nombre} vuelve a citar «{prohibido}»"
+    assert "mediana ~10 min" in cierre and "p90 ~15" in cierre, (
+        "el comentario del cierre debe citar lo que P2-LOADING-ETA-HONEST midió"
+    )
