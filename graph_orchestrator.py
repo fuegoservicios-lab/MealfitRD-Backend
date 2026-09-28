@@ -19757,6 +19757,7 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=N
         if info and info.protein >= min_protein and info.kcal > 0:
             out.append((info.protein / info.kcal, name, info))
     out.sort(key=lambda x: x[0], reverse=True)
+    out = __import__("embarazo_cerrador").filtrar(out)  # [P1-PLAN-LOTE-803] embarazo: sin queso blando (mira la Nevera)
     return __import__("nevera_exigida").filtrar_proteinas(out)  # [P1-PLAN-LOTE-199] con Nevera exigida, de la Nevera
 
 
