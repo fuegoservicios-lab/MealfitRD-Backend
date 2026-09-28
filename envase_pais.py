@@ -335,7 +335,32 @@ def _avisar_fuga(pais, sellados) -> None:
 # aunque la demanda venga en gramos. Sale del DATO de la fila (`market_container`), no de una lista de
 # nombres. Sin los diminutivos: la «fundita» de orégano sí es especiero. Knob
 # `MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR` (default on).
+#
+# [P1-PLAN-LOTE-791 · 2026-09-28 · revisión ronda 2, defecto 1] Y SÓLO en filas SIN precio (el
+# catálogo-país del lote). La regla valía para cualquier fila Despensa en paquete de ≤ 120 g, y en la
+# tabla viva hay UNA fila dominicana así: «Nueces mixtas» (paquete de 100 g, RD$95). 7 × «30 g de
+# Nueces mixtas» pasaba de «1 paquete» (RD$95) a «3 paquetes» (RD$285), y la mensual de RD$285 a
+# RD$855: arreglaba una compra corta anterior al lote, pero cambiaba la lista DO sin declararlo — el
+# mismo criterio que dejó fuera el pan («cambia listas DO: su propio lote»). Con precio, el tope de
+# siempre; la compra corta de las nueces queda abierta (docs/envases_y_catalogo_por_pais.md).
 _ENVASES_DE_COMIDA = frozenset({"paquete", "paquetes", "bolsa", "bolsas", "funda", "fundas"})
+
+
+def fila_sin_precio(master_item) -> bool:
+    """¿La fila no tiene NINGÚN precio (ni por libra, ni por unidad, ni un paquete con precio)? Es la
+    forma del catálogo-país de los países beta. Ante la duda (dato ilegible), `False`: con precio."""
+    try:
+        if not isinstance(master_item, dict):
+            return False
+        for col in ("price_per_lb", "price_per_unit"):
+            if float(master_item.get(col) or 0) > 0:
+                return False
+        for paquete in master_item.get("market_packages") or []:
+            if isinstance(paquete, dict) and float(paquete.get("price") or 0) > 0:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def envase_de_comida(master_item) -> bool:
@@ -349,11 +374,13 @@ def envase_de_comida(master_item) -> bool:
 
 def tope_de_comida(market_obj, master_item, tope) -> int:
     """El tope de envases de condimento, subido hasta los envases que cubren la demanda EN GRAMOS
-    cuando la fila es un paquete de comida. Cualquier otro caso devuelve `tope` tal cual. Nunca
-    revienta: corre en el camino caliente del agregador."""
+    cuando la fila es un paquete de comida SIN precio. Cualquier otro caso devuelve `tope` tal cual.
+    Nunca revienta: corre en el camino caliente del agregador."""
     try:
         if not _env_bool("MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR", True) or not envase_de_comida(master_item):
             return tope
+        if not fila_sin_precio(master_item):
+            return tope  # [revisión ronda 2, defecto 1] con precio (Nueces mixtas, DO): la lista de siempre
         if str((market_obj or {}).get("base_unit") or "").strip().lower() != "g":
             return tope  # conteo sin peso: «1 chile» no es «1 paquete»
         gramos = float((market_obj or {}).get("base_qty") or 0)

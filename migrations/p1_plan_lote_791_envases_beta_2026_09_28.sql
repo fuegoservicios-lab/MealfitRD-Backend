@@ -15,6 +15,16 @@
 -- NO se toca `market_packages`: cada entrada exige un precio y estos países no tienen precios propios.
 -- NO se inventa envase para las 57 filas que se venden a peso ni para las 9 de mazo o unidad.
 --
+-- PESO POR UNIDAD DE LOS SEIS CHILES SECOS (bloque 2b, revisión ronda 2). Los planes mexicanos escriben
+-- el chile por CONTEO («3 chiles anchos»). Sin `density_g_per_unit` el conteo no se convierte a gramos,
+-- el tope de condimentos lo deja en 1 paquete y 21 anchos (~357 g) salían «1 paquete» de 85 g, sin nota.
+-- Con el peso por unidad el conteo se vuelve gramos y la lista compra los paquetes que cubren la receta.
+-- REGLA: la porción «1 pepper» de USDA SR Legacy cuando existe para ESE chile (ancho 17 g, pasilla 7 g,
+-- las mismas fdc_id que ya usa su nutrición); si no, la mediana de los conteos minoristas publicados
+-- (Mexican Please, Spices Inc, CooksInfo), en gramo entero, mínimo 1. Sólo llena el hueco
+-- (`density_g_per_unit IS NULL`) de filas SIN precio; la procedencia se añade a `container_source`.
+-- Efecto declarado: la nutrición de «N chiles X» también resuelve gramos (antes no se contaban).
+--
 -- FUENTE: Open Food Facts (https://world.openfoodfacts.org), base de datos bajo licencia ODbL — la
 -- atribución es obligatoria: «© colaboradores de Open Food Facts, ODbL». Se consultó el campo
 -- `quantity` de los productos de cada país y categoría (search.openfoodfacts.org, 28-sep), se
@@ -57,7 +67,7 @@ ALTER TABLE public.master_ingredients
     ADD COLUMN IF NOT EXISTS container_source text;
 
 COMMENT ON COLUMN public.master_ingredients.container_source IS
-    '[P1-PLAN-LOTE-791] Procedencia de market_container/container_weight_g/available_sizes_g (fuente, n, mediana, decisión). NULL = sin procedencia registrada.';
+    '[P1-PLAN-LOTE-791] Procedencia de market_container/container_weight_g/available_sizes_g (fuente, n, mediana, decisión) y, en los seis chiles secos, de density_g_per_unit (tras « | »). NULL = sin procedencia registrada.';
 
 -- ── 1. Las 64 filas beta envasadas (sin precio RD) ────────────────────────────────────────────────
 UPDATE public.master_ingredients AS m
@@ -151,11 +161,29 @@ WHERE m.name = v.name
   AND m.market_container IS NULL
   AND m.market_packages IS NULL;
 
+-- ── 2b. Peso de UN chile seco (revisión ronda 2): el conteo se vuelve gramos ──────────────────────
+UPDATE public.master_ingredients AS m
+SET density_g_per_unit = u.g_por_unidad,
+    container_source   = concat_ws(' | ', m.container_source, u.fuente)
+FROM (VALUES
+    ('Chile ancho'   , 17, '[P1-PLAN-LOTE-791] peso por unidad: USDA FoodData Central SR Legacy fdc 169396 "Peppers, ancho, dried", porción "1 pepper" = 17 g (la misma fdc_id de la fila; CooksInfo 17 g, Mexican Please ~19 g)'),
+    ('Chile pasilla' ,  7, '[P1-PLAN-LOTE-791] peso por unidad: USDA FoodData Central SR Legacy fdc 168579 "Peppers, pasilla, dried", porción "1 pepper" = 7 g (la misma fdc_id de la fila; Mexican Please ~9,5 g)'),
+    ('Chile guajillo',  9, '[P1-PLAN-LOTE-791] peso por unidad: sin porción USDA; mediana de los conteos minoristas publicados: Mexican Please 6 por 2 oz (9,4 g), Spices Inc 2 por oz (14,2 g), CooksInfo 10 por 40 g (4 g) -> 9 g'),
+    ('Chile mulato'  , 11, '[P1-PLAN-LOTE-791] peso por unidad: sin porción USDA; mediana de los conteos minoristas publicados: Spices Inc 2-3 por oz (11,3 g), n=1 -> 11 g. Confianza baja (el ancho, el mismo poblano seco, pesa 17 g en USDA)'),
+    ('Chile chipotle',  3, '[P1-PLAN-LOTE-791] peso por unidad: sin porción USDA; mediana de los conteos minoristas publicados del chipotle morita: Mexican Please 16 por 2 oz (3,5 g), Spices Inc 9 por oz (3,2 g) -> 3 g'),
+    ('Chile de árbol',  1, '[P1-PLAN-LOTE-791] peso por unidad: sin porción USDA propia (la genérica "Peppers, hot chile, sun-dried", fdc 168570, da 0,5 g); mediana de los conteos minoristas publicados: Mexican Please 50 por 2 oz (1,1 g), Spices Inc 50 por oz (0,6 g) -> 1 g (gramo entero, mínimo 1)')
+) AS u(name, g_por_unidad, fuente)
+WHERE m.name = u.name
+  AND m.density_g_per_unit IS NULL
+  AND COALESCE(m.price_per_lb, 0) = 0
+  AND COALESCE(m.price_per_unit, 0) = 0;
+
 -- ── 3. Sanity acotado al lote ─────────────────────────────────────────────────────────────────────
 DO $$
 DECLARE
     _beta text[] := ARRAY['Azafrán', 'Alioli', 'Anchoas', 'Mazapán', 'Membrillo dulce', 'Turrón', 'Nata', 'Aceite de achiote', 'Achiote', 'Chile ancho', 'Chile chipotle', 'Chile de árbol', 'Chile guajillo', 'Chile mulato', 'Chile pasilla', 'Chocolate de mesa', 'Flor de Jamaica', 'Frijoles refritos', 'Huitlacoche', 'Panela', 'Tortilla de maíz', 'Crema mexicana', 'Arequipe', 'Natilla', 'Suero costeño', 'Champús', 'Aderezo ranch', 'Jarabe de arce', 'Kétchup', 'Salsa barbacoa', 'Salsa inglesa', 'Crema agria', 'Crema mitad y mitad', 'Ensalada de macarrones', 'Suero de mantequilla', 'Chile en polvo', 'Arándanos rojos', 'Bolitas de papa', 'Malvaviscos', 'Papas ralladas', 'Pretzels', 'Chili con carne', 'Frijoles horneados', 'Salsa de salchicha', 'Bagels', 'Galletas Graham', 'Masa para pie', 'Mezcla para panqueques', 'Pan de maíz', 'Panecillos de mantequilla', 'Panecillos ingleses', 'Pepperoni', 'Queso en hebras', 'Sémola de maíz', 'Wafles', 'Sazonador para tacos', 'Aceitunas rellenas', 'Adobo', 'Alcaparrado', 'Especias para arroz con dulce', 'Harina de yuca', 'Pique', 'Ron de cocina', 'Sofrito'];
     _do   text[] := ARRAY['Dátiles', 'Cúrcuma'];
+    _chiles text[] := ARRAY['Chile ancho', 'Chile pasilla', 'Chile guajillo', 'Chile mulato', 'Chile chipotle', 'Chile de árbol'];
     _n int;
     _lista text;
 BEGIN
@@ -177,6 +205,13 @@ BEGIN
     WHERE name = ANY(_beta || _do) AND (container_weight_g < 0.1 OR container_weight_g > 1500);
     IF _n > 0 THEN
         RAISE EXCEPTION '[P1-PLAN-LOTE-791] envases fuera de [0,1 g, 1,5 kg]: %', _lista;
+    END IF;
+
+    -- Los seis chiles secos con su peso por unidad (bloque 2b): sin él, «3 chiles» vuelve a 1 paquete.
+    SELECT count(*), string_agg(name, ', ') INTO _n, _lista FROM public.master_ingredients
+    WHERE name = ANY(_chiles) AND NOT (COALESCE(density_g_per_unit, 0) > 0);
+    IF _n > 0 THEN
+        RAISE EXCEPTION '[P1-PLAN-LOTE-791] chiles secos sin peso por unidad: %', _lista;
     END IF;
 
     -- Ninguna fila con precio, salvo la excepción DO declarada, lleva la procedencia de este lote.

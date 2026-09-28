@@ -19,6 +19,9 @@ REVISIÓN RONDA 1 (verificar_envases.md): rótulos de las 66 filas contra una ta
 era circular), los chiles secos en paquete fuera del tope de condimentos (compra corta: 85 g de 240),
 una sola regla de tamaño (Adobo 227 g, Sofrito 340 g en frasco), la cabecera que ya no promete lo que el
 bloque DO no cumple, y la licencia ODbL + doc del lote.
+
+REVISIÓN RONDA 2: el suelo de gramos sólo en filas SIN precio (la lista DO de «Nueces mixtas» no cambia)
+y el peso por unidad de los seis chiles secos (el conteo se compra por sus gramos).
 """
 from __future__ import annotations
 
@@ -343,6 +346,17 @@ _COMIDA_EN_PAQUETE_791 = {"Chile ancho", "Chile chipotle", "Chile de árbol", "C
                           "Chile mulato", "Chile pasilla"}
 
 
+def _pesos_por_unidad(sql):
+    """[revisión ronda 2, defecto 2] El bloque de la migración con el peso de UN chile seco.
+    {nombre: (gramos, fuente)}; vacío si el bloque no existe."""
+    m = re.search(r"FROM \(VALUES\n((?:(?!FROM \(VALUES).)*?)\n\) AS u\(name, g_por_unidad, fuente\)", sql, re.S)
+    if not m:
+        return {}
+    filas = re.findall(r"\(\s*'((?:[^']|'')*)'\s*,\s*([\d.]+)\s*,\s*'((?:[^']|'')*)'\s*\)", m.group(1))
+    assert len(filas) == len([ln for ln in m.group(1).splitlines() if ln.strip()]), "una fila no se pudo leer"
+    return {n.replace("''", "'"): (float(g), f.replace("''", "'")) for n, g, f in filas}
+
+
 def _fila_del_lote(nombre, foto, sql):
     beta, do = _bloques(sql)
     v = {f[0]: f for f in beta + do}[nombre]
@@ -350,7 +364,8 @@ def _fila_del_lote(nombre, foto, sql):
     return {"name": nombre, "category": r["category"], "aliases": [], "default_unit": r["default_unit"],
             "price_per_lb": 0.0, "price_per_unit": 0.0, "market_container": v[1],
             "container_weight_g": v[2], "available_sizes_g": [v[2]], "market_packages": None,
-            "density_g_per_unit": None, "density_g_per_cup": None, "shelf_life_days": 180, "name_en": None}
+            "density_g_per_unit": _pesos_por_unidad(sql).get(nombre, (None,))[0],
+            "density_g_per_cup": None, "shelf_life_days": 180, "name_en": None}
 
 
 def _obj(fila, n_envases, base_qty, base_unit):
@@ -380,13 +395,13 @@ def test_cada_fila_pequena_del_lote_sabe_si_es_especiero_o_comida(sql, foto):
         assert por_conteo["market_qty_numeric"] == 1
 
 
-def _lista_mx(sql, foto, monkeypatch, lineas):
+def _lista_mx(sql, foto, monkeypatch, lineas,
+              filas=("Chile guajillo", "Chile chipotle", "Chile en polvo")):
     import envase_pais as ep
     import shopping_calculator as sc
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
-    monkeypatch.setattr(sc, "_master_cache", [_fila_del_lote(n, foto, sql) for n in
-                                              ("Chile guajillo", "Chile chipotle", "Chile en polvo")])
+    monkeypatch.setattr(sc, "_master_cache", [_fila_del_lote(n, foto, sql) for n in filas])
     monkeypatch.setattr(sc, "_master_cache_ts", time.time() + 10 ** 6)
     monkeypatch.setattr(sc, "_VERIFIED_SHOPPING_NAMES", None, raising=False)
     with ep.lista_de_pais("MX"):
@@ -407,7 +422,8 @@ def test_cuatro_guajillos_de_60_g_no_se_quedan_en_un_paquete(sql, foto, monkeypa
 
 def test_un_chile_contado_no_es_un_paquete(sql, foto, monkeypatch):
     """El caso del replay (rdfinal, rdw): «1 chile chipotle seco» y «2 chiles guajillo» × 4. Sin peso
-    por unidad cada chile se convierte en un paquete; el tope sigue cortando esa inflación."""
+    por unidad cada chile se convertía en un paquete y el tope cortaba esa inflación; con el peso por
+    unidad de la 791 (ronda 2) son 6 g y 72 g: un paquete de 85 g basta, sin tope que lo decida."""
     por_nombre = _lista_mx(sql, foto, monkeypatch,
                            ["1 chile chipotle seco", "1 chile chipotle seco"] + ["2 chiles guajillo"] * 4)
     assert por_nombre["Chile chipotle"]["market_qty_numeric"] == 1, por_nombre["Chile chipotle"]
@@ -421,6 +437,112 @@ def test_el_knob_devuelve_el_tope_a_los_paquetes(sql, foto, monkeypatch):
     obj = _obj(fila, 3, 240.0, "g")
     assert sc._apply_condiment_sanity_cap(obj, fila, "DESPENSA", 7) is True
     assert obj["market_qty_numeric"] == 1
+
+
+# ── J. Revisión ronda 2 ────────────────────────────────────────────────────────────────────────
+#
+# Defecto 1 (IMPORTANTE, DO): el suelo de gramos valía para CUALQUIER fila Despensa en paquete de
+# ≤ 120 g. En la tabla viva la única fila DO con esa forma es «Nueces mixtas» (paquete de 100 g, CON
+# precio): 7 × «30 g de Nueces mixtas» pasaba de «1 paquete» (RD$95) a «3 paquetes» (RD$285), y la
+# mensual de RD$285 a RD$855. Arreglaba una compra corta anterior al lote, pero cambiaba listas DO sin
+# declararlo. El suelo queda para las filas SIN precio (el catálogo-país del lote): la lista dominicana
+# no cambia. La compra corta de las nueces sigue abierta y pide su propio lote.
+#
+# Defecto 2 (MENOR): el chile pedido por CONTEO («3 chiles anchos») no tenía peso por unidad, así que
+# el suelo de gramos no lo veía y el tope lo dejaba en 1 paquete: 21 anchos (~357 g) en «1 paquete»
+# de 85 g, sin nota. La 791 les da su peso por unidad (USDA SR Legacy donde existe; si no, la mediana
+# de los conteos minoristas publicados): el conteo se vuelve gramos y el suelo aplica.
+
+# La fila REAL (SELECT de solo lectura en Neon, 28-sep), sin los nutrientes.
+_NUECES_MIXTAS_DO = {
+    "name": "Nueces mixtas", "category": "Despensa", "default_unit": "lb",
+    "aliases": ["nueces mixtas", "nueces", "nuez", "mixed nuts", "frutos secos mixtos", "nueces surtidas"],
+    "name_en": "Mixed nuts", "price_per_lb": 430.91, "price_per_unit": 95, "market_container": "paquete",
+    "container_weight_g": 100, "available_sizes_g": [100],
+    "market_packages": [{"unit": "paquete", "grams": 100, "label": "100 g", "price": 95}],
+    "density_g_per_unit": None, "density_g_per_cup": 137, "shelf_life_days": 180, "ready_to_eat": True,
+    "prep_methods": ["ninguno", "tostar"],
+}
+
+
+def _lista_do_nueces(monkeypatch, dias, suelo):
+    import envase_pais as ep
+    import shopping_calculator as sc
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+    monkeypatch.setenv("MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR", "true" if suelo else "false")
+    monkeypatch.setattr(sc, "_master_cache", [dict(_NUECES_MIXTAS_DO)])
+    monkeypatch.setattr(sc, "_master_cache_ts", time.time() + 10 ** 6)
+    monkeypatch.setattr(sc, "_VERIFIED_SHOPPING_NAMES", None, raising=False)
+    with ep.lista_de_pais("DO"):
+        res = sc.aggregate_and_deduct_shopping_list(["30 g de Nueces mixtas"] * dias, structured=True,
+                                                    categorize=False, cycle_days=dias, num_days=dias)
+    return [i for i in res if isinstance(i, dict)]
+
+
+@pytest.mark.parametrize("dias,paquetes,costo", [(7, 1, 95.0), (30, 3, 285.0)])
+def test_la_lista_dominicana_de_nueces_no_cambia(monkeypatch, dias, paquetes, costo):
+    """La lista DO de nueces es la de antes del lote, byte a byte: con el suelo encendido sale lo mismo
+    que con el suelo apagado (el código base)."""
+    con = _lista_do_nueces(monkeypatch, dias, suelo=True)
+    sin = _lista_do_nueces(monkeypatch, dias, suelo=False)
+    assert con == sin, (con, sin)
+    (it,) = con
+    assert it["market_qty_numeric"] == paquetes, it["display_string"]
+    assert it["estimated_cost_rd"] == costo, it
+
+
+def test_el_suelo_de_gramos_solo_mira_filas_sin_precio():
+    import envase_pais as ep
+    obj = {"base_qty": 210.0, "base_unit": "g"}
+    assert ep.tope_de_comida(obj, dict(_NUECES_MIXTAS_DO), 1) == 1  # con precio: el tope de siempre
+    sin_precio = dict(_NUECES_MIXTAS_DO, price_per_lb=0, price_per_unit=0, market_packages=None)
+    assert ep.tope_de_comida(obj, sin_precio, 1) == 3               # catálogo-país: 210 g / 100 g
+    # Un paquete con precio sólo en `market_packages` también es fila con precio.
+    solo_paquete = dict(_NUECES_MIXTAS_DO, price_per_lb=0, price_per_unit=0)
+    assert ep.tope_de_comida(obj, solo_paquete, 1) == 1
+
+
+def test_los_seis_chiles_llevan_su_peso_por_unidad(sql):
+    pesos = _pesos_por_unidad(sql)
+    assert set(pesos) == _COMIDA_EN_PAQUETE_791, sorted(pesos)
+    for n, (g, fuente) in pesos.items():
+        assert 0.3 <= g <= 30, (n, g)
+        assert fuente.startswith("[P1-PLAN-LOTE-791] peso por unidad"), n
+        assert "USDA" in fuente or "mediana" in fuente, n
+    # USDA SR Legacy tiene porción «1 pepper» para dos de ellos: se usa tal cual.
+    assert pesos["Chile ancho"][0] == 17 and "169396" in pesos["Chile ancho"][1]
+    assert pesos["Chile pasilla"][0] == 7 and "168579" in pesos["Chile pasilla"][1]
+    bloque = sql.split(") AS u(name, g_por_unidad, fuente)", 1)[1].split(";", 1)[0]
+    assert "m.density_g_per_unit IS NULL" in bloque, "sólo llena el hueco"
+    assert "COALESCE(m.price_per_lb, 0) = 0" in bloque and "COALESCE(m.price_per_unit, 0) = 0" in bloque
+    # La procedencia se AÑADE a la del envase, no la pisa; y el sanity nombra los mismos seis.
+    assert "container_source   = concat_ws(' | ', m.container_source, u.fuente)" in sql
+    chiles = re.search(r"_chiles text\[\] := ARRAY\[(.*?)\];", sql, re.S)
+    assert chiles and set(re.findall(r"'([^']*)'", chiles.group(1))) == set(pesos)
+    assert "chiles secos sin peso por unidad" in sql
+
+
+_SEIS_CHILES = ("Chile ancho", "Chile chipotle", "Chile de árbol", "Chile guajillo", "Chile mulato",
+                "Chile pasilla")
+
+
+@pytest.mark.parametrize("linea,veces,nombre,minimo", [
+    ("3 chiles anchos", 7, "Chile ancho", 4),      # 21 × 17 g = 357 g: antes «1 paquete» (85 g)
+    ("2 chiles anchos", 4, "Chile ancho", 2),      # 8 × 17 g = 136 g: antes 1
+    ("3 chiles mulatos", 7, "Chile mulato", 3),    # 21 × 11 g = 231 g: antes 1
+    ("4 chiles pasilla", 7, "Chile pasilla", 3),   # 28 × 7 g = 196 g: antes 1
+    ("2 chiles guajillo", 4, "Chile guajillo", 1),  # 8 × 9 g = 72 g: un paquete basta
+    ("1 chile chipotle seco", 2, "Chile chipotle", 1),
+    ("5 chiles de árbol", 7, "Chile de árbol", 1),
+])
+def test_el_chile_contado_se_compra_por_sus_gramos(sql, foto, monkeypatch, linea, veces, nombre, minimo):
+    por_nombre = _lista_mx(sql, foto, monkeypatch, [linea] * veces, filas=_SEIS_CHILES)
+    it = por_nombre[nombre]
+    assert it["base_unit"] == "g", it
+    assert it["market_qty_numeric"] >= minimo, it["display_string"]
+    assert it["market_qty_numeric"] * 85 >= 0.9 * it["base_qty"], it  # la compra cubre la receta
+    assert "85 g" in it["display_string"], it["display_string"]      # y el tamaño no se borra
 
 
 # ── I. Licencia y doc (revisión ronda 1, defectos 7 y 10) ──────────────────────────────────────
@@ -438,7 +560,9 @@ def test_el_lote_tiene_su_doc():
     doc = (_BACKEND / "docs" / "envases_y_catalogo_por_pais.md").read_text(encoding="utf-8")
     for ancla in ("P1-PLAN-LOTE-790", "P1-PLAN-LOTE-791", "MEALFIT_COUNTRY_CATALOG_FOREIGN_FLAG",
                   "MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR", "MEALFIT_UNIT_SYSTEM_BY_COUNTRY",
-                  "catalogo_de_otro_pais", "p1_plan_lote_791_envases_beta_2026_09_28.sql"):
+                  "catalogo_de_otro_pais", "p1_plan_lote_791_envases_beta_2026_09_28.sql",
+                  # [revisión ronda 2] el suelo sólo en filas sin precio (DO no cambia) y el peso por unidad
+                  "Nueces mixtas", "sin precio", "peso por unidad"):
         assert ancla in doc, ancla
     assert "docs/envases_y_catalogo_por_pais.md" in (_BACKEND / "envase_pais.py").read_text(encoding="utf-8")
 
