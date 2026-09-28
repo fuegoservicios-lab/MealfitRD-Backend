@@ -3817,14 +3817,13 @@ def search_deep_memory(user_id: str, query: str) -> str:
     # Si está OFF, la tool NO consulta user_facts (lectura pausada). Los datos
     # quedan en BD, intactos, listos para ser usados de nuevo cuando reactive.
     # Defensive: si el perfil no tiene el campo (legacy), default TRUE.
-    try:
-        _profile = get_user_profile(user_id)
-        if _profile and "long_term_memory_enabled" in _profile:
-            if not bool(_profile.get("long_term_memory_enabled", True)):
-                logger.info(f"[LONG-TERM-MEMORY-TOGGLE] search_deep_memory pausado por user toggle (user={user_id}).")
-                return "La memoria a largo plazo está desactivada en tus ajustes. Actívala desde Settings para acceder a tus recuerdos históricos."
-    except Exception:
-        pass  # fail-open: si el lookup falla, comportamiento legacy
+    # [P1-PLAN-LOTE-719 · 2026-09-28] Misma lectura fail-CLOSED que el resto del coach (`memoria_largo_plazo`): con la
+    # base caída esto seguía consultando («fail-open»), justo lo que el usuario pidió no hacer al pausarla.
+    from memoria_largo_plazo import memoria_activa
+    if not memoria_activa(user_id, donde="search_deep_memory"):
+        logger.info(f"[LONG-TERM-MEMORY-TOGGLE] search_deep_memory pausado o ilegible (user={user_id}).")
+        return ("La memoria a largo plazo está pausada o no se pudo comprobar ahora mismo. Si el usuario quiere que la "
+                "uses, que la active en Configuración → Capacidades → «Memoria a Largo Plazo».")
 
     # [P1-SEARCH-DEEP-MEMORY-CACHE · 2026-05-19] Cache lookup. La key
     # normaliza la query (strip + lower + cap 256) para colapsar

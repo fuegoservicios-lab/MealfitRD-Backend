@@ -180,6 +180,8 @@ def _patch(monkeypatch, health_profile, uid="user-p3-country"):
 
     monkeypatch.setattr(db_module, "execute_sql_write", lambda *a, **kw: [{"id": uid}])
     monkeypatch.setattr(db_module, "execute_sql_query", lambda *a, **kw: None)
+    # [P1-PLAN-LOTE-717] `health_profile` se fusiona ahora por el helper atómico (FOR UPDATE + invalidación post-commit).
+    monkeypatch.setattr(db_module, "update_user_health_profile_atomic", lambda _uid, mut: (lambda hp: mut(hp) or hp)({}))
     body = ProfilePatchBody(health_profile=health_profile)
     return asyncio.run(api_patch_profile(body=body, verified_user_id=uid))
 

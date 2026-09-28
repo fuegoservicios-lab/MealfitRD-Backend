@@ -23,6 +23,9 @@ from db import (
     get_user_facts_by_metadata, acquire_fact_lock, release_fact_lock,
     enqueue_pending_fact, dequeue_pending_facts, delete_pending_facts
 )
+# [P1-PLAN-LOTE-717 · 2026-09-28] El interruptor «Memoria a Largo Plazo» (SSOT de su lectura). Nombres de módulo para
+# que los tests los sustituyan aquí.
+from memoria_largo_plazo import MemoriaIlegible, leer_memoria, memoria_activa
 
 # ============================================================
 # [P3-FACT-SHADOW-AB · 2026-05-14] Shadow A/B PRO → FLASH
@@ -1094,6 +1097,14 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         logger.info("⏭️ [P1-CHAT-FACTS-AUDIT] Extracción omitida: sin usuario real (invitado).")
         return
 
+    # [P1-PLAN-LOTE-717 · 2026-09-28] La memoria PAUSADA no aprende, y la guarda va aquí, en el DESTINO: los dos caminos
+    # del chat y los textos libres de los paneles de Configuración (clínico, súper personalización) llegan a esta
+    # función, y los paneles no miraban el interruptor. Antes del router (LLM), del lock y de la cola: un mensaje de
+    # alguien con la memoria pausada no se procesa ni se ENCOLA para después. Ilegible ⇒ pausada (fail-closed).
+    if not memoria_activa(user_id, donde="extracción"):
+        logger.info(f"⏭️ [P1-PLAN-LOTE-717] Extracción omitida: memoria a largo plazo pausada (o ilegible) de {user_id}.")
+        return
+
     # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Token del lock: se libera SOLO si se adquirió,
     # y solo el lock propio. Antes el `finally` llamaba a `release_fact_lock` también en
     # los caminos «el router dice que no hay nada» y «no conseguí el lock, encolo»:
@@ -1171,9 +1182,28 @@ def process_pending_queue_sync(user_id: str):
         return
 
     try:
+        # [P1-PLAN-LOTE-717 · 2026-09-28] La cola tampoco aprende de quien pausó la memoria. Ilegible ⇒ este tick no toca
+        # nada (fail-closed sin perder datos: el siguiente reintenta).
+        try:
+            _memoria_on = leer_memoria(user_id)
+        except MemoriaIlegible as _mi:
+            logger.warning(f"⚠️ [P1-PLAN-LOTE-717] cola de {user_id}: memoria ilegible, no se procesa en este tick: {_mi}")
+            return
         pending_items = dequeue_pending_facts(user_id)
         if not pending_items:
             logger.info("➡️ [WEBHOOK QUEUE] No hay hechos pendientes en cola.")
+            return
+        if not _memoria_on:
+            # Pausada: los pendientes se CONSERVAN sin procesar (se enviaron con la memoria encendida; si la reactiva
+            # dentro del tope de antigüedad, se aprenden entonces) y los que ya lo superan se descartan, como siempre.
+            _caducados = [p["id"] for p in pending_items if _pending_item_too_old(p)]
+            if _caducados:
+                delete_pending_facts(_caducados)
+            logger.info(
+                f"⏸ [P1-PLAN-LOTE-717] cola de {user_id}: memoria pausada — "
+                f"{len(pending_items) - len(_caducados)} pendiente(s) conservado(s) sin procesar, "
+                f"{len(_caducados)} caducado(s) descartado(s)."
+            )
             return
 
         logger.info(f"\n📋 [FACT EXTRACTOR WEBHOOK] Iniciando drenaje estructurado para {len(pending_items)} mensajes pendientes...")

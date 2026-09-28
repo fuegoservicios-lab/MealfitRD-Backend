@@ -638,7 +638,10 @@ def test_sin_la_migracion_la_tarjeta_aparece_y_el_patch_da_500(monkeypatch):
     monkeypatch.setattr(no, "execute_sql_query", _sin_columna)
     monkeypatch.setattr(no, "execute_sql_write", _sin_columna)
     assert no.nevera_activa("u1") is True
-    assert no.estado_nevera("u1") == {"enabled": None, "activa": True, "auto_off_at": None, "disponible": True}
+    # [P1-PLAN-LOTE-717 · 2026-09-28] La lectura de CONFIGURACIÓN ya no inventa «activa»: lanza y el GET responde 503
+    # (antes, `{"activa": True}` sobre una base que no respondió). La decisión del motor (arriba) sigue fallando abierta.
+    with pytest.raises(no.NeveraIlegible):
+        no.estado_nevera("u1")
     with pytest.raises(HTTPException) as e:
         asyncio.run(pref.api_set_nevera(body=pref.NeveraPreferenceBody(enabled=False), verified_user_id="u1"))
     assert e.value.status_code == 500

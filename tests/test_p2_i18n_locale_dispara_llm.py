@@ -87,9 +87,8 @@ _SIN_LIMITADOR_PENDIENTES = {
     "PATCH /inventory/items/{item_id}",
     "DELETE /inventory/items/{item_id}",
     "DELETE /inventory/items",
-    "PUT /user/preferences/super-personalization",
-    "PUT /user/preferences/clinical-profile",
-    "PUT /user/preferences/staple-foods",
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Los tres PUT de los paneles de Configuración ganaron `_PANEL_PREFERENCES_LIMITER`:
+    # salen de la deuda (el trinquete se aprieta).
 }
 
 

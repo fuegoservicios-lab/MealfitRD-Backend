@@ -94,6 +94,8 @@ def test_flag_text_parity():
         ({"labs": {"tfg": 45}}, "nefrólogo"),
         ({"labs": {"acido_urico": 8}}, "limita vísceras"),
         ({"weightHistory": {"unintentionalLoss": True}}, "NO INTENCIONAL"),
+        # [P1-PLAN-LOTE-719] el texto libre clínico también veta el bypass (y su texto ya existía).
+        ({"freeText": "Me quitaron la vesícula en 2024"}, "Contexto clínico en sus palabras"),
     ]
     for cp, marker in cases:
         flags = clinical_profile_active_flags(_fd(cp))

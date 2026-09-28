@@ -99,10 +99,18 @@ def nevera_activa(user_id: Optional[str]) -> bool:
     return nevera_activa_de(row or {})
 
 
+class NeveraIlegible(RuntimeError):
+    """[P1-PLAN-LOTE-717] La base no respondió: no se sabe en qué estado está la Nevera de este usuario."""
+
+
 def estado_nevera(user_id: str) -> dict:
     """Lo que pinta Configuración: la elección (NULL/TRUE/FALSE), si está activa, cuándo la apagó el sistema y si el
-    interruptor existe (knob)."""
-    row: dict = {}
+    interruptor existe (knob).
+
+    [P1-PLAN-LOTE-717 · 2026-09-28] Lectura ESTRICTA: si la base no responde lanza `NeveraIlegible` (el endpoint dice
+    503). Antes devolvía `activa: true` inventado y Configuración pintaba un interruptor que no reflejaba nada. Sin
+    fila sí es «activa»: es el valor de la regla para un perfil que no existe, no un fallo. Las DECISIONES del motor
+    (`nevera_activa`) siguen fallando abiertas, a propósito (ver su docstring)."""
     try:
         row = execute_sql_query(
             "SELECT plan_mode, nevera_enabled, nevera_auto_off_at FROM user_profiles WHERE id = %s",
@@ -110,6 +118,7 @@ def estado_nevera(user_id: str) -> dict:
         ) or {}
     except Exception as e:
         logger.warning(f"[P1-NEVERA-OPCIONAL] estado_nevera({user_id}) sin leer: {e}")
+        raise NeveraIlegible(f"{type(e).__name__}: {e}") from e
     auto = row.get("nevera_auto_off_at")
     return {
         "enabled": row.get("nevera_enabled"),

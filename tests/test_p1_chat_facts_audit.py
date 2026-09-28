@@ -50,6 +50,10 @@ def fe(monkeypatch):
     ):
         monkeypatch.setattr(_fe, name, _boom)
     monkeypatch.setattr(_fe, "_invoke_with_shadow", _boom)
+    # [P1-PLAN-LOTE-717] El extractor y la cola leen el interruptor de memoria (DB): aquí, encendida. La pausa se prueba
+    # en test_p1_plan_lote_717_memory_sync.py. `raising=False`: el fixture sigue corriendo contra el código previo.
+    monkeypatch.setattr(_fe, "memoria_activa", lambda *_a, **_k: True, raising=False)
+    monkeypatch.setattr(_fe, "leer_memoria", lambda *_a, **_k: True, raising=False)
     # getattr: el fixture debe poder correr contra el código previo (verificación
     # «falla antes / pasa después») sin convertir cada test en un ERROR de montaje.
     getattr(_fe, "_PENDING_RETRY_NOT_BEFORE", {}).clear()

@@ -448,13 +448,21 @@ def _estimate_cost_usd(prompt: str, output_obj) -> float:
 
 def consolidate_user(user_id: str) -> dict:
     """Ciclo de Dreaming para UN usuario. Devuelve un dict de telemetría con
-    status ∈ {ok, skipped_few_facts, skipped_locked, budget_exhausted,
+    status ∈ {ok, skipped_few_facts, skipped_locked, skipped_memory_paused, budget_exhausted,
     breaker_open, error}. Best-effort: no propaga excepciones."""
     from fact_extractor import get_embedding
     from db_facts import acquire_fact_lock, release_fact_lock
 
     result = {"user_id": user_id, "status": "ok", "facts_in": 0, "merges": 0,
               "contradictions": 0, "profile_updated": False, "cost_usd": 0.0}
+
+    # [P1-PLAN-LOTE-719 · 2026-09-28] «Memoria a Largo Plazo» pausada (o ilegible: fail-closed, `memoria_largo_plazo`)
+    # ⇒ Dreaming no toca a este usuario. Consolidar y sintetizar su modelo ES aprender de él, y el interruptor promete
+    # «la IA no aprende». No se marca nada como consolidado: al reactivarla, el ciclo lo retoma donde estaba.
+    from memoria_largo_plazo import memoria_activa
+    if not memoria_activa(user_id, donde="dreaming"):
+        result["status"] = "skipped_memory_paused"
+        return result
 
     # Exclusión por-usuario contra el extractor online Y otros workers del dream.
     if not acquire_fact_lock(user_id):

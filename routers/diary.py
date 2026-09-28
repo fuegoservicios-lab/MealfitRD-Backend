@@ -2061,12 +2061,21 @@ _P14_VALID_PREFERENCES = ("manual", "auto_proxy")
 
 @router.get("/preferences/logging")
 def api_get_logging_preference(verified_user_id: str = Depends(get_verified_user_id)):
+    # [P1-PLAN-LOTE-717 · 2026-09-28] `get_verified_user_id` devuelve None sin sesión válida: aquí eso era un SELECT
+    # `WHERE id = NULL` y un 404 «perfil no encontrado» que no era verdad. Sin sesión ⇒ 401; base caída ⇒ 503 con el
+    # código estable de las lecturas de Configuración (la UI ofrece «Reintentar»), no un 500 crudo.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
     from db_core import execute_sql_query
-    row = execute_sql_query(
-        "SELECT logging_preference FROM user_profiles WHERE id = %s",
-        (verified_user_id,),
-        fetch_one=True,
-    )
+    try:
+        row = execute_sql_query(
+            "SELECT logging_preference FROM user_profiles WHERE id = %s",
+            (verified_user_id,),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-717] logging_preference de {verified_user_id} ilegible → 503: {e}")
+        raise HTTPException(status_code=503, detail="preference_unavailable")
     if not row:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
     return {"logging_preference": row.get("logging_preference") or "manual"}
@@ -2077,6 +2086,10 @@ def api_set_logging_preference(
     data: dict = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
 ):
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Sin sesión el PUT corría `UPDATE … WHERE id = NULL` (cero filas) y respondía
+    # `success: true`: la preferencia «se guardaba» sin guardarse. Ahora 401 sin sesión y 404 si no tocó ninguna fila.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
     pref = (data or {}).get("logging_preference")
     if pref not in _P14_VALID_PREFERENCES:
         raise HTTPException(
@@ -2084,9 +2097,12 @@ def api_set_logging_preference(
             detail=f"logging_preference debe ser uno de: {list(_P14_VALID_PREFERENCES)}.",
         )
     from db_core import execute_sql_write
-    execute_sql_write(
-        "UPDATE user_profiles SET logging_preference = %s WHERE id = %s",
+    filas = execute_sql_write(
+        "UPDATE user_profiles SET logging_preference = %s WHERE id = %s RETURNING id",
         (pref, verified_user_id),
+        returning=True,
     )
+    if not filas:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado.")
     return {"success": True, "logging_preference": pref}
 

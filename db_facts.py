@@ -572,6 +572,14 @@ def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
 def search_user_facts(user_id: str, query_embedding: list, query_text: Optional[str] = None, threshold: float = 0.5, limit: int = 5):
     """Busca hechos similares usando búsqueda híbrida (si hay texto) o vectorial pura en Neon."""
     if not connection_pool: return []
+    # [P1-PLAN-LOTE-719 · 2026-09-28] «Memoria a Largo Plazo» pausada (o ilegible: fail-closed) ⇒ la búsqueda semántica
+    # no devuelve nada, para TODOS sus lectores: el chat ya no la llamaba (P1-PLAN-LOTE-717), pero la generación de
+    # planes (`graph_orchestrator`, RAG del contexto) seguía usando lo aprendido. Las alergias, condiciones y rechazos
+    # NO pasan por aquí: llegan por `get_user_facts_by_metadata` y por `health_profile`, así que pausar la memoria no
+    # quita ninguna protección clínica.
+    from memoria_largo_plazo import memoria_activa
+    if not memoria_activa(user_id, donde="search_user_facts"):
+        return []
     
     # Auto-Limpieza de síntomas temporales antes de buscar
     delete_expired_temporal_facts(user_id)
@@ -635,7 +643,11 @@ def delete_user_fact(fact_id: str, user_id: str):
     [P1-CHAT-FACTS-AUDIT · 2026-09-14] Invariante I2: la mutación filtra
     `AND user_id = %s`. Antes borraba por id a secas y el pipeline de hechos le
     pasaba ids propuestos por un LLM: un id de otra cuenta que se colara se
-    desactivaba. `user_id` es obligatorio; sin él no se toca nada."""
+    desactivaba. `user_id` es obligatorio; sin él no se toca nada.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] Es la herramienta del EXTRACTOR (hecho sustituido por otro más
+    nuevo). El «Olvidar» que pide el usuario NO pasa por aquí: va por `forget_user_fact`, que borra
+    la fila de verdad."""
     if not connection_pool: return None
     if not user_id:
         logger.error("[P1-CHAT-FACTS-AUDIT] delete_user_fact sin user_id — rechazado (I2).")
@@ -657,6 +669,69 @@ def delete_user_fact(fact_id: str, user_id: str):
     except Exception as e:
         logger.error(f"Error haciendo soft delete a user_fact: {e}")
         return None
+
+
+# [P1-PLAN-LOTE-716 · 2026-09-28] «Olvidar» desde Ajustes → Memoria es un BORRADO de verdad, no el soft delete de
+# arriba. `delete_user_fact` marca `is_active = FALSE` y nadie purgaba esas filas: el recuerdo «olvidado» seguía en la
+# base para siempre y el export de datos lo devolvía (`SELECT *` sin mirar `is_active`). Medido el 28-sep: 84 de las 93
+# filas de `user_facts` estaban inactivas. El soft delete sigue siendo la herramienta del EXTRACTOR (un hecho sustituido
+# por otro más nuevo) y del Dreaming (fusiones reversibles); la del USUARIO es esta.
+#
+# Qué referencia a un hecho (esquema de producción, 28-sep): NINGUNA FK apunta a `user_facts`. Lo único que guarda su
+# id es `user_memory_profile.evidence_fact_ids` (UUID[], sin FK): la síntesis del Dreaming. Ahí no basta con sacar el
+# id del array: el TEXTO de `user_model` se redactó a partir de ese hecho y puede repetirlo, y el coach lo seguiría
+# «recordando». Si el perfil lo cita, se borra esa fila en la MISMA transacción; el Dreaming la rehace con los hechos
+# que quedan en su próximo ciclo (si está encendido). Las búsquedas (`match_user_facts`, `hybrid_search_user_facts`,
+# `match_user_facts_hybrid_metadata`) ya filtraban `is_active`: lo que cambia es que la fila deja de existir.
+def forget_user_fact(fact_id: str, user_id: str) -> str:
+    """Borra (hard delete) UN hecho del usuario. Devuelve "deleted", "not_found" o "forbidden".
+
+    La pertenencia se lee con `SELECT ... FOR UPDATE` y el DELETE filtra además `AND user_id = %s` (I2), todo en una
+    transacción: sin ventana entre la comprobación y el borrado. Levanta la excepción si la base falla — el endpoint la
+    distingue de «no es tuyo» (503 frente a 403) —, y ValueError sin `user_id`.
+    """
+    if not user_id:
+        raise ValueError("forget_user_fact exige user_id (I2).")
+    try:
+        fact_uuid = str(uuid.UUID(str(fact_id)))
+    except (ValueError, TypeError, AttributeError):
+        # Un id que no es uuid no existe; mandarlo a la base haría que el cast fallara como si la base estuviera caída.
+        return "not_found"
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    from psycopg.rows import dict_row
+
+    perfil_borrado = 0
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT user_id::text AS user_id FROM public.user_facts WHERE id = %s FOR UPDATE",
+                    (fact_uuid,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return "not_found"
+                if str(row.get("user_id")) != str(user_id):
+                    return "forbidden"
+                cur.execute(
+                    "DELETE FROM public.user_facts WHERE id = %s AND user_id = %s",
+                    (fact_uuid, user_id),
+                )
+                cur.execute(
+                    "DELETE FROM public.user_memory_profile "
+                    "WHERE user_id = %s AND %s::uuid = ANY(evidence_fact_ids)",
+                    (user_id, fact_uuid),
+                )
+                perfil_borrado = max(int(getattr(cur, "rowcount", 0) or 0), 0)
+    # Tras el COMMIT: el contexto RAG cacheado podía servir el hecho hasta su TTL.
+    _invalidate_rag_cache(str(user_id))
+    logger.info(
+        f"🧽 [P1-PLAN-LOTE-716] Hecho {fact_uuid[:8]} olvidado (hard delete) para {str(user_id)[:8]}"
+        f"{' + síntesis del Dreaming que lo citaba' if perfil_borrado else ''}."
+    )
+    return "deleted"
+
 
 def enqueue_pending_fact(user_id: str, message: str, recent_history: str = ""):
     """Encola un mensaje pendiente de extracción de hechos en la DB."""
