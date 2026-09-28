@@ -315,29 +315,52 @@ def _avisar_fuga(pais, sellados) -> None:
         pais, len(sellados), ", ".join(sellados))
 
 
-# ── (c) Un PAQUETE pequeño es comida, no especiero ───────────────────────────────────────────────
+# ── (c) En un PAQUETE de comida, el tope de condimentos no corta los gramos de la receta ──────────
 
 # [P1-PLAN-LOTE-791 · 2026-09-28 · revisión ronda 1, defecto 1] El tope de condimentos
 # (P1-SHOPLIST-SANITY-CAP) reconoce un condimento por su DATO: Despensa + envase ≤ 120 g. Con los
 # envases del lote 791, los seis chiles secos mexicanos (paquete de 85 g) cumplían las dos cosas y
 # el tope los capaba a 1-3 paquetes por ciclo: 4 × «60 g de Chile guajillo» en una semana (240 g)
-# salían «1 paquete de Chile guajillo», 85 g de 240, sin nota de cobertura. La premisa del tope —un
-# frasco dura meses, «el consumo de un condimento no escala con las recetas que lo mencionan»— vale
-# para el ESPECIERO (sobre, frasco, pote, caja), no para un paquete de comida: cada salsa gasta sus
-# chiles. Lo que separa sigue siendo un DATO de la fila (`market_container`), no una lista de nombres,
-# y el fallo va hacia el lado que el propio tope declara barato: una fila nueva en paquete no se capa
-# (ítem feo), jamás se capa comida a ciegas (compra corta). Sin los diminutivos: la «fundita» o
-# «bolsita» de orégano sí es especiero. Knob `MEALFIT_CONDIMENT_CAP_FOOD_PACKAGE_EXEMPT` (default on).
+# salían «1 paquete de Chile guajillo», 85 g de 240, sin nota de cobertura.
+#
+# Quitarles el tope a secas fue el primer arreglo, y el replay de 426 planes guardados lo tumbó: los
+# planes reales escriben el chile por CONTEO («1 chile chipotle seco», «½ chile chipotle») y, sin peso
+# por unidad en la fila, cada chile se convierte en UN paquete — la misma inflación que el tope corta
+# en «1 orégano» × 30. Sin tope, dos chiles pedían «3 paquetes (85 g c/u)».
+#
+# La regla que sirve a los dos casos: en un envase de COMIDA (paquete, bolsa, funda — el especiero es
+# sobre, frasco, pote, caja) el tope no baja de los envases que cubren la demanda que la receta dio EN
+# GRAMOS (`base_unit == "g"`); la que llega por conteo se capa como siempre. El especiero no cambia: su
+# premisa («el consumo de un condimento no escala con las recetas que lo mencionan») sigue valiendo
+# aunque la demanda venga en gramos. Sale del DATO de la fila (`market_container`), no de una lista de
+# nombres. Sin los diminutivos: la «fundita» de orégano sí es especiero. Knob
+# `MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR` (default on).
 _ENVASES_DE_COMIDA = frozenset({"paquete", "paquetes", "bolsa", "bolsas", "funda", "fundas"})
 
 
 def envase_de_comida(master_item) -> bool:
-    """¿La fila se vende en un envase de COMIDA (paquete, bolsa, funda)? Entonces el tope de
-    condimentos no la toca aunque su envase sea pequeño. Nunca revienta: corre en el agregador."""
+    """¿La fila se vende en un envase de COMIDA (paquete, bolsa, funda) y no de especiero?"""
     try:
-        if not _env_bool("MEALFIT_CONDIMENT_CAP_FOOD_PACKAGE_EXEMPT", True):
-            return False
         envase = (master_item or {}).get("market_container") if isinstance(master_item, dict) else None
         return str(envase or "").strip().lower() in _ENVASES_DE_COMIDA
     except Exception:
         return False
+
+
+def tope_de_comida(market_obj, master_item, tope) -> int:
+    """El tope de envases de condimento, subido hasta los envases que cubren la demanda EN GRAMOS
+    cuando la fila es un paquete de comida. Cualquier otro caso devuelve `tope` tal cual. Nunca
+    revienta: corre en el camino caliente del agregador."""
+    try:
+        if not _env_bool("MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR", True) or not envase_de_comida(master_item):
+            return tope
+        if str((market_obj or {}).get("base_unit") or "").strip().lower() != "g":
+            return tope  # conteo sin peso: «1 chile» no es «1 paquete»
+        gramos = float((market_obj or {}).get("base_qty") or 0)
+        envase_g = float((master_item or {}).get("container_weight_g") or 0)
+        if gramos <= 0 or envase_g <= 0:
+            return tope
+        import math
+        return max(int(tope), int(math.ceil(gramos / envase_g - 1e-6)))
+    except Exception:
+        return tope

@@ -329,8 +329,13 @@ def test_cada_envase_curado_llega_a_la_lista_con_el_rotulo_de_su_pais(sql, foto,
 # El tope de condimentos (P1-SHOPLIST-SANITY-CAP) capa lo que es Despensa con envase ≤ 120 g. Con
 # los envases de este lote, los seis chiles secos (paquete de 85 g) entraban: 4 × «60 g de Chile
 # guajillo» en una semana mexicana (240 g) salían «1 paquete de Chile guajillo» — 85 g de 240, sin
-# nota de cobertura y sin el tamaño. Antes del lote salía «½ lb». El especiero (sobre, frasco, pote)
-# dura meses; un PAQUETE es comida: los chiles de una salsa, las nueces de una merienda.
+# nota de cobertura y sin el tamaño. Antes del lote salía «½ lb».
+#
+# PERO el replay de 426 planes guardados enseñó el otro lado: los planes reales escriben el chile por
+# CONTEO («1 chile chipotle seco», «½ chile chipotle») y, sin peso por unidad, cada chile se convierte
+# en UN paquete — la misma inflación que el tope corta en el orégano. Quitar el tope a los paquetes
+# pedía «3 paquetes (85 g c/u)» para dos chiles. La regla que sirve a los dos: en un paquete de
+# COMIDA el tope no corta por debajo de lo que la receta pidió EN GRAMOS; el conteo sí se capa.
 
 _ESPECIERO_791 = {"Azafrán", "Chile en polvo", "Sazonador para tacos", "Especias para arroz con dulce",
                   "Alcaparrado", "Cúrcuma"}
@@ -348,9 +353,16 @@ def _fila_del_lote(nombre, foto, sql):
             "density_g_per_unit": None, "density_g_per_cup": None, "shelf_life_days": 180, "name_en": None}
 
 
+def _obj(fila, n_envases, base_qty, base_unit):
+    return {"name": fila["name"], "market_qty_numeric": float(n_envases), "market_qty": str(n_envases),
+            "market_unit": fila["market_container"], "display_qty": f"{n_envases} {fila['market_container']}s",
+            "base_qty": base_qty, "base_unit": base_unit}
+
+
 def test_cada_fila_pequena_del_lote_sabe_si_es_especiero_o_comida(sql, foto):
     """Todas las filas del lote que el tope podría capar (Despensa, envase ≤ 120 g) están clasificadas
-    a propósito, y el tope real (`_apply_condiment_sanity_cap`) sólo capa el especiero."""
+    a propósito. Con demanda EN GRAMOS que llena 5 envases, el tope real (`_apply_condiment_sanity_cap`)
+    capa el especiero y deja la comida; con demanda por CONTEO (5 unidades → 5 envases) capa los dos."""
     import shopping_calculator as sc
     beta, do = _bloques(sql)
     cat = {r["name"]: r["category"] for r in foto}
@@ -360,26 +372,32 @@ def test_cada_fila_pequena_del_lote_sabe_si_es_especiero_o_comida(sql, foto):
         "una fila nueva del lote cae bajo el tope de condimentos: clasifícala (especiero o comida)")
     for n in sorted(pequenas):
         fila = _fila_del_lote(n, foto, sql)
-        obj = {"name": n, "market_qty_numeric": 5.0, "market_qty": "5",
-               "market_unit": fila["market_container"], "display_qty": f"5 {fila['market_container']}s"}
-        capo = sc._apply_condiment_sanity_cap(obj, fila, "DESPENSA", 7)
-        assert capo is (n in _ESPECIERO_791), (n, fila["market_container"], obj)
+        en_gramos = _obj(fila, 5, 5 * fila["container_weight_g"], "g")
+        assert sc._apply_condiment_sanity_cap(en_gramos, fila, "DESPENSA", 7) is (n in _ESPECIERO_791), (
+            n, en_gramos)
+        por_conteo = _obj(fila, 5, 5.0, "unidad")
+        assert sc._apply_condiment_sanity_cap(por_conteo, fila, "DESPENSA", 7) is True, (n, por_conteo)
+        assert por_conteo["market_qty_numeric"] == 1
 
 
-def test_cuatro_guajillos_de_60_g_no_se_quedan_en_un_paquete(sql, foto, monkeypatch):
+def _lista_mx(sql, foto, monkeypatch, lineas):
     import envase_pais as ep
     import shopping_calculator as sc
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
-    monkeypatch.setattr(sc, "_master_cache", [_fila_del_lote("Chile guajillo", foto, sql),
-                                              _fila_del_lote("Chile en polvo", foto, sql)])
+    monkeypatch.setattr(sc, "_master_cache", [_fila_del_lote(n, foto, sql) for n in
+                                              ("Chile guajillo", "Chile chipotle", "Chile en polvo")])
     monkeypatch.setattr(sc, "_master_cache_ts", time.time() + 10 ** 6)
     monkeypatch.setattr(sc, "_VERIFIED_SHOPPING_NAMES", None, raising=False)
     with ep.lista_de_pais("MX"):
-        res = sc.aggregate_and_deduct_shopping_list(
-            ["60 g de Chile guajillo"] * 4 + ["1 cdta de Chile en polvo"] * 30,
-            structured=True, categorize=False, cycle_days=7, num_days=7)
-    por_nombre = {i.get("name"): i for i in res if isinstance(i, dict)}
+        res = sc.aggregate_and_deduct_shopping_list(lineas, structured=True, categorize=False,
+                                                    cycle_days=7, num_days=7)
+    return {i.get("name"): i for i in res if isinstance(i, dict)}
+
+
+def test_cuatro_guajillos_de_60_g_no_se_quedan_en_un_paquete(sql, foto, monkeypatch):
+    por_nombre = _lista_mx(sql, foto, monkeypatch,
+                           ["60 g de Chile guajillo"] * 4 + ["1 cdta de Chile en polvo"] * 30)
     chile = por_nombre["Chile guajillo"]
     assert chile["market_qty_numeric"] == 3, chile["display_string"]  # 240 g / 85 g → 3 paquetes
     assert "85 g" in chile["display_string"], chile["display_string"]
@@ -387,13 +405,22 @@ def test_cuatro_guajillos_de_60_g_no_se_quedan_en_un_paquete(sql, foto, monkeypa
     assert por_nombre["Chile en polvo"]["market_qty_numeric"] == 1
 
 
+def test_un_chile_contado_no_es_un_paquete(sql, foto, monkeypatch):
+    """El caso del replay (rdfinal, rdw): «1 chile chipotle seco» y «2 chiles guajillo» × 4. Sin peso
+    por unidad cada chile se convierte en un paquete; el tope sigue cortando esa inflación."""
+    por_nombre = _lista_mx(sql, foto, monkeypatch,
+                           ["1 chile chipotle seco", "1 chile chipotle seco"] + ["2 chiles guajillo"] * 4)
+    assert por_nombre["Chile chipotle"]["market_qty_numeric"] == 1, por_nombre["Chile chipotle"]
+    assert por_nombre["Chile guajillo"]["market_qty_numeric"] == 1, por_nombre["Chile guajillo"]
+
+
 def test_el_knob_devuelve_el_tope_a_los_paquetes(sql, foto, monkeypatch):
     import shopping_calculator as sc
-    monkeypatch.setenv("MEALFIT_CONDIMENT_CAP_FOOD_PACKAGE_EXEMPT", "false")
+    monkeypatch.setenv("MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR", "false")
     fila = _fila_del_lote("Chile guajillo", foto, sql)
-    obj = {"name": "Chile guajillo", "market_qty_numeric": 3.0, "market_unit": "paquete",
-           "display_qty": "3 paquetes"}
+    obj = _obj(fila, 3, 240.0, "g")
     assert sc._apply_condiment_sanity_cap(obj, fila, "DESPENSA", 7) is True
+    assert obj["market_qty_numeric"] == 1
 
 
 # ── I. Licencia y doc (revisión ronda 1, defectos 7 y 10) ──────────────────────────────────────
@@ -410,7 +437,7 @@ def test_la_licencia_del_uso_nuevo_esta_documentada():
 def test_el_lote_tiene_su_doc():
     doc = (_BACKEND / "docs" / "envases_y_catalogo_por_pais.md").read_text(encoding="utf-8")
     for ancla in ("P1-PLAN-LOTE-790", "P1-PLAN-LOTE-791", "MEALFIT_COUNTRY_CATALOG_FOREIGN_FLAG",
-                  "MEALFIT_CONDIMENT_CAP_FOOD_PACKAGE_EXEMPT", "MEALFIT_UNIT_SYSTEM_BY_COUNTRY",
+                  "MEALFIT_CONDIMENT_CAP_FOOD_GRAMS_FLOOR", "MEALFIT_UNIT_SYSTEM_BY_COUNTRY",
                   "catalogo_de_otro_pais", "p1_plan_lote_791_envases_beta_2026_09_28.sql"):
         assert ancla in doc, ancla
     assert "docs/envases_y_catalogo_por_pais.md" in (_BACKEND / "envase_pais.py").read_text(encoding="utf-8")

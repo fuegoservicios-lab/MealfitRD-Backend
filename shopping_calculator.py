@@ -1014,13 +1014,13 @@ def _apply_condiment_sanity_cap(market_obj, master_item, display_category, cycle
     if not _shoplist_sanity_cap_enabled() or not isinstance(market_obj, dict):
         return False
     _envase = (master_item or {}).get("container_weight_g") if isinstance(master_item, dict) else None
-    if not _is_condiment_presentation(display_category, _envase) or _envase_de_comida(master_item):  # [P1-PLAN-LOTE-791] paquete = comida (envase_pais.py)
+    if not _is_condiment_presentation(display_category, _envase):
         return False
     try:
         _qty = float(market_obj.get("market_qty_numeric") or 0)
     except (TypeError, ValueError):
         return False
-    _tope = _condiment_package_cap(cycle_days)
+    _tope = _tope_de_comida(market_obj, master_item, _condiment_package_cap(cycle_days))  # [P1-PLAN-LOTE-791] paquete de comida: no bajo los gramos de la receta (envase_pais.py)
     if _qty <= _tope:
         return False
     _factor = _tope / _qty if _qty else 1.0
@@ -5232,7 +5232,7 @@ def _lbs_to_market_fraction(lbs: float) -> "tuple[int, str]":
 
 # [P1-PLAN-LOTE-790 · 2026-09-28] El rótulo del envase habla el sistema del PAÍS de la lista (ES/MX/CO en g/kg/ml, DO/US/PR como
 # siempre, decimales bajo 1 g) y el país viaja por contexto desde el sello del plan. Vive en `envase_pais.py` (tope de líneas).
-from envase_pais import etiqueta_envase as _sku_size_label, con_pais_del_plan as _con_pais_del_plan, sellar_catalogo_de_otro_pais as _sellar_catalogo_de_otro_pais, envase_de_comida as _envase_de_comida  # noqa: E402
+from envase_pais import etiqueta_envase as _sku_size_label, con_pais_del_plan as _con_pais_del_plan, sellar_catalogo_de_otro_pais as _sellar_catalogo_de_otro_pais, tope_de_comida as _tope_de_comida  # noqa: E402
 
 
 # [P1-COHERENCE-BASE-QTY · 2026-07-26] Cantidad en unidad BASE del item de la lista, en el
