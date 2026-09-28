@@ -471,6 +471,16 @@ def test_v2_el_acompanante_con_con_no_le_quita_el_estado_a_la_cabeza(idx):
     assert _v2(["Sirve el huevo revuelto con atún en agua (ya viene cocido)."], idx) == []
 
 
+def test_v2_la_coordinacion_con_y_tambien_sube(idx):
+    """«la pechuga de pollo y el filete de pescado blanco (ya viene cocido)»: la base acusaba a los dos crudos y la
+    primera versión sólo al pescado (sonda del revisor)."""
+    assert _v2(["Incorpora la pechuga de pollo y el filete de pescado blanco (ya viene cocido)."], idx) == [
+        "Filete de pescado blanco", "Pechuga de pollo"]
+    # un verbo por medio corta la coordinación: «revuelve los huevos y agrega el pescado» no dice nada del huevo
+    assert _v2(["Revuelve los huevos y agrega el filete de pescado blanco (ya viene cocido)."], idx) == [
+        "Filete de pescado blanco"]
+
+
 def test_v2_sin_dueno_en_su_oracion_mira_la_anterior(idx):
     assert _v2(["Incorpora el filete de pescado blanco. Ya viene cocido, así que solo caliéntalo 1 minuto."], idx) == [
         "Filete de pescado blanco"]

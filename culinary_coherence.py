@@ -781,8 +781,10 @@ def _v1_verbo_alimento(day, meal, index) -> list:
 
 
 # [P1-PLAN-LOTE-745 · ronda 1] «la pechuga … CON la cebolla (ya viene cocida)»: lo que va tras «con» es el acompañante,
-# y la frase habla también de la cabeza. «ya viene cocido EL filete»: el sujeto pospuesto, justo detrás del estado.
-_V2_ACOMPANANTE_RE = re.compile(r"\bcon\s+(?:(?:el|la|los|las|un|una|unos|unas)\s+)?$")
+# y la frase habla también de la cabeza; igual con la coordinación directa «la pechuga de pollo Y el filete (ya viene
+# cocido)» (un verbo por medio —«revuelve los huevos y agrega el filete»— la corta). «ya viene cocido EL filete»: el
+# sujeto pospuesto, justo detrás del estado.
+_V2_ACOMPANANTE_RE = re.compile(r"\b(?:con|y|e)\s+(?:(?:el|la|los|las|un|una|unos|unas)\s+)?$")
 _V2_POSPUESTO_RE = re.compile(r"\w*\s+(?:(?:el|la|los|las|un|una)\s+)?")
 
 
@@ -791,7 +793,7 @@ def _v2_duenos_del_estado(texto_norm: str, m_estado, spans: list, index: dict) -
 
     1. el más cercano que lo PRECEDE en su oración («atún en agua (ya viene cocido)», «el casabe ya está cocido»),
        saltando condimentos («la pechuga de pollo con sal y pimienta (ya está cocida)»: la sal no viene cocida) y, si
-       ese dueño no es listo-para-comer y va tras «con», también el alimento al que acompaña;
+       ese dueño no es listo-para-comer y va tras «con» o «y», también el alimento al que acompaña;
     2. si nada lo precede, el sujeto POSPUESTO («ya viene cocido el filete de pescado blanco»);
     3. si la oración no nombra ninguno, el último alimento de la oración ANTERIOR («Incorpora el filete de pescado
        blanco. Ya viene cocido, así que solo caliéntalo»);
