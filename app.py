@@ -955,7 +955,11 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # breaker abierto o sin saldo, el veredicto se pide al modelo de respaldo en vez de regenerar el plan entero.
 # [P1-PLAN-LOTE-616 · 2026-09-27] (backend) Sin sustituto admitido para la fruta de un plato salado (Nevera exigida),
 # la fruta va al lado en vez de dejar el pareo al revisor: dos regeneraciones completas menos por bloque.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-616 · 2026-09-27"
+# [P1-PLAN-LOTE-620 · 2026-09-27] (backend) El panel /admin se lee de un vistazo: cifras destacadas, subfilas tras su
+# total, códigos en español, barras del gasto y qué midió cada corrida del banco. (Frontend: 621.)
+# [P1-PLAN-LOTE-622 · 2026-09-27] (backend) El aviso de comida del coach nombra la comida en el idioma del usuario: en
+# inglés decía «go ahead and merendar now».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-622 · 2026-09-27"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
