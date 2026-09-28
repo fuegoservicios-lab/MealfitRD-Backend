@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """[P1-PLAN-LOTE-746 · 2026-09-28] El revisor no rechaza con confirmaciones, y la alerta cuenta ENTREGAS.
 
-Producción, 29-ago → 28-sep (journal de `mealfit-backend`): 140 rechazos del revisor médico con 210 razones. 172 las
-añaden los guards deterministas (nevera, piso de proteína, horario, repetición…) y son defectos por construcción. De las
-38 que escribió el revisor LLM, 7 no señalan ningún defecto; cinco de ellas llegaron JUNTAS en una sola revisión
+Producción, 29-ago → 28-sep (journal de `mealfit-backend`): 140 rechazos del revisor médico con 210 razones. 172 no las
+escribió el LLM: 163 las añaden los guards deterministas (nevera, piso de proteína, horario, repetición…) y son defectos
+por construcción; 9 son errores de infraestructura del revisor («Error transitorio» 6, «Error en la estructura» 3), que
+tampoco toca esta regla. De las 38 que escribió el revisor LLM, 7 no señalan ningún defecto; cinco de ellas llegaron
+JUNTAS en una sola revisión
 (25-sep 04:33:03, bloque 92328ff7 semana 2), con severidad «minor», y quemaron dos intentos:
 
     · «No se detectan alérgenos declarados (paciente sin alergias).»
@@ -63,7 +65,19 @@ def test_ninguna_razon_real_ni_ambigua_de_produccion_se_descarta():
         assert not rc.es_confirmacion_sin_defecto(x["texto"]), (x["n"], x["texto"])
 
 
-def test_ninguna_razon_de_los_guards_deterministas_se_descarta():
+def test_los_guards_deterministas_se_anaden_despues_del_filtro():
+    """[revisión 1, defecto 8] Lo que protege las razones deterministas es el ORDEN: `review_plan_node` rebaja las
+    razones del LLM y SOLO DESPUÉS los guards añaden las suyas, así que el filtro nunca las ve."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index("_downgrade_reviewer_non_issues(approved, issues, severity)")
+    for ancla in ("ALÉRGENO DETECTADO (rechazo de seguridad clínica)", "TIRAMINA CON IMAO",
+                  "ALIMENTO RECHAZADO POR EL USUARIO"):
+        assert i < src.index(ancla), ancla
+
+
+def test_canario_si_el_filtro_se_moviera_tras_los_guards_tampoco_los_tocaria():
+    """Hoy no protege el camino vivo (ver el test de arriba): es un canario por si el filtro se moviera detrás de los
+    guards. Incluye las 2 de infraestructura del revisor."""
     for texto in _FIX["deterministas"]:
         assert not rc.es_confirmacion_sin_defecto(texto), texto
 
@@ -112,10 +126,82 @@ NO_SE_DESCARTAN = [
     "Día 2: casabe en dos comidas (sin problema de sodio).",
 ]
 
+# [revisión 1 · 2026-09-28] Defectos clínicos reales que la primera versión aprobaba con severidad `critical`.
+# Ninguno lleva «pero/debe»: se quedan por la regla, no por un giro.
+# (1) «(sin problema…)» al final no absuelve las cláusulas anteriores, y «(sin problemas)» sin «en este punto» no es
+#     la conclusión del punto.
+DEFECTO_1_SIN_PROBLEMA = [
+    "Anemia: el desayuno del Día 2 combina leche con avena, fuente de hierro no hemo. Hidratación adecuada (sin problemas).",
+    "El paciente rechazó el hígado; el Día 3 incluye hígado encebollado. El paciente rechazó la berenjena; no aparece en "
+    "el plan (sin problema en este punto).",
+    "Día 2: pollo en dieta vegetariana (violación). Día 3: correcto (sin problemas).",
+    "Paciente renal: el Día 2 aporta 4200 mg de potasio. Sodio adecuado (sin problemas).",
+    "Día 4, Almuerzo contiene 'pan de trigo', prohibido temporalmente en el perfil. Día 5 correcto (sin problema en este "
+    "punto).",
+    "Paciente renal: el Día 2 aporta 4200 mg de potasio. Sodio adecuado (sin problema en este punto).",
+    "El Día 3 incluye hígado encebollado, que el paciente rechazó (sin problema en este punto).",
+]
+# (2) el texto libre (cola y paréntesis) no puede llevar un hallazgo
+DEFECTO_2_TEXTO_LIBRE = [
+    "No se detectan alérgenos declarados (la merienda del Día 3 contiene maní).",
+    "Ningún alimento prohibido por el médico se retiró del plan.",
+    "El plan respeta las restricciones del paciente y contiene maní en el Día 3.",
+    "El plan respeta las restricciones declaradas (la merienda del Día 3 contiene maní).",
+    "La dieta vegetariana se respeta en el Día 1 y el Día 2 incluye pollo.",
+    "Dieta 'vegetariana' respetada (el Día 2 lleva pollo).",
+    "No hay interacciones con la warfarina en la cena del Día 2 (espinaca diaria).",
+    "Ningún alimento rechazado fue retirado del plan.",
+    "El plan contiene 7 días (con maní en el Día 3) pero el plan solicitado es de 3 días; esto es una inconsistencia "
+    "estructural, no un riesgo médico.",
+]
+# (3) «restricción declarada» con verbo de posesión o artículo definido es la restricción AUSENTE: un defecto
+DEFECTO_3_RESTRICCION = [
+    "El plan no incluye la restricción de sodio declarada para la hipertensión.",
+    "El plan no contiene la restricción calórica declarada.",
+    "No se incluye la restricción de potasio declarada.",
+    "El plan no presenta la restricción de gluten declarada.",
+    "El plan no tiene la restricción de purinas declarada.",
+    "Sin la restricción de purinas declarada.",
+    "No hay la restricción de lactosa declarada.",
+]
+# (1 bis) El ejemplo del hígado de la revisión salía aprobado AUNQUE este lote se apague: la regla del 227 buscaba
+#     «no aparece en el plan» en CUALQUIER oración, y otra oración de la misma razón afirmaba el defecto. Ahora esa
+#     regla exige que ninguna otra oración afirme contenido del plan (la de la CONCLUSIÓN, «…por lo que este punto se
+#     cumple», no cambia: es la del 25-sep).
+HUECO_227 = [
+    "El Día 3 incluye hígado encebollado, que el paciente rechazó. La berenjena no aparece en el plan.",
+    "El paciente rechazó el hígado; el Día 3 incluye hígado encebollado. El paciente rechazó la berenjena; no aparece en "
+    "el plan.",
+    "La cena del Día 2 contiene 150 g de pollo en una dieta vegetariana. El pescado no figura en el plan.",
+    "El Día 3 incluye hígado encebollado, que el paciente rechazó, y la berenjena no aparece en el plan.",
+]
+
+
+def test_la_regla_del_227_sigue_rebajando_lo_que_se_niega_solo():
+    """Lo que el 227 rebaja por diseño sigue igual: el veredicto sobre lo mismo que se describe, y la ausencia sin
+    ninguna afirmación de contenido (con «no» delante, «no contiene» no afirma)."""
+    for t in ("Día 1 | Cena: contiene queso mozzarella (lácteo) — sin alergia a lácteos declarada, no es violación.",
+              # corpus de baterías: el veredicto va tras «;», en la MISMA oración
+              "Día 1 | Merienda y Día 2 | Merienda: contienen mantequilla de maní; sin alergia declarada, no constituye "
+              "violación.",
+              "Los rechazos declarados son Pescado y Berenjena, y ninguno aparece en el plan. El plan es seguro.",
+              "El plan no contiene pescado ni berenjena; ninguno aparece en el plan.",
+              "El paciente rechazó la berenjena; no se incluye berenjena y no aparece en el plan."):
+        ok, issues, sev, avisos = rnd._downgrade_reviewer_non_issues(False, [t], "minor")
+        assert (ok, issues, sev, avisos) == (True, [], "low", [t]), t
+NO_SE_DESCARTAN += DEFECTO_1_SIN_PROBLEMA + DEFECTO_2_TEXTO_LIBRE + DEFECTO_3_RESTRICCION + HUECO_227
+
 
 def test_lo_que_no_es_una_confirmacion_se_queda():
     for texto in NO_SE_DESCARTAN:
         assert not rc.es_confirmacion_sin_defecto(texto), texto
+
+
+def test_los_defectos_de_la_revision_siguen_rechazando_con_su_severidad():
+    """Por el camino completo (lote 227 + este): con severidad `critical` el plan sigue rechazado y la razón intacta."""
+    for texto in DEFECTO_1_SIN_PROBLEMA + DEFECTO_2_TEXTO_LIBRE + DEFECTO_3_RESTRICCION + HUECO_227:
+        ok, issues, sev, avisos = rnd._downgrade_reviewer_non_issues(False, [texto], "critical")
+        assert (ok, issues, sev, avisos) == (False, [texto], "critical", []), texto
 
 
 SE_DESCARTAN = [
@@ -134,6 +220,57 @@ SE_DESCARTAN = [
 def test_otras_confirmaciones_de_la_misma_forma_tambien():
     for texto in SE_DESCARTAN:
         assert rc.es_confirmacion_sin_defecto(texto), texto
+
+
+def test_replay_de_los_140_rechazos_solo_cambia_la_revision_del_25_sep(monkeypatch):
+    """Reproduce la cifra del informe desde lo commiteado: cadena completa de rebajas (demandas de verificación →
+    227 → este lote) sobre las razones LLM de cada rechazo; un rechazo con razones deterministas o de infraestructura
+    sigue rechazado. Antes: 1 (17-sep, anemia, por la rebaja de «confirmar» — riesgo abierto, fuera de este lote)."""
+    import graph_orchestrator as go
+    assert len(_FIX["rechazos"]) == 140
+    assert sum(len(r["llm"]) for r in _FIX["rechazos"]) == 38
+    assert sum(r["deterministas"] for r in _FIX["rechazos"]) == 163
+    assert sum(r["infraestructura"] for r in _FIX["rechazos"]) == 9
+
+    def aprobados(knob):
+        monkeypatch.setenv("MEALFIT_REVIEWER_CONFIRMATIONS_DISCARD", knob)
+        out = []
+        for r in _FIX["rechazos"]:
+            issues = [_LLM[n - 1]["texto"] for n in r["llm"]]
+            if not issues or r["deterministas"] or r["infraestructura"]:
+                continue
+            ok, iss, sev, _ = go._downgrade_reviewer_verification_demands(False, issues, r["severidad"])
+            ok, iss, sev, _ = rnd._downgrade_reviewer_non_issues(ok, iss, sev)
+            if ok:
+                out.append(r["ts"])
+        return out
+
+    antes, despues = aprobados("false"), aprobados("true")
+    assert antes == ["2026-09-17 05:41:47"], antes
+    assert sorted(despues) == ["2026-09-17 05:41:47", "2026-09-25 04:33:03"], despues
+
+
+def test_corpus_de_baterias_solo_descarta_las_dos_sin_defecto():
+    """Los 135 textos del revisor en los 919 planes de batería del VPS: solo dos se descartan, ambos sin defecto."""
+    corpus = [x["t"] for x in _FIX["corpus_baterias"]]
+    assert len(corpus) == 135
+    assert sorted(t for t in corpus if rc.motivo(t)) == [
+        "El paciente declaró que NO le gusta la berenjena; no aparece berenjena en el plan (sin problema en este punto).",
+        "No se detectan alérgenos declarados (el paciente no reporta alergias).",
+    ]
+
+
+def test_la_regla_depende_del_knob_del_227(monkeypatch):
+    """[revisión 1, defecto 7] Documentado: con `MEALFIT_REVIEWER_NON_ISSUES_ADVISORY` apagado,
+    `_downgrade_reviewer_non_issues` sale antes y esta regla no corre en el revisor (aunque su knob siga en True)."""
+    import graph_orchestrator as go
+    monkeypatch.setattr(go, "REVIEWER_NON_ISSUES_ADVISORY", False)
+    conf = _LLM[35]["texto"]
+    assert rc.es_confirmacion_sin_defecto(conf)
+    assert rnd._downgrade_reviewer_non_issues(False, [conf], "minor")[:2] == (False, [conf])
+    for f in ("revisor_confirmaciones.py", "revisor_no_defectos.py"):
+        src = (_BACKEND / f).read_text(encoding="utf-8")
+        assert "MEALFIT_REVIEWER_NON_ISSUES_ADVISORY" in src and "no corre" in src, f
 
 
 def test_una_confirmacion_junto_a_un_defecto_real_solo_se_va_ella():
@@ -246,6 +383,35 @@ def test_sin_cola_cuenta_la_ultima_corrida_de_la_clave_y_el_legado_una_por_fila(
     assert (r["entregas"], r["fallidas"], r["corridas"]) == (3, 2, 4), r
 
 
+def test_la_fila_que_la_cola_de_metricas_inserta_tras_completar_cuenta():
+    """[revisión 1, defecto 5] La fila `clinical_band` va por `_METRICS_EXECUTOR` (en cola): su `created_at` puede
+    caer DESPUÉS de completarse el bloque. Con margen de 2 min sigue siendo la entrega; fuera del margen, no."""
+    corridas = [_run(_t(4, 37), True, _W9), _run(_t(17, 2) + timedelta(seconds=40), False, _W9)]
+    r = er.contar_entregas(corridas, [{"plan_id": "3957a669", "semana": 9, "updated_at": _t(17, 2)}])
+    assert (r["entregas"], r["fallidas"]) == (1, 1), r
+    tarde = [_run(_t(4, 37), True, _W9), _run(_t(17, 5), False, _W9)]
+    r = er.contar_entregas(tarde, [{"plan_id": "3957a669", "semana": 9, "updated_at": _t(17, 2)}])
+    assert (r["entregas"], r["fallidas"]) == (1, 0), r
+
+
+def test_la_hora_de_entrega_es_learning_persisted_at_y_solo_cuentan_bloques_llm():
+    """[revisión 1, defecto 6] `updated_at` lo mueven también la GC de snapshots y `reservation_status`; la hora de la
+    compleción es `learning_persisted_at` (T2 y el chunk inicial la estampan en el mismo UPDATE). Un bloque completado
+    por shuffle/edge/emergencia no entregó la corrida LLM: no se le atribuye su revisión."""
+    corridas = [_run(_t(4, 37), False, _W9), _run(_t(18, 0), True, _W9)]
+    q = {"plan_id": "3957a669", "semana": 9, "updated_at": _t(18, 30), "completado_en": _t(4, 45)}
+    r = er.contar_entregas(corridas, [q])
+    assert (r["entregas"], r["fallidas"]) == (1, 1), r          # la de las 4:37, no la de las 18:00
+    for tier in ("shuffle", "edge", "emergency"):
+        r = er.contar_entregas(corridas, [dict(q, quality_tier=tier)])
+        assert r["entregas"] == 0, (tier, r)
+    for tier in ("llm", None):                                  # el chunk inicial no estampa quality_tier
+        assert er.contar_entregas(corridas, [dict(q, quality_tier=tier)])["entregas"] == 1, tier
+    sql = er._SQL_COMPLETADOS
+    assert "COALESCE(learning_persisted_at, updated_at) AS completado_en" in sql
+    assert "COALESCE(quality_tier, 'llm') = 'llm'" in sql
+
+
 def test_contar_entregas_revisadas_solo_lee(monkeypatch):
     llamadas = []
 
@@ -273,10 +439,11 @@ def test_contar_entregas_revisadas_falla_a_cero(monkeypatch):
     assert er.contar_entregas_revisadas(72) == (0, 0, 0)
 
 
-def _cron_con(monkeypatch, corridas, completados):
+def _cron_con(monkeypatch, corridas, completados, escrituras=None):
     import cron_tasks
     import db_core
-    escrituras = []
+    escrituras = [] if escrituras is None else escrituras
+    monkeypatch.delenv("MEALFIT_REVFAIL_RATE_LOOKBACK_H", raising=False)
     monkeypatch.setattr(cron_tasks, "execute_sql_write",
                         lambda sql, params=None: escrituras.append((str(sql), params)), raising=False)
     monkeypatch.setattr(db_core, "execute_sql_query",
@@ -285,6 +452,60 @@ def _cron_con(monkeypatch, corridas, completados):
     tick = [p for s, p in escrituras if "_review_failed_delivered_rate_alert_job_tick" in s]
     alerta = [p for s, p in escrituras if "INSERT INTO system_alerts" in s]
     return json.loads(tick[0][1]), alerta
+
+
+def _entregas(resultados):
+    """Una corrida y su compleción por bloque: `resultados` = review_passed de cada entrega."""
+    corridas = [_run(_t(1, i), ok, {"clave": f"p{i}:chunk_worker:initial", "plan_id": f"p{i}",
+                                    "contexto": "chunk_worker:initial", "semana": 1}) for i, ok in enumerate(resultados)]
+    return corridas, [{"plan_id": f"p{i}", "semana": 1, "updated_at": _t(2, 0)} for i in range(len(resultados))]
+
+
+def test_en_modo_entregas_la_ventana_por_defecto_es_una_semana(monkeypatch):
+    """[revisión 1, defecto 4] Prod: 15 bloques completados en 14 días (≈3,2 por 72 h) contra un mínimo de 5: con 72 h
+    la alerta casi nunca evaluaba. En modo entregas la ventana por defecto es 168 h; con el knob apagado, 72 h."""
+    tick, _ = _cron_con(monkeypatch, *_entregas([True] * 5))
+    assert tick["lookback_h"] == 168, tick
+    monkeypatch.setenv("MEALFIT_REVFAIL_COUNT_DELIVERIES", "false")
+    tick, _ = _cron_con(monkeypatch, *_entregas([True] * 5))
+    assert tick["lookback_h"] == 72, tick
+    monkeypatch.delenv("MEALFIT_REVFAIL_COUNT_DELIVERIES")
+    monkeypatch.setenv("MEALFIT_REVFAIL_RATE_LOOKBACK_H", "48")
+    import cron_tasks
+    import db_core
+    esc = []
+    monkeypatch.setattr(cron_tasks, "execute_sql_write", lambda sql, params=None: esc.append((str(sql), params)))
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda sql, params=None, **k: [])
+    cron_tasks._review_failed_delivered_rate_alert_job()
+    assert json.loads([p for s, p in esc if "_tick" in s][0][1])["lookback_h"] == 48   # el knob explícito manda
+
+
+def _resuelve_heredada(escrituras):
+    return [p for s, p in escrituras if "UPDATE system_alerts" in s and "n_corridas" in s]
+
+
+def test_la_alerta_abierta_por_corridas_se_cierra_con_muestra_insuficiente_bajo_el_umbral(monkeypatch):
+    """[revisión 1, defecto 4] La fila abierta hoy la escribió el conteo por CORRIDAS (su metadata no trae
+    `n_corridas`). Con muestra insuficiente el cron nunca la tocaba: queda abierta para siempre. Si las entregas de la
+    ventana están bajo el umbral, se cierra — SOLO esa fila heredada (una abierta por entregas espera la muestra)."""
+    esc = []
+    tick, alerta = _cron_con(monkeypatch, *_entregas([True, True, False]), escrituras=esc)   # 1/3 = 33 % > 20 %
+    assert "insufficient_samples" in tick["skip_reason"] and not alerta and not _resuelve_heredada(esc)
+    esc = []
+    tick, alerta = _cron_con(monkeypatch, *_entregas([True, True]), escrituras=esc)          # 0/2
+    assert "insufficient_samples" in tick["skip_reason"] and not alerta
+    upd = _resuelve_heredada(esc)
+    assert len(upd) == 1 and upd[0] == ("review_failed_delivered_rate_high",), esc
+    sql = [s for s, p in esc if "UPDATE system_alerts" in s][0]
+    assert "resolved_at IS NULL" in sql and "? 'n_corridas'" in sql and "NOT" in sql
+    assert tick["legacy_close_attempted"] is True
+    esc = []
+    tick, _ = _cron_con(monkeypatch, [], [], escrituras=esc)                                   # 0 entregas: sin evidencia
+    assert not _resuelve_heredada(esc) and tick["legacy_close_attempted"] is False
+    monkeypatch.setenv("MEALFIT_REVFAIL_COUNT_DELIVERIES", "false")                            # modo corridas: como antes
+    esc = []
+    _cron_con(monkeypatch, *_entregas([True, True]), escrituras=esc)
+    assert not _resuelve_heredada(esc)
 
 
 def test_el_cron_con_el_caso_del_28_sep_ya_no_alerta(monkeypatch):
