@@ -43989,7 +43989,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     all_ingredients, clean_pantry, strict_quantities=False,
                     country=country_for_form_data(form_data),
                 )
-                val_result = __import__("compras_pequenas").tolerar(val_result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
+                if val_result is not True:
+                    val_result = __import__("compras_pequenas").tolerar(val_result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas
                 if val_result is not True:
                     approved = False
                     issues.append(val_result)  # val_result es el string de error generado por constants.py
