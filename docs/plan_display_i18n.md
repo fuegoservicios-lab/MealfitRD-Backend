@@ -519,3 +519,14 @@ traducido (`display_name`, `meals_display_names`, vía `traduccion_para_mostrar`
 popeaba `_display`, y `/restore-local` y `/adopt-guest-plan` la quitan (`_quitar_display_provisional`). Ojo si se toca
 `_display_ya_usable`: una entrada provisional sólo tiene `name`, así que para un plato con receta o ingredientes NO es
 usable y se retraduce — que es lo que se quiere.
+
+## `P1-PLAN-LOTE-625` — la etiqueta se repone, la línea no se tira (2026-09-27)
+
+Medido en el único plan real traducido (fr-FR): 12 de 54 pasos volvían ENTEROS al español y la telemetría decía
+«16 de 16 escritas». El modelo escribía la tipografía francesa correcta («Mise en place : ») o traducía la etiqueta
+(«Coup de feu : »), y el control de vocabulario cerrado descartaba la línea completa. Ahora
+`_reponer_vocab_cerrado` pone la etiqueta española del original delante del texto que el modelo escribió tras sus
+dos puntos y la línea vuelve a pasar el mismo control; sin dos puntos en la cabeza (o con una cabeza de más de seis
+palabras) cae al español como antes. Las líneas que siguen cayendo se cuentan en el log (`[P1-PLAN-LOTE-625] N de M
+pasos quedaron en español`). Las cuatro directivas piden además las cifras en dígitos: «trois œufs» por «3 huevos»
+también devolvía el paso al español (el control de cifras sigue igual).
