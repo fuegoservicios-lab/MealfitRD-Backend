@@ -1917,7 +1917,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # rescate sobre Sardinas en lata). Encender esto sin re-medir T20 deshace parte de T20.
     # tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
     _tpl_factor = _low_template_coverage_penalty()
-    _tpl_country = form_data.get("country") if isinstance(form_data, dict) else None   # [P1-PLAN-LOTE-704] G75
+    _tpl_country = _variety_country   # [P1-PLAN-LOTE-704] G75: el país SSOT (DO con el knob apagado)
     if _tpl_factor < 1.0:
         try:
             protein_weights, _tpl_np = _apply_low_template_coverage_penalty(
