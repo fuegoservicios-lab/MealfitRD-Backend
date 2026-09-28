@@ -7963,13 +7963,14 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     # anti-repetición explícita. Mismo dict → los contextos de retry/surgical lo heredan gratis.
     try:
         _abd_days = skeleton_days[:days_in_chunk]
+        _abd_paises = [cultural_country_for_form_data(form_data, day_index=int(form_data.get("_days_offset", 0) or 0) + _abd_j) for _abd_j in range(len(_abd_days))]  # [P1-PLAN-LOTE-748] la cocina de cada día: UNA derivación por día, no por par (día, otro día)
         for _abd_i, _abd_sd in enumerate(_abd_days):
             if isinstance(_abd_sd, dict):
                 _abd_sd["_other_days_brief"] = [
                     {
                         "technique": str((_abd_od or {}).get("assigned_technique") or "").strip(),
                         "breakfast": str((_abd_od or {}).get("breakfast_category") or "").strip(),
-                        "country": cultural_country_for_form_data(form_data, day_index=int(form_data.get("_days_offset", 0) or 0) + _abd_j),  # [P1-PLAN-LOTE-748] la cocina de ESE día
+                        "country": _abd_paises[_abd_j],  # [P1-PLAN-LOTE-748] la cocina de ESE día
                     }
                     for _abd_j, _abd_od in enumerate(_abd_days)
                     if _abd_j != _abd_i and isinstance(_abd_od, dict)

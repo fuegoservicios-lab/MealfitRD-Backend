@@ -77,11 +77,22 @@ AVISO_DESAYUNO_BETA = "NO la cambies por la categoría de otro día"
 # [ronda 1] La A debe ser DISTINTA de las otras cuatro (schemas.py: «DEBE ser diferente para cada día»): fuera lo que ya
 # es la base de B (Avena/Cereales), C (Pan/Tostadas), D (Batido/Bowl, el yogur) y E (Revoltillo/Tortilla, el huevo).
 # «tortilla» NO está a propósito: el único perfil que la lista para el desayuno es MX, donde es la de MAÍZ, no la de
-# huevo de la E.
+# huevo de la E — y el dato lo dice («tortilla de maíz», ronda 2).
 _BASES_DE_OTRAS_CATEGORIAS = ("avena", "cereal", "granola", "pan", "tostada", "yogur", "yogurt", "batido", "bowl",
                               "huevo", "revoltillo")
 # §15a beta: «DESAYUNO … PROHIBIDO: … sopas sustanciosas» (el «caldo» del desayuno colombiano).
 _NO_ES_DESAYUNO = ("caldo", "sopa")
+# [ronda 2] La fruta va en TODO desayuno (regla 9: «base sólida + proteína + fruta») y es la base de la D (Batido/Bowl):
+# no es la identidad de la A. España quedaba en «Desayuno típico local (fruta)», que choca con las dos cosas ⇒ respaldo.
+_NO_ES_BASE_PROPIA = ("fruta",)
+
+# [ronda 2] La CLASE de un ítem, para la puerta de alergias. El vocabulario de alergias no expande la clase a sus
+# miembros (`_allergen_pool_item_banned('frijoles', ['legumbres'])` es False, y el escáner tampoco ve la legumbre en
+# «frijoles refritos»): la A se lo imponía a quien declaró «legumbres». Los MIEMBROS salen de la tupla con la que el
+# motor ya reconoce una legumbre (`graph_orchestrator._LEGUME_PROTEIN_HINT`); éstos son los dos nombres con que se
+# DECLARA la clase. La causa de fondo (el vocabulario) es un lote propio, junto con el de frutos secos.
+_CLASE_LEGUMBRE = ("legumbres", "leguminosas")
+_LEGUMBRES_RESPALDO = ("habichuela", "frijol", "lenteja", "garbanzo", "gandul", "guandul", "arveja", "guisante")
 
 _EXCLUSIVOS_DO_RESPALDO = ("casabe",)
 
@@ -165,6 +176,31 @@ def _desayuno_tipico(country) -> list:
         return []
 
 
+def _nombres_para_la_puerta(item) -> list:
+    """[ronda 2] Los nombres con que la puerta de alergias pregunta por un ítem de la A: el ítem, la BASE con que el
+    catálogo lo compra (`constants.GLOBAL_REVERSE_MAP`: «arepa» ⇒ «harina de maíz precocida») y, si es una legumbre,
+    el nombre de la CLASE. La puerta (`_allergen_pool_item_banned`) sólo casa el término declarado DENTRO del texto:
+    «arepa» no contiene «maíz» y «frijoles» no contiene «legumbres». El dato ya viene calificado («arepa de maíz»,
+    `cultural_profiles`); esto es la defensa para el que no lo venga."""
+    nombres = [item]
+    try:
+        from constants import GLOBAL_REVERSE_MAP
+        for clave in (str(item).strip().casefold(), _norm(item).strip()):
+            base = GLOBAL_REVERSE_MAP.get(clave)
+            if base and base not in nombres:
+                nombres.append(base)
+    except Exception:                                                          # noqa: BLE001
+        pass
+    try:
+        import graph_orchestrator as _go
+        miembros = tuple(_go._LEGUME_PROTEIN_HINT) or _LEGUMBRES_RESPALDO
+    except Exception:                                                          # noqa: BLE001
+        miembros = _LEGUMBRES_RESPALDO
+    if _contiene(item, miembros):
+        nombres.extend(_CLASE_LEGUMBRE)
+    return nombres
+
+
 def _vetados_por_dieta(dieta) -> tuple:
     """Lo que la dieta prohíbe, con el vocabulario del ESCÁNER de dieta (`graph_orchestrator._scan_diet_violations`),
     no con una lista nueva. «caldo» se suma para veg*: la línea dura vegana prohíbe «caldos de origen animal»."""
@@ -196,19 +232,22 @@ def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None,
 
     DO ⇒ la categoría tal cual. Beta ⇒ sólo la categoría A cambia: «Desayuno típico local (…)» con el desayuno típico del
     perfil de cocina del país (`cultural_profiles.PROFILES[...]['slot_affinity']`), SIN
-      · lo que ya es la base de otra categoría (la A tiene que ser distinta de las otras cuatro),
+      · lo que ya es la base de otra categoría (la A tiene que ser distinta de las otras cuatro) y la fruta, que va en
+        todo desayuno,
       · las sopas (§15a beta),
       · lo que `vetado` (la puerta de alergias y rechazos de `day_generator._vetado`) o la `dieta` prohíben: la A es
         el refugio de `desayuno_por_alergia.reasignar`, y un «⚠️ OBLIGATORIO … (avena, huevo, pan)» a un alérgico al
-        gluten y al huevo reabre el «ALÉRGENO DETECTADO» del lote 227.
+        gluten y al huevo reabre el «ALÉRGENO DETECTADO» del lote 227. [ronda 2] La puerta pregunta también por la base
+        del catálogo y la clase (`_nombres_para_la_puerta`): «arepa» a un alérgico al maíz, «frijoles» a quien declaró
+        «legumbres», y ni el escáner ni el backstop lo marcan después.
     Si no queda nada ⇒ `ETIQUETA_A_BETA_RESPALDO` (también en el brief). `detalle=False` (el brief de los OTROS días) da
     sólo el nombre, sin la lista. `pais_cocina` es un código YA canónico: el de la cocina de ESE día."""
     if categoria != ENUM_DESAYUNO_A or es_do(pais_cocina):
         return categoria
-    prohibidos = _BASES_DE_OTRAS_CATEGORIAS + _NO_ES_DESAYUNO + _vetados_por_dieta(dieta)
+    prohibidos = _BASES_DE_OTRAS_CATEGORIAS + _NO_ES_DESAYUNO + _NO_ES_BASE_PROPIA + _vetados_por_dieta(dieta)
     items = [i for i in _desayuno_tipico(pais_cocina) if not _contiene(i, prohibidos)]
     if vetado is not None:
-        items = [i for i in items if not vetado(i)]
+        items = [i for i in items if not any(vetado(n) for n in _nombres_para_la_puerta(i))]
     if not items:
         return ETIQUETA_A_BETA_RESPALDO
     return f"{_ETIQUETA_A_BETA_CORTA} ({', '.join(items)})" if detalle else _ETIQUETA_A_BETA_CORTA

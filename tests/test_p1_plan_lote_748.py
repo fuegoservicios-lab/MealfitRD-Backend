@@ -209,11 +209,12 @@ def _desayuno_tipico(cc):
 
 # [P1-PLAN-LOTE-748 · ronda 1] La lista del perfil YA NO va entera: pierde lo que es base de otra categoría (avena,
 # pan/tostada, huevo, yogur), las sopas (§15a beta las prohíbe en el desayuno) y lo que la alergia o la dieta vetan. En
-# US y PR no queda nada propio ⇒ el respaldo. El contrato por país, a la vista:
+# US y PR no queda nada propio ⇒ el respaldo. [ronda 2] La fruta tampoco es base propia (va en todo desayuno): España
+# ⇒ el respaldo; y el maíz va nombrado (la puerta de alergias no lo ve en «arepa»). El contrato por país, a la vista:
 _ETIQUETA_A_ESPERADA = {
-    "ES": "Desayuno típico local (fruta)",
-    "MX": "Desayuno típico local (frijoles, tortilla)",
-    "CO": "Desayuno típico local (arepa)",
+    "ES": "Base de tubérculo local",
+    "MX": "Desayuno típico local (frijoles, tortilla de maíz)",
+    "CO": "Desayuno típico local (arepa de maíz)",
     "US": "Base de tubérculo local",
     "PR": "Base de tubérculo local",
 }
@@ -370,7 +371,7 @@ def test_vegetariano_la_etiqueta_a_sin_caldo(vocab_real, cc):
 def test_etiqueta_a_filtra_por_la_puerta_de_vetos_y_cae_al_respaldo():
     from prompts import asignacion_pais as ap
     assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: "frijol" in i) == \
-        "Desayuno típico local (tortilla)"
+        "Desayuno típico local (tortilla de maíz)"
     assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True) == ap.ETIQUETA_A_BETA_RESPALDO
     assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=lambda i: True, detalle=False) == \
         ap.ETIQUETA_A_BETA_RESPALDO
@@ -391,7 +392,8 @@ def test_etiqueta_a_filtra_por_la_dieta_con_el_vocabulario_del_escaner(monkeypat
 
 # ── 2/3. la A no repite otra categoría ni pide sopa ──
 
-_BASES_OTRAS = ("avena", "cereal", "granola", "pan", "tostada", "huevo", "yogur", "yogurt", "batido", "bowl", "revoltillo")
+_BASES_OTRAS = ("avena", "cereal", "granola", "pan", "tostada", "huevo", "yogur", "yogurt", "batido", "bowl", "revoltillo",
+                "fruta")   # [ronda 2] la fruta va en todo desayuno: no es la base de la A
 
 
 @pytest.mark.parametrize("cc", _BETA)
@@ -499,18 +501,23 @@ def test_pais_corrupto_avisa_una_vez_por_render(entorno_fijo, caplog):
 
 def test_brief_de_otros_dias_con_la_cocina_de_cada_dia(entorno_fijo):
     sk = _esqueleto()
+    # [ronda 2] CO y no ES: la A española ya es el respaldo (la fruta no es base propia); ES va en el tercer día
     sk["_other_days_brief"] = [{"technique": "salteado", "breakfast": "Mangú/Tubérculos", "country": "DO"},
-                               {"technique": "horno", "breakfast": "Mangú/Tubérculos", "country": "ES"}]
-    esperado = "salteado (desayuno: Mangú/Tubérculos); horno (desayuno: Desayuno típico local)"
+                               {"technique": "horno", "breakfast": "Mangú/Tubérculos", "country": "CO"},
+                               {"technique": "plancha", "breakfast": "Mangú/Tubérculos", "country": "ES"}]
+    esperado = ("salteado (desayuno: Mangú/Tubérculos); horno (desayuno: Desayuno típico local); "
+                "plancha (desayuno: Base de tubérculo local)")
     assert esperado in _bdac(copy.deepcopy(sk), 1, country="ES")
     assert esperado in _bdac(copy.deepcopy(sk), 1, country="DO")
 
 
 def test_el_brief_lleva_la_cocina_de_cada_dia():
+    # [ronda 2] derivada UNA vez por día antes de la comprensión (`_abd_paises`); el contrato completo en
+    # test_r2_el_brief_deriva_la_cocina_una_vez_por_dia
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index('_abd_sd["_other_days_brief"] = [')
     bloque = src[i:src.index("for _abd_j", i)]
-    assert '"country": cultural_country_for_form_data(form_data, day_index=' in bloque, bloque
+    assert '"country": _abd_paises[_abd_j]' in bloque, bloque
 
 
 # ── 8. «habichuelas» en el bloque de dieta beta ──
@@ -528,3 +535,102 @@ def test_do_y_pr_conservan_habichuelas(entorno_fijo, cc):
     """En Puerto Rico «habichuelas» ES la palabra (está en los staples de su perfil)."""
     t = _bdac(_esqueleto(), 1, day_name="Lunes", diet_type="vegan", country=cc)
     assert "habichuelas/lentejas/garbanzos" in t
+
+
+# ─────────────── G. ronda 2 de la revisión adversaria (P1-PLAN-LOTE-748) ───────────────
+# 1 IMPORTANTE (seguridad clínica, regresión frente a main): la A imponía MAÍZ al alérgico al maíz. El vocabulario de
+#   alergias no expande maíz → arepa/tortilla ni legumbres → frijoles (`_allergen_pool_item_banned('arepa', ['maíz'])`
+#   es False, y el escáner tampoco ve «1 arepa mediana»): la etiqueta tiene que preguntar con el nombre CALIFICADO
+#   («arepa de maíz», la base del catálogo, la clase «legumbres»). La causa de fondo —el vocabulario— es otro lote.
+# 2 MENOR: el brief derivaba la cocina por cada par (día, otro día): 42 derivaciones por bloque de 7 días.
+# 3 MENOR: la A de España quedaba en «(fruta)» — la fruta va en TODO desayuno («base sólida + proteína + fruta») y es
+#   la base de la D (Batido/Bowl): no es una base propia ⇒ el respaldo.
+
+def _linea_a_con(cc, alergias, **kw):
+    return _linea_a(_bdac(_esqueleto(), 1, day_name="Lunes", allergies=alergias, country=cc, **kw))
+
+
+@pytest.mark.parametrize("cc", ("MX", "CO"))
+@pytest.mark.parametrize("alergias", (["maíz"], ["maiz"], ["Maíz"], ["gluten", "maíz"]))
+def test_r2_maiz_la_etiqueta_a_no_impone_arepa_ni_tortilla(vocab_real, cc, alergias):
+    linea = _linea_a_con(cc, alergias)
+    for tok in ("arepa", "tortilla", "maiz"):
+        assert not _tiene(tok, linea), (cc, alergias, linea)
+
+
+def test_r2_gluten_y_maiz_el_refugio_no_trae_maiz(vocab_real):
+    import desayuno_por_alergia as dpa
+    dias = [{"day": 1, "breakfast_category": "Avena/Cereales"}, {"day": 2, "breakfast_category": "Pan/Tostadas"}]
+    dpa.reasignar(dias, {"allergies": ["gluten", "maíz"]})
+    assert "Mangú/Tubérculos" in [d["breakfast_category"] for d in dias], "la A es el refugio de este usuario"
+    for cc in ("CO", "MX"):
+        linea = _linea_a_con(cc, ["gluten", "maíz"])
+        assert not _tiene("arepa", linea) and not _tiene("tortilla", linea), (cc, linea)
+
+
+@pytest.mark.parametrize("alergias", (["legumbres"], ["legumbre"], ["leguminosas"], ["frijoles"], ["Legumbres"]))
+def test_r2_legumbres_la_etiqueta_a_no_impone_frijoles(vocab_real, alergias):
+    linea = _linea_a_con("MX", alergias)
+    assert not _tiene("frijol", linea), (alergias, linea)
+
+
+def test_r2_el_celiaco_conserva_la_arepa_de_maiz(vocab_real):
+    """Sin sobre-filtrar el refugio del celíaco: la arepa de maíz no lleva gluten, ni la tortilla de maíz."""
+    assert "arepa de maíz" in _linea_a_con("CO", ["gluten"])
+    assert "tortilla de maíz" in _linea_a_con("MX", ["gluten"])
+    # y a quien no declara nada, la A no se le recorta por la clase de legumbre
+    assert "frijoles" in _linea_a_con("MX", [])
+
+
+def test_r2_la_etiqueta_mexicana_no_se_confunde_con_la_tortilla_de_huevo(vocab_real):
+    """«tortilla» a secas es la de HUEVO en la E (Revoltillo/Tortilla) y en el catálogo (`GLOBAL_REVERSE_MAP`): la A
+    de México nombra la de maíz."""
+    linea = _linea_a_con("MX", [])
+    assert "tortilla de maíz" in linea and not re.search(r"tortilla(?! de maíz)", linea), linea
+
+
+def test_r2_la_puerta_pregunta_tambien_por_la_base_y_la_clase(monkeypatch):
+    """Defensa aunque el dato venga sin calificar: la base del catálogo (`constants.GLOBAL_REVERSE_MAP`: arepa ⇒
+    harina de maíz precocida) y la clase (frijoles/habichuelas/lentejas ⇒ legumbres) también pasan por la puerta."""
+    import cultural_profiles
+    import graph_orchestrator as go
+    from prompts import asignacion_pais as ap
+    monkeypatch.setitem(cultural_profiles.PROFILES["colombia_casera"], "slot_affinity",
+                        {"desayuno": ["arepa", "habichuelas", "lentejas", "chocolate"]})
+
+    def puerta(alergias):
+        return lambda i: go._allergen_pool_item_banned(i, alergias)
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=puerta(["maíz"])) == \
+        "Desayuno típico local (habichuelas, lentejas, chocolate)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=puerta(["legumbres"])) == \
+        "Desayuno típico local (arepa, chocolate)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=puerta(["gluten"])) == \
+        "Desayuno típico local (arepa, habichuelas, lentejas, chocolate)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=puerta([])) == \
+        "Desayuno típico local (arepa, habichuelas, lentejas, chocolate)"
+
+
+def test_r2_espana_no_queda_en_solo_fruta(entorno_fijo):
+    linea = _linea_a(_render("ES", "cat_0")["cat_0"])
+    assert "(fruta)" not in linea, linea
+    assert linea.endswith(f"ASIGNADA: {_ETIQUETA_A_ESPERADA['ES']}"), linea
+
+
+@pytest.mark.parametrize("cc", _BETA)
+def test_r2_la_fruta_no_es_la_base_de_la_a(entorno_fijo, cc):
+    assert not _tiene("fruta", _linea_a(_render(cc, "cat_0")["cat_0"])), cc
+
+
+def test_r2_el_brief_deriva_la_cocina_una_vez_por_dia():
+    """La cocina de cada día se deriva UNA vez por día (7 derivaciones), no por cada par (día, otro día) (42): con un
+    país corrupto eran 42 avisos P2-COUNTRY-HOUSEKEEPING por bloque."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index('_abd_sd["_other_days_brief"] = [')
+    fin = src.index("for _abd_j", i)
+    comprension = src[i:fin]
+    assert "cultural_country_for_form_data" not in comprension, comprension
+    assert '"country": _abd_paises[_abd_j]' in comprension, comprension
+    ini = src.rindex("_abd_days = skeleton_days[:days_in_chunk]", 0, i)
+    previo = src[ini:i]
+    assert "_abd_paises = [cultural_country_for_form_data(form_data, day_index=" in previo, previo
+    assert previo.count("cultural_country_for_form_data(") == 1, previo
