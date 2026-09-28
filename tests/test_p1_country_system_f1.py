@@ -2765,7 +2765,9 @@ def test_qbudget_currency_symbol_y_toggle_usan_effective_currency():
     assert "effectiveCurrency" in symbol_body, "currencySymbol debe derivar de effectiveCurrency."
     # [P3-I18N-MONEDA-COMPUESTA-A-MANO-EN-EL-PRESUPUESTO] El símbolo ya no se arma con
     # ramas literales locales: Intl/currencySymbolFor es el SSOT para los cinco idiomas.
-    assert "currencySymbolFor(effectiveCurrency)" in symbol_body
+    # [P1-PLAN-LOTE-656] …a través de `budgetCurrencySymbol`, el resolvedor que QBudget comparte con el Dashboard
+    # (RD$/US$ fijos; las beta con el símbolo de Intl del idioma activo).
+    assert "budgetCurrencySymbol(effectiveCurrency)" in symbol_body
     assert re.search(r"value=\{effectiveCurrency\}", src), (
         "El UnitToggle no resalta `effectiveCurrency` — podría seguir resaltando una moneda STALE."
     )
