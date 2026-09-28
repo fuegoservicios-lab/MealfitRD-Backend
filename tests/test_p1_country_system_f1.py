@@ -509,10 +509,12 @@ def test_finding4_frases_sin_marco_nacional():
 _B_CLASS_PROHIBICIONES = [
     'PROHIBIDO ABSOLUTO: técnicas de plato fuerte (salteado, locrio, asopao, guisado, frito '
     'completo, horneado tipo cazuela).',
+    # [P1-PLAN-LOTE-748 · 2026-09-28] La PROHIBICIÓN sigue verbatim; lo que cambió en beta es el MOTIVO («no se
+    # acostumbra en la cena dominicana y el gate lo rechaza» era falso dos veces: la regla beta es blanda y avisa).
     'PROHIBIDO el "ARROZ DE NOCHE": NADA de arroz blanco/integral, locrio, moro, asopao NI '
     'platos cuya BASE sea arroz aunque el nombre no diga "arroz" (chofán/arroz frito, paella, '
-    'risotto, congrí, mamposteao) en la cena (no se acostumbra en la cena dominicana y el gate '
-    'lo rechaza).',
+    'risotto, congrí, mamposteao) en la cena (es una regla de horario del plan y el validador de '
+    'horario lo señala).',
     "Evita frituras pesadas, locrios densos y guisos calóricos en la noche.",
 ]
 _C_CLASS_CATALOG_ENUM = [
@@ -627,13 +629,15 @@ def test_finding5_f5b_carb_rotation_sin_casabe():
     out = build("balanced", "ES")
     assert "Rota a otro carbohidrato del pool asignado distinto del arroz (NUNCA arroz)." in out
     assert "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral" not in out
-    # el párrafo ARROZ DE NOCHE (clase b) sigue verbatim — no se tocó:
+    # el párrafo ARROZ DE NOCHE (clase b) sigue: la prohibición verbatim; el MOTIVO es neutro desde
+    # [P1-PLAN-LOTE-748 · 2026-09-28] (en beta la regla es blanda y sólo avisa; el gate no cambió):
     assert (
         'PROHIBIDO el "ARROZ DE NOCHE": NADA de arroz blanco/integral, locrio, moro, asopao NI '
         'platos cuya BASE sea arroz aunque el nombre no diga "arroz" (chofán/arroz frito, paella, '
-        'risotto, congrí, mamposteao) en la cena (no se acostumbra en la cena dominicana y el gate '
-        'lo rechaza).'
+        'risotto, congrí, mamposteao) en la cena (es una regla de horario del plan y el validador de '
+        'horario lo señala).'
     ) in out
+    assert "no se acostumbra en la cena dominicana" not in out
 
 
 def test_finding5_do_byte_identico_tras_las_2_filas_nuevas():
@@ -3978,13 +3982,19 @@ def test_f1a_breakfast_cat_label_do_byte_equal():
 
 
 def test_f1a_breakfast_cat_label_beta_traducida():
+    # [P1-PLAN-LOTE-748 · 2026-09-28] La etiqueta beta de la categoría A ya no es «Tubérculos/plátano (preparación
+    # local)» — a una española «plátano» es la banana — sino el desayuno típico de su cocina (cultural_profiles), y el
+    # aviso de las otras categorías ya no veta el «plátano». Contrato completo en test_p1_plan_lote_748.py.
     from prompts.day_generator import build_day_assignment_context as bdac
+    from cultural_profiles import PROFILES, profile_for_market
     skeleton = {"protein_pool": [], "breakfast_category": "Mangú/Tubérculos"}
     for cc in _BETA_CCS:
         out = bdac(skeleton, 1, day_name="Lunes", country=cc)
         assert "Mangú/Tubérculos" not in out, cc
-        assert "CATEGORÍA DE DESAYUNO ASIGNADA: Tubérculos/plátano (preparación local)" in out, cc
-        assert "NO uses tubérculo/plátano" in out, cc
+        tipico = ", ".join(PROFILES[profile_for_market(cc)]["slot_affinity"]["desayuno"])
+        assert f"CATEGORÍA DE DESAYUNO ASIGNADA: Desayuno típico local ({tipico})" in out, cc
+        assert "tubérculo/plátano" not in out, cc
+        assert "NO la cambies por la categoría de otro día" in out, cc
 
 
 def test_f1a_breakfast_cat_enum_value_del_skeleton_no_se_muta():
@@ -4009,7 +4019,10 @@ def test_f1a_breakfast_cat_otra_categoria_conserva_label_pero_hereda_warn_beta()
     assert "CATEGORÍA DE DESAYUNO ASIGNADA: Avena/Cereales" in out_do
     assert "CATEGORÍA DE DESAYUNO ASIGNADA: Avena/Cereales" in out_beta
     assert "NO uses mangú/tubérculos" in out_do
-    assert "NO uses tubérculo/plátano" in out_beta
+    # [P1-PLAN-LOTE-748 · 2026-09-28] En beta la categoría A ya no es un tubérculo: el aviso no nombra «plátano»
+    # (a una española le vetaba la banana del desayuno) y pide no cambiar la categoría por la de otro día.
+    assert "NO la cambies por la categoría de otro día" in out_beta
+    assert "tubérculo/plátano" not in out_beta
 
 
 # ── F1b: preferences.py — bullet "FIDELIDAD CULTURAL es-DO" del seeder ──────
