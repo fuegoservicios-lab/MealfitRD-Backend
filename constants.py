@@ -1339,6 +1339,45 @@ def _entero_no_negativo(valor, default: int = 0) -> int:
         return default
 
 
+def fecha_local_del_ancla(start_date_str, tz_offset_min):
+    """[P1-PLAN-LOTE-652 · 2026-09-27] La fecha LOCAL del usuario en que empieza la ventana viva del plan.
+
+    `grocery_start_date` llega en dos formatos: fecha sola (`YYYY-MM-DD`, ya es la fecha local) o instante ISO (se pasa
+    a UTC y se le resta `tz_offset_min`, el `getTimezoneOffset()` del navegador: 240 en RD). Es la cuenta que ya hacían
+    en línea `/shift-plan` y el cron de refill; aquí vive una sola vez. tooltip-anchor: P1-PLAN-LOTE-652"""
+    from datetime import date   # el módulo solo importa datetime/timezone/timedelta (más abajo)
+    s = str(start_date_str or "").strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return date.fromisoformat(s)
+    dt = safe_fromisoformat(s)
+    dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    return (dt - timedelta(minutes=int(tz_offset_min or 0))).date()
+
+
+def ancla_tras_shift(start_date_str, dias, *, tz_offset_min=None) -> str:
+    """[P1-PLAN-LOTE-652 · 2026-09-27] El `grocery_start_date` nuevo tras archivar `dias` días.
+
+    Fecha sola → fecha sola + `dias`. Instante → el MISMO instante UTC + `dias`. Antes se persistía el ancla pasada a
+    reloj local (`instante - tz_offset + dias`) etiquetada como UTC: en RD bajaba 4 h por shift y, al cruzar las
+    04:00 UTC, la siguiente llamada del mismo día archivaba OTRO día (dea00a2f, 6594aae1).
+
+    Con `tz_offset_min` (el snapshot `_plan_start_date` de los chunks, que sus lectores pasan a fecha LOCAL) una fecha
+    sola sale como INSTANTE: su medianoche local en UTC (`fecha 00:00Z + tz_offset`: 04:00Z en RD). El código viejo
+    restaba el huso en vez de sumarlo y ese snapshot caía en la víspera local.
+    tooltip-anchor: P1-PLAN-LOTE-652"""
+    from datetime import date
+    s = str(start_date_str or "").strip()
+    n = int(dias or 0)
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        if tz_offset_min is not None:
+            medianoche = datetime.combine(date.fromisoformat(s), datetime.min.time(), tzinfo=timezone.utc)
+            return (medianoche + timedelta(minutes=int(tz_offset_min or 0), days=n)).isoformat()
+        return (date.fromisoformat(s) + timedelta(days=n)).isoformat()
+    dt = safe_fromisoformat(s)
+    dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    return (dt + timedelta(days=n)).isoformat()
+
+
 def rebase_pending_chunk_offsets(live_days_count, chunks):
     """Re-ancla los `days_offset` de la cola contra la ventana viva actual.
 

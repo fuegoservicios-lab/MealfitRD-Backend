@@ -119,12 +119,14 @@ def test_routers_plans_has_dateonly_branch():
         "TZ negativas reaparece para todos los planes persistidos con el "
         "formato date-only (backfill SQL p0_3 + plan_data del LLM)."
     )
-    # El branch date-only DEBE construir `start_date` desde date(y, m, d),
-    # NO desde `start_dt.date()`.
-    assert "_date_p3(" in body or re.search(r"date\(_y_p3,\s*_m_p3,\s*_d_p3\)", body), (
-        "Branch date-only no construye `date(y, m, d)` directo — está "
-        "probablemente reusando el path timestamp. Eso reintroduce el bug."
+    # [P1-PLAN-LOTE-652] La fecha local sale del SSOT `constants.fecha_local_del_ancla`, cuya rama date-only
+    # construye la fecha directa (no por el path timestamp): se verifica la delegación Y la conducta.
+    assert "fecha_local_del_ancla(start_date_str, tz_offset)" in body, (
+        "api_shift_plan ya no cuenta los días con el SSOT de la fecha local del ancla."
     )
+    from constants import fecha_local_del_ancla
+    from datetime import date as _d
+    assert fecha_local_del_ancla("2026-05-18", 240) == _d(2026, 5, 18)
 
 
 def test_cron_tasks_has_dateonly_branch():
@@ -133,8 +135,9 @@ def test_cron_tasks_has_dateonly_branch():
         "Branch date-only ausente en _background_shift_plan_for_user. "
         "El cron de rolling refill (P0-2) divergiría del endpoint HTTP."
     )
-    assert "_date_p3_bg(" in body or re.search(r"date\(_y_p3,\s*_m_p3,\s*_d_p3\)", body), (
-        "Branch date-only en cron no construye `date(y, m, d)` directo."
+    # [P1-PLAN-LOTE-652] mismo SSOT que el endpoint
+    assert "fecha_local_del_ancla(start_date_str, tz_offset)" in body, (
+        "El cron no cuenta los días con el SSOT de la fecha local del ancla."
     )
 
 
@@ -145,7 +148,10 @@ def test_routers_plans_preserves_dateonly_format_on_write():
     body = _api_shift_plan_body()
     # Anchor: el branch _is_date_only_shift dentro del save de new_plan_start_iso.
     save_block = body[body.find("if needs_shift and start_date_str"):]
-    assert "_is_date_only_shift" in save_block[:2000], (
+    # [P1-PLAN-LOTE-652] el formato lo preserva el SSOT `ancla_tras_shift` (fecha sola → fecha sola)
+    from constants import ancla_tras_shift
+    assert ancla_tras_shift("2026-05-18", 1) == "2026-05-19"
+    assert "ancla_tras_shift(start_date_str, days_since_creation)" in save_block[:2000], (
         "El save de `new_plan_start_iso` NO ramifica por formato date-only. "
         "Resultado: un plan persistido como 'YYYY-MM-DD' sería promovido a "
         "timestamp ISO completo tras el primer shift, rompiendo SSOT con el "
@@ -159,7 +165,7 @@ def test_cron_tasks_preserves_dateonly_format_on_write():
     save_block_idx = body.find("if needs_shift and not is_expired_renewable")
     assert save_block_idx > 0
     save_block = body[save_block_idx:save_block_idx + 1500]
-    assert "_is_date_only_shift" in save_block, (
+    assert "ancla_tras_shift(start_date_str, days_since_creation)" in save_block, (   # [P1-PLAN-LOTE-652]
         "Cron `_background_shift_plan_for_user` no preserva formato date-only "
         "en el write. Divergencia con `api_shift_plan`."
     )

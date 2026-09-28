@@ -35125,19 +35125,9 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                             isinstance(start_date_str, str)
                             and _re_p3_shift_bg.match(r'^\d{4}-\d{2}-\d{2}$', start_date_str.strip()) is not None
                         )
-                        if _is_date_only_shift:
-                            _y_p3, _m_p3, _d_p3 = (int(x) for x in start_date_str.strip().split('-'))
-                            from datetime import date as _date_p3_bg
-                            start_date = _date_p3_bg(_y_p3, _m_p3, _d_p3)
-                            start_dt = datetime(_y_p3, _m_p3, _d_p3, tzinfo=timezone.utc) - timedelta(minutes=int(tz_offset))
-                        else:
-                            start_dt = safe_fromisoformat(start_date_str)
-                            if start_dt.tzinfo is None:
-                                start_dt = start_dt.replace(tzinfo=timezone.utc)
-                            else:
-                                start_dt = start_dt.astimezone(timezone.utc)
-                            start_dt = start_dt - timedelta(minutes=int(tz_offset))
-                            start_date = start_dt.date()
+                        # [P1-PLAN-LOTE-652] la fecha local del ancla, por el SSOT (fecha sola o instante)
+                        from constants import ancla_tras_shift, fecha_local_del_ancla
+                        start_date = fecha_local_del_ancla(start_date_str, tz_offset)
                         days_since_creation = (today.date() - start_date).days
                     except Exception as e:
                         logger.warning(f"[BG-REFILL] Error parseando fecha plan {plan_id}: {e}")
@@ -35279,7 +35269,7 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                             # Sin esto, el gate retornaba ready=True con reason=missing_plan_start_date
                             # y el aprendizaje continuo se desactivaba para todo rolling refill.
                             new_plan_start_iso = (
-                                (start_dt + timedelta(days=days_since_creation)).isoformat()
+                                ancla_tras_shift(start_date_str, days_since_creation, tz_offset_min=tz_offset)
                                 if needs_shift else start_date_str
                             )
 
@@ -35520,7 +35510,7 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                                     next_week += 1
                                     current_offset += chunk_count
                                 shifted_days = []
-                                shifted_data["grocery_start_date"] = today.isoformat()
+                                shifted_data["grocery_start_date"] = datetime.now(timezone.utc).isoformat()   # [P1-PLAN-LOTE-652] instante real
                                 # [Ronda 5 · N-1 · 2026-08-04] Ancla del ciclo VIGENTE, gemela
                                 # de la de `api_shift_plan` (rama P0-1 RENEWAL). Este es el
                                 # SEGUNDO camino de renovación y se quedó sin ella: un plan
@@ -35555,14 +35545,10 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                             # formato original del campo (date-only → date-only,
                             # timestamp → timestamp). Espejo del fix en
                             # api_shift_plan.
-                            if _is_date_only_shift:
-                                new_plan_start_iso = (start_date + timedelta(days=days_since_creation)).isoformat()
-                            else:
-                                new_start = start_dt + timedelta(days=days_since_creation)
-                                new_plan_start_iso = new_start.isoformat()
+                            new_plan_start_iso = ancla_tras_shift(start_date_str, days_since_creation)   # [P1-PLAN-LOTE-652]
                             shifted_data["grocery_start_date"] = new_plan_start_iso
                         elif is_expired_renewable:
-                            new_plan_start_iso = today.isoformat()
+                            new_plan_start_iso = datetime.now(timezone.utc).isoformat()   # [P1-PLAN-LOTE-652]
                         shifted_data["_plan_modified_at"] = datetime.now(timezone.utc).isoformat()
                         # [P2-NEXT-1 · 2026-05-11] Filtro user_id (defense-in-depth I2).
                         # Mismo razonamiento que el path pantry-pause arriba.

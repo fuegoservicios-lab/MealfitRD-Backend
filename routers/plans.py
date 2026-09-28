@@ -2846,25 +2846,9 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                             isinstance(start_date_str, str)
                             and _re_p3_shift.match(r'^\d{4}-\d{2}-\d{2}$', start_date_str.strip()) is not None
                         )
-                        if _is_date_only_shift:
-                            _y_p3, _m_p3, _d_p3 = (int(x) for x in start_date_str.strip().split('-'))
-                            from datetime import date as _date_p3
-                            start_date = _date_p3(_y_p3, _m_p3, _d_p3)
-                            # `start_dt` se usa downstream para `new_start = start_dt +
-                            # timedelta(days=days_since_creation)` (línea ~2051).
-                            # Construirlo como aware datetime al local-midnight del user
-                            # expresado en UTC: equivale a "date local + 0:00" cuando
-                            # el caller hace `.isoformat()` — preserva semántica con
-                            # tz_offset ya aplicado.
-                            start_dt = datetime(_y_p3, _m_p3, _d_p3, tzinfo=timezone.utc) - timedelta(minutes=int(tz_offset))
-                        else:
-                            start_dt = safe_fromisoformat(start_date_str)
-                            if start_dt.tzinfo is None:
-                                start_dt = start_dt.replace(tzinfo=timezone.utc)
-                            else:
-                                start_dt = start_dt.astimezone(timezone.utc)
-                            start_dt = start_dt - timedelta(minutes=int(tz_offset))
-                            start_date = start_dt.date()
+                        # [P1-PLAN-LOTE-652] la fecha local del ancla, por el SSOT (fecha sola o instante)
+                        from constants import ancla_tras_shift, fecha_local_del_ancla
+                        start_date = fecha_local_del_ancla(start_date_str, tz_offset)
 
                         # Remove time component
                         today_date = today.date()
@@ -3084,7 +3068,7 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                             next_week += 1
                                             current_offset += chunk_count
                                         shifted_days = []
-                                        shifted_data['grocery_start_date'] = today.isoformat()
+                                        shifted_data['grocery_start_date'] = datetime.now(timezone.utc).isoformat()   # [P1-PLAN-LOTE-652] instante real
                                         # [Ronda 4 · B1 · 2026-08-04] Ancla del ciclo VIGENTE.
                                         # La renovación reusa el mismo plan_id, conserva
                                         # `total_days_requested` y NUNCA vacía `_archived_days`:
@@ -3226,7 +3210,7 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                 # [P0-1 FIX] _plan_start_date vigente (post-shift) para que el
                                 # gate de adherencia previa pueda calcular ventanas correctas.
                                 catchup_plan_start_iso = (
-                                    (start_dt + timedelta(days=days_since_creation)).isoformat()
+                                    ancla_tras_shift(start_date_str, days_since_creation, tz_offset_min=tz_offset)
                                     if needs_shift else start_date_str
                                 )
                                 _hist = plan_data.get("_lifetime_lessons_history", [])
@@ -3316,11 +3300,7 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                             # date-only en lugar de promoverlo a timestamp ISO
                             # completo — evita drift entre escrituras y mantiene
                             # SSOT con el backfill SQL p0_3.
-                            if _is_date_only_shift:
-                                new_plan_start_iso = (start_date + timedelta(days=days_since_creation)).isoformat()
-                            else:
-                                new_start = start_dt + timedelta(days=days_since_creation)
-                                new_plan_start_iso = new_start.isoformat()
+                            new_plan_start_iso = ancla_tras_shift(start_date_str, days_since_creation)   # [P1-PLAN-LOTE-652]
                             shifted_data['grocery_start_date'] = new_plan_start_iso
 
                             # [P0-C] Accumulate shift days

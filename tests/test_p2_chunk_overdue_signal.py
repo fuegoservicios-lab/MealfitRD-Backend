@@ -949,8 +949,11 @@ def test_b1_plan_renovado_el_indice_del_coach_tambien_lo_declara():
     assert "día 4" in lines[0], lines
 
 
+# [P1-PLAN-LOTE-652] la renovación guarda ahora el INSTANTE real (`datetime.now(timezone.utc)`), no `today` (reloj
+# local etiquetado como UTC): la firma acepta las dos formas para seguir encontrando los dos caminos.
 _RENOVACION_RE = re.compile(
-    r"""^[ \t]*\w+\[['"]grocery_start_date['"]\][ \t]*=[ \t]*today\b.*$""", re.MULTILINE)
+    r"""^[ \t]*\w+\[['"]grocery_start_date['"]\][ \t]*=[ \t]*(?:today\b|datetime\.now\(timezone\.utc\)).*$""",
+    re.MULTILINE)
 _ANCLA_ASSIGN_RE = re.compile(r"""^[ \t]*\w+\[['"]_cycle_started_at['"]\][ \t]*=""")
 
 
