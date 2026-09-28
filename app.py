@@ -1038,7 +1038,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # «Atún en agua») estaba dentro de «aguacate», y 86 de 1.244 desayunos del corpus recibían 35-300 g de atún. Por palabra.
 # [P1-PLAN-LOTE-783 · 2026-09-28] (backend) Embarazo: el tope de pescado cambiaba el atún EN LATA por pechuga de pavo
 # y dejaba «mezcla pechuga de pavo en agua (ya viene cocido)… sirve frío»: carne cruda servida fría. Ahora se cocina.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-783 · 2026-09-28"
+# [P1-PLAN-LOTE-784 · 2026-09-28] (backend) «Montaje: marina pechuga de pollo cocido con el limón» con 1½ pechugas CRUDAS
+# en la lista y ningún paso que las cocine (perfil sin tiempo): el 407 no conocía «marina» ni «acompaña». Cocción previa.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-784 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -3260,7 +3260,7 @@ def masa_con_su_agua(meal) -> int:
 # Nunca si la lista ya la compra cocida, en lata o ahumada, ni si algún paso la cocina. tooltip-anchor: P1-PLAN-LOTE-407
 _PROT_COCIDA_407_RE = re.compile(
     r"(?:ten\s+list[oa]s?|usa|desmenuza|mide|agrega|anade|incorpora|coloca|reparte|mezcla|pesa|prepara|corta|pica|trocea|"
-    r"sirve|calienta|recalienta)\b[^.;]{0,40}\b"  # [P1-PLAN-LOTE-445] prepara/corta/calienta
+    r"sirve|calienta|recalienta|marina|acompana)\b[^.;]{0,40}\b"  # [P1-PLAN-LOTE-445] prepara/corta/calienta; [P1-PLAN-LOTE-784] marina/acompaña
     r"(?P<k>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}?(?:ya\s+)?cocid[oa]s?|"
     r"\b(?P<k2>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}\bya\s+cocid[oa]s?")
 #: la cocción de verdad rige a la proteína («sella la pechuga», «hierve el pollo») o dice su punto («… hasta 74 °C»);
