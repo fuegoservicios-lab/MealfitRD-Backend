@@ -4275,6 +4275,33 @@ def pricing_mode_for_form_data(form_data) -> "str | None":
     return pricing_mode_for_country(country_for_form_data(form_data))
 
 
+def effective_budget_currency(budget_currency, form_data) -> str:
+    """[P1-PLAN-LOTE-792 · 2026-09-28] La moneda en la que se COMPARA el presupuesto declarado — nunca
+    `budgetCurrency` crudo. Espejo EXACTO de `effectiveBudgetCurrency` (frontend/src/config/formValidation.js).
+
+    EL DEFECTO QUE CIERRA: `budgetCurrency` sobrevive a un cambio de país. Configuración sólo reescribe
+    `country` y la hidratación del submit corrige el país, no la moneda: quien pasa de CO a DO conserva
+    `budgetCurrency='COP'`. El frontend ya resolvía la moneda vigente y le enseñaba RD$200.000, muy por encima
+    del mínimo; `validate_budget_sufficient` comparaba el crudo y, con la decisión por MERCADO, le devolvía un
+    422 «mínimo ~COP 252,000». Dos lados que resuelven la moneda con reglas distintas no avisan: uno miente.
+
+    Regla (la del frontend, una a una):
+      * DOP y USD valen siempre: son las dos opciones universales del selector.
+      * Cualquier otra —ausente, de otro país o desconocida— se lee en la moneda del país de MERCADO
+        (`country_for_form_data`, la ÚNICA puerta de país). Si es la del mercado, es ella misma.
+
+    Con `MEALFIT_COUNTRY_SYSTEM` apagado el mercado es DO, así que todo lo que no sea DOP/USD se compara en
+    DOP: lo que `validate_budget_sufficient` ya hacía con su `else` histórico, ahora dicho en un solo sitio.
+
+    tooltip-anchor: effective_budget_currency (test_p1_plan_lote_792.py)
+    """
+    raw = str(budget_currency or "").strip().upper()
+    if raw in ("DOP", "USD"):
+        return raw
+    perfil = COUNTRY_PROFILES.get(country_for_form_data(form_data)) or {}
+    return str(perfil.get("currency") or "DOP").upper()
+
+
 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] SSOT de las FUENTES DE PROTEÍNA sugeribles por dieta.
 # Razón (benchmark issue #9, journal 2026-08-08 01:53-02:00 UTC): el stack de prompts ordenaba
 # "fuente animal de alta densidad (pollo, pescado, cerdo, res...)" sin mirar la dieta — el retry

@@ -118,6 +118,49 @@ def test_la_fuente_esta_citada_con_su_fecha(donde):
         assert trozo in txt, f"{donde}: falta «{trozo}»"
 
 
+# [ronda 1 de revisión] La procedencia citaba fuente, fecha y método, pero NO los valores: nadie podía rehacer la
+# cuenta. Estos son los insumos, bajados de la API del Banco Mundial el 2026-09-28
+# (`/v2/sources/88/country/<ISO3>/series/CoHD_LCU/time/all`, base FPN 5.0 «lastupdated» 2026-07-21, observación
+# del año 2025; Puerto Rico no tiene dato) y del PDF oficial «Official USDA Thrifty Food Plan: U.S. Average,
+# August 2026» (emitido en septiembre de 2026). Escritos a mano: son el contrato, no una copia del código.
+_COHD_2025 = {"DOP": 133.32, "EUR": 2.55, "MXN": 49.51, "COP": 7952.04}   # por persona y día, moneda local
+_PASO_REDONDEO = {"DOP": 1000, "EUR": 5, "MXN": 100, "COP": 10000}      # la «cifra amable» de cada moneda
+_TFP_AGO_2026_SEMANAL = {"mujer 20-50": 58.50, "hombre 20-50": 73.60}   # hogar de 4; +20 % si vive sola
+
+
+@pytest.mark.parametrize("moneda", sorted(_COHD_2025))
+def test_el_piso_semanal_se_reproduce_desde_el_dato_del_banco_mundial(moneda):
+    """piso 7 d = CoHD_LCU 2025 × 7 × 4,286, redondeado al paso de su moneda. Si alguien cambia un piso sin
+    cambiar el dato (o el dato se actualiza y nadie rehace la cuenta), esto lo dice."""
+    esperado = {**{m: p[7] for m, p in _PISOS.items()}, "DOP": 4000}[moneda]
+    crudo = _COHD_2025[moneda] * 7 * 4.286
+    paso = _PASO_REDONDEO[moneda]
+    assert round(crudo / paso) * paso == esperado, f"{moneda}: {crudo:.2f} no redondea a {esperado}"
+    assert abs(esperado / crudo - 1) < 0.025, f"{moneda}: el redondeo se aleja más de un 2,5 % del dato"
+
+
+def test_el_4286_es_el_de_rd_y_equivale_a_un_mes_de_dieta_sana():
+    """4,286 = 4.000 / (133,32 × 7) y coincide con 30/7: el piso SEMANAL es ~30 días de dieta sana."""
+    assert round(4000 / (_COHD_2025["DOP"] * 7), 3) == 4.286
+    assert round(30 / 7, 3) == 4.286
+
+
+def test_usd_80_sale_del_thrifty_food_plan_de_una_persona_sola():
+    """Media de los dos adultos de 20-50 años con el +20 % que el USDA indica para un hogar de 1 persona."""
+    media = sum(_TFP_AGO_2026_SEMANAL.values()) / 2 * 1.20
+    assert round(media / 5) * 5 == _PISOS["USD"][7]
+
+
+@pytest.mark.parametrize("donde", ["nutrition_calculator.py", "docs/country_system_f1.md"])
+def test_la_cuenta_se_puede_rehacer_con_lo_escrito(donde):
+    """Los insumos ESCRITOS donde vive el número (comentario y doc): valores, año, paso de redondeo, TFP."""
+    txt = _src(donde)
+    for trozo in ("133,32", "2,55", "49,51", "7.952,04", "2025", "30/7", "58,50", "73,60", "agosto de 2026"):
+        assert trozo in txt, f"{donde}: falta «{trozo}»"
+    for paso in ("múltiplo de 5", "centena", "decena de mil"):
+        assert paso in txt, f"{donde}: no dice la regla de redondeo «{paso}»"
+
+
 # ── B. Avisa en mercado beta; bloquea en mercado con precios ─────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("pais", ["US", "PR"])
@@ -137,11 +180,15 @@ def test_el_visitante_de_eeuu_en_rd_sigue_con_el_gate_duro(nc, paises, pais):
 
 
 def test_la_decision_es_el_mercado_y_no_la_moneda(nc, paises):
-    """Pesos dominicanos declarados desde un mercado beta: avisa. Pesos colombianos sin país (mercado DO): bloquea.
-    Si la regla volviera a mirar la moneda, las dos mitades cambiarían de lado."""
+    """Pesos dominicanos declarados desde un mercado beta: avisa. Dólares desde el mercado DO: bloquea.
+    Si la regla volviera a mirar la moneda, las dos mitades cambiarían de lado.
+
+    [ronda 1 de revisión] La segunda mitad era «COP 100.000 sin país ⇒ 422» y ANCLABA EL DEFECTO: sin país el
+    mercado es DO, y en DO una moneda beta no es una opción del selector — el frontend compara en RD$
+    (`effectiveBudgetCurrency`). Ese caso pasa ahora a la sección D (`test_de_colombia_a_rd_...`)."""
     ok_us, det_us = nc.validate_budget_sufficient(_form("DOP", 3000, "US"))
     assert ok_us is True and det_us["warning_code"] == "budget_below_goal_floor_advisory"
-    ok_do, det_do = nc.validate_budget_sufficient(_form("COP", 100000, None))
+    ok_do, det_do = nc.validate_budget_sufficient(_form("USD", 70, "DO"))
     assert ok_do is False and det_do["error_code"] == "budget_below_goal_floor"
 
 
@@ -196,3 +243,113 @@ def test_el_wizard_decide_por_el_pais_y_no_por_la_moneda():
     assert "hasNativePrices" in cuerpo and "coerceCountry" in cuerpo
     assert "currency" not in cuerpo and "USD" not in cuerpo, "el espejo vuelve a mirar la moneda"
     assert "pisoSinProcedencia" not in paises
+
+
+# ── D. [ronda 1 de revisión] La moneda que se compara es la VIGENTE, no `budgetCurrency` crudo ──────────────────
+# EL DEFECTO (medido por la revisión, reproducido aquí en rojo antes del arreglo): Configuración sólo cambia
+# `country` (Settings.jsx) y la hidratación del submit corrige el país, no la moneda. Quien pasa de CO a DO
+# conserva `budgetCurrency='COP'`; el Dashboard y QBudget ya le muestran RD$200.000 (`effectiveBudgetCurrency`),
+# y el backend comparaba el crudo: con la decisión por MERCADO, 422 «mínimo ~COP 252,000» a quien ve en pantalla
+# un monto cincuenta veces por encima del mínimo.
+
+def test_de_colombia_a_rd_en_configuracion_renueva_en_pesos_dominicanos(nc, paises):
+    ok, det = nc.validate_budget_sufficient(_form("COP", 200000, "DO"))
+    assert ok is True and det is None, f"compara en COP lo que el usuario ve en RD$: {det}"
+
+
+@pytest.mark.parametrize("moneda,monto", [("MXN", 1200), ("EUR", 60), ("COP", 1000)])
+def test_moneda_beta_vieja_en_mercado_do_se_compara_y_se_explica_en_rd(nc, paises, moneda, monto):
+    """El mismo número, en la moneda que la pantalla le mostró: RD$1.200 SÍ está bajo el mínimo dominicano (y el
+    paso del asistente también lo bloquea), así que el 422 es coherente — pero en RD$, jamás en MXN."""
+    ok, det = nc.validate_budget_sufficient(_form(moneda, monto, "DO"))
+    assert ok is False and det["error_code"] == "budget_below_goal_floor"
+    assert det["currency"] == "DOP"
+    assert "RD$" in det["message"] and moneda not in det["message"]
+
+
+# (sistema de países, país, budgetCurrency crudo, moneda vigente). La MISMA tabla vive en
+# frontend/src/__tests__/lote792.test.js contra `effectiveBudgetCurrency`: el test de abajo exige que coincidan.
+_TABLA_MONEDA = [
+    (True, "DO", "COP", "DOP"), (True, "DO", "USD", "USD"), (True, "DO", "DOP", "DOP"), (True, "DO", "", "DOP"),
+    (True, "CO", "COP", "COP"), (True, "CO", "EUR", "COP"), (True, "CO", "DOP", "DOP"), (True, "CO", None, "COP"),
+    (True, "ES", "", "EUR"), (True, "MX", "EUR", "MXN"), (True, "US", "EUR", "USD"), (True, "PR", "COP", "USD"),
+    (True, None, "EUR", "DOP"), (True, "ZZ", "MXN", "DOP"),
+    (False, "ES", "EUR", "DOP"), (False, "CO", "COP", "DOP"), (False, "US", "USD", "USD"), (False, "ES", "", "DOP"),
+]
+
+
+@pytest.mark.parametrize("sistema,pais,crudo,vigente", _TABLA_MONEDA)
+def test_la_moneda_vigente_es_la_del_frontend(monkeypatch, sistema, pais, crudo, vigente):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true" if sistema else "false")
+    import constants
+    fd = {} if pais is None else {"country": pais}
+    assert constants.effective_budget_currency(crudo, fd) == vigente
+
+
+def test_la_tabla_es_la_misma_que_la_del_frontend():
+    src = _front("src/__tests__/lote792.test.js")
+    i = src.index("const TABLA_MONEDA")
+    cuerpo = src[i:src.index("];", i)]
+    lit = r"(null|'[A-Z]*')"
+    filas = re.findall(r"\[\s*(true|false)\s*,\s*" + lit + r"\s*,\s*" + lit + r"\s*,\s*'([A-Z]+)'\s*\]", cuerpo)
+
+    def _py(v):
+        return None if v == "null" else v.strip("'")
+    front = {(s == "true", _py(p), _py(c), v) for s, p, c, v in filas}
+    assert front == set(_TABLA_MONEDA), f"backend y frontend resuelven la moneda con tablas distintas: {front ^ set(_TABLA_MONEDA)}"
+
+
+def test_el_gate_no_lee_la_moneda_cruda():
+    arbol = ast.parse(_src("nutrition_calculator.py"))
+    fn = next(n for n in ast.walk(arbol) if isinstance(n, ast.FunctionDef) and n.name == "validate_budget_sufficient")
+    codigo = " ; ".join(ast.unparse(n) for n in fn.body[1:])  # sin el docstring
+    assert re.search(r"effective_budget_currency\(form_data\.get\('budgetCurrency'\), form_data\)", codigo), (
+        "validate_budget_sufficient ya no resuelve la moneda vigente")
+    assert codigo.count("budgetCurrency") == 1, "otra lectura cruda de budgetCurrency en el gate"
+
+
+def test_el_hint_resuelve_la_moneda_vigente_si_le_dan_el_formulario(nc, paises):
+    amt, cur = nc.budget_floor_in_currency(7, "COP", 4000.0, form_data={"country": "DO"})
+    assert (round(amt), cur) == (4000, "DOP")
+    # Sin formulario (el hook de hoy no manda país: ya envía la moneda VIGENTE), la moneda que llegó.
+    amt, cur = nc.budget_floor_in_currency(7, "EUR", 4000.0)
+    assert (round(amt), cur) == (75, "EUR")
+
+
+def test_el_endpoint_del_hint_resuelve_con_el_pais_solo_si_viene(paises):
+    import asyncio
+    from routers.plans import api_budget_floor
+    res = asyncio.run(api_budget_floor(payload=_form("COP", 1, "DO"), _uid=None))
+    assert res.get("ok") is True and res["currency"] == "DOP", res
+    # Un cliente sin país (el bundle viejo del hook) no puede perder su moneda: sin país el mercado sería DO.
+    res = asyncio.run(api_budget_floor(payload=_form("EUR", 1), _uid=None))
+    assert res.get("ok") is True and res["currency"] == "EUR", res
+
+
+# ── E. [ronda 1 de revisión] Lo que la prosa dice tiene que ser verdad ──────────────────────────────────────────
+
+def test_el_comentario_no_promete_un_aviso_que_nadie_entrega():
+    """Los tres llamadores (routers/plans.py ×2, generation_inputs.py) descartan `_budget_detail` con ok=True: el
+    «aviso» es la línea de log y la pista estática del asistente. El comentario decía que el mensaje «sigue
+    viajando para que el frontend lo muestre»."""
+    src = _src("nutrition_calculator.py")
+    i = src.index("def validate_budget_sufficient")
+    cuerpo = src[i:src.index("\ndef ", i + 10)]
+    assert "para que el frontend lo muestre" not in cuerpo
+    assert "descartan" in cuerpo, "el comentario ya no dice qué hacen los llamadores con el aviso"
+    for rel in ("routers/plans.py", "generation_inputs.py"):
+        for m in re.finditer(r"_budget_ok, _budget_detail = _vbs\(data\)", _src(rel)):
+            tramo = _src(rel)[m.end():m.end() + 400]
+            assert "if not _budget_ok" in tramo, f"{rel}: un llamador cambió de forma; revisa el comentario del aviso"
+
+
+def test_las_referencias_viejas_se_actualizaron():
+    src = _src("nutrition_calculator.py")
+    i = src.index("def _budget_cycle_floor_for_currency")
+    doc = src[i:src.index('"""', src.index('"""', i) + 3)]
+    assert "{EUR,MXN,COP,USD}" in doc and "'DOP'/'USD'" not in doc, "el docstring sigue diciendo que USD delega en DOP"
+    fila12 = next(l for l in _src("docs/country_system_f1.md").splitlines() if l.startswith("| 12 |"))
+    assert "validate_budget_sufficient" in fila12
+    assert not re.search(r"\[`?:\d+`?\]\(\.\./nutrition_calculator\.py\)", fila12), (
+        "la fila 12 vuelve a anclar por número de línea (ya apuntaba a otra función)")
+    assert "pisoSinProcedencia" not in _src("tests/test_p1_budget_custom.py")

@@ -2403,7 +2403,11 @@ def test_knob_off_moneda_nueva_se_trata_como_dop_igual_que_antes(monkeypatch):
     monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
     ok_bajo, detail_bajo = nc.validate_budget_sufficient(_budget_form("EUR", 100))
     assert ok_bajo is False
-    assert detail_bajo["currency"] == "EUR"
+    # [P1-PLAN-LOTE-792 · 2026-09-28] (ronda 1 de revisión) CAMBIADO A SABIENDAS: el detalle decía
+    # `currency='EUR'` sobre una comparación y un mensaje en RD$ — el propio detalle se contradecía.
+    # Ahora la moneda la resuelve `constants.effective_budget_currency` (espejo del frontend) y es la
+    # que se comparó: DOP. El veredicto, el umbral y el texto del 422 no cambian.
+    assert detail_bajo["currency"] == "DOP"
     assert "RD$" in detail_bajo["message"]
     ok_alto, detail_alto = nc.validate_budget_sufficient(_budget_form("EUR", 50000))
     assert ok_alto is True and detail_alto is None

@@ -40,7 +40,7 @@ constants.py — SSOT del literal `'beta_no_prices'`).
 | 9 | Finalizer de receta (swap/chat-modify) | `finalize_single_meal_recipe_coherence(..., country="DO")` — hilvana el gate anterior a su propio `_night_rice_autofix` interno | [`graph_orchestrator.py`](../graph_orchestrator.py) | T4 (fix-round 1) |
 | 10 | §16 contrato de horario en el prompt | `build_meal_timing_rules(meal_type, country="DO")` — DO idéntico byte a byte; beta omite la enumeración negativa (labels dominicanos intencionales) y usa `_SLOT_POSITIVE_HINT_NEUTRAL` | [`constants.py`](../constants.py) | T4 |
 | 11 | Fecha local del usuario | `user_tz_offset_min(user_id)` — los 4 SQL con `'America/Santo_Domingo'` hardcodeado pasan a `NOW() - make_interval(mins => offset)`; fallback 240 preservado | [`db_facts.py`](../db_facts.py) (helper); call sites en `db_facts.py`/`tools.py`/`proactive_agent.py` | T5 |
-| 12 | Presupuesto multi-moneda | `budget_floor_in_currency(days, currency, min_budget_dop)` + pisos EUR/MXN/COP/USD con fuente (Banco Mundial, ver «Pisos de presupuesto por país» abajo); `validate_budget_sufficient` responde en la moneda del usuario y `_piso_solo_orienta` decide por el país de MERCADO si el piso bloquea (422) o avisa | [`nutrition_calculator.py`](../nutrition_calculator.py) (floor), [`:2010`](../nutrition_calculator.py) (validate) | T6 |
+| 12 | Presupuesto multi-moneda | `budget_floor_in_currency(days, currency, min_budget_dop, form_data=None)` + pisos EUR/MXN/COP/USD con fuente (Banco Mundial, ver «Pisos de presupuesto por país» abajo); `validate_budget_sufficient` responde en la moneda del usuario y `_piso_solo_orienta` decide por el país de MERCADO si el piso bloquea (422) o avisa | [`nutrition_calculator.py`](../nutrition_calculator.py) (floor y `validate_budget_sufficient`; la moneda comparada es la VIGENTE, `constants.effective_budget_currency`) | T6 |
 | 13 | Piso de presupuesto en frontend | `effectiveBudgetCurrency(country, budgetCurrency, countrySystemUI)` — resuelve DOP/USD siempre; EUR/MXN/COP solo tras `COUNTRY_SYSTEM_UI` + país beta con esa moneda | [`frontend/src/config/formValidation.js:258`](../../frontend/src/config/formValidation.js#L258) | T6 |
 | 14 | Flag de modo beta de precios | `pricing_mode_for_form_data(form_data)` estampado en `plan_data['_pricing_mode']` dentro de `assemble_plan_node`, ANTES del bloque de agregación de listas | [`graph_orchestrator.py`](../graph_orchestrator.py) | T7 |
 | 15 | Choke point del aggregator | `_strip_prices_for_beta_pricing_mode(res)` al final de `get_shopping_list_delta` — cubre los ~15 callers reales (agent/cron_tasks/routers/plans/tools) sin threadear un parámetro por función | [`shopping_calculator.py`](../shopping_calculator.py) (strip), [`:12173`](../shopping_calculator.py) (`get_shopping_list_delta`) | T7 |
@@ -378,10 +378,28 @@ dejan de ser conversiones de tipo de cambio de la cesta dominicana (EUR=USD×0,9
 y pasan a tener fuente.
 
 - **Fuente:** Banco Mundial, *Food Prices for Nutrition 5.0*, indicador `CoHD_LCU` (coste de una dieta sana
-  por persona y día, en moneda local), licencia CC BY 4.0; datos del 2026-07-21.
+  por persona y día, en moneda local: los alimentos más baratos disponibles que cumplen las guías, un mínimo
+  teórico), licencia CC BY 4.0; base actualizada el 2026-07-21, observación del año 2025. Bajado de la API
+  `https://api.worldbank.org/v2/sources/88/country/<ISO3>/series/CoHD_LCU/time/all` (Puerto Rico no tiene dato).
 - **Método:** piso semanal = dieta sana × 7 × 4,286. El 4,286 es la proporción que ya guarda el piso
-  dominicano (RD$4.000) respecto a su propia dieta sana: cada moneda guarda con la suya la misma proporción.
-  Escalones como en DO (4.000 → 7.000 → 13.000): ×1,75 a 15 días y ×3,25 a 30, redondeados a la unidad.
+  dominicano (RD$4.000) respecto a su propia dieta sana — 4.000 / (133,32 × 7) — y coincide con 30/7: el piso
+  SEMANAL de una persona equivale a unos 30 días de dieta sana. Cada moneda guarda con la suya la misma proporción.
+- **Redondeo** a una cifra amable: EUR al múltiplo de 5, MXN a la centena, COP a la decena de mil (a menos
+  de un 2 % del dato). Escalones como en DO (4.000 → 7.000 → 13.000): ×1,75 a 15 días y ×3,25 a 30,
+  redondeados a la unidad.
+
+| Moneda | CoHD_LCU 2025 (persona·día) | × 7 × 4,286 | Piso 7 d |
+|---|---|---|---|
+| DOP | 133,32 | 3.999,9 | 4.000 (referencia) |
+| EUR | 2,55 | 76,50 | 75 |
+| MXN | 49,51 | 1.485,4 | 1.500 |
+| COP | 7.952,04 | 238.577 | 240.000 |
+| USD | 2,86 | 85,8 | 80 (no sale del método; ver abajo) |
+
+**USD 80 = USDA Thrifty Food Plan.** «Official USDA Thrifty Food Plan: U.S. Average, August 2026»
+(precios de agosto de 2026, emitido en septiembre de 2026): coste semanal mujer 20-50 = 58,50 y hombre
+20-50 = 73,60, en hogar de 4 personas. Con el +20 % que el USDA indica para un hogar de 1 persona: 70,20 a
+88,32, media 79,26 ≈ 80. `test_p1_plan_lote_792.py` rehace las cuentas con estos insumos.
 
 | Moneda | 7 días | 15 días | 30 días | Nota |
 |---|---|---|---|---|

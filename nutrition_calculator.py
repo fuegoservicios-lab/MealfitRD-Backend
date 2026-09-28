@@ -1926,14 +1926,27 @@ def _budget_cycle_floor_dop(days: int) -> float:
 # (≈1,88 M/mes) a una persona de 2500 kcal: más que el salario mínimo mensual de su país.
 #
 # Fuente: Banco Mundial, «Food Prices for Nutrition 5.0», indicador CoHD_LCU (coste de una dieta sana por
-# persona y día, en moneda local), licencia CC BY 4.0; datos del 2026-07-21.
+# persona y día, en moneda local: los alimentos más baratos disponibles que cumplen las guías, un mínimo
+# teórico), licencia CC BY 4.0; base actualizada el 2026-07-21, observación del año 2025. Bajado de la API
+# `/v2/sources/88/country/<ISO3>/series/CoHD_LCU/time/all` (Puerto Rico no tiene dato).
 # Método: piso semanal = dieta sana × 7 × 4,286. El 4,286 es la proporción que ya guarda el piso dominicano
-# (RD$4.000) respecto a su propia dieta sana: cada moneda guarda con la suya la misma proporción que DO.
+# (RD$4.000) respecto a su propia dieta sana — 4.000 / (133,32 × 7) — y coincide con 30/7: el piso SEMANAL de
+# una persona equivale a unos 30 días de dieta sana. Cada moneda guarda con la suya la misma proporción que DO.
+# Redondeo a una cifra amable: EUR al múltiplo de 5, MXN a la centena, COP a la decena de mil (≤ 2 % del dato).
+#   moneda   CoHD_LCU 2025   × 7 × 4,286   piso 7 d
+#   DOP         133,32         3.999,9      4.000   (la referencia del método)
+#   EUR           2,55            76,50        75   (igual que antes)
+#   MXN          49,51         1.485,4      1.500
+#   COP       7.952,04       238.577      240.000
+#   USD           2,86            85,8         80   (NO sale del método: ver abajo)
 # Escalones como en DO (4.000 → 7.000 → 13.000): ×1,75 a 15 días y ×3,25 a 30, redondeados a la unidad.
-#   EUR: 75 (igual que antes)        → 131 (131,25) · 244 (243,75)
-#   MXN: 1.500                       → 2.625        · 4.875
-#   COP: 240.000                     → 420.000      · 780.000
-#   USD: 80 (se mantiene: lo respalda el USDA Thrifty Food Plan) → 140 · 260 — ver P1-BUDGET-FLOOR-USD abajo.
+#   EUR: 75 → 131 (131,25) · 244 (243,75)
+#   MXN: 1.500 → 2.625 · 4.875
+#   COP: 240.000 → 420.000 · 780.000
+#   USD: 80 → 140 · 260. Se mantiene 80 porque lo respalda el USDA Thrifty Food Plan («Official USDA Thrifty
+#        Food Plan: U.S. Average, August 2026», agosto de 2026): semanal mujer 20-50 = 58,50 y hombre 20-50 =
+#        73,60 en hogar de 4; con el +20 % que el USDA indica para quien vive solo, 70,20 a 88,32 y media
+#        79,26 ≈ 80. Ver P1-BUDGET-FLOOR-USD abajo.
 #   Puerto Rico usa lo declarado para US: comparte la moneda en COUNTRY_PROFILES, no lleva fila propia.
 # Espejo EXACTO del frontend (frontend/src/config/formValidation.js BUDGET_MIN_TOTAL); paridad cross-file en
 # test_p1_country_system_f1.py (T6), test_p1_budget_floor_usd.py y test_p1_plan_lote_792.py.
@@ -1981,7 +1994,7 @@ _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY = {
 def _budget_cycle_floor_for_currency(days: int, currency: str) -> float:
     """[P1-COUNTRY-SYSTEM-F1] Piso TOTAL del ciclo en EUR/MXN/COP/USD (fuente y método en el
     comentario de `_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR` arriba — P1-PLAN-LOTE-792).
-    `currency` fuera de {EUR,MXN,COP} (incluido 'DOP'/'USD') delega en
+    `currency` fuera de {EUR,MXN,COP,USD} (incluido 'DOP') delega en
     `_budget_cycle_floor_dop` SIN tocarlo — mismo fallback conservador que ese
     piso ya usa para ciclos no estándar. Knob por ciclo×moneda:
     MEALFIT_BUDGET_FLOOR_TOTAL_{days}D_{moneda} (mismo patrón de nombre que el
@@ -2001,7 +2014,8 @@ def _budget_cycle_floor_for_currency(days: int, currency: str) -> float:
         f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_{currency}", float(default), lambda v: v >= 0.0)
 
 
-def budget_floor_in_currency(days: int, currency: str, min_budget_dop: float) -> tuple[float, str]:
+def budget_floor_in_currency(days: int, currency: str, min_budget_dop: float,
+                             form_data: "dict | None" = None) -> tuple[float, str]:
     """[P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Convierte un piso ya PERSONALIZADO
     (`min_budget_dop`, de `min_budget_for_goals` — ya incluye el escalado por calorías×hogar)
     a la moneda declarada, para el endpoint hint `/api/plans/budget-floor`
@@ -2018,7 +2032,15 @@ def budget_floor_in_currency(days: int, currency: str, min_budget_dop: float) ->
     exponer en `currency` (nunca 'DOP' disfrazando un monto EUR, ni al revés): el "outcome
     que importa" del brief — la respuesta del hint NUNCA mal-etiqueta un monto beta como DOP.
 
+    [P1-PLAN-LOTE-792 · 2026-09-28] (ronda 1 de revisión) `form_data` (opcional): si llega, `currency` se
+    resuelve a la moneda VIGENTE con `constants.effective_budget_currency`, la misma que usa el 422. Es
+    opcional A PROPÓSITO: el hook de hoy no manda país (ya envía la moneda vigente), y resolver sin país
+    leería el mercado como DO y le cambiaría la moneda a un cliente de España.
+
     tooltip-anchor: budget_floor_in_currency (test_p1_country_system_f1.py)"""
+    if form_data is not None:
+        from constants import effective_budget_currency
+        currency = effective_budget_currency(currency, form_data)
     new_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY and _nc_env_bool_budget(
         "MEALFIT_COUNTRY_SYSTEM", False)
     if new_currency:
@@ -2173,7 +2195,13 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
         if declared <= 0:
             # custom sin monto válido: build_budget_context cae a 'medium', no es nuestro bloqueo.
             return True, None
-        currency = str(form_data.get("budgetCurrency") or "DOP").upper()
+        # [P1-PLAN-LOTE-792 · 2026-09-28] (ronda 1 de revisión) La moneda VIGENTE, no el crudo: un
+        # `budgetCurrency='COP'` que sobrevivió a pasar de CO a DO en Configuración se compara en RD$, que
+        # es lo que el Dashboard y QBudget le enseñan. SSOT `constants.effective_budget_currency`, espejo de
+        # `effectiveBudgetCurrency` del frontend. Con el sistema de países apagado lo no DOP/USD es DOP,
+        # igual que el `else` de abajo ya lo trataba.
+        from constants import effective_budget_currency
+        currency = effective_budget_currency(form_data.get("budgetCurrency"), form_data)
 
         # [P1-COUNTRY-SYSTEM-F1] Gate INLINE por-llamada (mismo patrón que
         # constants.country_for_form_data): el flip solo exige restart. Con el
@@ -2229,9 +2257,12 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
         )
         # [P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23 → P1-PLAN-LOTE-792 · 2026-09-28] Aqui se
         # decide el 422. En un país de MERCADO beta (lista sin precios) el piso NO puede impedir
-        # una compra: se degrada a AVISO, pague en la moneda que pague (US/PR con USD incluidos).
-        # El mensaje —el mismo, con sus cifras— sigue viajando para que el frontend lo muestre
-        # como orientacion; lo que cambia es que el plan se genera.
+        # una compra: se degrada a AVISO, pague en la moneda que pague (US/PR con USD incluidos),
+        # y el plan se genera. OJO con lo que NO pasa: el detalle del aviso (warning_code + el
+        # mensaje con sus cifras) se devuelve, pero los tres llamadores —routers/plans.py ×2 y
+        # generation_inputs.py— lo descartan cuando ok=True. Hoy el aviso es la línea de log de
+        # abajo más la pista estática del asistente (QBudget con `pisoSoloOrienta`); si un día
+        # viaja en la respuesta o el SSE, este comentario cambia con él.
         if _piso_solo_orienta(form_data):
             logger.info(
                 "[P1-PLAN-LOTE-792] aviso (no bloqueo) mercado beta currency=%s declared=%s piso=%s",
