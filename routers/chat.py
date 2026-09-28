@@ -602,6 +602,54 @@ _CHAT_STREAM_LIMITER = RateLimiter(
     period_seconds=60,
 )
 
+# [P1-PLAN-LOTE-685 · 2026-09-28] La voz del coach en el modo voz: Gemini 3.8 Flash-Lite TTS (`coach_voz.py`). El dueño:
+# «la voz no es nada realista» (era el lector de accesibilidad del teléfono). Exenta del paywall como todo el modo voz:
+# el gasto va a `llm_usage_events` (node="coach_voice_tts"), NUNCA a `api_usage` —cada frase quemaría un crédito del
+# plan—; el tope es de DINERO (presupuesto diario, knob) y el anti-spam, el RateLimiter (una respuesta son 2-4 frases).
+# Soft-fail: 204 sin cuerpo y el teléfono pone su propia voz —apagada por knob, sin presupuesto o Google caído—, nunca
+# un error en rojo. `asyncio.to_thread`: la síntesis tarda ~2 s y el backend corre con UN worker de uvicorn.
+_VOZ_LIMITER = RateLimiter(max_calls=40, period_seconds=60)
+_VOZ_EN_VUELO = None
+
+
+def _semaforo_de_voz():
+    global _VOZ_EN_VUELO
+    if _VOZ_EN_VUELO is None:
+        import asyncio
+        _VOZ_EN_VUELO = asyncio.Semaphore(4)   # no más de 4 síntesis a la vez: el resto espera su turno
+    return _VOZ_EN_VUELO
+
+
+@router.post("/voz")
+async def api_chat_voz(background_tasks: BackgroundTasks, data: dict = Body(...),
+                       verified_user_id: Optional[str] = Depends(get_verified_user_id),
+                       _rl: None = Depends(_VOZ_LIMITER)):
+    """[P1-PLAN-LOTE-685] Una frase del coach → WAV con su voz. `{texto, locale}`; 204 = «usa la voz del teléfono»."""
+    import asyncio
+    from coach_voz import hay_presupuesto, registrar_uso, sintetizar, voz_en_la_nube_activa
+    texto = str((data or {}).get("texto") or "").strip()
+    locale = str((data or {}).get("locale") or "es-DO").strip()[:10]
+    if not texto:
+        raise HTTPException(status_code=400, detail="Falta el texto.")
+    if not voz_en_la_nube_activa():
+        return Response(status_code=204, headers={"X-Voz-Motivo": "apagada"})
+    if not await asyncio.to_thread(hay_presupuesto):
+        logger.warning("⚠️ [P1-PLAN-LOTE-685] voz del coach sin presupuesto hoy: el teléfono pone la suya.")
+        return Response(status_code=204, headers={"X-Voz-Motivo": "presupuesto"})
+    try:
+        async with _semaforo_de_voz():
+            voz = await asyncio.to_thread(sintetizar, texto, locale)
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-685] la voz del coach falló, el teléfono pone la suya: "
+                       f"{type(e).__name__}: {str(e)[:160]}")
+        return Response(status_code=204, headers={"X-Voz-Motivo": "error"})
+    if voz is None:
+        return Response(status_code=204, headers={"X-Voz-Motivo": "vacio"})
+    background_tasks.add_task(registrar_uso, voz, verified_user_id)
+    return Response(content=voz.wav, media_type="audio/wav",
+                    headers={"Cache-Control": "no-store", "X-Voz-Ms": str(voz.ms)})
+
+
 # [P1-PLAN-LOTE-682 · 2026-09-28] Aquí vivía `POST /tts`: el proxy a ElevenLabs del viejo Modo Llamada.
 # Sin llamadores desde mayo (P1-DEADCODE-TTS) y reemplazado por la voz del propio dispositivo
 # (`speechSynthesis`, frontend `utils/vozDelCoach.js`): ya no se manda texto a ElevenLabs, y un endpoint

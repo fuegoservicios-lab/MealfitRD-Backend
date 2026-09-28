@@ -355,6 +355,8 @@ def test_la_semilla_no_se_toma_como_respuesta_a_un_nudge(monkeypatch):
     fake_pa = types.ModuleType("proactive_agent")
     fake_pa.handle_nudge_response = lambda u, c: called.append((u, c))
     monkeypatch.setitem(sys.modules, "proactive_agent", fake_pa)
+    # [P1-PLAN-LOTE-684] En línea para poder mirar `called` al momento (el camino en hilo lo prueba lote684).
+    monkeypatch.setenv("MEALFIT_NUDGE_RESPONSE_ASYNC", "0")
     inserts: list = []
     monkeypatch.setattr(db_chat, "_save_message_insert_with_retry", lambda *a: inserts.append(a))
     monkeypatch.setattr(db_chat, "connection_pool", object())

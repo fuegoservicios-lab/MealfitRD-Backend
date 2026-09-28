@@ -324,6 +324,9 @@ def test_p2_3_nudge_outside_retry(db_chat_src: str) -> None:
     end = (fn_idx + 10 + next_def.start()) if next_def else len(db_chat_src)
     body = db_chat_src[fn_idx:end]
     nudge_pos = body.find("handle_nudge_response(")
+    if nudge_pos < 0:
+        # [P1-PLAN-LOTE-684] El efecto sale por su despachador (hilo aparte, sigue siendo UNA vez y fuera del retry).
+        nudge_pos = body.find("_procesar_respuesta_a_nudge(")
     retry_pos = body.find("_save_message_insert_with_retry(")
     assert 0 <= nudge_pos < retry_pos, (
         "[P2-CHAT-SAVE-MSG-RETRY] `handle_nudge_response(...)` debe "

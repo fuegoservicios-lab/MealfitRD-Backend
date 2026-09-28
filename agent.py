@@ -5113,6 +5113,25 @@ _RE_CLAIM_DIARY = re.compile(
 # el modelo está siendo honesto — y lo castigaría por ello.
 _RE_NEGACION = re.compile(r"\b(?:no|nunca|tampoco|sin)\b", re.IGNORECASE)
 
+# [P1-PLAN-LOTE-684 · 2026-09-28] Una OFERTA condicionada a que el usuario cuente algo no afirma nada hecho:
+# «Va, dime qué desayunaste y lo dejo anotado», «cuando me digas, queda registrado». Caso vivo del dueño
+# (28-sep, modo voz, «Cómo estás»): el guard tiró la respuesta entera, el turno tardó 1,7 s más y la de
+# repuesto salió peor («Te lo digo directo para no dar vueltas» era el modelo reaccionando a la nota interna).
+# Hacen falta LAS DOS señales: el auxiliar de presente/futuro justo antes del participio y, antes en la misma
+# frase, la petición o la condición. «Lo dejo anotado: 450 kcal» (sin condición) y «dime si lo cambio, ya quedó
+# registrado» (pretérito) siguen siendo afirmaciones.
+_RE_AUX_DE_OFERTA = re.compile(
+    r"\b(?:dejo|dejamos|dejar[eé]|dejaremos|queda|quedan|quedar[aá]|quedar[aá]n|"
+    r"voy\s+a\s+dejar|vamos\s+a\s+dejar|va\s+a\s+quedar)\s+(?:(?:todo|bien|ya)\s+)?$",
+    re.IGNORECASE,
+)
+_RE_CONDICION_DEL_USUARIO = re.compile(
+    r"\b(?:dime|d[ií]melo|cu[eé]ntame|p[aá]same|m[aá]ndame|av[ií]same|escr[ií]beme|"
+    r"(?:si|cuando|en\s+cuanto|apenas)\s+me\s+(?:dices|digas|cuentas|cuentes|pasas|pases|mandas|mandes|"
+    r"escribes|escribas|confirmas|confirmes))\b",
+    re.IGNORECASE,
+)
+
 
 def _reply_claims_diary_write(text: str) -> bool:
     """True si el texto AFIRMA haber registrado algo en el diario."""
@@ -5202,6 +5221,10 @@ def _diary_claim_sentences(text: str) -> list:
         _fin = min(_fin_c) if _fin_c else len(text)
         _frase = text[_ini + 1:_fin + 1]
         if "¿" in _frase or _frase.rstrip().endswith("?"):
+            continue
+        # [P1-PLAN-LOTE-684] «dime qué desayunaste y lo dejo anotado»: oferta, no registro.
+        _antes = text[_ini + 1:m.start()]
+        if _RE_AUX_DE_OFERTA.search(_antes) and _RE_CONDICION_DEL_USUARIO.search(_antes):
             continue
         out.append(_frase)
     return out
@@ -5621,6 +5644,47 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         _generating_titles.discard(session_id)
 
 
+def _rag_es_casual(prompt: str) -> bool:
+    """Los filtros del router que no necesitan un LLM: True = no hay nada que buscar en la memoria."""
+    # Paso 1: Filtro rápido — mensajes cortos y claramente casuales
+    casual_patterns = [
+        'ok', 'okay', 'vale', 'sí', 'si', 'no', 'gracias', 'thanks',
+        'hola', 'hello', 'hey', 'buenos días', 'buenas tardes', 'buenas noches',
+        'perfecto', 'genial', 'entendido', 'claro', 'listo', 'dale',
+        'jaja', 'jeje', 'lol', 'xd', 'bien', 'cool', 'nice',
+        'de acuerdo', 'ya', 'ajá', 'aja', 'okey', 'bueno'
+    ]
+
+    clean = prompt.strip().lower().rstrip('!?.,')
+    # Si es un mensaje muy corto O coincide con un patrón casual
+    if len(clean) < 4 or clean in casual_patterns:
+        logger.info(f"⏭️ [RAG ROUTER] Mensaje casual detectado: '{prompt[:30]}' → Saltando RAG.")
+        return True
+
+    # Paso 2: Combos casuales ("ok gracias", "sí perfecto", etc.)
+    words = clean.split()
+    if len(words) <= 3 and all(w in casual_patterns for w in words):
+        logger.info(f"⏭️ [RAG ROUTER] Combo casual detectado: '{prompt[:30]}' → Saltando RAG.")
+        return True
+
+    # [P1-PLAN-LOTE-684 · 2026-09-28] Paso 2b: saludos y charla corta («cómo estás», «qué tal, coach»). No estaban
+    # en la lista de palabras sueltas y pagaban ~1,75 s de LLM para acabar en SKIP (turno de voz del dueño).
+    from coach_voz import es_charla_corta
+    if es_charla_corta(prompt):
+        logger.info(f"⏭️ [RAG ROUTER] Charla corta detectada: '{prompt[:30]}' → Saltando RAG.")
+        return True
+    return False
+
+
+def _rag_sin_router(prompt: str) -> dict:
+    """[P1-PLAN-LOTE-684] Modo voz: la decisión de RAG SIN el LLM del router (~1,75 s medidos en el turno de voz
+    del dueño). La charla corta no busca; lo demás busca con la frase tal cual: el router solo la reescribía, y el
+    embedding tolera la frase hablada."""
+    if _rag_es_casual(prompt):
+        return {"skip": True}
+    return {"skip": False, "query": prompt}
+
+
 def rag_query_router(prompt: str) -> dict:
     """
     Decide si un mensaje del usuario amerita búsqueda RAG y, si sí,
@@ -5630,27 +5694,10 @@ def rag_query_router(prompt: str) -> dict:
         {"skip": True} si el mensaje es casual y no necesita RAG.
         {"skip": False, "query": "..."} con la query reescrita para el embedding.
     """
-    # Paso 1: Filtro rápido — mensajes cortos y claramente casuales
-    casual_patterns = [
-        'ok', 'okay', 'vale', 'sí', 'si', 'no', 'gracias', 'thanks',
-        'hola', 'hello', 'hey', 'buenos días', 'buenas tardes', 'buenas noches',
-        'perfecto', 'genial', 'entendido', 'claro', 'listo', 'dale',
-        'jaja', 'jeje', 'lol', 'xd', 'bien', 'cool', 'nice',
-        'de acuerdo', 'ya', 'ajá', 'aja', 'okey', 'bueno'
-    ]
-    
-    clean = prompt.strip().lower().rstrip('!?.,')
-    # Si es un mensaje muy corto O coincide con un patrón casual
-    if len(clean) < 4 or clean in casual_patterns:
-        logger.info(f"⏭️ [RAG ROUTER] Mensaje casual detectado: '{prompt[:30]}' → Saltando RAG.")
+    # Pasos 1-2b: los filtros sin LLM (casuales, combos, charla corta).
+    if _rag_es_casual(prompt):
         return {"skip": True}
-    
-    # Paso 2: Combos casuales ("ok gracias", "sí perfecto", etc.)
-    words = clean.split()
-    if len(words) <= 3 and all(w in casual_patterns for w in words):
-        logger.info(f"⏭️ [RAG ROUTER] Combo casual detectado: '{prompt[:30]}' → Saltando RAG.")
-        return {"skip": True}
-    
+
     # Paso 3: Para mensajes sustanciales, usar Flash-Lite para reescribir la query
 
     # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate hot-path del chat. El RAG
@@ -7338,13 +7385,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # única diferencia entre planes son las CANTIDADES de créditos
     # (auth._TIER_LIMITS). Pre-fix: sentimiento solo plus+ y RAG excluía a
     # gratis. Guests (sin cuenta) siguen fuera del RAG: no tienen user_facts.
-    _do_sentiment = True
+    # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz: ni clasificador de sentimiento (el prompt de voz ya fija el tono,
+    # y es solo tono: no tiene papel de seguridad) ni el LLM del router de RAG (`_rag_sin_router` decide sin él).
+    # Medido en el turno de voz del dueño: 1,00 s y 1,75 s en paralelo antes del primer token.
+    _do_sentiment = not is_call_mode
     _do_rag = bool(user_id) and user_id != "guest"
-    rag_decision = None
-    if _do_sentiment or _do_rag:
+    _do_rag_router = _do_rag and not is_call_mode
+    rag_decision = _rag_sin_router(prompt) if (_do_rag and is_call_mode) else None
+    if _do_sentiment or _do_rag_router:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
             _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
-            _f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag else None
+            _f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag_router else None
             if _f_sent is not None:
                 try:
                     sentiment_result = _f_sent.result() or {}
