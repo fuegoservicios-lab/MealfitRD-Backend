@@ -165,11 +165,9 @@ def test_user_with_multiple_chunks_picks_max_deferral_count_for_metadata():
         f"P1-24: la fila representativa debe ser la de max deferral_count "
         f"(12), vio {insert_metadata[0]['deferral_count']}"
     )
-    # El push body debe mencionar el conteo más fuerte.
-    assert "12" in push_kwargs[0].get("body", ""), (
-        f"P1-24: push body debe reflejar el max deferral_count: "
-        f"{push_kwargs[0].get('body')!r}"
-    )
+    # [P1-PLAN-LOTE-658] El conteo vive en la alerta del operador (arriba). El push al usuario ya no lo lleva:
+    # es texto fijo del catálogo (traducible) y solo sale cuando el perfil no tiene zona horaria.
+    assert all("12" not in k.get("body", "") for k in push_kwargs)
 
 
 # ---------------------------------------------------------------------------

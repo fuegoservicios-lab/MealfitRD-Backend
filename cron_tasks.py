@@ -21075,15 +21075,20 @@ def _detect_chronic_deferrals() -> None:
         # ese audit no contamine el flujo operacional.
         rows = execute_sql_query(
             """
-            SELECT user_id::text AS user_id,
-                   meal_plan_id::text AS meal_plan_id,
-                   week_number,
+            SELECT cd.user_id::text AS user_id,
+                   cd.meal_plan_id::text AS meal_plan_id,
+                   cd.week_number,
                    COUNT(*)::int AS deferral_count,
-                   MAX(created_at) AS last_at
+                   MAX(cd.created_at) AS last_at,
+                   -- [P1-PLAN-LOTE-658] la zona horaria del perfil, en la MISMA consulta (P1-24: nada de un SELECT
+                   -- por usuario dentro del bucle): el push solo sale si falta.
+                   MAX(COALESCE(up_tz.health_profile->>'tz_offset_minutes', up_tz.health_profile->>'tzOffset'))
+                       AS tz_perfil
             FROM chunk_deferrals cd
-            WHERE created_at > NOW() - make_interval(hours => %s)
-              AND reason = 'temporal_gate'
-              AND meal_plan_id IS NOT NULL
+            LEFT JOIN user_profiles up_tz ON up_tz.id = cd.user_id
+            WHERE cd.created_at > NOW() - make_interval(hours => %s)
+              AND cd.reason = 'temporal_gate'
+              AND cd.meal_plan_id IS NOT NULL
               -- [P2-PUSH-RESPECTS-PAUSE · 2026-08-15] Quien apagó la generación no
               -- recibe avisos de que su plan «parece atrasado». Sus filas siguen
               -- dentro de la ventana horas después de pausar, y esos reintentos son
@@ -21096,7 +21101,7 @@ def _detect_chronic_deferrals() -> None:
                   SELECT 1 FROM user_profiles up
                   WHERE up.id = cd.user_id AND up.plan_mode = 'tracking'
               )
-            GROUP BY user_id, meal_plan_id, week_number
+            GROUP BY cd.user_id, cd.meal_plan_id, cd.week_number
             HAVING COUNT(*) >= %s
             """,
             (int(CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS), int(CHUNK_CHRONIC_DEFERRAL_MIN_COUNT)), fetch_all=True
@@ -21195,16 +21200,21 @@ def _detect_chronic_deferrals() -> None:
             continue
 
         try:
-            _dispatch_push_notification(
-                user_id=user_id,
-                title="Tu plan parece atrasado",
-                body=(
-                    f"Detectamos {row['deferral_count']} reintentos en las últimas "
-                    f"{int(CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS)}h. Verifica que tu zona horaria "
-                    f"esté correcta en tu perfil."
-                ),
-                url=CHUNK_STALE_PANTRY_DEEPLINK,
-            )
+            # [P1-PLAN-LOTE-658] El usuario solo puede arreglar una cosa aquí: que su perfil no tenga zona horaria.
+            # Con ella puesta, el aplazamiento es del sistema (0257d89d recibió este aviso una y otra vez con 240 bien
+            # puesto, y en español: el cuerpo era una f-string que el catálogo de push no traduce). Entonces, solo
+            # la alerta del operador; sin zona horaria, el aviso fijo (en el catálogo) que ya usa la pausa por TZ.
+            if row.get("tz_perfil") in (None, ""):
+                _dispatch_push_notification(
+                    user_id=user_id,
+                    title="Necesitamos tu zona horaria",
+                    body=(
+                        "Dejamos en pausa los próximos días de tu plan porque no pudimos "
+                        "detectar tu zona horaria. Abre Bioboros y se sincronizará "
+                        "automáticamente para reanudar la generación."
+                    ),
+                    url="/dashboard?action_required=tz_unresolved",
+                )
             execute_sql_write(
                 """
                 INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
