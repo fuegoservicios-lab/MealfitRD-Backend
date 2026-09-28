@@ -18,10 +18,12 @@ El pre-chequeo (`nevera_refutada.prechequeo`, antes del bucle de reintentos del 
      autonomía del `initial_plan` —y con ella P1-FIRST-PURCHASE-PAUSE—), no hace nada. Ninguna guarda decide sola.
   2. Evidencia: la última refutación del plan (`plan_data._pantry_refutation`, escrita por la guarda de existencia al
      agotar sus reintentos) con sus líneas INEXISTENTES, la huella BRUTA de la Nevera de ANTES de los intentos
-     (∩ la de después: una compra durante la corrida no entra) y la huella del GENERADOR que falló. Un éxito estricto
-     de la guarda la borra.
+     (∩ la de después: una compra durante la corrida no entra), los alimentos DISPONIBLES en las dos lecturas y la
+     huella del GENERADOR que falló (hash corto: proveedor, modelos, esfuerzo del day-gen y tier). Un éxito estricto
+     de la guarda la borra. Ni `registrar` ni `olvidar` sellan `_plan_modified_at` (contabilidad interna).
   3. La Nevera no creció desde entonces (huella bruta: ni alimento nuevo ni más cantidad) — las reservas no cuentan:
-     suben y bajan solas y no son una compra.
+     suben y bajan solas y no son una compra —, y no hay hoy disponible un alimento que entonces estaba reservado
+     entero.
   4. La MISMA medida de la guarda (`validate_ingredients_against_pantry` + `compras_pequenas.tolerar`) sigue
      rechazando esas líneas contra la Nevera de hoy.
   5. El bloque sigue vivo (`_validate_chunk_pre_llm`).
@@ -66,9 +68,10 @@ INVENTARIO = [
 REFUTADAS_S3 = ["10 g de aguacate", "10 g de arroz blanco", "45 g de guineo"]
 REFUTADAS_S4 = ["½ guineo", "10 g de semillas de linaza", "120 g de edamame cocido", "30 g de proteína whey",
                 "20 g de semillas de girasol", "15 g de aguacate", "30 g de arroz blanco crudo"]
-#: Huella del generador en los tests (época del knob | proveedor | modelo del usuario | modelo primario del day-gen).
-MODELOS = "zai|glm-5.3-flash|gpt-6-luna"
-GENERADOR = "1|" + MODELOS
+#: Generador de los tests (proveedor | modelo del usuario | modelo del day-gen | esfuerzo | tier) y su huella: el hash
+#: corto de «época del knob|generador» (plan_data llega al cliente: ningún nombre de proveedor en la evidencia).
+MODELOS = "zai|glm-5.3-flash|gpt-6-luna|low|gratis"
+GENERADOR = __import__("hashlib").sha256(("1|" + MODELOS).encode("utf-8")).hexdigest()[:12]
 
 REFUTADAS_S7 = ["15 g de aguacate", "95 g de edamame cocido", "2 rebanadas de pan integral familiar",
                 "80 g de camarones cocidos", "½ guineo maduro (74 g)", "15 g de arroz blanco crudo",
@@ -136,8 +139,8 @@ def worker(monkeypatch):
 def _evidencia(lineas, inv=INVENTARIO, horas=10):
     at = (datetime.now(timezone.utc) - timedelta(hours=horas)).isoformat()
     import nevera_refutada as m
-    return {"v": 2, "at": at, "week": 4, "chunk_kind": "rolling_refill", "lines": list(lineas),
-            "bruto": m.huella_bruta(_filas(inv)), "gen": GENERADOR}
+    return {"v": 3, "at": at, "week": 4, "chunk_kind": "rolling_refill", "lines": list(lineas),
+            "bruto": m.huella_bruta(_filas(inv)), "disponible": m.huella_disponible(_filas(inv)), "gen": GENERADOR}
 
 
 def _pre(m, *, plan_data, chunk_kind="rolling_refill", form_data=None, snap=None):
@@ -261,7 +264,7 @@ def test_knob_apagado_conducta_previa_exacta(nr, worker, monkeypatch):
     assert _pre(nr, plan_data={"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is False
     assert nr.huella_inicial("u-1") is None
     assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
-                        bruto_inicio=nr.huella_bruta(_filas(INVENTARIO))) is False
+                        inicio=_inicio_de(nr)) is False
     assert nr.olvidar("p-1", "u-1", {"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is False
     assert pausas == [] and nr._escrituras == [] and leidas == []
 
@@ -281,27 +284,29 @@ def test_un_fallo_al_decidir_deja_correr_al_llm(nr, worker, monkeypatch):
 def test_registrar_escribe_quirurgico_y_con_dueno(nr):
     assert nr.registrar("p-1", "u-1", 4, "rolling_refill",
                         (_resultado_guarda(REFUTADAS_S4[:3]), _resultado_guarda(REFUTADAS_S4[3:])),
-                        bruto_inicio=nr.huella_bruta(_filas(INVENTARIO))) is True
+                        inicio=_inicio_de(nr)) is True
     (sql, params), = nr._escrituras
-    assert "jsonb_set" in sql and "'{_pantry_refutation}'" in sql and "'{_plan_modified_at}'" in sql
+    assert "jsonb_set" in sql and "'{_pantry_refutation}'" in sql
+    assert "_plan_modified_at" not in sql, "contabilidad interna: no promueve el plan a activo (ronda 2, punto 1)"
     assert re.search(r"WHERE id = %s AND user_id = %s\s*$", sql.strip())
     ev = json.loads(params[0])
     assert params[1:] == ("p-1", "u-1")
     assert ev["lines"] == REFUTADAS_S4 and ev["week"] == 4 and ev["chunk_kind"] == "rolling_refill"
     assert ev["bruto"] == nr.huella_bruta(_filas(INVENTARIO))
-    assert ev["gen"] == GENERADOR and ev["v"] == 2
+    assert ev["disponible"] == nr.huella_disponible(_filas(INVENTARIO))
+    assert ev["gen"] == GENERADOR and ev["v"] == 3
 
 
 def test_sin_lineas_inexistentes_no_hay_evidencia(nr):
     assert nr.registrar("p-1", "u-1", 4, "rolling_refill", ("CANTIDADES: excede", True, None),
-                        bruto_inicio=nr.huella_bruta(_filas(INVENTARIO))) is False
+                        inicio=_inicio_de(nr)) is False
     assert nr._escrituras == []
 
 
 def test_el_ciclo_completo_registrar_y_despues_prechequear(nr, worker):
     pausas, _ = worker
     nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
-                 bruto_inicio=nr.huella_inicial("u-1"))
+                 inicio=nr.huella_inicial("u-1"))
     ev = json.loads(nr._escrituras[0][1][0])
     assert _pre(nr, plan_data={"_pantry_refutation": ev}) is True and len(pausas) == 1
 
@@ -360,7 +365,7 @@ def test_la_refutacion_se_registra_antes_de_pisar_la_correccion_anterior():
     assert w.rindex("Violación persistente tras", 0, pausa) < gancho
     linea = w[w.rfind("\n", 0, gancho):w.index("\n", gancho)]
     assert 'form_data.get("_pantry_correction")' in linea and "_val_result" in linea
-    assert "bruto_inicio=_nr_bruto0" in linea, "la base de la evidencia es la Nevera de ANTES de los intentos"
+    assert "inicio=_nr_inicio" in linea, "la base de la evidencia es la Nevera de ANTES de los intentos"
 
 
 def test_el_modulo_consulta_la_ssot_con_los_mismos_argumentos_que_la_guarda():
@@ -400,7 +405,7 @@ def test_defecto1_una_compra_durante_la_corrida_no_entra_en_la_base(nr, worker, 
     comprado = INVENTARIO + [("Pechuga de pollo", 2, "lb")]  # compra a mitad de la corrida (no es lo refutado)
     monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas(comprado))
     assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
-                        bruto_inicio=antes) is True
+                        inicio=_inicio_de(nr)) is True
     ev = json.loads(nr._escrituras[-1][1][0])
     assert "pechuga de pollo|lb" not in ev["bruto"], "la compra de durante la corrida entró en la base refutada"
     assert ev["bruto"] == antes
@@ -413,12 +418,12 @@ def test_defecto1_la_base_es_la_interseccion_y_sin_lectura_inicial_no_hay_eviden
     antes = nr.huella_bruta(_filas(INVENTARIO))
     comido = [(n, q / 2, u) if n == "Yogurt" else (n, q, u) for n, q, u in INVENTARIO if n != "Uva"]
     monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas(comido))
-    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),), bruto_inicio=antes)
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),), inicio=_inicio_de(nr))
     ev = json.loads(nr._escrituras[-1][1][0])
     assert ev["bruto"] == nr.huella_bruta(_filas(comido)), "min(antes, después) por alimento"
     n = len(nr._escrituras)
     assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
-                        bruto_inicio=None) is False
+                        inicio=None) is False
     assert len(nr._escrituras) == n
 
 
@@ -426,17 +431,18 @@ def test_defecto1_la_huella_inicial_se_toma_antes_de_refrescar_la_nevera():
     w = _cuerpo_worker()
     gancho = w.index('__import__("nevera_refutada").prechequeo(')
     refresco = w.rindex("form_data = _refresh_chunk_pantry(", 0, gancho)
-    inicial = w.rindex('_nr_bruto0 = __import__("nevera_refutada").huella_inicial(user_id)', 0, gancho)
+    inicial = w.rindex('_nr_inicio = __import__("nevera_refutada").huella_inicial(user_id)', 0, gancho)
     assert inicial < refresco, "la huella inicial debe leerse ANTES de capturar la Nevera que validará la guarda"
     assert w[inicial:refresco].count("\n") <= 1, "pegada al refresco: nada entre la lectura bruta y la neta"
-    assert w.count("_nr_bruto0 = ") == 1
+    assert w.count("_nr_inicio = ") == 1
 
 
 def test_defecto2_un_exito_estricto_borra_la_evidencia(nr):
     plan_data = {"_pantry_refutation": _evidencia(REFUTADAS_S4), "days": []}
     assert nr.olvidar("p-1", "u-1", plan_data) is True
     (sql, params), = nr._escrituras
-    assert "plan_data - '_pantry_refutation'" in sql and "'{_plan_modified_at}'" in sql
+    assert "plan_data - '_pantry_refutation'" in sql
+    assert "_plan_modified_at" not in sql, "corre DENTRO de la corrida: sellar disparaba el CAS del propio worker"
     assert re.search(r"WHERE id = %s AND user_id = %s AND plan_data \? '_pantry_refutation'\s*$", sql.strip())
     assert params == ("p-1", "u-1")
     assert "_pantry_refutation" not in plan_data, "la copia en memoria del worker tampoco la conserva"
@@ -482,15 +488,25 @@ def test_defecto3_la_caducidad_por_defecto_es_una_semana(nr):
 
 
 def test_defecto3_el_generador_real_se_resuelve_sin_lanzar(monkeypatch):
-    """Sin sustituir: la huella real del generador (proveedor + modelo del usuario + modelo del day-gen) sale como
-    texto; si algo de la resolución falla, None (y entonces ni se registra ni se predice)."""
+    """Sin sustituir la resolución: la huella real del generador (proveedor | modelo del usuario | modelo y esfuerzo del
+    day-gen | tier) sale como texto; si algo de la resolución falla, None (y entonces ni se registra ni se predice).
+    El tier sí se sustituye en los DOS módulos que lo leen, y ninguna consulta llega a la DB."""
     import nevera_refutada as m
     import llm_provider
+    import graph_orchestrator
+    import db
+    consultas = []
+    # [ronda 2 · punto 5] Ninguna consulta REAL del tier (con `.env` iría a producción).
+    monkeypatch.setattr(db, "get_user_plan_tier", lambda user_id: consultas.append(user_id) or "gratis")
     monkeypatch.setattr(llm_provider, "get_user_tier", lambda user_id: "gratis")
-    g = m._generador_actual("u-1")
-    assert isinstance(g, str) and g.count("|") == 2 and llm_provider.llm_provider_name() in g
+    monkeypatch.setattr(graph_orchestrator, "get_user_tier", lambda user_id: "gratis")  # su propia copia (import por nombre)
+    g = m._generador_actual("u-747-sin-db")
+    assert consultas == [], "el test consultó el tier real: `graph_orchestrator` tiene su propia copia de get_user_tier"
+    assert isinstance(g, str) and g.count("|") == 4 and llm_provider.llm_provider_name() in g
+    assert g.endswith("|gratis")
     monkeypatch.setattr(llm_provider, "llm_provider_name", lambda: (_ for _ in ()).throw(RuntimeError("x")))
-    assert m._generador_actual("u-1") is None
+    assert m._generador_actual("u-747-sin-db") is None
+    assert consultas == []
 
 
 @pytest.mark.parametrize("estado", ["plan_missing", "chunk_terminal", "chunk_unknown"])
@@ -574,3 +590,141 @@ def test_defecto9_el_helper_sella_y_limpia_la_marca(monkeypatch):
     assert escritos[0]["_pantry_pause_precheck_at"] != "vieja"
     assert "_pantry_pause_precheck_at" not in escritos[1]
     assert "_pantry_pause_precheck_at" in cron_tasks._PANTRY_PAUSE_LIVE_KEYS
+
+
+# ─────────────── ronda 2 de la revisión (re-verificación) ───────────────
+# Cada test reproduce un punto de la re-verificación (rojo contra 5e1f82c0) y fija su arreglo.
+
+def _hash12(texto: str) -> str:
+    import hashlib
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()[:12]
+
+
+def _filas_res(inv, reservado=None):
+    """Filas de `_leer_bruto` con su `reserved_quantity` (lo que la Nevera neta descuenta)."""
+    reservado = reservado or {}
+    return [{"ingredient_name": n, "quantity": q, "unit": u, "reserved_quantity": float(reservado.get(n, 0))}
+            for n, q, u in inv]
+
+
+def _inicio_de(m, inv=INVENTARIO, reservado=None):
+    """Lo que `huella_inicial` devuelve para esa Nevera (bruta + lo disponible)."""
+    filas = _filas_res(inv, reservado)
+    return {"bruto": m.huella_bruta(filas), "disponible": m.huella_disponible(filas)}
+
+
+def _sql_de(nombre_fn: str) -> str:
+    """El SQL que una función del módulo pasa a `_escribir` (sin docstring ni logs)."""
+    src = _MOD.read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == nombre_fn)
+    llamada = next(n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_escribir")
+    return "".join(c.value for c in ast.walk(llamada.args[0]) if isinstance(c, ast.Constant) and isinstance(c.value, str))
+
+
+def test_r2_punto1_registrar_y_olvidar_no_sellan_plan_modified_at():
+    """`_plan_modified_at` elige el plan ACTIVO (`GREATEST(created_at, _plan_modified_at)`: restore, rename, Historial,
+    coach) y es el CAS del worker. `registrar` corre tras minutos de LLM sin re-comprobar que el bloque siga vivo: si el
+    usuario creó o restauró otro plan, sellar el viejo lo promovía a activo (el fallo de P2-HIST-RENAME-NO-PROMOTE). Y
+    `olvidar` corre DENTRO de la misma corrida: su sello disparaba el CAS del propio worker (modo degradado ⇒ merge
+    abortado y bloque re-encolado). Son contabilidad interna: perder una escritura sólo hace que corra el LLM."""
+    for fn in ("registrar", "olvidar"):
+        sql = _sql_de(fn)
+        assert "UPDATE meal_plans" in sql, fn
+        assert "_plan_modified_at" not in sql, f"{fn}: la evidencia no es una edición del plan; no lo promueve a activo"
+        assert "AND user_id = %s" in sql, fn
+
+
+def test_r2_punto1_las_escrituras_reales_no_llevan_el_sello(nr):
+    nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),), inicio=_inicio_de(nr))
+    nr.olvidar("p-1", "u-1", {"_pantry_refutation": _evidencia(REFUTADAS_S4)})
+    assert len(nr._escrituras) == 2
+    for sql, _params in nr._escrituras:
+        assert "_plan_modified_at" not in sql
+
+
+def test_r2_punto2_otro_tier_es_otro_generador(monkeypatch):
+    """gratis y plus resuelven el MISMO modelo con los defaults, pero el day-gen de plus corre con esfuerzo `medium` (y
+    otro revisor clínico): quien se pasa a plus no arrastra una semana la evidencia del generador barato."""
+    import nevera_refutada as m
+    import llm_provider
+    import graph_orchestrator
+    monkeypatch.setattr(graph_orchestrator, "_openai_key_available", lambda: True)
+    huellas = {}
+    for tier in ("gratis", "plus"):
+        monkeypatch.setattr(llm_provider, "get_user_tier", lambda user_id, _t=tier: _t)
+        monkeypatch.setattr(graph_orchestrator, "get_user_tier", lambda user_id, _t=tier: _t)
+        huellas[tier] = m.huella_generador("u-747-tier")
+    assert huellas["gratis"] and huellas["plus"]
+    assert huellas["gratis"] != huellas["plus"], "otro tier (otro esfuerzo del day-gen) ⇒ se vuelve a probar de verdad"
+
+
+def test_r2_punto3_la_huella_del_generador_no_saca_nombres_de_proveedor(nr):
+    """`plan_data` llega al cliente (y a su localStorage): la evidencia guarda un hash corto, no `deepseek|glm-…`."""
+    assert nr.huella_generador("u-1") == _hash12("1|" + MODELOS)
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
+                        inicio=_inicio_de(nr)) is True
+    crudo = nr._escrituras[-1][1][0]
+    ev = json.loads(crudo)
+    assert re.fullmatch(r"[0-9a-f]{12}", ev["gen"])
+    for nombre in ("zai", "glm", "gpt", "luna", "deepseek", "openai"):
+        assert nombre not in crudo.lower(), nombre
+
+
+def test_r2_punto4_un_alimento_liberado_de_reservas_vuelve_a_probar(nr, worker, monkeypatch):
+    """Al refutar, el mango estaba reservado entero (el LLM no lo vio y puso guineo). Hoy se liberó y vuelve a estar
+    disponible: la Nevera BRUTA no creció, lo refutado sigue fuera, pero el LLM tiene hoy una fruta que entonces no tenía
+    ⇒ se prueba de verdad en vez de 12 h de pausa."""
+    pausas, _ = worker
+    ev = dict(_evidencia(REFUTADAS_S4))
+    ev["disponible"] = _inicio_de(nr, reservado={"Mango": 4})["disponible"]
+    assert "mango|unidad" not in ev["disponible"]
+    monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas_res(INVENTARIO))
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") is None
+    assert _pre(nr, plan_data={"_pantry_refutation": ev}) is False and pausas == []
+
+
+def test_r2_punto4_lo_que_hoy_esta_reservado_no_cuenta_como_novedad(nr, worker, monkeypatch):
+    pausas, _ = worker
+    ev = dict(_evidencia(REFUTADAS_S4))
+    ev["disponible"] = _inicio_de(nr)["disponible"]
+    monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas_res(INVENTARIO, {"Mango": 4, "Yogurt": 1960}))
+    fd = {"current_pantry_ingredients": _nevera_neta(INVENTARIO, {"Mango": 4, "Yogurt": 1960})}
+    assert _pre(nr, plan_data={"_pantry_refutation": ev}, form_data=fd) is True and len(pausas) == 1
+
+
+def test_r2_punto4_registrar_guarda_lo_disponible_en_las_dos_lecturas(nr, monkeypatch):
+    """La base de lo disponible es la de ANTES ∩ la de DESPUÉS (igual que la bruta): lo que se liberó a mitad de corrida
+    no lo vieron todos los intentos."""
+    inicio = _inicio_de(nr, reservado={"Mango": 4})
+    monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas_res(INVENTARIO, {"Piña": 1}))
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),), inicio=inicio) is True
+    ev = json.loads(nr._escrituras[-1][1][0])
+    assert "mango|unidad" not in ev["disponible"] and "pina|unidad" not in ev["disponible"]
+    assert "tilapia|unidad" in ev["disponible"]
+    assert ev["v"] == 3
+
+
+def test_r2_punto4_evidencia_sin_lo_disponible_no_vale(nr):
+    ev = dict(_evidencia(REFUTADAS_S4))
+    ev.pop("disponible", None)
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") is None
+
+
+def test_r2_punto4_la_lectura_trae_lo_reservado():
+    src = _MOD.read_text(encoding="utf-8")
+    lectura = src[src.index("def _leer_bruto"):src.index("def _escribir")]
+    assert "reserved_quantity" in lectura and "kind = 'food'" in lectura
+
+
+def test_r2_punto6_el_push_del_worker_solo_si_la_pausa_ocurrio():
+    """C1-PAUSE-CAS: `_pause_chunk_for_pantry_refresh` devuelve False si el bloque ya no es nuestro (desplazado o
+    cancelado por un plan nuevo). El worker avisaba igual: push sobre un plan que el usuario acababa de reemplazar."""
+    worker_fn = next(n for n in ast.walk(ast.parse(_CRON)) if isinstance(n, ast.FunctionDef) and n.name == "_chunk_worker")
+    ramas = [n for n in ast.walk(worker_fn) if isinstance(n, ast.If) and isinstance(n.test, ast.Call)
+             and getattr(n.test.func, "id", "") == "_pause_chunk_for_pantry_refresh"
+             and any(k.arg == "reason" and getattr(k.value, "value", None) == "pantry_violation_after_retries"
+                     for k in n.test.keywords)]
+    assert len(ramas) == 1, "la pausa tras agotar los reintentos debe condicionar el push a que ocurrió"
+    cuerpo = "\n".join(ast.get_source_segment(_CRON, st) or "" for st in ramas[0].body)
+    assert '__import__("nevera_refutada").avisar(user_id)' in cuerpo
+    assert _cuerpo_worker().count('__import__("nevera_refutada").avisar(user_id)') == 1

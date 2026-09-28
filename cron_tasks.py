@@ -30971,7 +30971,7 @@ __PLAN_MODE_GATE__
                         # objetivos/señales, pero no la identidad del plan ya encolado.
                         form_data = _merge_chunk_live_profile(form_data, chunk_health_profile)
 
-                    _nr_bruto0 = __import__("nevera_refutada").huella_inicial(user_id)  # [P1-PLAN-LOTE-747] Nevera bruta ANTES de capturar la que validará la guarda: base de una posible refutación
+                    _nr_inicio = __import__("nevera_refutada").huella_inicial(user_id)  # [P1-PLAN-LOTE-747] Nevera bruta y disponible ANTES de capturar la que validará la guarda: base de una posible refutación
                     form_data = _refresh_chunk_pantry(user_id, form_data, snapshot_form_data, task_id=task_id, week_number=week_number)
                     if form_data.get("_pantry_paused"):
                         return
@@ -31499,16 +31499,16 @@ __PLAN_MODE_GATE__
                                 # Persistir el feedback final para diagnóstico operacional y
                                 # para que el frontend pueda mostrar al usuario qué ingredientes
                                 # el LLM no pudo resolver tras varios intentos.
-                                __import__("nevera_refutada").registrar(meal_plan_id, user_id, week_number, chunk_kind, (form_data.get("_pantry_correction"), _val_result), bruto_inicio=_nr_bruto0)  # [P1-PLAN-LOTE-747] evidencia para el pre-chequeo del próximo bloque
+                                __import__("nevera_refutada").registrar(meal_plan_id, user_id, week_number, chunk_kind, (form_data.get("_pantry_correction"), _val_result), inicio=_nr_inicio)  # [P1-PLAN-LOTE-747] evidencia para el pre-chequeo del próximo bloque
                                 form_data["_pantry_correction"] = str(_val_result)[:1000]
-                                _pause_chunk_for_pantry_refresh(
+                                if _pause_chunk_for_pantry_refresh(  # [P1-PLAN-LOTE-747] C1-PAUSE-CAS: desplazado o cancelado ⇒ sin push
                                     task_id,
                                     user_id,
                                     week_number,
                                     fresh_inventory=_pantry_snapshot,
                                     reason="pantry_violation_after_retries",
-                                )
-                                __import__("nevera_refutada").avisar(user_id)  # [P1-PLAN-LOTE-747] el push de esta pausa vive en UN sitio (push_i18n traduce por el texto exacto)
+                                ):
+                                    __import__("nevera_refutada").avisar(user_id)  # [P1-PLAN-LOTE-747] el push de esta pausa vive en UN sitio (push_i18n traduce por el texto exacto)
                                 return
                         else:
                             _final_validation = _finalize_live_pantry_validation("Inventario actualizado.")
