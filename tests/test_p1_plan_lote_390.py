@@ -19,7 +19,7 @@ def test_la_clara_dura_se_hierve_en_su_huevo():
     assert pc.claras_en_su_huevo(m) == 1
     assert m["recipe"][0] == ("El Toque de Fuego: hierve la yautía 15-18 minutos. En otra olla, hierve 3 huevos y 3 claras "
                               "de huevo (hiérvelas dentro de su huevo entero, con cáscara) 10-11 minutos, enfríalos y "
-                              "pélalos; quita la yema de cada huevo pelado: usa solo la clara."), m["recipe"][0]
+                              "pélalos; quita la yema a 3 de ellos: usa solo su clara."), m["recipe"][0]   # [P1-PLAN-LOTE-804]
     assert pc.claras_en_su_huevo(m) == 0                                   # idempotente
     s = {"ingredients": ["6 claras de huevo"],
          "recipe": ["Mise en place: enjuaga 50 g de cebada; hierve 6 claras de huevo 8-10 min, pélalos y córtalos en mitades."]}
@@ -31,14 +31,14 @@ def test_la_clara_dura_se_hierve_en_su_huevo():
                     "10-12 minutos, hasta que no escurran al pelarlos."]}
     assert pc.claras_en_su_huevo(u) == 1
     assert "1 clara de huevo (hiérvela dentro de su huevo entero, con cáscara) en agua" in u["recipe"][0]
-    assert u["recipe"][0].endswith("; quita la yema del huevo pelado: usa solo la clara."), u["recipe"][0]
+    assert u["recipe"][0].endswith("; quita la yema a 1 de ellos: usa solo su clara."), u["recipe"][0]   # [P1-PLAN-LOTE-804]
     c = {"ingredients": ["1 huevo", "4 claras de huevo"],
          "recipe": ["El Toque de Fuego: hornea la avena 12-14 minutos. En paralelo, cuece el huevo entero y 4 claras en agua "
                     "hirviendo 9-10 minutos; enfría, pela y reserva."]}
     assert pc.claras_en_su_huevo(c) == 1
     assert c["recipe"][0].endswith("cuece el huevo entero y 4 claras (hiérvelas dentro de su huevo entero, con cáscara) en "
-                                   "agua hirviendo 9-10 minutos; enfría, pela y reserva; quita la yema de cada huevo pelado: "
-                                   "usa solo la clara."), c["recipe"][0]
+                                   "agua hirviendo 9-10 minutos; enfría, pela y reserva; quita la yema a 4 de ellos: "
+                                   "usa solo su clara."), c["recipe"][0]   # [P1-PLAN-LOTE-804] «cada huevo» incluía al entero
 
 
 def test_sin_pelar_en_la_misma_frase():
