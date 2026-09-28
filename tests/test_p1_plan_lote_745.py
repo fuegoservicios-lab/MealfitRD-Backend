@@ -494,6 +494,18 @@ def test_v7a_el_adjetivo_de_tamano_no_es_la_palabra_contada(idx):
                     idx) == ["Tortilla integral"], ing
 
 
+def test_v7a_el_salto_del_tamano_no_se_come_un_nombre():
+    """«chic…» como prefijo se comía «chicharrones»: la palabra contada pasaba a ser «de»."""
+    i2 = cc.build_culinary_index(_CAT + [{"name": "Chicharrón de cerdo", "prep_methods": ["freir"], "ready_to_eat": True,
+                                          "category": "Proteínas", "aliases": ["chicharrones de cerdo"]}])
+    contado: dict = {}
+    cc._v7_piezas("2 chicharrones de cerdo", i2, contado=contado)
+    assert contado == {"Chicharrón de cerdo": "chicharrones"}, contado
+    contado = {}
+    cc._v7_piezas("2 chiquitas tortillas integrales", i2, contado=contado)
+    assert contado == {"Tortilla integral": "tortillas"}, contado
+
+
 def test_v7a_trocear_en_rodajas_una_pieza_contable_DECISION_PENDIENTE(idx):
     """Decisión de producto PENDIENTE del dueño (revisión del 745, defecto 6): hoy «corta el huevo duro en rodajas» y
     «corta el guineo en rodajas» vuelven colectiva a la pieza, igual que «corta el tomate en cubitos» — y el check calla

@@ -1507,7 +1507,8 @@ _V7_RANGO_RE = re.compile(_V7_CANT + r"\s*(?:-|–|—|\ba\b)\s*$")
 
 # [P1-PLAN-LOTE-745 · ronda 1] Adjetivo de tamaño antepuesto a la palabra contada («2 pequeñas tortillas», «3 medianos
 # tomates»): no es lo que la cifra cuenta. Se salta sólo mientras quede otra palabra detrás.
-_V7_ADJ_TAMANO_RE = re.compile(r"(?:pequen|median|grand|enter|chiquit|chic)[a-z]*")
+# Formas exactas, no prefijos: «chic…» a secas se comería «chicharrones».
+_V7_ADJ_TAMANO_RE = re.compile(r"(?:pequen|median|enter|chiquit|chic)[oa]s?|grandes?")
 
 
 def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma", contado: "dict | None" = None) -> dict:
