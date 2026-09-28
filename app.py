@@ -3794,6 +3794,11 @@ _ACCOUNT_EXPORT_TABLES = (
     ("custom_shopping_items", "user_id", 2000),
     ("user_brand_preferences", "user_id", 2000),
     ("inventory_consumption_events", "user_id", 5000),
+    # [P1-PLAN-LOTE-777 · 2026-09-28] Regalos de la cuenta (créditos extra,
+    # plan de cortesía): la Política de Privacidad §2 promete que aparecen en
+    # la exportación. `reason` (el motivo) SÍ se exporta — es información
+    # sobre la persona, no del personal que lo otorgó.
+    ("account_grants", "user_id", 500),
 )
 
 # Columnas internas sin valor para el usuario y costosas de serializar
@@ -3801,7 +3806,9 @@ _ACCOUNT_EXPORT_TABLES = (
 # [P1-PLAN-LOTE-716] Todas las columnas vector del esquema, no solo `embedding` (la de los planes se llama
 # `profile_embedding`), y se quitan EN LA BASE (`to_jsonb(t) - [...]`): antes viajaban 1536 floats en texto
 # por fila hasta Python para tirarlos allí.
-_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding")
+# [P1-PLAN-LOTE-777] `granted_by`/`revoked_by` de `account_grants` identifican al PERSONAL que actuó sobre la
+# cuenta (el user_id del admin), no al titular: tampoco salen.
+_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding", "granted_by", "revoked_by")
 
 # [P1-PLAN-LOTE-716] Columnas explícitas donde `*` arrastraría binarios: el contenido de las fotos del chat es
 # `bytea` (MBs por foto) y no viaja en un JSON; sí sus datos.

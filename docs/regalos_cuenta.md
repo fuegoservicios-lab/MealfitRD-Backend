@@ -51,6 +51,13 @@ huso del dispositivo. En Configuración, la escalera de «Otros planes» y las a
 actual») deciden por el plan PAGADO (`planDeCobro`); el nombre del plan, la pastilla de estado y las funciones
 premium siguen al plan efectivo.
 
+## Privacidad
+
+[P1-PLAN-LOTE-777 · 2026-09-28] Los regalos aparecen en la exportación de datos del usuario
+(`GET /api/account/export`, tabla `account_grants`) sin los ids del personal que los otorgó o
+revocó (`granted_by`/`revoked_by` van en `_ACCOUNT_EXPORT_STRIPPED_KEYS`; el motivo, `reason`,
+SÍ se exporta). La Política de Privacidad §5 declara el acceso del equipo de soporte a la cuenta.
+
 ## Knob
 
 `MEALFIT_ACCOUNT_GRANTS` (default `True`). En `False`: la superposición y los topes extra se ignoran (cada cuenta
@@ -59,4 +66,5 @@ queda con lo que paga) y regalar responde 503; revertir sigue funcionando.
 ## Tests
 
 `test_p1_plan_lote_771.py` (tabla y reglas), `_772` (superposición y cuotas), `_773` (aviso), `_774` (panel),
-`_777_doc`; frontend `lote775.test.jsx` (panel) y `lote776.test.jsx` (usuario).
+`_777_doc`, `_777_export` (exportación e higiene de ids del personal); frontend `lote775.test.jsx` (panel) y
+`lote776.test.jsx` (usuario).
