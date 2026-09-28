@@ -5603,7 +5603,8 @@ async def api_budget_floor(
         usd_dop = _budget_usd_to_dop()
         min_dop = float(info["min_budget_dop"])
         min_in_currency_raw, currency = await asyncio.to_thread(
-            budget_floor_in_currency, int(info["days"]), currency_in, min_dop
+            budget_floor_in_currency, int(info["days"]), currency_in, min_dop,
+            form if "country" in form else None,
         )
         min_in_currency = round(min_in_currency_raw)
         _is_beta_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY

@@ -2217,10 +2217,12 @@ def test_dst_america_santo_domingo_no_aplica_240_vale_todo_el_ano():
 #
 # Extensión de T6 (ruling R2-F1): EUR/MXN/COP NO ganan una tasa FX propia —
 # ganan su PROPIO piso literal por ciclo (`_budget_cycle_floor_for_currency`),
-# derivado UNA vez del piso USD (80/140/260) por factor fijo y redondeado a
-# cifra amable, espejo exacto del frontend (`BUDGET_MIN_TOTAL` en
-# formValidation.js). La comparación es DIRECTA en la moneda declarada — la
-# MISMA semántica que el camino DOP histórico — nunca una conversión FX.
+# espejo exacto del frontend (`BUDGET_MIN_TOTAL` en formValidation.js). La
+# comparación es DIRECTA en la moneda declarada — la MISMA semántica que el
+# camino DOP histórico — nunca una conversión FX.
+# [P1-PLAN-LOTE-792 · 2026-09-28] Los números ya no salen del piso USD por factor
+# fijo sino del método del Banco Mundial (Food Prices for Nutrition 5.0, CoHD_LCU;
+# decisión del dueño): EUR 75/131/244 · MXN 1500/2625/4875 · COP 240000/420000/780000.
 
 # ── pisos backend: _budget_cycle_floor_for_currency ──────────────────────────
 
@@ -2243,21 +2245,24 @@ def test_gate_currencies_son_exactamente_las_monedas_beta():
 
 
 def test_piso_eur_defaults():
+    # [P1-PLAN-LOTE-792] método del Banco Mundial: 75 igual; ×1,75 = 131,25 → 131; ×3,25 = 243,75 → 244.
     assert nc._budget_cycle_floor_for_currency(7, "EUR") == 75
-    assert nc._budget_cycle_floor_for_currency(15, "EUR") == 135
-    assert nc._budget_cycle_floor_for_currency(30, "EUR") == 245
+    assert nc._budget_cycle_floor_for_currency(15, "EUR") == 131
+    assert nc._budget_cycle_floor_for_currency(30, "EUR") == 244
 
 
 def test_piso_mxn_defaults():
-    assert nc._budget_cycle_floor_for_currency(7, "MXN") == 1400
-    assert nc._budget_cycle_floor_for_currency(15, "MXN") == 2500
-    assert nc._budget_cycle_floor_for_currency(30, "MXN") == 4700
+    # [P1-PLAN-LOTE-792] antes 1400/2500/4700 (USD×18).
+    assert nc._budget_cycle_floor_for_currency(7, "MXN") == 1500
+    assert nc._budget_cycle_floor_for_currency(15, "MXN") == 2625
+    assert nc._budget_cycle_floor_for_currency(30, "MXN") == 4875
 
 
 def test_piso_cop_defaults():
-    assert nc._budget_cycle_floor_for_currency(7, "COP") == 350000
-    assert nc._budget_cycle_floor_for_currency(15, "COP") == 600000
-    assert nc._budget_cycle_floor_for_currency(30, "COP") == 1100000
+    # [P1-PLAN-LOTE-792] antes 350000/600000/1100000 (USD×4200).
+    assert nc._budget_cycle_floor_for_currency(7, "COP") == 240000
+    assert nc._budget_cycle_floor_for_currency(15, "COP") == 420000
+    assert nc._budget_cycle_floor_for_currency(30, "COP") == 780000
 
 
 def test_piso_moneda_no_reconocida_delega_en_dop_sin_tocarlo():
@@ -2285,8 +2290,8 @@ def test_piso_knob_override_por_ciclo_y_moneda_sin_contaminar_vecinos(monkeypatc
     monkeypatch.setenv("MEALFIT_BUDGET_FLOOR_TOTAL_7D_EUR", "999")
     assert nc._budget_cycle_floor_for_currency(7, "EUR") == 999.0
     # Ni el resto de ciclos de EUR ni las otras monedas se contaminan.
-    assert nc._budget_cycle_floor_for_currency(15, "EUR") == 135
-    assert nc._budget_cycle_floor_for_currency(7, "MXN") == 1400
+    assert nc._budget_cycle_floor_for_currency(15, "EUR") == 131
+    assert nc._budget_cycle_floor_for_currency(7, "MXN") == 1500
     assert nc._budget_cycle_floor_for_currency(7, "DOP") == nc._budget_cycle_floor_dop(7)
 
 
@@ -2398,7 +2403,11 @@ def test_knob_off_moneda_nueva_se_trata_como_dop_igual_que_antes(monkeypatch):
     monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
     ok_bajo, detail_bajo = nc.validate_budget_sufficient(_budget_form("EUR", 100))
     assert ok_bajo is False
-    assert detail_bajo["currency"] == "EUR"
+    # [P1-PLAN-LOTE-792 · 2026-09-28] (ronda 1 de revisión) CAMBIADO A SABIENDAS: el detalle decía
+    # `currency='EUR'` sobre una comparación y un mensaje en RD$ — el propio detalle se contradecía.
+    # Ahora la moneda la resuelve `constants.effective_budget_currency` (espejo del frontend) y es la
+    # que se comparó: DOP. El veredicto, el umbral y el texto del 422 no cambian.
+    assert detail_bajo["currency"] == "DOP"
     assert "RD$" in detail_bajo["message"]
     ok_alto, detail_alto = nc.validate_budget_sufficient(_budget_form("EUR", 50000))
     assert ok_alto is True and detail_alto is None
@@ -2564,7 +2573,9 @@ def test_simbolo_nuevo_sale_de_country_profiles_no_de_tabla_propia(monkeypatch):
     }
     monkeypatch.setattr(constants, "COUNTRY_PROFILES", fake_profiles)
     ok, detail = nc.validate_budget_sufficient(_budget_form("EUR", 1, country="ES"))
-    assert ok is False
+    # [P1-PLAN-LOTE-792] ES sigue siendo mercado beta en el perfil falso ⇒ aviso, no 422; lo que
+    # este test mide es el SÍMBOLO del mensaje, que viaja igual en el aviso.
+    assert detail and detail["min_budget"] > 0
     assert "RD$" in detail["message"], (
         "Con COUNTRY_PROFILES sin 'EUR' registrado, el símbolo debe caer a 'RD$' (fail-safe) — "
         "si esto falla, el código no está realmente consultando COUNTRY_PROFILES en runtime."

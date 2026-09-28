@@ -220,7 +220,8 @@ def test_budget_minimum_enforced_and_shared_ssot():
     # ahora pasa por `effectiveBudgetCurrency` antes de `minBudgetFor`.
     # [reapuntado 2026-08-23, P1-COUNTRY-BUDGET-FLOOR-FX] La llamada dejó de estar
     # anidada: la moneda se extrae a una variable porque ahora TAMBIÉN decide si el piso
-    # bloquea o sólo orienta (`pisoSinProcedencia`). La propiedad que este test protege es
+    # bloquea o sólo orienta (hoy `pisoSoloOrienta(fd?.country, ...)`, que lo decide por el país de
+    # mercado desde P1-PLAN-LOTE-792 — la moneda ya no). La propiedad que este test protege es
     # la misma —el mínimo se resuelve con la moneda EFECTIVA, no con `fd.budgetCurrency`
     # crudo, que reabriría el bug de la moneda beta stale— y se ancla en eso, no en la
     # forma sintáctica.
