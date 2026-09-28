@@ -89,8 +89,9 @@ def test_el_filtro_de_catalogo_saca_granola_y_natilla():
 
 def test_ancla():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
-    assert src.count('__import__("vocabulario_alergenos")') == 11
-    assert (_BACKEND / "constants.py").read_text(encoding="utf-8").count('__import__("vocabulario_alergenos")') == 6
+    # [P1-PLAN-LOTE-796] +1 en el escáner (lactosa) y +4 en el filtro del catálogo (lácteos, sésamo, huevo, mariscos)
+    assert src.count('__import__("vocabulario_alergenos")') == 12
+    assert (_BACKEND / "constants.py").read_text(encoding="utf-8").count('__import__("vocabulario_alergenos")') == 10
     assert "P1-PLAN-LOTE-252-VOCABULARIO-ALERGENOS" in (_BACKEND / "vocabulario_alergenos.py").read_text(encoding="utf-8")
 
 

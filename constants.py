@@ -4458,7 +4458,12 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     if any(r in ["mariscos", "seafood", "marisco"] for r in normalized_restrictions):
         normalized_restrictions.extend(["camaron", "camarones", "pescado", "atun",
             "mero", "tilapia", "salmon", "bacalao", "sardina", "sardinas", "arenque", "merluza",
-            "pulpo", "calamar", "mejillones", "mejillon", "cangrejo", "langosta", "langostino", "lambi"])
+            "pulpo", "calamar", "mejillones", "mejillon", "cangrejo", "langosta", "langostino", "lambi",
+            # [P1-PLAN-LOTE-796 · 2026-09-28] La paridad con el escáner sólo se medía en DO: el pool de ES dejaba
+            # Gambas, Almejas, Vieira y Percebes al alérgico a mariscos (y el de US, Almejas). Mismo vocabulario que
+            # `_ALLERGEN_SYNONYMS['mariscos']`; lo enforza `test_p1_plan_lote_796` en los 6 países.
+            "almeja", "gamba", "percebe", "vieira", "ostra", "marisco", "sepia", "surimi",
+            *__import__("vocabulario_mar").MARISCOS_EXTRA, *__import__("vocabulario_alergenos").OCULTOS["mariscos"]])
     # [P1-PESCADO-CATCHALL · 2026-07-28] "pescado" a secas (el término que un dominicano
     # realmente escribe) no disparaba NINGÚN catch-all: solo "mariscos" expandía especies,
     # así que un dislike "pescado" dejaba mero/tilapia/salmón/bacalao/sardinas/arenque en
@@ -4467,7 +4472,10 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     # Mismo sesgo a sobre-filtrar de P2-VARIETY-CATALOG-NOT-FILTERED.
     if any(r in ["pescado", "pescados", "pez", "peces", "fish"] for r in normalized_restrictions):
         normalized_restrictions.extend(["pescado", "atun", "mero", "tilapia", "salmon",
-            "bacalao", "sardina", "sardinas", "arenque", "merluza"])
+            "bacalao", "sardina", "sardinas", "arenque", "merluza",
+            # [P1-PLAN-LOTE-796] Anchoas y Boquerones (ES), Bacalaítos (PR) y Trucha (CO) sobrevivían al chip.
+            "anchoa", "boqueron", "trucha", "bacalaitos", "carite", "chillo", "caviar", "salsa inglesa",
+            "worcestershire", *__import__("vocabulario_mar").PESCADOS_EXTRA])
     if any(r in ["carne", "carnes", "meat"] for r in normalized_restrictions):
         normalized_restrictions.extend(["pollo", "cerdo", "res", "chuleta", "longaniza", "salami",
             "pavo", "conejo", "chivo", "cabro", "higado", "costilla", "jamon", "muslo", "pernil"])
@@ -4480,7 +4488,10 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
     if any(r in ["lacteos", "lacteo", "lactosa", "dairy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["leche", "queso", "yogur", "yogurt", "mantequilla", "crema",
                                         "ricotta", "mozzarella", "parmesano", "requeson", "suero de leche",
-                                        *__import__("vocabulario_alergenos").EXTRA["lacteos"]])  # [P1-PLAN-LOTE-252]
+                                        *__import__("vocabulario_alergenos").EXTRA["lacteos"],  # [P1-PLAN-LOTE-252]
+                                        # [P1-PLAN-LOTE-796] «Suero costeño» (CO) sobrevivía al chip de lácteos
+                                        "suero costeno", "arequipe", "cuajada", "nata", "kefir", "ghee", "cottage",
+                                        *__import__("vocabulario_alergenos").LACTOSA_EXTRA])
     # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F13/F29/F14) Estas tres expansiones estaban
     # DRIFTEADAS respecto a `graph_orchestrator._ALLERGEN_SYNONYMS`, que es el vocabulario que usa el
     # escáner de seguridad: el catch-all de gluten listaba 5 términos contra ~24 del canónico, así que
@@ -4494,13 +4505,20 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
                                         "pistacho", "pistachos", "avellana", "merey", "anacardo",
                                         "marzipan", "mazapan", "nutella", "praline", "turron", "pesto",
                                         *__import__("vocabulario_alergenos").EXTRA["frutos secos"]])
-    if any(r in ["mani", "cacahuate", "peanut", "peanuts"] for r in normalized_restrictions):
+    if any(r in ["mani", "cacahuate", "cacahuete", "peanut", "peanuts"] for r in normalized_restrictions):
         normalized_restrictions.extend(["mani", "cacahuate", "peanut", "mantequilla de mani",
-                                        "crema de mani", "salsa de mani"])
+                                        "crema de mani", "salsa de mani",
+                                        "cacahuete", "crema de cacahuete", "mantequilla de cacahuete"])  # [P1-PLAN-LOTE-796]
+    # [P1-PLAN-LOTE-796] El chip «Sésamo» no tenía catch-all: sólo la palabra literal salía del pool.
+    if any(r in ["sesamo", "ajonjoli", "sesame"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
+                                        "semillas de sesamo", "gomasio", "halva",
+                                        *__import__("vocabulario_alergenos").EXTRA["sesamo"]])
     if any(r in ["huevo", "huevos", "egg", "eggs"] for r in normalized_restrictions):
         normalized_restrictions.extend(["huevo", "huevos", "clara", "claras", "yema", "yemas",
                                         "mayonesa", "merengue", "aioli", "alioli", "holandesa",
-                                        "ponche", "mousse", *__import__("vocabulario_alergenos").EXTRA["huevo"]])
+                                        "ponche", "mousse", *__import__("vocabulario_alergenos").EXTRA["huevo"],
+                                        *__import__("vocabulario_alergenos").OCULTOS["huevo"]])  # [P1-PLAN-LOTE-796]
     if any(r in ["gluten", "trigo", "wheat"] for r in normalized_restrictions):
         normalized_restrictions.extend(["trigo", "pan", "pasta", "harina de trigo", "galleta",
                                         "galletas", "cebada", "centeno", "gluten",

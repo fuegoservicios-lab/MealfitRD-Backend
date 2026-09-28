@@ -3816,21 +3816,10 @@ def _verified_catalog_name_allowed_for_country(name: str, country: str) -> bool:
 
 
 def _patron_termino_alergeno(termino: str) -> str:
-    """Regex con frontera y plural español para un término clínico normalizado.
-
-    [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] El plural regular histórico
-    ``(?:s|es)?`` no puede convertir ``-z`` en ``-ces``. Esta construcción es
-    compartida por el backstop y el catálogo cerrado para que una alergia libre
-    (también fuera de las clases conocidas) no tenga una capa más débil que otra.
-    """
-    t = str(termino or "")
-    if not t:
-        return r"(?!)"
-    if t.endswith("z"):
-        cuerpo = _re.escape(t[:-1]) + r"(?:z|ces)"
-    else:
-        cuerpo = _re.escape(t) + r"(?:s|es)?"
-    return r"\b" + cuerpo + r"\b"
+    """Regex con frontera y plural español para un término clínico normalizado ([P0-ALLERGEN-EU14-CLASES-I18N] `-z`→`-ces`),
+    compartido por backstop y catálogo cerrado. [P1-PLAN-LOTE-796 · 2026-09-28] Cuerpo en `patron_alergeno.patron`: el plural
+    también en las palabras internas («2 tortillas de harina»). tooltip-anchor: P1-PLAN-LOTE-796-PLURAL-COMPUESTO"""
+    return __import__("patron_alergeno").patron(termino)
 
 
 def _verified_catalog_excluded_tokens(form_data) -> frozenset:
@@ -14037,7 +14026,7 @@ _ALLERGEN_SYNONYMS = {
                 "nata",
                 # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con 'lacteos' arriba (Arequipe/
                 # Suero costeño SÍ llevan lactosa — leche real, sin proceso que la remueva).
-                "arequipe", "suero costeno"],
+                "arequipe", "suero costeno", *__import__("vocabulario_alergenos").LACTOSA_EXTRA],  # [P1-PLAN-LOTE-796]
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
                "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
                "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
@@ -14480,6 +14469,7 @@ _ALLERGEN_TERM_BASE_EXCUSES = {
     # una alérgica al gluten al fallback matemático (bench real): el casabe es yuca. Acotado al término, como la sémola:
     # «tostada integral» y «tostadas de trigo» siguen marcadas, y «tostada» desnuda también.
     "tostada": ("casabe", "yuca", "maiz", "arroz", "platano"),
+    "cuchuco": ("maiz",), "cracker": ("arroz", "maiz", "yuca", "casabe"),  # [P1-PLAN-LOTE-796] cuchuco de maíz · crackers de arroz
 }
 _ALLERGEN_TERM_BASE_EXCUSE_RX = {
     _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")

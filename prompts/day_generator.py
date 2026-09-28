@@ -1225,7 +1225,7 @@ _POOL_IMPLICATIONS = {
 }
 
 
-def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
+def build_slot_targets_block(daily_targets: dict, meal_types: list, vetos=None) -> str:
     """[P3-DAYGEN-SLOT-TARGETS · 2026-07-29] (audit solver+seeder v4) Una línea por slot con su cuota
     de kcal/P/C/F, derivada del SSOT `allocate_macros_per_slot` (el mismo que el swap ya consume).
 
@@ -1294,10 +1294,13 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
             return ""
         _fat_rule = ""
         if _needs_fat:
+            # [P1-PLAN-LOTE-796 · 2026-09-28] los portadores pasan por la misma puerta que las demás sugerencias
+            _portadores = _sin_vetados(["aceite", "aguacate", "frutos secos", "mantequilla de maní", "queso"],
+                                       list(vetos or [])) or ["aceite"]
             _fat_rule = (
                 f"\n  ⚠️ PORTADOR DE GRASA OBLIGATORIO en: {', '.join(_needs_fat)} — su cuota supera "
                 f"los 5 g y la grasa NO se puede fabricar re-escalando lo que no la tiene. Incluye una "
-                f"fuente real (aceite, aguacate, frutos secos, mantequilla de maní, queso). Un yogurt "
+                f"fuente real ({', '.join(_portadores)}). Un yogurt "
                 f"con fruta y avena NO llega ni escalándolo al máximo.")
         return ("\n• 🎯 CUOTA POR COMIDA (el motor mide cada plato contra ESTO, no solo el total del día):\n"
                 + "\n".join(_rows) + _fat_rule)
@@ -1735,7 +1738,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         if str(_os_dg.environ.get("MEALFIT_DAYGEN_SLOT_TARGETS_IN_PROMPT", "false")
                ).strip().lower() in ("1", "true", "yes", "on") and daily_targets:
             _slot_targets_block = build_slot_targets_block(
-                daily_targets, skeleton_day.get("meal_types") or [])
+                daily_targets, skeleton_day.get("meal_types") or [], vetos=_vetos)   # [P1-PLAN-LOTE-796]
     except Exception:
         _slot_targets_block = ""
 

@@ -27,6 +27,7 @@ snapshot reproducible desde la fuente. Fail-open total en runtime: sin snapshot 
 from __future__ import annotations
 
 import pantry_durability as _pd  # [F7-G] SSOT de durabilidad
+import functools
 import hashlib
 import json
 import logging
@@ -774,6 +775,43 @@ def _template_uses_excluded_food(t: dict, excluded: list, pnm) -> bool:
     return False
 
 
+# [P1-PLAN-LOTE-796 · 2026-09-28] La exclusión por alergia comparaba la declaración CRUDA con la clase de la plantilla:
+# sólo el chip exacto («Mani», «Lacteos») excluía algo. «maní», «lácteos», «nueces», «cacahuete», «soja», «trigo» o
+# «atún» escritos a mano (campo «Otra…», el coach) dejaban 37/291/32/214/136 plantillas con el alérgeno en el
+# CandidateSet que el prompt nombra y en el día determinista (el backstop las rechazaba después: intento quemado).
+# Y las etiquetas son del snapshot COMPILADO: 7 plantillas no se enteraron del vocabulario del lote 252 (granola sin
+# gluten, natilla sin huevo). Se resuelve la clase con el vocabulario SSOT del escáner y, con alergias declaradas, se
+# re-derivan las clases de los constituyentes con el vocabulario VIVO. tooltip-anchor: P1-PLAN-LOTE-796-REGISTRY-ALERGIA
+def clases_de_alergia(declaraciones: Iterable[str]) -> set:
+    """Clases de alérgeno (normalizadas) que declaran estas alergias. Sin clase («Ninguna», «fresa») ⇒ vacío: lo que el
+    registry no etiqueta lo sigue cazando el backstop. Si el vocabulario no carga, la comparación literal de siempre."""
+    decl = [str(a) for a in (declaraciones or ()) if str(a or "").strip()]
+    if not decl:
+        return set()
+    try:
+        from graph_orchestrator import _ALLERGEN_SYNONYMS, _expand_allergy_declarations
+        terminos = {_norm(t) for t in _expand_allergy_declarations(decl)}
+        return {_norm(cls) for cls, syns in _ALLERGEN_SYNONYMS.items()
+                if syns and {_norm(x) for x in syns} <= terminos}
+    except Exception as _e:                                                     # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-796] clases de alergia no resolubles ({type(_e).__name__}): comparación literal")
+        return {_norm(a) for a in decl}
+
+
+@functools.lru_cache(maxsize=8192)
+def _clases_vivas(nombres: tuple) -> frozenset:
+    return frozenset(_norm(c) for c in allergen_classes_for(nombres))
+
+
+def _excluida_por_alergia(t: dict, ex: set) -> bool:
+    """Etiquetas del snapshot primero; si no bastan, las del vocabulario vivo (memoizadas por constituyentes)."""
+    if ex.intersection(_norm(a) for a in ((t.get("intrinsic_risk_attributes") or {}).get("allergens") or [])):
+        return True
+    nombres = tuple(sorted({str(c.get(k) or "") for c in (t.get("constituents") or []) for k in ("name", "canonical")}
+                           - {""}))
+    return bool(ex.intersection(_clases_vivas(nombres)))
+
+
 def template_candidates(country: Optional[str], slot: str, family: Optional[str] = None, *, k: int = 6,
                         exclude_allergens: Iterable[str] = (), need_days: Optional[int] = None,
                         allow_frozen: bool = False, prefer_batch: bool = False,
@@ -817,7 +855,7 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
     if diet_canon is _DIET_UNAVAILABLE:
         return []
     need = {str(x) for x in (require_known_nutrients or ())}
-    ex = {str(a).lower() for a in exclude_allergens or ()}
+    ex = clases_de_alergia(exclude_allergens)                                     # [P1-PLAN-LOTE-796]
     # [P1-PLAN-LOTE-3 · 2026-09-11 · B5] `diet.exclusions` (los «no me gusta» del formulario) llegaban al prompt
     # como texto y a ningún filtro: el CandidateSet fijado al run podía traer el alimento que el usuario
     # pidió no ver. Identidad por `pantry_names_match` (case/acentos/plural, por token completo) — la misma
@@ -851,7 +889,7 @@ def template_candidates(country: Optional[str], slot: str, family: Optional[str]
     for t in snap.get("templates") or []:
         if t.get("status") != "ok" or slot_es not in (t.get("slots") or []):
             continue
-        if ex and ex.intersection({a.lower() for a in (t.get("intrinsic_risk_attributes") or {}).get("allergens", [])}):
+        if ex and _excluida_por_alergia(t, ex):                                  # [P1-PLAN-LOTE-796] vocabulario vivo
             continue
         if diet_canon and _template_violates_diet(t, diet_canon):
             continue
