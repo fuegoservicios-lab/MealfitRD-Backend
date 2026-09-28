@@ -982,7 +982,10 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-652 · 2026-09-27] (backend, P0) El shift ya no retrocede el ancla 4 h (archivaba días dos veces).
 # [P1-PLAN-LOTE-653..657 · 2026-09-27] (backend) Plan congelado no avanza y sus fechas quedan ISO; alerta de saldo
 # agotado del proveedor de IA; catálogo beta sin «precio verificado»; doc de países sin números de línea.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-655 · 2026-09-28"
+# [P1-PLAN-LOTE-658..659 · 2026-09-28] (backend) «Tu plan parece atrasado» solo pide la zona horaria a quien no la
+# tiene (con texto traducible); chunk_lag_excessive no cuenta el tiempo congelado. [P1-PLAN-LOTE-700] (backend) al
+# descongelar, las pestañas dicen el día de la semana correcto.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-659 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
