@@ -52,6 +52,9 @@ _ISSUE_CONTINUES_RX = re.compile(
 # 4200 mg de potasio» salían aprobadas con `critical` (`_ISSUE_CONTINUES_RX` solo ve «pero además / pero se detecta /
 # pero el plan»). No se añade un «pero» suelto aquí: el de la n.º 20 va ANTES del veredicto y es el mismo objeto. La
 # regla vive en `revisor_confirmaciones._pendientes` (veredicto local) y `.conclusion_cerrada` (la conclusión).
+# [revisión 4] Y lo que lo PRECEDE en su cláusula propia: «…prohibido temporalmente, pero no es violación de alergia»,
+# «…para paciente renal, el plátano no constituye violación» (`_antes_del_veredicto`); a la conclusión se le pasa lo que
+# absuelve para que una declaración en su cola no nombre lo que aparece ahí («…; el paciente rechazó el hígado»).
 # [P1-PLAN-LOTE-255 · 2026-09-25] «Posible reactividad cruzada» con un alimento que el usuario NO declaró no es un
 # defecto: batería rd252 (maní + sésamo + «piña» escrita a mano) — el revisor rechazó como CRÍTICO la linaza «por el
 # sésamo», el edamame «por el maní» y la lechosa y el guineo «por la piña», dos veces, y el usuario recibió el PLAN DE
@@ -82,8 +85,8 @@ def _downgrade_reviewer_non_issues(approved, issues, severity):
             _fin = _SELF_NEGATING_TAIL_RX.search(_ultima[0])
             _niega = ((_SELF_NEGATING_ISSUE_RX.search(t) and not _ISSUE_CONTINUES_RX.search(t)
                        and __import__("revisor_confirmaciones").oraciones_sin_hallazgo(t))  # [P1-PLAN-LOTE-746 · rev. 2]
-                      or bool(_fin and __import__("revisor_confirmaciones").conclusion_cerrada(  # [P1-PLAN-LOTE-746 · rev. 3]
-                          _ultima[0][_fin.end():]))
+                      or bool(_fin and __import__("revisor_confirmaciones").conclusion_cerrada(  # [P1-PLAN-LOTE-746 · rev. 3-4]
+                          _ultima[0][_fin.end():], _ultima[0][:_fin.start()]))
                       or bool(_CROSS_REACTIVITY_RX.search(t))   # [P1-PLAN-LOTE-255]
                       or __import__("revisor_confirmaciones").es_confirmacion_sin_defecto(t))  # [P1-PLAN-LOTE-746]
             (avisos if _niega else real).append(it)

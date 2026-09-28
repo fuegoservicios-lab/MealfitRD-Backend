@@ -95,9 +95,32 @@ PERMITIDO y todo lo demás se queda —
   · SIGUE ABIERTO (ya en main): el veredicto que el LLM da sobre su propia cláusula («Día 2: pollo en la cena, no es
     violación de la dieta vegetariana»; «El Día 3 incluye hígado…, que el paciente rechazó; no hay violación de la
     dieta vegetariana») y la conclusión del 227 sobre las oraciones ANTERIORES (la decisión del 25-sep).
+
+[P1-PLAN-LOTE-746 · 2026-09-28] Revisión 4 —
+  · LA CLÁUSULA PROPIA DEL VEREDICTO (bloqueante, ya en main; el punto de la revisión 3 en el otro sentido): lo dicho
+    en la revisión 3 («un veredicto con su propio sujeto ya no absuelve la cláusula anterior») solo era cierto tras
+    «;», «—» o «, y». Con una coma o dos puntos delante, o un contraste, el veredicto seguía absolviendo la oración
+    entera con severidad `critical`: «…plátano maduro, prohibido temporalmente en el perfil de gustos, pero no es
+    violación de alergia», «…inhibe la absorción de hierro en la anemia, pero no es violación…», «Día 3: 4200 mg de
+    potasio para paciente renal, el plátano no constituye violación». Ahora la cláusula propia va tras la última
+    frontera de CUALQUIER tipo: con un contraste o una concesión (si bien, pese a, a pesar de…) se queda; con un sujeto
+    propio, todo lo anterior queda pendiente salvo una etiqueta de lugar («Día 1 | Cena:», que ya no se rechaza tras
+    «—»). Un pronombre que remite atrás («…, lo cual no es violación») no es un sujeto propio; un sujeto con
+    determinante tras el que va un preámbulo («…, el queso, sin alergia declarada, no es violación») sí. COSTE
+    ACEPTADO: una lista con artículo delante del preámbulo («queso, el yogur griego, sin alergia…») se lee así.
+    SIGUE ABIERTO (ya en main): sin conector ni sujeto el veredicto juzga su cláusula entera aunque lleve comas
+    («Día 2: plátano, prohibido temporalmente, no es violación de alergia»; también con «pero sin alergia declarada,»
+    delante) — partirla por comas rompería la n.º 20.
+  · LO DECLARADO NO PUEDE ESTAR EN LO JUZGADO (menor, ya en main): «Día 2: hígado — no hay violación de la dieta
+    vegetariana; el paciente rechazó el hígado» se aprobaba porque una declaración sola es neutra. Ahora se guarda la
+    cláusula que cada veredicto absuelve y la declaración no puede nombrar un alimento de ella (en la oración o en otra;
+    también tras la conclusión del 227).
+  · «(paciente sin ninguna alergia)» / «(el paciente no reporta alergias)»: la negación se busca fuera del paréntesis
+    del paciente (rechazo de más desde la revisión 3, cuando «ningún/ninguna» entró en `_NEGACION`).
 tooltip-anchor: P1-PLAN-LOTE-746-CONFIRMACIONES
 tooltip-anchor: P1-PLAN-LOTE-746-FORMAS-CERRADAS
 tooltip-anchor: P1-PLAN-LOTE-746-VEREDICTO-Y-SU-COLA
+tooltip-anchor: P1-PLAN-LOTE-746-CLAUSULA-PROPIA
 """
 from __future__ import annotations
 
@@ -344,6 +367,33 @@ _COLA_SIN_HALLAZGO = re.compile(
 # cláusula de antes («X — sin alergia a lácteos declarada, no es violación»). Un preámbulo más laxo solo absolvería lo
 # mismo que antes de la revisión 3: nunca más.
 _FRONTERA_VEREDICTO = re.compile(r"\s*[;—–]\s*|,\s*y\s+", _I)
+# [revisión 4] La cláusula PROPIA del veredicto va tras la última frontera de CUALQUIER tipo — también «,», «:» y
+# « y el/la…» (un sujeto nuevo) —: «…prohibido temporalmente en el perfil, pero no es violación de alergia», «…para
+# paciente renal, el plátano no constituye violación» absolvían la oración entera (ya en main).
+_FRONTERA_PROPIA = re.compile(
+    r"\s*[,;:—–]\s*|\s+(?:y|e)\s+(?=(?:el|la|los|las|un|una|este|esta|estos|estas|ese|esa|su|sus)\b)", _I)
+# Concesiones que `_CONTRASTE` no nombra: delante del veredicto dicen lo mismo que «aunque».
+_CONCESION = re.compile(
+    r"\b(?:si\s+bien|pese\s+a|a\s+pesar\s+de|aun\s+cuando|aun\s+as[ií]|aunque|empero|mas|con\s+la\s+salvedad)\b", _I)
+# Un pronombre o un conector de consecuencia NO es un sujeto propio: remite a la cláusula anterior, que es la que el
+# veredicto juzga («El plan incluye queso en la cena, lo cual no es violación»).
+_ANAFORA = re.compile(
+    r"(?:lo|el|la|los|las)\s+cual(?:es)?|lo\s+que|que|esto|eso|ello|lo\s+anterior|"
+    r"por\s+(?:ende|tanto|consiguiente)|en\s+consecuencia|de\s+ah[ií]\s+que", _I)
+# Una ETIQUETA de lugar («Día 1 | Cena», «Día 1 | Merienda y Día 2 | Merienda», «Desayuno del Día 3») no afirma nada:
+# delante de un sujeto propio («Día 1 | Cena: el queso no es violación») no queda pendiente.
+_COMIDA = r"(?:desayuno|almuerzo|comida|cena|merienda|snack|colaci[oó]n|media\s+mañana)s?"
+# Sin ambigüedad (la repetición anidada no puede leer «, Día 2» de dos maneras: sin backtracking exponencial): tras la
+# coma o la «y» interna va un NÚMERO; tras la externa, una palabra («Día», «Cena»).
+_UNA_ETIQUETA = (r"(?:d[ií]as?\s+\d+(?:\s*(?:,|y|a|al|-|–)\s*\d+)*(?:\s*[|\-–]?\s*" + _COMIDA + r")?"
+                 r"|" + _COMIDA + r"(?:\s+del?\s+d[ií]a\s+\d+)?|nota|observaci[oó]n|aclaraci[oó]n)")
+_ETIQUETA = re.compile(_UNA_ETIQUETA + r"(?:\s*(?:,|y|e)\s+" + _UNA_ETIQUETA + r")*", _I)
+# Sin sujeto propio tras la última frontera, pero con un PREÁMBULO explícito delante del veredicto («…, el queso, sin
+# alergia a lácteos declarada, no es violación»): el veredicto juzga la cláusula anterior al preámbulo, y si esa empieza
+# con su propio determinante («el queso»), lo que va antes queda pendiente. Solo con «,;:—–» (una lista «queso y la
+# crema» no se parte) y nunca tras un contraste («…, pero los ingredientes son vegetarianos, por lo que…»: la n.º 20).
+_FRONTERA_CLAUSULA = re.compile(r"\s*[,;:—–]\s*")
+_SUJETO_NUEVO = re.compile(r"(?:el|la|los|las|un|una|este|esta|estos|estas|ese|esa|su|sus)\s", _I)
 _PREAMBULO_VEREDICTO = re.compile(
     r"(?:sin\s+(?:ninguna\s+)?alergias?(?:\s+(?:a|al)\s+[^\s,;]+(?:\s+[^\s,;]+)?)?(?:\s+declarad[oa]s?)?"
     r"|(?:el|la)\s+paciente\s+no\s+(?:declar[oó]|report[oó]|tiene|indic[oó])\s+(?:ninguna\s+)?alergias?"
@@ -353,8 +403,10 @@ _PREAMBULO_VEREDICTO = re.compile(
 
 
 def _confirma(c: str) -> bool:
-    """Reglas 1-2 sobre una cláusula."""
-    return bool(_NIEGA_ALGO_MALO.fullmatch(c) or (_CUMPLE.fullmatch(c) and not _NEGACION.search(c)))
+    """Reglas 1-2 sobre una cláusula. [revisión 4] La negación se busca SIN el paréntesis del paciente (`_PAREN`, el
+    único que `_CUMPLE` admite): «Dieta 'balanced' respetada (paciente sin ninguna alergia)» es un cumplimiento."""
+    return bool(_NIEGA_ALGO_MALO.fullmatch(c)
+                or (_CUMPLE.fullmatch(c) and not _NEGACION.search(re.sub(r"\s*\([^()]*\)\s*$", "", c))))
 
 
 def _norm_alimento(s: str) -> tuple:
@@ -372,14 +424,31 @@ def _subclausulas(texto: str) -> list:
     return [p.strip().rstrip(".;!?, ").strip() for p in _SUBCLAUSULA.split(texto or "") if p and p.strip(" .;!?,")]
 
 
-def _neutras(clausulas) -> bool:
+def _palabras(txt) -> set:
+    """Las palabras de un texto normalizadas como las de un alimento (sin tildes, artículos ni plural)."""
+    return {w for w in _norm_alimento(txt) if len(w) > 2}
+
+
+def _neutras(clausulas, juzgados=()) -> bool:
     """[revisión 2] Cada cláusula es confirmación (reglas 1-2), declaración de rechazo/alergia del paciente o AUSENCIA; y
     si hay ausencias, lo ausente es exactamente lo declarado (lo que no remite a una declaración puede ser algo bueno
-    que falta: «el hierro hemo no aparece en el plan»)."""
+    que falta: «el hierro hemo no aparece en el plan»).
+    [revisión 4] `juzgados`: las cláusulas que un veredicto local absolvió («Día 2: hígado — no hay violación…»). Lo
+    que el paciente declaró rechazar o a lo que es alérgico no puede aparecer en ellas: «…; el paciente rechazó el
+    hígado» dice que el plan TRAE lo rechazado."""
+    declarados = _neutras_y_declarados(clausulas)
+    if declarados is None:
+        return False
+    en_juzgados = set().union(*(_palabras(j) for j in juzgados)) if juzgados else set()
+    return not ({w for d in declarados for w in d if len(w) > 2} & en_juzgados)
+
+
+def _neutras_y_declarados(clausulas):
+    """Lo declarado (conjunto de alimentos normalizados) si las cláusulas son neutras; None si no."""
     declarados, ausentes, remite, hay_ausencia, respeta = set(), set(), False, False, False
     for c in clausulas:
         if not c or _GIROS.search(c):
-            return False
+            return None
         if _confirma(c):
             continue
         if _RESPETANDO.fullmatch(c):
@@ -391,20 +460,21 @@ def _neutras(clausulas) -> bool:
             continue
         m = _AUSENCIA.fullmatch(c)
         if not m:
-            return False
+            return None
         hay_ausencia = True
         if m.group("suj") and m.group("obj"):
-            return False
+            return None
         txt = m.group("suj") or m.group("obj") or m.group("obj2")
         if txt:
             ausentes |= _alimentos(txt)
         else:
             remite = True                     # «no aparece en el plan» / «ninguno aparece…»: lo declarado
     if not hay_ausencia:
-        return True
+        return declarados
     if respeta:
         declarados |= ausentes
-    return bool(declarados) and ausentes <= declarados and (remite or declarados <= ausentes)
+    ok = bool(declarados) and ausentes <= declarados and (remite or declarados <= ausentes)
+    return declarados if ok else None
 
 
 def _cola(resto: str):
@@ -417,51 +487,94 @@ def _cola(resto: str):
     return re.sub(r"^(?:y|e)\s+", "", resto[corte.start():].strip(" ,;:—–.!?"), flags=_I) if corte else ""
 
 
-def _pendientes_de_cola(cola: str, prof: int):
+def _pendientes_de_cola(cola: str, prof: int, juzgados=None):
     if not cola or _COLA_SIN_HALLAZGO.fullmatch(cola):
         return []
     if _CONTRASTE.search(cola) or prof >= 12:          # tope de veredictos encadenados: pasado, se queda
         return None
-    return _pendientes(cola, prof + 1)
+    return _pendientes(cola, prof + 1, juzgados)
 
 
-def _antes_del_veredicto(prefijo: str) -> list:
+def _sin_etiquetas(clausulas) -> list:
+    return [c for c in clausulas if not _ETIQUETA.fullmatch(c.strip(" |:"))]
+
+
+def _antes_del_veredicto(prefijo: str, juzgados=None):
     """[revisión 3] Lo que PRECEDE al veredicto y él no juzga. Juzga SU cláusula (tras la última frontera «;», «—» o
     «, y»); si su cláusula es solo un preámbulo cerrado (nada, «sin alergia a lácteos declarada,», «el paciente no
     declaró alergia al maní, por lo que»), juzga la cláusula ANTERIOR — el caso del 227: «…contiene queso mozzarella —
     sin alergia a lácteos declarada, no es violación». Las demás quedan pendientes: en «Hay pollo en la cena del Día 2;
-    el queso no es violación» el veredicto es del queso, no del pollo."""
+    el queso no es violación» el veredicto es del queso, no del pollo.
+    [revisión 4 · CLÁUSULA PROPIA] La revisión 3 solo veía «;», «—» y «, y»: con una coma o dos puntos delante («…para
+    paciente renal, el plátano no constituye violación») o un contraste («…prohibido temporalmente en el perfil, pero
+    no es violación de alergia») el veredicto absolvía la oración entera (ya en main). Ahora su cláusula propia va tras
+    la última frontera de CUALQUIER tipo (`_FRONTERA_PROPIA`): con un contraste o una concesión → None (se queda); con
+    un sujeto propio (ni preámbulo ni pronombre que remita atrás) → juzga solo ese sujeto y TODO lo anterior queda
+    pendiente, salvo una etiqueta de lugar («Día 1 | Cena:»). Con un preámbulo o un pronombre entre el sujeto y el
+    veredicto («…, el queso, sin alergia a lácteos declarada, no es violación»), lo mismo si la cláusula anterior al
+    preámbulo abre con su propio determinante (`_SUJETO_NUEVO`). Si no, como en la revisión 3. Sigue abierto (ya en
+    main): sin conector ni sujeto, el veredicto juzga su cláusula entera aunque lleve comas o un contraste antes del
+    preámbulo («Día 2: plátano, prohibido temporalmente, [pero sin alergia declarada,] no es violación de alergia»):
+    partirla por comas rompería la n.º 20 («…crudo, pero los ingredientes son vegetarianos…; no es violación») y el
+    caso del 227. `juzgados` recibe la cláusula que el veredicto absuelve (ver `_neutras`)."""
+    fronteras = list(_FRONTERA_PROPIA.finditer(prefijo))
+    propia = (prefijo[fronteras[-1].end():] if fronteras else prefijo).strip()
+    if _CONTRASTE.search(propia) or _CONCESION.search(propia):
+        return None
+    if (fronteras and propia and not _PREAMBULO_VEREDICTO.fullmatch(propia)
+            and not _ANAFORA.fullmatch(propia)):
+        if juzgados is not None:
+            juzgados.append(propia)
+        return _sin_etiquetas(_subclausulas(prefijo[:fronteras[-1].start()]))
+    cortes = list(_FRONTERA_CLAUSULA.finditer(prefijo))
+    ini, fin = [0] + [c.end() for c in cortes], [c.start() for c in cortes] + [len(prefijo)]
+    k, explicito = len(ini) - 1, False
+    while k > 0:                                       # se salta el preámbulo explícito que precede al veredicto
+        t = prefijo[ini[k]:fin[k]].strip()
+        if t and not (_PREAMBULO_VEREDICTO.fullmatch(t) or _ANAFORA.fullmatch(t)):
+            break
+        explicito, k = explicito or bool(t), k - 1
+    if explicito and k > 0 and _SUJETO_NUEVO.match(prefijo[ini[k]:fin[k]].strip()):
+        if juzgados is not None:
+            juzgados.append(prefijo[ini[k]:fin[k]])
+        return _sin_etiquetas(_subclausulas(prefijo[:fin[k - 1]]))
     partes = _FRONTERA_VEREDICTO.split(prefijo)
-    previas = partes[:-1]
+    previas, juzgada = partes[:-1], partes[-1]
     if previas and _PREAMBULO_VEREDICTO.fullmatch(partes[-1].strip()):
-        previas = previas[:-1]
-    return [c for p in previas for c in _subclausulas(p)]
+        previas, juzgada = previas[:-1], previas[-1]
+    if juzgados is not None:
+        juzgados.append(juzgada)
+    return _sin_etiquetas([c for p in previas for c in _subclausulas(p)])
 
 
-def _pendientes(oracion: str, prof: int = 0):
+def _pendientes(oracion: str, prof: int = 0, juzgados=None):
     """[revisión 3] Las cláusulas de la oración que su veredicto local NO absuelve ([] = ninguna), o None si lo que
     sigue al veredicto trae un contraste. El veredicto absuelve la cláusula que juzga (`_antes_del_veredicto`; sigue
     abierto: el LLM juzga su propia cláusula, «Día 2: pollo en la cena, no es violación de la dieta vegetariana»); lo
-    que le SIGUE es otra cláusula y pasa por la misma regla — puede traer su propio veredicto."""
+    que le SIGUE es otra cláusula y pasa por la misma regla — puede traer su propio veredicto.
+    [revisión 4] También None si lo que lo PRECEDE en su cláusula propia es un contraste («…, pero no es violación»)."""
     for m in _VEREDICTO_LOCAL.finditer(oracion):
         cola = _cola(oracion[m.end():])
         if cola is not None:
-            despues = _pendientes_de_cola(cola, prof)
-            return None if despues is None else _antes_del_veredicto(oracion[:m.start()]) + despues
+            antes = _antes_del_veredicto(oracion[:m.start()], juzgados)
+            despues = None if antes is None else _pendientes_de_cola(cola, prof, juzgados)
+            return None if despues is None else antes + despues
     return _subclausulas(oracion)
 
 
-def conclusion_cerrada(resto) -> bool:
+def conclusion_cerrada(resto, juzgado="") -> bool:
     """[P1-PLAN-LOTE-746 · revisión 3] Para la conclusión del 227 («…, por lo que no es una violación» / «… este punto
     se cumple»): lo que le sigue en su oración es su objeto cerrado y, detrás, nada o una cola sin contraste que sea
     confirmación, declaración o ausencia de lo declarado. «…, por lo que no es una violación, pero el Día 3 aporta
-    4200 mg de potasio» se queda. Puro; nunca lanza."""
+    4200 mg de potasio» se queda. [revisión 4] `juzgado`: lo que la conclusión absuelve (lo que la precede en su
+    oración); una declaración en la cola no puede nombrar lo que aparece ahí. Puro; nunca lanza."""
     try:
         cola = _cola(str(resto or ""))
         if cola is None:
             return False
-        p = _pendientes_de_cola(cola, 0)
-        return p is not None and _neutras(p)
+        juzgados = [str(juzgado or "")]
+        p = _pendientes_de_cola(cola, 0, juzgados)
+        return p is not None and _neutras(p, juzgados)
     except Exception as e:                                                     # noqa: BLE001
         logger.debug(f"[P1-PLAN-LOTE-746] conclusion_cerrada no-op: {type(e).__name__}: {e}")
         return False
@@ -476,16 +589,16 @@ def oraciones_sin_hallazgo(texto) -> bool:
     try:
         if not isinstance(texto, str):
             return False
-        resto = []
+        resto, juzgados = [], []
         for s in re.split(r"(?<=[.!?])\s+", " ".join(texto.split())):
             s = s.strip().rstrip(".!? ").strip()
             if not s or _RECHAZADOS_AUSENTES.fullmatch(s):
                 continue
-            p = _pendientes(s)
+            p = _pendientes(s, 0, juzgados)
             if p is None:
                 return False
             resto.extend(p)
-        return _neutras(resto)
+        return _neutras(resto, juzgados)          # [revisión 4] lo declarado no puede estar en lo juzgado
     except Exception as e:                                                     # noqa: BLE001
         logger.debug(f"[P1-PLAN-LOTE-746] oraciones_sin_hallazgo no-op: {type(e).__name__}: {e}")
         return False

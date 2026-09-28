@@ -681,6 +681,123 @@ def test_r3_el_vocabulario_de_dietas_sale_del_ssot():
     assert "diet_type_aliases" in mod and "_PALABRA =" not in mod
 
 
+# ─── [revisión 4 · 2026-09-28] El contraste o el sujeto propio ANTES del veredicto, en la misma oración ───
+# (1) BLOQUEANTE (ya en main; es el punto 1 de la revisión 3 en el otro sentido): `_FRONTERA_VEREDICTO` solo reconocía
+#     «;», «—» y «, y»: una coma, dos puntos, «pero», «aunque» o «mientras que» delante del veredicto no separaban nada y
+#     el veredicto absolvía la oración ENTERA. Las prohibiciones temporales, la anemia y lo renal solo las ve el LLM.
+#     Ahora se lee la cláusula PROPIA del veredicto (tras la última frontera: «,», «:», «;», «—», « y el…»): con un
+#     contraste o una concesión se queda; con un sujeto propio («el queso no es violación») lo anterior queda pendiente.
+R4_CONTRASTE_ANTES_DEL_VEREDICTO = [
+    # los ocho de la re-verificación
+    "Día 2 | Almuerzo: contiene plátano maduro, prohibido temporalmente en el perfil de gustos, pero no es violación de "
+    "alergia.",
+    "El Día 2 incluye pan de trigo, prohibido temporalmente en el perfil, aunque no es violación de alergia.",
+    "La leche con avena del Día 2 inhibe la absorción de hierro en la anemia, pero no es violación de alergia.",
+    "El Día 2 aporta 4200 mg de potasio, excesivo para un paciente renal, aunque no es violación de la dieta "
+    "vegetariana.",
+    "Para un paciente renal el Día 3 aporta potasio excesivo, aunque no es violación de alergia.",
+    "El Día 3 aporta 4200 mg de potasio para paciente renal, mientras que el queso no es violación.",
+    "Día 3: 4200 mg de potasio para paciente renal, el plátano no constituye violación.",
+    "Hay pollo en la cena del Día 2 con dieta vegetariana, pero el queso no es violación.",
+    # el resto de las 13 sondas de la re-verificación y la variante con « y » sin coma
+    "Día 2 | Almuerzo: contiene plátano maduro, prohibido temporalmente en el perfil de gustos, aunque no es violación "
+    "de alergia.",
+    "El Día 3 incluye hígado encebollado, que el paciente rechazó, aunque no es violación de alergia.",
+    "Hígado encebollado en el Día 3 (rechazado por el paciente), aunque no hay violación de alergia.",
+    "Hay pollo en la cena del Día 2 con dieta vegetariana, el queso no es violación.",
+    "Hay pollo en la cena del Día 2 con dieta vegetariana: el queso no es violación.",
+    "El Día 3 aporta 4200 mg de potasio para paciente renal y el queso no es violación.",
+    # sondas propias: concesiones fuera de `_CONTRASTE`
+    "El Día 2 incluye pan de trigo, prohibido temporalmente, si bien no es violación de alergia.",
+    "El Día 2 aporta 4200 mg de potasio para un paciente renal, pese a lo cual no es violación de la dieta vegetariana.",
+    "El Día 2 aporta 4200 mg de potasio, a pesar de ello no es violación de la dieta vegetariana.",
+    "El Día 2 aporta 4200 mg de potasio, aun así no es violación de la dieta vegetariana.",
+    "La cena del Día 2 lleva pollo en dieta vegetariana, empero no es violación de alergia.",
+    "El Día 2 aporta 4200 mg de potasio: el queso no es violación.",
+    # sondas propias: el sujeto propio con un PREÁMBULO (o un pronombre) entre él y el veredicto
+    "Hay pollo en la cena del Día 2 con dieta vegetariana, el queso, sin alergia a lácteos declarada, no es violación.",
+    "El Día 3 aporta 4200 mg de potasio para paciente renal: el plátano, sin alergia declarada, no constituye violación.",
+    "Hay pollo en la cena del Día 2, el queso, lo cual no es violación.",
+    "Día 2 | Cena con pollo: el queso no es violación.",
+]
+# Lo que sigue descartándose: el caso del 227 (su cláusula propia es un preámbulo cerrado o nada), un pronombre que
+# remite a la cláusula anterior («, lo cual no es violación»), y una ETIQUETA de lugar («Día 1 | Cena:») delante de un
+# sujeto propio: la etiqueta no afirma nada. La última la rechazaba la revisión 3 (tras «—»); main la aprobaba.
+R4_VEREDICTO_SIGUE = [
+    "Día 1 | Cena: el queso no es violación de alergia (paciente sin alergias).",
+    "Día 2 | Almuerzo — el queso no es violación de alergia (paciente sin alergias).",
+    "El plan incluye queso en la cena del Día 1, lo cual no es violación (paciente sin alergias).",
+    "El plan incluye queso en la cena del Día 1, que no es violación de alergia (paciente sin alergias).",
+    "El Día 3 incluye maní en la merienda, pero el paciente no declaró alergia al maní, por lo que no es una violación.",
+    "Día 1 | Cena: contiene queso mozzarella, sin alergia a lácteos declarada, no es violación.",
+    "El queso de la cena del Día 1, sin alergia a lácteos declarada, no es violación.",
+    "Día 1 | Cena: el queso, sin alergia a lácteos declarada, no es violación.",
+    "Día 1 | Cena: contiene queso mozzarella y la crema, sin alergia a lácteos declarada, no es violación.",
+    "El Día 1 incluye queso en la cena, el cual no es violación de alergia.",
+    # la forma de la n.º 20 con «por lo que» en vez de «;»: el sujeto tras un contraste sigue la cláusula anterior
+    "Nota: el nombre 'Ceviche' sugiere pescado crudo, pero los ingredientes son vegetarianos (lentejas), por lo que no "
+    "es violación de la dieta vegetariana.",
+]
+# COSTE ACEPTADO (un reintento de más frente a main; ninguno en el fixture ni en el corpus): una lista cuyo elemento
+# lleva artículo delante del preámbulo se lee como un sujeto propio. Cerrarlo a la inversa reabre «Hay pollo…, el
+# queso, sin alergia…, no es violación».
+R4_COSTE_ACEPTADO = [
+    "Día 1 | Cena: queso, el yogur griego, sin alergia a lácteos declarada, no es violación.",
+]
+
+# (2) MENOR (ya en main): una DECLARACIÓN del paciente sobre el mismo alimento que el veredicto absolvió («Día 2:
+#     hígado — no hay violación…; el paciente rechazó el hígado») no es neutra: dice que el plan trae lo rechazado. La
+#     cláusula que juzga el veredicto se guarda y lo declarado no puede aparecer en ella (en la oración o en otra).
+R4_DECLARACION_DE_LO_JUZGADO = [
+    "Día 2: hígado — no hay violación de la dieta vegetariana; el paciente rechazó el hígado.",
+    "Día 3 | Merienda: maní tostado — no es violación de la dieta vegetariana, y el paciente es alérgico al maní.",
+    "Día 3 | Cena: hígado encebollado — sin alergia declarada, no es violación; el paciente rechazó el hígado.",
+    "Día 3 | Cena: hígado — no es violación de alergia; el paciente rechazó el hígado encebollado.",
+    "Día 2: hígado — no hay violación de la dieta vegetariana. El paciente rechazó el hígado.",
+    "El paciente rechazó el hígado; Día 2: hígado, no es violación de la dieta vegetariana.",
+    "El paciente rechazó el hígado. Día 2 | Cena: hígado encebollado — sin alergia declarada, no es violación.",
+]
+R4_DECLARACION_SIN_CRUCE = [
+    "No hay violación de la dieta vegetariana; el paciente rechazó el hígado.",
+    "Día 1 | Cena: queso — sin alergia a lácteos declarada, no es violación; el paciente rechazó el pescado.",
+    "No hay violación de alergia; el paciente rechazó la berenjena; no aparece berenjena en el plan.",
+]
+
+# (3) MENOR (rechazo de más desde la revisión 3): «ningún/ninguna» entró en `_NEGACION` y `_PAREN` los admite
+#     («(paciente sin ninguna alergia)»). La negación se busca en la cláusula SIN su paréntesis del paciente.
+R4_PAREN_CON_NEGACION = [
+    "Dieta 'balanced' respetada (paciente sin ninguna alergia).",
+    "El plan respeta las restricciones declaradas (el paciente no reporta alergias).",
+    "La dieta vegetariana se respeta en todas las comidas (paciente sin ninguna alergia).",
+]
+R4_NEGACION_FUERA_DEL_PAREN = [
+    "Dieta vegetariana respetada en ningún día (paciente sin alergias).",
+    "La dieta vegetariana no se respeta (paciente sin alergias).",
+    "El plan no respeta la dieta vegetariana (paciente sin ninguna alergia).",
+    "Dieta 'balanced' respetada (paciente sin ninguna alergia, maní en el postre).",
+]
+
+
+def test_r4_el_contraste_o_el_sujeto_antes_del_veredicto_rechaza_con_su_severidad():
+    """Camino completo (demandas de verificación → 227 → 746) con severidad `critical`."""
+    casos = (R4_CONTRASTE_ANTES_DEL_VEREDICTO + R4_DECLARACION_DE_LO_JUZGADO + R4_NEGACION_FUERA_DEL_PAREN
+             + R4_COSTE_ACEPTADO)
+    malos = [t for t in casos if _cadena_completa(t) != (False, [t], "critical", [])]
+    assert not malos, malos
+    assert not [t for t in R4_CONTRASTE_ANTES_DEL_VEREDICTO + R4_DECLARACION_DE_LO_JUZGADO
+                if rc.oraciones_sin_hallazgo(t) or rc.motivo(t)]
+
+
+def test_r4_lo_cerrado_se_sigue_descartando():
+    for t in (R4_VEREDICTO_SIGUE + R4_DECLARACION_SIN_CRUCE + R4_PAREN_CON_NEGACION + R3_VEREDICTO_SIGUE
+              + R3_ALCANCE_BIEN_USADO):
+        assert _cadena_completa(t, "minor") == (True, [], "low", [t]), t
+    for t in R4_PAREN_CON_NEGACION:
+        assert rc.motivo(t) == "confirmacion", t
+    mod = (_BACKEND / "revisor_confirmaciones.py").read_text(encoding="utf-8")
+    assert "tooltip-anchor: P1-PLAN-LOTE-746-CLAUSULA-PROPIA" in mod
+
+
 def test_la_regla_depende_del_knob_del_227(monkeypatch):
     """[revisión 1, defecto 7] Documentado: con `MEALFIT_REVIEWER_NON_ISSUES_ADVISORY` apagado,
     `_downgrade_reviewer_non_issues` sale antes y esta regla no corre en el revisor (aunque su knob siga en True)."""
@@ -1023,6 +1140,42 @@ def test_r3_el_sop_de_la_transicion_lee_la_tasa_sin_heredadas(monkeypatch):
     assert meta["n_sin_entrega"] == 0 and er.tasa_sin_heredadas(meta) == meta["review_failed_rate"] == 0.4
     assert er.tasa_sin_heredadas({"n_delivered": 4, "n_review_failed": 2, "n_sin_entrega": 4}) is None
     assert er.tasa_sin_heredadas({}) is None and er.tasa_sin_heredadas(None) is None
+
+
+def test_r4_la_tasa_sin_heredadas_solo_vale_contando_entregas(monkeypatch):
+    """[revisión 4] Con `MEALFIT_REVFAIL_COUNT_DELIVERIES=False` las filas con clave cuentan por CORRIDA: la «tasa sin
+    heredadas» sería una tasa por corrida disfrazada de entregas. La metadata lleva `modo` y la tasa da None."""
+    _, alerta = _cron_con(monkeypatch, *_transicion())
+    meta = json.loads(alerta[0][3])
+    assert meta["modo"] == "entregas" and er.tasa_sin_heredadas(meta) == 0.0, meta
+    monkeypatch.setenv("MEALFIT_REVFAIL_COUNT_DELIVERIES", "false")
+    tick, alerta = _cron_con(monkeypatch, *_transicion())
+    meta = json.loads(alerta[0][3])
+    assert meta["modo"] == "corridas" and tick["modo"] == "corridas", meta
+    assert er.tasa_sin_heredadas(meta) is None and er.tasa_sin_heredadas(tick) is None
+
+
+def test_r4_una_fila_nueva_sin_identidad_no_es_heredada():
+    """[revisión 4] `clave_de_entrega` da {} sin plan ni correlación: esa fila es NUEVA (cuenta una por corrida, como
+    siempre) pero no es del conteo heredado; si `n_sin_entrega` la contara, jamás llegaría a 0 tras la transición."""
+    r = er.contar_entregas([_run(_t(5, 0), False, {}), _run(_t(5, 1), True, {}), _run(_t(5, 2), False, None)], [])
+    assert (r["entregas"], r["fallidas"], r["sin_entrega"], r["fallidas_sin_entrega"]) == (3, 2, 1, 1), r
+    mod = (_BACKEND / "entregas_revisadas.py").read_text(encoding="utf-8")
+    tabla = (_BACKEND / "docs" / "system_alerts_resolution_table.md").read_text(encoding="utf-8")
+    fila = [ln for ln in tabla.splitlines() if ln.startswith("| `review_failed_delivered_rate_high`")][0]
+    for texto in (mod, fila):
+        assert "`modo`" in texto and "`entrega = {}`" in texto, texto[:200]
+
+
+def test_r4_el_tick_se_escribe_aunque_falle_el_import(monkeypatch):
+    """[revisión 4] El `__import__("entregas_revisadas")` iba FUERA del try: si fallara, el cron no escribía el tick."""
+    monkeypatch.setitem(sys.modules, "entregas_revisadas", None)            # el import lanza ImportError
+    esc = []
+    import cron_tasks
+    monkeypatch.setattr(cron_tasks, "execute_sql_write", lambda sql, params=None: esc.append((str(sql), params)))
+    cron_tasks._review_failed_delivered_rate_alert_job()
+    tick = [p for s, p in esc if "_review_failed_delivered_rate_alert_job_tick" in s]
+    assert len(tick) == 1 and json.loads(tick[0][1])["n_delivered"] == 0, esc
 
 
 def test_los_ficheros_con_tope_no_crecen():

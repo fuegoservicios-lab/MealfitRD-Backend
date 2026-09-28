@@ -45,6 +45,11 @@ como antes (y ventana de 72 h).
     entregas NUEVAS, (n_review_failed − n_fallidas_sin_entrega) / (n_delivered − n_sin_entrega): si esa queda bajo el
     umbral, la alerta es el conteo heredado y se deja cerrar sola (sale de la ventana en ≤ 7 días); si también lo
     supera, es real. Si no hay entregas nuevas (`None`), no hay nada que leer todavía. No se toca el umbral.
+    [revisión 4] Dos precisiones del SOP: (a) solo vale CONTANDO ENTREGAS — la metadata lleva `modo`; con
+    `modo` = "corridas" (knob apagado) las filas con clave también cuentan una por corrida, no hay transición que leer
+    y `tasa_sin_heredadas` da None; (b) heredada es la fila SIN la clave `entrega`; una fila nueva sin plan ni
+    correlación lleva `entrega = {}`, cuenta una por corrida para siempre (como antes de este lote) y NO entra en
+    `n_sin_entrega`, que así sí llega a 0 cuando la última fila heredada sale de la ventana.
 tooltip-anchor: P1-PLAN-LOTE-746-ENTREGAS
 """
 from __future__ import annotations
@@ -138,7 +143,8 @@ def _es(valor, esperado: str) -> bool:
 def contar_entregas(corridas, completados, por_entrega=None) -> dict:
     """Puro. `corridas`: filas {created_at, review_passed, fallback, entrega}; `completados`: {plan_id, semana,
     updated_at}. Devuelve {entregas, fallidas, corridas, modo, sin_entrega, fallidas_sin_entrega} — entregas y
-    fallidas SIN fallback; `sin_entrega`/`fallidas_sin_entrega`: cuántas de ellas son filas heredadas (sin clave)."""
+    fallidas SIN fallback; `sin_entrega`/`fallidas_sin_entrega`: cuántas de ellas son filas heredadas (sin la clave
+    `entrega`; una fila con `entrega = {}` es nueva)."""
     if por_entrega is None:
         por_entrega = activo()
     filas = [c for c in (corridas or []) if isinstance(c, dict)]
@@ -178,7 +184,10 @@ def contar_entregas(corridas, completados, por_entrega=None) -> dict:
             except Exception as ex:                                            # noqa: BLE001
                 logger.debug(f"[P1-PLAN-LOTE-746] grupo no contado: {type(ex).__name__}: {ex}")
     vivas = [c for c in elegidas if not _es(c.get("fallback"), "true")]
-    heredadas = [c for c in vivas if not (isinstance(c.get("entrega"), dict) and c["entrega"].get("clave"))]
+    # [revisión 4] heredada = SIN la clave `entrega` (anterior al despliegue). Una fila nueva sin identidad trae
+    # `entrega = {}`: cuenta una por corrida, como siempre, pero no es heredada — si lo fuera, `sin_entrega` no
+    # llegaría nunca a 0 y el SOP de la transición no terminaría.
+    heredadas = [c for c in vivas if not isinstance(c.get("entrega"), dict)]
     return {"entregas": len(vivas), "fallidas": sum(1 for c in vivas if _es(c.get("review_passed"), "false")),
             "corridas": len(filas), "modo": "entregas" if por_entrega else "corridas",
             "sin_entrega": len(heredadas),
@@ -187,9 +196,13 @@ def contar_entregas(corridas, completados, por_entrega=None) -> dict:
 
 def tasa_sin_heredadas(metadata) -> "float | None":
     """[revisión 3] El SOP de la transición: la tasa de revisión fallida de las entregas NUEVAS (sin las filas heredadas
-    que aún cuentan una por corrida), desde la metadata de la alerta o del tick. None si no hay entregas nuevas. Puro."""
+    que aún cuentan una por corrida), desde la metadata de la alerta o del tick. None si no hay entregas nuevas. Puro.
+    [revisión 4] None también contando CORRIDAS (`modo` = "corridas", knob `MEALFIT_REVFAIL_COUNT_DELIVERIES` apagado):
+    ahí las filas con clave cuentan una por corrida y la resta daría una tasa por corrida disfrazada de entregas."""
     try:
         m = metadata if isinstance(metadata, dict) else {}
+        if m.get("modo") == "corridas":
+            return None
         n = int(m["n_delivered"]) - int(m.get("n_sin_entrega") or 0)
         rf = int(m["n_review_failed"]) - int(m.get("n_fallidas_sin_entrega") or 0)
         return round(rf / n, 3) if n > 0 else None

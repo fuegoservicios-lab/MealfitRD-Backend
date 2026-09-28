@@ -6284,16 +6284,19 @@ def _review_failed_delivered_rate_alert_job():
     alert_key = "review_failed_delivered_rate_high"
     # [P2-FLEET-CRON-MIN-SAMPLES · 2026-06-22] lookback 24→72h + piso 10→5 (ver _clinical_band_drift_alert_job).
     # [P1-PLAN-LOTE-746 · 2026-09-28] contando ENTREGAS la ventana por defecto es 168 h (≈3 bloques por 72 h en prod).
-    _ent = __import__("entregas_revisadas")
-    lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", _ent.lookback_por_defecto()), 168))
+    # [revisión 4] el import va DENTRO del try: si fallara, el tick se escribe igual (con la ventana de 72 h de antes)
+    lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", 72), 168))
     min_samples = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_REVFAIL_RATE_THRESHOLD", 0.20)
     _n = _n_corridas = _n_sin = _rf_sin = 0
     _rf = 0
-    _rate = None
+    _rate = _modo = None
     _alert_emitted = _legacy_close = False
     _skip = None
     try:
+        _ent = __import__("entregas_revisadas")
+        _modo = "entregas" if _ent.activo() else "corridas"      # [revisión 4] el SOP de la transición solo vale así
+        lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", _ent.lookback_por_defecto()), 168))
         # [P1-PLAN-LOTE-746 · 2026-09-28] ENTREGAS, no corridas: `clinical_band` se emite por corrida del pipeline y el
         # bloque 9 de 3957a669 corrió 4 veces para 1 entrega (27-sep). Lógica en `entregas_revisadas`.
         # [revisión 3] + las filas heredadas (sin `entrega`) contadas en `_n`: el SOP de la transición de 7 días las lee
@@ -6322,7 +6325,7 @@ def _review_failed_delivered_rate_alert_job():
                         f"skeleton-fidelity) — revisar el reviewer/retry budget del pipeline.",
                         json.dumps({"review_failed_rate": _rate, "n_review_failed": _rf, "n_delivered": _n,
                                     "n_corridas": _n_corridas, "n_sin_entrega": _n_sin, "n_fallidas_sin_entrega": _rf_sin,
-                                    "lookback_h": lookback_h, "threshold": threshold},
+                                    "modo": _modo, "lookback_h": lookback_h, "threshold": threshold},
                                    ensure_ascii=False),
                     ),
                 )
@@ -6351,7 +6354,7 @@ def _review_failed_delivered_rate_alert_job():
                 (_rate if _rate is not None else -1.0,
                  json.dumps({"n_delivered": _n, "n_review_failed": _rf, "review_failed_rate": _rate,
                              "n_corridas": _n_corridas, "n_sin_entrega": _n_sin, "n_fallidas_sin_entrega": _rf_sin,
-                             "alert_emitted": _alert_emitted, "skip_reason": _skip,
+                             "modo": _modo, "alert_emitted": _alert_emitted, "skip_reason": _skip,
                              "legacy_close_attempted": _legacy_close,
                              "threshold": threshold, "lookback_h": lookback_h}, ensure_ascii=False)),
             )
