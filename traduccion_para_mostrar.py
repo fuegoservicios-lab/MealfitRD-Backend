@@ -126,18 +126,20 @@ def _validar(res, limpios: list, node: str, max_chars: int = _MAX_TEXTO) -> Opti
 
 
 async def traducir_para_mostrar(textos, locale, *, user_id: Optional[str] = None,
-                                node: str = "display_i18n_corto", timeout_s: float = 8.0) -> Optional[list]:
+                                node: str = "display_i18n_corto", timeout_s: float = 8.0,
+                                tipo: str = "nombres") -> Optional[list]:
     """`textos` traducidos a `locale`, en el mismo orden; None si no aplica o si algo falla.
 
     Un texto vacío vuelve vacío. Un texto que el modelo devuelva vacío o desmedido vuelve en español: se mide por
-    elemento, así que un fallo parcial no tira el resto."""
+    elemento, así que un fallo parcial no tira el resto. `tipo="textos"` [P1-PLAN-LOTE-626]: frases (las dudas de la
+    foto) en vez de nombres de platos."""
     prep = _preparar(textos, locale)
     if prep is None:
         return None
     idioma, limpios = prep
     try:
         llm = _modelo(timeout_s)
-        mensajes = _mensajes(idioma, limpios)
+        mensajes = _mensajes(idioma, limpios, tipo)
         reset = _contexto(node, user_id)
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-225] traducción para mostrar no disponible: {e}")

@@ -89,7 +89,9 @@ def test_la_regla_de_dudas_solo_va_cuando_hay_dudas():
 
 
 def test_el_escaner_recibe_las_dudas():
-    assert '"dudas": vision_result.get("dudas") or []' in _src("routers/diary.py")
+    # [P1-PLAN-LOTE-626] pasan antes por la traducción para mostrar (`dudas_out`)
+    src = _src("routers/diary.py")
+    assert 'dudas_out = vision_result.get("dudas") or []' in src and '"dudas": dudas_out' in src
 
 
 def test_marker():

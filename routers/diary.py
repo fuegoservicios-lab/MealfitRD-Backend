@@ -788,8 +788,17 @@ async def api_diary_upload(
         # (el `name` no se toca). Sólo en el escáner del diario: en el chat el coach ya contesta en su idioma.
         meal_name_es = meal_name
         items_out = vision_result.get("items") or []
-        if is_food and purpose == "diary" and meal_name:
-            meal_name, items_out = await _nombres_para_mostrar(meal_name, items_out, locale, verified_user_id)
+        dudas_out = vision_result.get("dudas") or []
+        if (is_food and purpose == "diary" and meal_name) or dudas_out:
+            # [P1-PLAN-LOTE-626] el idioma se resuelve UNA vez: el plato, sus ingredientes y sus dudas, a la vez
+            _loc = await _locale_del_escaner(locale, verified_user_id)
+            _nombres = (_nombres_para_mostrar(meal_name, items_out, _loc, verified_user_id)
+                        if is_food and purpose == "diary" and meal_name else None)
+            if _nombres is not None:
+                (meal_name, items_out), dudas_out = await asyncio.gather(
+                    _nombres, _dudas_para_mostrar(dudas_out, _loc, verified_user_id))
+            else:
+                dudas_out = await _dudas_para_mostrar(dudas_out, _loc, verified_user_id)
 
         return {
             "success": True,
@@ -810,7 +819,8 @@ async def api_diary_upload(
             "photo_kind": vision_result.get("photo_kind") or ("plato" if is_food else "otro"),
             "items": items_out,
             # [P1-PLAN-LOTE-305] lo que la foto no deja saber: el modal lo muestra junto al plato
-            "dudas": vision_result.get("dudas") or [],
+            # [P1-PLAN-LOTE-626] en el idioma del usuario (la pregunta; las opciones llevan su `*_mostrar` al lado)
+            "dudas": dudas_out,
             "description": description,
             "image_url": image_url,
             "attachment_id": attachment_id,
@@ -876,6 +886,51 @@ async def _nombres_para_mostrar(meal_name: str, items: list, locale_form, verifi
             it2["display_name"] = propio
         out.append(it2)
     return ((trad[0] if trad and trad[0] else meal_name), out)
+
+
+async def _dudas_para_mostrar(dudas: list, locale_form, verified_user_id) -> list:
+    """[P1-PLAN-LOTE-626 · 2026-09-27] Las dudas de la foto para LEER en el idioma de la pantalla.
+
+    La pregunta es solo para leer y se traduce en su sitio. En cada opción, `texto` puede renombrar el ingrediente
+    (el frontend lo usa como nombre) y `nombre_plato` es el nombre del plato si se elige: son identificadores y se
+    quedan en español; su traducción va al lado, en `texto_mostrar` y `nombre_plato_mostrar`. `sobre` casa con el
+    ingrediente: no se toca. Una sola llamada al modelo flash; si falla, las dudas salen como vinieron."""
+    if not dudas:
+        return dudas
+    loc = await _locale_del_escaner(locale_form, verified_user_id)
+    if loc == "es-DO":
+        return dudas
+    textos, destinos = [], []
+    for i, d in enumerate(dudas):
+        if not isinstance(d, dict):
+            continue
+        textos.append(str(d.get("pregunta") or ""))
+        destinos.append((i, None, "pregunta"))
+        for j, o in enumerate(d.get("opciones") or []):
+            if not isinstance(o, dict):
+                continue
+            for campo in ("texto", "nombre_plato"):
+                if str(o.get(campo) or "").strip():
+                    textos.append(str(o[campo]))
+                    destinos.append((i, j, campo))
+    if not textos:
+        return dudas
+    import traduccion_para_mostrar as _tpm
+    trad = await _tpm.traducir_para_mostrar(textos, loc, user_id=verified_user_id,
+                                           node="vision_scan_dudas_i18n", tipo="textos")
+    if not trad:
+        return dudas
+    out = [dict(d, opciones=[dict(o) for o in (d.get("opciones") or [])]) if isinstance(d, dict) else d
+           for d in dudas]
+    for (i, j, campo), original, t in zip(destinos, textos, trad):
+        t = " ".join(str(t or "").split())
+        if not t or t == original:
+            continue
+        if campo == "pregunta":
+            out[i]["pregunta"] = t[:160]
+        else:
+            out[i]["opciones"][j][f"{campo}_mostrar"] = t[:200 if campo == "nombre_plato" else 60]
+    return out
 
 
 def _save_visual_entry_background(user_id: str, image_url: str, description: str):
