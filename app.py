@@ -1006,7 +1006,23 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-720..721 · 2026-09-28] La ficha de un plato registrado: `consumed_meals.source`/`plan_ref` (de dónde
 # vino) y `GET /api/diary/meal/{id}` (ingredientes con kcal solo si cuadran); la foto del escáner vive SOLO en el
 # dispositivo (la Política de Privacidad promete no retenerla).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-721 · 2026-09-28"
+# [P1-PLAN-LOTE-730 · 2026-09-28] (backend) La yema «al punto» o «a tu gusto» del paso también se alinea con la nota
+# «yema y clara firmes» del mismo plato (el 631 veía «cremosa/blanda/suave»).
+# [P1-PLAN-LOTE-731 · 2026-09-28] (backend) Lo que sólo se le hace a un huevo o a un queso no se le hace a su
+# sustituto: sin huevo en la lista, «bien cuajado» → «bien cocido» (fuera del nombre) y «vierte la pechuga» → «añade…»;
+# sin queso y con yogur, «desmenuza el yogurt» → «añade…» y fuera «para que se funda».
+# [P1-PLAN-LOTE-732 · 2026-09-28] (backend) El casabe se cuenta por pieza: «mide 1 casabe pequeño» sigue al «½ casabe
+# pequeño» de la lista.
+# [P1-PLAN-LOTE-733 · 2026-09-28] (backend) «…suficiente lechosa para obtener ½ taza» dice la taza de la lista.
+# [P1-PLAN-LOTE-734 · 2026-09-28] (backend) «queso fresco batido» no hace de un bowl un batido: el paso de licuadora
+# (P1-BLEND-STEP-REQUIRED) y `_name_suggests_blended` reconocen el «batido» adjetivo por su forma.
+# [P1-PLAN-LOTE-735 · 2026-09-28] (backend) Las claras de la lista se cocinan también cuando el huevo va a la sartén
+# («casca 2 huevos… hasta que la clara y la yema cuajen» engañaba al detector del 405).
+# [P1-PLAN-LOTE-736 · 2026-09-28] (backend) El atún que el guiso ya incorpora no se «acompaña» otra vez aunque el Montaje
+# lo nombre más corto («atún en agua» ⊂ «atún en agua bajo en sodio»); «… y edamame» conserva el edamame.
+# [P1-PLAN-LOTE-737 · 2026-09-28] (backend) El ave/cerdo crudo de la lista siempre dice cuándo está hecho: si ningún paso
+# ni nota lo dice, va la nota estándar de P2-UNDERCOOK-TIME-NOTE (88 de 698 comidas recientes).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-737 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

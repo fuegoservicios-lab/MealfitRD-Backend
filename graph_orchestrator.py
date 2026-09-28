@@ -16778,7 +16778,7 @@ def _name_suggests_blended(meal_name: str, strip_accents_fn=None) -> bool:
         _n = strip_accents_fn(str(meal_name or "").lower())
         for _ex in _BLENDED_NAME_EXCLUDE:
             _n = _n.replace(strip_accents_fn(_ex), " ")
-        return any(b in _n for b in _NO_COOK_BLENDED)
+        return any(b in __import__("batido_nombre").sin_adjetivo(_n) for b in _NO_COOK_BLENDED)  # [P1-PLAN-LOTE-734]
     except Exception:
         try:
             return any(b in str(meal_name or "").lower() for b in _NO_COOK_BLENDED)
@@ -24741,7 +24741,7 @@ def _run_assembly_validations(
                 try:
                     from constants import strip_accents as _sa_bl2
                     _n_blend = _sa_bl2(str(meal.get("name") or "").lower())
-                    if _re.search(r"\b(batido|licuado|smoothie|frappe|malteada)\b", _n_blend):
+                    if __import__("batido_nombre").es_batido(_n_blend):  # [P1-PLAN-LOTE-734] «queso fresco batido» es adjetivo
                         if not _re.search(r"(licu|bate|batir|procesa|procesar|mezcla en la licuadora)", _sa_bl2(recipe)):
                             if RECIPE_COHERENCE_AUTOFIX and _recipe_steps:
                                 # Se inserta ANTES del montaje: licuar precede a servir.

@@ -19,7 +19,22 @@ _NOTAS = ("⚠", "🤰", "⚕", "💡", "🌱")
 # del 592 (celíaco, día 2): «cuaja el huevo entero con 5 claras hasta que la clara esté firme y la yema siga cremosa» con
 # «⚠️ … cocina el huevo por completo (≥71°C, yema y clara firmes…)» en el mismo plato; corpus: 10 pasos así (3 en las
 # corridas recientes), la forma que el 565 no veía. Con la nota, el paso pide la yema firme. tooltip-anchor: P1-PLAN-LOTE-631
-_BLANDA_631 = r"(?:cremosa|blanda|suave|tierna|jugosa|semil[ií]quida|melosa|fluida|a\s+punto)"
+# [P1-PLAN-LOTE-730 · 2026-09-28] + «al punto», «a tu/su gusto», «como te guste»: batería real sobre el 659 (adulto mayor
+# con HTA): «cocínalos 3-4 minutos hasta que la clara cuaje y la yema quede al punto» y «…la yema quede a tu gusto», los
+# dos con «⚠️ … yema y clara firmes» en el plato. Dejar la yema al gusto de quien cocina es permitirla líquida. En
+# plural también («hasta que las claras estén cuajadas y las yemas a tu punto»: 3 platos con la nota en el corpus).
+# tooltip-anchor: P1-PLAN-LOTE-730
+_BLANDA_631 = (r"(?:cremosa|blanda|suave|tierna|jugosa|semil[ií]quida|melosa|fluida|a\s+punto|al\s+punto(?:\s+deseado)?|"
+               r"a\s+(?:(?:tu|su)\s+)?(?:gusto|punto)|como\s+(?:te|le)\s+guste)")
+_BLANDAS_730 = (r"(?:cremosas|blandas|suaves|tiernas|jugosas|semil[ií]quidas|melosas|fluidas|a\s+punto|"
+                r"al\s+punto(?:\s+deseado)?|a\s+(?:(?:tu|su)\s+)?(?:gusto|punto)|como\s+(?:te|le)\s+gusten?)")
+_YEMAS_730 = re.compile(r"\b(?P<las>las\s+yemas\s+)(?:(?P<v>queden|sigan|est[eé]n)\s+)?(?:ligeramente\s+|un\s+poco\s+)?"
+                        + _BLANDAS_730 + r"\b", re.IGNORECASE)
+
+
+def _firmes_730(m) -> str:
+    v = (m.group("v") or "").lower()
+    return m.group("las") + ("queden firmes" if v == "queden" else "estén firmes" if v else "firmes")
 _CLARA_Y_YEMA_631 = re.compile(
     r"hasta\s+que\s+la\s+clara\s+(?P<v>cuaje|est[eé]\s+(?:firme|cuajada))(?:\s+por\s+completo)?\s+y\s+la\s+yema\s+"
     r"(?:(?:quede|siga|est[eé]|a[uú]n|todav[ií]a)\s+)?(?:ligeramente\s+|un\s+poco\s+)?" + _BLANDA_631 + r"\b", re.IGNORECASE)
@@ -39,6 +54,7 @@ def _cambia(p: str) -> str:
                                                                           else "estén firmes"), q)   # [P1-PLAN-LOTE-631]
     q = _YEMA_631.sub(lambda m: m.group("la") + {"quede": "quede firme", "siga": "esté firme"}.get(
         m.group("v").lower(), "esté firme" if m.group("v").lower().startswith("est") else "firme"), q)
+    q = _YEMAS_730.sub(_firmes_730, q)                     # [P1-PLAN-LOTE-730] también en plural
     return q
 
 

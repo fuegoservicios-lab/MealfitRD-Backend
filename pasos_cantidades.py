@@ -1112,16 +1112,21 @@ _PIEZAS = {
     "batata": ("batata", "batatas"), "manzana": ("manzana", "manzanas"), "naranja": ("naranja", "naranjas"),
     "mandarina": ("mandarina", "mandarinas"), "kiwi": ("kiwi", "kiwis"), "pera": ("pera", "peras"),
     "chinola": ("chinola", "chinolas"),
+    # [P1-PLAN-LOTE-732 · 2026-09-28] y el casabe: batería real sobre el 659 (adulto mayor con HTA), «mide 1 casabe pequeño
+    # sin sal» con «½ casabe pequeño sin sal (15 g)» en la lista — el paso mandaba medir el doble. tooltip-anchor:
+    # P1-PLAN-LOTE-732
+    "casabe": ("casabe", "casabes"),
 }
 _PIEZA_NOMBRE_RE = (r"(?P<pieza>dientes?|aj[ií](?:es)?|tomates?|lim[oó]n(?:es)?|cebollas?|pepinos?|zanahorias?|tortillas?|"
                     r"arepitas?|pechugas?|berenjenas?|papas?|lechosas?|aguacates?|mangos?|rebanadas?|pl[aá]tanos?|guineos?|"
-                    r"batatas?|manzanas?|naranjas?|mandarinas?|kiwis?|peras?|chinolas?)")
+                    r"batatas?|manzanas?|naranjas?|mandarinas?|kiwis?|peras?|chinolas?|casabes?)")
 _CUENTA = r"(?P<q>\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?|[½¼¾⅓⅔])"
 _PIEZA_EN_LISTA_RE = re.compile(r"^\s*" + _CUENTA + r"\s+" + _PIEZA_NOMBRE_RE + r"\b", re.IGNORECASE)
 _PIEZA_EN_PASO_RE = re.compile(r"(?<![\w.,/½¼¾⅓⅔])" + _CUENTA + r"\s+" + _PIEZA_NOMBRE_RE + r"\b", re.IGNORECASE)
 _ADJ_PIEZA = {"mediano": "medianos", "mediana": "medianas", "pequeño": "pequeños", "pequeña": "pequeñas",
               "grande": "grandes", "verde": "verdes", "maduro": "maduros", "madura": "maduras", "rojo": "rojos",
-              "roja": "rojas", "entero": "enteros", "entera": "enteras", "fresco": "frescos", "fresca": "frescas"}
+              "roja": "rojas", "entero": "enteros", "entera": "enteras", "fresco": "frescos", "fresca": "frescas",
+              "tostado": "tostados", "tostada": "tostadas"}                      # [P1-PLAN-LOTE-732] + tostado
 _ADJ_SING = {v: k for k, v in _ADJ_PIEZA.items()}
 
 
@@ -1187,7 +1192,14 @@ def conteos_de_la_lista(meal) -> int:
                         nombre = plur if plural else sing
                         if mm.group("pieza")[:1].isupper():
                             nombre = nombre[:1].upper() + nombre[1:]
-                        cambios.setdefault(i, []).append((mm.start("pieza"), mm.end("pieza"), nombre))
+                        _fin, _txt = mm.end("pieza"), nombre
+                        _adj = re.match(r"(\s+)([a-záéíóúñ]+)", p[mm.end("pieza"):])   # [P1-PLAN-LOTE-732] y su adjetivo
+                        if _adj:
+                            _w = _adj.group(2)
+                            _w2 = _ADJ_PIEZA.get(_w, _w) if plural else _ADJ_SING.get(_w, _w)
+                            if _w2 != _w:
+                                _fin, _txt = mm.end("pieza") + _adj.end(), nombre + _adj.group(1) + _w2
+                        cambios.setdefault(i, []).append((mm.start("pieza"), _fin, _txt))
                     continue
             except Exception:
                 continue

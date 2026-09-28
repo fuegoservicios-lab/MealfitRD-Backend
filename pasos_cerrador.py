@@ -879,8 +879,26 @@ def proteina_servida_una_vez(meal) -> int:
                 continue
             q = p
             for m in list(_ACOMPANA_449_RE.finditer(p)):
-                if m.group("cab") == "Acompaña" and _sa(m.group("obj")).strip() in servidas:
-                    q = q.replace(m.group(0), "", 1)
+                # [P1-PLAN-LOTE-736 · 2026-09-28] el MISMO alimento aunque el Montaje lo nombre más corto o más largo:
+                # batería real sobre el 659 (adulto mayor con HTA, cena), «Escurre e incorpora atún en agua bajo en sodio
+                # (ya viene cocido) al guiso» y «Acompaña con atún en agua.» — la igualdad exacta no los emparejaba y el
+                # atún salía dos veces (19 montajes en el corpus). Uno es el otro más PALABRAS detrás; si lo que sobra es
+                # «y edamame», el edamame se sigue acompañando. tooltip-anchor: P1-PLAN-LOTE-736
+                _o = _sa(m.group("obj")).strip()
+                _q = None                                  # None: no se toca; "": fuera; texto: lo que queda
+                for _s in servidas:
+                    if _o == _s or _s.startswith(_o + " "):
+                        _q = ""
+                        break
+                    if _o.startswith(_s + " "):
+                        _cola = m.group("obj").split()[len(_s.split()):]
+                        if _cola and _cola[0].lower() in ("y", "e"):
+                            _q = " ".join(_cola[1:])
+                        elif _cola and not re.search(r",|\b(?:y|e|con)\b", " ".join(_cola), re.IGNORECASE):
+                            _q = ""                        # «… bajo en sodio», «… fresco»: el mismo alimento
+                        break
+                if m.group("cab") == "Acompaña" and _q is not None:
+                    q = q.replace(m.group(0), f"Acompaña con {_q}." if _q else "", 1)
                     n += 1
             if q != p and re.sub(r"^Montaje:\s*", "", q).strip():      # un Montaje nunca se queda vacío
                 rec[i] = re.sub(r"\s{2,}", " ", q).rstrip()
