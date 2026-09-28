@@ -879,7 +879,7 @@ def _unit_system_by_country_enabled() -> bool:
 
 
 def _etiqueta_metrica(gramos: float) -> str:
-    """454 g · 1,4 kg. Coma decimal: la lista se lee en español."""
+    """454 g · 1,4 kg. El frontend repone el separador del país + idioma al pintar (formatRegionFor, lote 703)."""
     if gramos >= 1000:
         kg = round(gramos / 1000.0, 1)
         txt = f"{kg:.1f}".replace(".", ",")
