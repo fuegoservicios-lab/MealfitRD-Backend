@@ -37,6 +37,57 @@ def _ya_servido(obj: str, antes: str) -> bool:
             and bool(re.search(r"\b(?:el|la|los|las)\s+" + re.escape(toks[1]) + r"\b", antes)))
 
 
+# [P1-PLAN-LOTE-789 · 2026-09-28] Dos huecos del 582, medidos en el bloque 3 REAL de 6594aae1 y en el corpus de la cola 744:
+#   · sólo miraba la ÚLTIMA frase: «…coloca la mozzarella sobre las tostadas… Acompaña con queso mozzarella fresco bajo en
+#     sodio. Espolvorea las semillas de linaza por encima.» — la siembra de micros (709) ya había cerrado el Montaje;
+#   · exigía la frase entera: «coloca encima el pescado desmenuzado… Acompaña con filete de pescado blanco.», «sirve las
+#     tortitas con el pollo desmenuzado encima… Acompaña con pechuga de pollo cocida y desmenuzada.».
+# Aquí, cualquier «Acompaña con X.» del Montaje (no «Termina con»: suele ser el acabado) se va si lo que IDENTIFICA a X —un
+# nombre de proteína o de queso concreto, no «queso», «filete» ni «pechuga»— ya se sirvió antes en ese paso con artículo
+# («el pescado», «la mozzarella»). Con varios alimentos («con pollo y aguacate») sólo si todos lo están; lo que sigue a «y»
+# puede ser un adjetivo («cocida y desmenuzada»). El agua nunca. tooltip-anchor: P1-PLAN-LOTE-789
+_ACOMPANA_789_RE = re.compile(r"(?:(?<=[.;:])|^)\s*Acompaña\s+con\s+(?:el\s+|la\s+|los\s+|las\s+)?"
+                              r"(?P<obj>[^.;:]{3,80}?)\.(?=\s|$)")
+_IDENTIDAD_789 = ("pescado", "pollo", "pavo", "res", "cerdo", "atun", "sardina", "tilapia", "camaron", "huevo",
+                  "mozzarella", "gouda", "ricotta", "cottage", "cheddar", "parmesano", "provolone", "edamame")
+_ADJETIVOS_789 = {"cocido", "cocida", "cocidos", "cocidas", "desmenuzado", "desmenuzada", "desmenuzados", "desmenuzadas",
+                  "picado", "picada", "rallado", "rallada", "tostado", "tostada", "fresco", "fresca", "frio", "fria",
+                  "caliente", "entero", "entera", "bajo", "sodio", "en", "agua", "blanco", "blanca", "claro"}
+
+
+def _identidad_789(parte: str):
+    toks = re.findall(r"[a-z]+", _sa(parte))
+    ids = [t for t in toks if t in _IDENTIDAD_789 or (t.endswith("s") and t[:-1] in _IDENTIDAD_789)
+           or (t.endswith("es") and t[:-2] in _IDENTIDAD_789)]
+    if not ids:
+        return "" if toks and all(t in _ADJETIVOS_789 for t in toks) else None
+    return ids[0][:-2] if ids[0][:-2] in _IDENTIDAD_789 else (ids[0][:-1] if ids[0][:-1] in _IDENTIDAD_789 else ids[0])
+
+
+def _servido_789(obj: str, antes: str) -> bool:
+    partes = [x for x in re.split(r",|\s+y\s+|\s+e\s+", _sa(obj)) if x.strip()]
+    if not partes or any(re.fullmatch(r"\s*agua\s*", x) for x in partes):
+        return False
+    vistos = 0
+    for x in partes:
+        ident = _identidad_789(x)
+        if ident is None:
+            return False                       # un alimento sin identidad reconocible: no se toca
+        if ident == "":
+            continue                           # sólo adjetivos («… y desmenuzada»)
+        if not re.search(r"\b(?:el|la|los|las)\s+" + re.escape(ident) + r"(?:s|es)?\b", antes):
+            return False
+        vistos += 1
+    return vistos > 0
+
+
+def _limpiar_789(p: str) -> str:
+    q = p
+    for m in reversed(list(_ACOMPANA_789_RE.finditer(q))):
+        if _servido_789(m.group("obj"), _sa(q[:m.start()])):
+            q = (q[:m.start()].rstrip() + (" " if q[m.end():].strip() else "") + q[m.end():].lstrip()).rstrip()
+    return q
+
 def limpiar(meal) -> int:
     """Nº de frases quitadas; 0 ante cualquier error."""
     try:
@@ -55,6 +106,10 @@ def limpiar(meal) -> int:
                 q = q[:m.start()].rstrip()
                 if q and q[-1] not in ".!?":
                     q += "."
+                n += 1
+            q789 = _limpiar_789(q)  # [P1-PLAN-LOTE-789] también en medio del Montaje y por lo que identifica al alimento
+            if q789 != q:
+                q = q789
                 n += 1
             if q != p:
                 rec[i] = q

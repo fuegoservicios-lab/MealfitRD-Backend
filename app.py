@@ -1048,7 +1048,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # empieza por su unidad («½ pedazo mediano de yuca (≈172 g)» ↔ «corta 205 g de yuca») o va en plural («filetes»).
 # [P1-PLAN-LOTE-788 · 2026-09-28] (backend) El punto del sustituto del pescado (785) sólo se cambia DETRÁS de su mención
 # en la frase: «saltea la cebolla hasta que esté opaca y añade la pechuga» habla de la cebolla.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-788 · 2026-09-28"
+# [P1-PLAN-LOTE-789 · 2026-09-28] (backend) El Montaje no re-sirve lo servido aunque la frase no sea la última («…
+# Acompaña con queso mozzarella… Espolvorea la linaza») ni use el mismo nombre («el pescado» / «filete de pescado blanco»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-789 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
