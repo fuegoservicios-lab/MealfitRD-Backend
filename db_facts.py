@@ -810,7 +810,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary (tras retries): {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None, source: Optional[str] = None, plan_ref: Optional[dict] = None):
     """Guarda una comida consumida en la tabla consumed_meals.
 
     [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
@@ -821,6 +821,10 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     permite registrar comidas de días ANTERIORES ("el almuerzo de ayer") con su
     fecha real — sin él, todo caía en HOY y contaminaba las macros del día. El
     caller (tools.log_consumed_meal) clampa el rango; aquí solo se aplica.
+
+    [P1-PLAN-LOTE-720 · 2026-09-28] `source` (de dónde vino: `ficha_comida.ORIGENES_DE_COMIDA`) y `plan_ref` (las
+    coordenadas de «Me lo comí») van a la fila para que la ficha del plato lo diga. Son etiquetas: un valor fuera
+    del vocabulario se guarda como NULL, y una base sin la migración del lote se registra igual, sin ellas.
     """
     try:
         from datetime import datetime, timezone
@@ -905,11 +909,37 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # `routers/diary.py`) solo chequean truthiness (`is not None`,
         # `!= "deduped"`, `not _logged_ok`) — un string uuid es tan truthy
         # como el `True` que devolvía antes.
-        _rows = execute_sql_write(
-            "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at),
-            returning=True,
+        _base = (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at)
+        _insert_base = (
+            "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, "
+            "consumed_at, meal_type, inventory_synced_at{extra}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s{marcas}) "
+            "RETURNING id"
         )
+        # [P1-PLAN-LOTE-720 · 2026-09-28] El origen, si lo hay. Si la base aún no tiene las columnas (la migración
+        # llega aparte del código), se registra sin ellas: perder la etiqueta es aceptable, perder la comida no.
+        from ficha_comida import origen_de_comida, plan_ref_limpio, es_columna_inexistente
+        _origen = origen_de_comida(source)
+        _ref = plan_ref_limpio(plan_ref)
+        _rows = None
+        if _origen or _ref:
+            try:
+                _rows = execute_sql_write(
+                    _insert_base.format(extra=", source, plan_ref", marcas=", %s, %s"),
+                    _base + (_origen, Jsonb(_ref) if _ref else None),
+                    returning=True,
+                )
+            except Exception as _col_err:
+                if not es_columna_inexistente(_col_err):
+                    raise
+                logger.warning(f"[P1-PLAN-LOTE-720] consumed_meals sin source/plan_ref (¿migración pendiente?); se registra sin origen: {_col_err}")
+                _rows = None
+                _origen = _ref = None
+        if not (_origen or _ref):
+            _rows = execute_sql_write(
+                _insert_base.format(extra="", marcas=""),
+                _base,
+                returning=True,
+            )
         return str(_rows[0]["id"]) if _rows else True
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")
@@ -1099,8 +1129,11 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             # desempaquetan posicionalmente — una columna extra no rompe nada.
             # [P1-PLAN-LOTE-103 · 2026-09-18] + `ingredients`: la fuente del contador de micros del día
             # (routers/diary.py los resuelve y NO los devuelve al cliente).
+            # [P1-PLAN-LOTE-720 · 2026-09-28] + `created_at`: el cajón de días anteriores decide con él si la hora es
+            # de fiar («Lo anotaste el lunes 21») y la ficha del plato también — lo leía y el endpoint no lo mandaba,
+            # así que esa frase NUNCA salió. La columna existe desde siempre (NOT NULL); no depende de la migración.
             _COLUMNS = (
-                "id, meal_name, calories, protein, carbs, healthy_fats, "
+                "id, meal_name, calories, protein, carbs, healthy_fats, created_at, "
                 "consumed_at, meal_type, ingredients"
             )
             # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST.

@@ -94,6 +94,9 @@ class ManualMealRequest(BaseModel):
     # Arranca APAGADO en el cliente: descontar sin pedirlo convierte cada antojo
     # anotado en una mutación de inventario que el usuario no pidió.
     deduct_pantry: bool = False
+    # [P1-PLAN-LOTE-720 · 2026-09-28] «estimate» si alguna línea salió del estimador («Descríbelo» / texto libre): la
+    # ficha del plato lo dice. Cualquier otro valor = «manual». Es una etiqueta, no toca la aritmética.
+    origin: Optional[str] = Field(default=None, max_length=16)
 
 
 class EstimateMacrosRequest(BaseModel):
@@ -349,6 +352,9 @@ _ESTIMATE_PLATE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _AJUSTE_DUDA_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # [P1-PLAN-LOTE-365] «Cambiar» un ingrediente del escáner (flash, texto); exento de la cuota como el de arriba
 _INGREDIENTE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-PLAN-LOTE-720 · 2026-09-28] La ficha de un plato registrado (lectura, cero LLM): exenta de la cuota como el resto
+# del diario — abrir lo que ya comiste no puede quemar un crédito de planes ni dar 402.
+_MEAL_DETAIL_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -980,7 +986,7 @@ def _clamp_diary_days_ago(days_ago) -> int:
 def _persist_consumed_meal(
     *, user_id: str, meal_name: str, meal_type: str, calories, protein, carbs,
     healthy_fats, ingredients, days_ago, background_tasks: BackgroundTasks,
-    source: str, deduct: bool = True,
+    source: str, deduct: bool = True, origen: Optional[str] = None,
 ) -> dict:
     """[P1-MANUAL-FOOD-LOG · 2026-08-11] EL camino de escritura del diario, extraído
     del cuerpo de `/consumed` para que la foto y el componedor manual lo COMPARTAN en
@@ -996,7 +1002,11 @@ def _persist_consumed_meal(
     `deduct=False` con ingredientes: se GUARDAN (el coach los lee) pero se marcan
     `inventory_synced` igual, porque la decisión explícita del usuario de no tocar su
     Nevera debe sobrevivir también a la reconciliación del cierre de chunk — si no,
-    el «no» de hoy se convertiría en un descuento silencioso dentro de unos días."""
+    el «no» de hoy se convertiría en un descuento silencioso dentro de unos días.
+
+    [P1-PLAN-LOTE-720 · 2026-09-28] `origen` es lo que la FILA dice de dónde vino (la ficha del plato); por defecto
+    el mismo `source` del ledger. Difiere cuando el ledger no distingue: «Registrar otra vez» (`repeat`) y el
+    estimado por texto (`estimate`) descuentan —si descuentan— como «manual»."""
     from datetime import datetime, timezone, timedelta
     _days_ago = _clamp_diary_days_ago(days_ago)
     consumed_at_override = (
@@ -1009,6 +1019,7 @@ def _persist_consumed_meal(
         int(healthy_fats), ingredients=_ingredients, meal_type=meal_type,
         mark_inventory_synced=bool(_ingredients),
         consumed_at_override=consumed_at_override,
+        source=(origen or source),
     )
     if not _logged_ok:
         raise HTTPException(
@@ -1036,7 +1047,9 @@ def _persist_consumed_meal(
         "success": True,
         "message": "Comida registrada exitosamente.",
         "already_logged": _already_logged,
-        "meal_id": (_logged_ok if isinstance(_logged_ok, str) else None),
+        # [P1-PLAN-LOTE-720] un doble toque devuelve el centinela «deduped», que no es un id (la foto del escáner se
+        # guardaría bajo esa clave)
+        "meal_id": (_logged_ok if isinstance(_logged_ok, str) and not _already_logged else None),
         "deducted": _summary.get("succeeded") or [],
         "inferred": _summary.get("inferred") or [],
         "not_in_pantry": _summary.get("not_in_pantry") or [],
@@ -1308,6 +1321,7 @@ def api_log_manual_meal(
             healthy_fats=totales["fats"], ingredients=(pantry or None),
             days_ago=payload.days_ago, background_tasks=background_tasks,
             source="manual", deduct=bool(payload.deduct_pantry),
+            origen=("estimate" if payload.origin == "estimate" else "manual"),   # [P1-PLAN-LOTE-720]
         )
         resp["totals"] = {k: int(v) for k, v in totales.items()}
         resp["lines"] = [
@@ -1395,7 +1409,7 @@ def api_repeat_consumed_meal(
             carbs=row.get("carbs") or 0, healthy_fats=row.get("healthy_fats") or 0,
             ingredients=(row.get("ingredients") or None),
             days_ago=payload.days_ago, background_tasks=background_tasks,
-            source="manual", deduct=False,
+            source="manual", deduct=False, origen="repeat",   # [P1-PLAN-LOTE-720]
         )
     except HTTPException as he:
         raise he
@@ -1516,6 +1530,9 @@ def api_log_consumed_meal_from_plan(
             meal_type=meal_type,
             mark_inventory_synced=bool(ingredients),
             consumed_at_override=consumed_at_override,
+            # [P1-PLAN-LOTE-720 · 2026-09-28] la ficha del plato dice «Del plan» y sabe de qué plato salió
+            source="plan_meal",
+            plan_ref={"plan_id": payload.plan_id, "day_index": payload.day_index, "meal_index": payload.meal_index},
         )
         if not logged:
             # Fail-loud (doctrina P1-PROD-AUDIT-3): sin esto un blip de DB
@@ -1544,6 +1561,8 @@ def api_log_consumed_meal_from_plan(
         return {
             "success": True,
             "already_logged": already_logged,
+            # [P1-PLAN-LOTE-720] el id de la fila, como en `/consumed` (la ficha y «deshacer» la nombran por él)
+            "meal_id": (logged if isinstance(logged, str) and logged != "deduped" else None),
             "meal_name": meal_name,
             "meal_type": meal_type,
             "calories": calories,
@@ -1758,6 +1777,49 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.get("/meal/{meal_id}")
+def api_get_consumed_meal_detail(
+    meal_id: str,
+    verified_user_id: Optional[str] = Depends(_MEAL_DETAIL_LIMITER),
+):
+    """[P1-PLAN-LOTE-720 · 2026-09-28] La ficha de UN plato registrado: sus ingredientes (con kcal por renglón solo si
+    cuadran con la comida) y de dónde vino. La lista del día no los trae —son la materia prima de los micros, no la
+    respuesta—, así que se piden al abrir la ficha.
+
+    [I2] `AND user_id = %s`; el 404 es el mismo para «no existe» y «es de otro» (como el DELETE de al lado). La foto no
+    pasa por aquí: vive solo en el dispositivo (spec 2026-09-28-ficha-plato-registrado)."""
+    try:
+        assert_valid_uuid(meal_id)
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        from ficha_comida import ficha_de_comida, es_columna_inexistente
+        _base = ("id, meal_name, calories, protein, carbs, healthy_fats, consumed_at, created_at, meal_type, "
+                 "ingredients")
+        _sql = "SELECT {cols} FROM consumed_meals WHERE id = %s AND user_id = %s"
+        try:
+            row = execute_sql_query(_sql.format(cols=_base + ", source, plan_ref"),
+                                    (meal_id, verified_user_id), fetch_one=True)
+        except Exception as _col_err:
+            # sin la migración del lote todavía: la ficha sale igual, sin decir de dónde vino
+            if not es_columna_inexistente(_col_err):
+                raise
+            row = execute_sql_query(_sql.format(cols=_base), (meal_id, verified_user_id), fetch_one=True)
+        if not row:
+            raise HTTPException(status_code=404, detail="Comida no encontrada.")
+        try:
+            from nutrition_db import IngredientNutritionDB
+            _ndb = IngredientNutritionDB()
+        except Exception as _e:
+            logger.warning(f"[P1-PLAN-LOTE-720] catálogo no disponible para la ficha: {_e}")
+            _ndb = None
+        return {"success": True, "meal": ficha_de_comida(row, _ndb)}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/meal GET: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

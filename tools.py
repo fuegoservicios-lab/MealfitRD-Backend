@@ -1336,6 +1336,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         meal_type=_meal_type,
         mark_inventory_synced=has_ingredients,
         consumed_at_override=(_consumed_at if _days_ago > 0 else None),
+        source="chat",   # [P1-PLAN-LOTE-720] la ficha del plato dice «Anotada por el coach»
     )
     import db_inventory
     deduct_summary = None
