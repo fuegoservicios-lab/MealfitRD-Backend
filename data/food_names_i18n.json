@@ -9,7 +9,11 @@
   "[P1-PLAN-LOTE-623 · 2026-09-27] `variantes_regionales`: el MISMO alimento con el nombre de otro país hispano",
   "(Melocotón = Duraznos, Boniato = Batata). Entran en el índice de las traducciones: alergias, rechazos y pools.",
   "`variantes_solo_alergias`: nombres AMBIGUOS entre países («Plátano» es banana en ES/MX y de cocinar en RD);",
-  "solo amplían una alergia (bloquear de más es lo seguro) y nunca un rechazo ni un buscador."
+  "solo amplían una alergia (bloquear de más es lo seguro) y nunca un rechazo ni un buscador.",
+  "[P1-PLAN-LOTE-649 · 2026-09-27] `nombre_por_pais`: cómo llama cada país hispano beta al alimento, SOLO donde",
+  "difiere del canónico dominicano. Es para LEER en español: la app lo pone entre paréntesis tras el identificador",
+  "(«guineo (plátano)»), sin reemplazarlo —el canónico sigue siendo el que el motor resuelve— y sin romper la",
+  "concordancia de la frase (batata→boniato cambia de género). EE. UU. no lleva tabla: su español es de todos lados."
  ],
  "alimentos": {
   "Aceite de achiote": {
@@ -2247,5 +2251,63 @@
    "Caraotas",
    "Judías"
   ]
+ },
+ "nombre_por_pais": {
+  "ES": {
+   "Guineo": "plátano",
+   "Guineo verde": "plátano verde",
+   "Plátano verde": "plátano macho verde",
+   "Plátano maduro": "plátano macho maduro",
+   "Duraznos": "melocotones",
+   "Durazno en almíbar": "melocotón en almíbar",
+   "Batata": "boniato",
+   "Vainitas": "judías verdes",
+   "Auyama": "calabaza",
+   "Chinola": "maracuyá",
+   "Habichuelas negras": "alubias negras",
+   "Habichuelas rojas": "alubias rojas",
+   "Habichuelas blancas": "alubias blancas",
+   "Papa": "patata",
+   "Ají morrón": "pimiento",
+   "Lechosa": "papaya",
+   "Tayota": "chayote"
+  },
+  "MX": {
+   "Guineo": "plátano",
+   "Guineo verde": "plátano verde",
+   "Plátano verde": "plátano macho verde",
+   "Plátano maduro": "plátano macho maduro",
+   "Habichuelas negras": "frijoles negros",
+   "Habichuelas rojas": "frijoles rojos",
+   "Habichuelas blancas": "frijoles blancos",
+   "Batata": "camote",
+   "Vainitas": "ejotes",
+   "Auyama": "calabaza",
+   "Chinola": "maracuyá",
+   "Lechosa": "papaya",
+   "Tayota": "chayote",
+   "Ají morrón": "pimiento morrón",
+   "Maíz dulce en granos": "elote en granos",
+   "Guisantes secos": "chícharos secos"
+  },
+  "CO": {
+   "Guineo": "banano",
+   "Guineo verde": "banano verde",
+   "Habichuelas negras": "fríjoles negros",
+   "Habichuelas rojas": "fríjoles rojos",
+   "Habichuelas blancas": "fríjoles blancos",
+   "Auyama": "ahuyama",
+   "Chinola": "maracuyá",
+   "Lechosa": "papaya",
+   "Tayota": "guatila",
+   "Ají morrón": "pimentón"
+  },
+  "PR": {
+   "Auyama": "calabaza",
+   "Chinola": "parcha",
+   "Lechosa": "papaya",
+   "Vainitas": "habichuelas tiernas",
+   "Ají morrón": "pimiento"
+  }
  }
 }

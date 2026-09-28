@@ -55,6 +55,16 @@ def nombres() -> dict:
     return {str(k): dict(v) for k, v in alimentos.items() if isinstance(v, dict)}
 
 
+def nombres_por_pais() -> dict:
+    """[P1-PLAN-LOTE-649] {país: {canónico: cómo lo llaman allí}}, solo donde difiere del canónico dominicano. Para
+    LEER en español (la app lo pone entre paréntesis tras el identificador); nunca entra al motor."""
+    crudo = _datos().get("nombre_por_pais") or {}
+    if not isinstance(crudo, dict):
+        return {}
+    return {str(p).upper(): {str(k): str(v) for k, v in t.items() if isinstance(v, str) and v.strip()}
+            for p, t in crudo.items() if isinstance(t, dict)}
+
+
 def _variantes(seccion: str) -> dict:
     """[P1-PLAN-LOTE-623] {canónico: [nombres del mismo alimento en otro país hispano]} de `seccion`."""
     crudo = _datos().get(seccion) or {}
