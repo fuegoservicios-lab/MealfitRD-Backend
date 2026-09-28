@@ -23301,9 +23301,18 @@ def _alert_chunk_lag_excessive() -> None:
                 q.effective_lag_seconds_at_pickup AS lag_seconds,
                 q.updated_at
             FROM plan_chunk_queue q
+            -- [P1-PLAN-LOTE-659] El tiempo que el plan pasó CONGELADO (Nevera vacía, P1-PLAN-FREEZE) no es lag del
+            -- scheduler: dea00a2f sumó 697 min de «lag» que eran su congelado. Se excluye el chunk cuyo plan se
+            -- descongeló DESPUÉS de que el chunk venciera (vencimiento ≈ fin del pickup − lag).
+            LEFT JOIN meal_plans mp_fz ON mp_fz.id = q.meal_plan_id
             WHERE q.effective_lag_seconds_at_pickup IS NOT NULL
               AND q.effective_lag_seconds_at_pickup > %s
               AND q.updated_at > NOW() - make_interval(hours => %s)
+              AND NOT (
+                  (mp_fz.plan_data->>'_last_unfrozen_at') IS NOT NULL
+                  AND (mp_fz.plan_data->>'_last_unfrozen_at')::timestamptz
+                      > q.updated_at - make_interval(secs => q.effective_lag_seconds_at_pickup)
+              )
             ORDER BY q.effective_lag_seconds_at_pickup DESC
             LIMIT 100
             """,
