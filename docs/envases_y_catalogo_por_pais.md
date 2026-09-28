@@ -81,6 +81,20 @@ raíz la sube el integrador):
   «alcanza ~24 de 30 días — recompra» (compra contra la necesidad ANTES de P6-SPICE-CAP, 70 g) mientras
   `base_qty` dice 28 g (DESPUÉS del tope). Sólo aparece si el dueño aprueba el frasco de 57 g.
 
+## Validación de la revisión ronda 2 (replay, sin DB en el cálculo ni IA)
+
+426 planes guardados (380 DO, 30 sin país, 5 ES, 11 MX) × ciclos de 7, 15 y 30 días, con la foto de
+`master_ingredients` del 28-sep (SELECT de solo lectura) y la 791 emulada sobre ella:
+
+- **Sólo código, contra la base anterior al lote 790:** 0 listas DO y 0 sin país distintas. ES y MX, sólo
+  el rótulo del lote 790. La versión anterior de esta rama sí cambiaba 2 listas DO semanales de nueces
+  (rd15, rd8: 105 y 140 g → «2 paquetes», RD$190); ahora vuelven a «1 paquete» (RD$95), como antes.
+- **Peso por unidad de los chiles (datos de la 2b):** sólo cambian 6 listas MX, todas de Chile chipotle
+  pedido por conteo (2,1 y 1,2 chipotles ≈ 6 y 3,5 g): «2 paquetes» / «3 paquetes (85 g c/u)» en 15 y 30
+  días pasan a «1 paquete (85 g)».
+- **Base anterior al lote contra la rama con la 791:** en DO sólo cambian Dátiles, Cúrcuma y Tortilla de
+  maíz. En los 13 planes vivos (todos DO), sólo Dátiles y Cúrcuma.
+
 ## Tests
 
 `tests/test_p1_plan_lote_790.py` (rótulos contra un oráculo copiado de la función anterior, contexto de
