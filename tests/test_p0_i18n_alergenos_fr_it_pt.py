@@ -144,11 +144,14 @@ def test_lo_que_el_sistema_no_modela_sigue_cayendo_a_literal() -> None:
     """El contrato que NO se toca: quien declara algo fuera del modelo (fresa, kiwi) sigue
     recibiendo su termino tal cual. Si esto se rompiera, el arreglo habria convertido el
     vocabulario en un embudo que traga cualquier cosa."""
-    for termino in ("fresa", "kiwi", "melocoton"):
+    for termino in ("fresa", "kiwi"):
         assert _expand_allergy_declarations([termino]) == {termino}, (
             f"«{termino}» dejo de caer a literal: alguna clase lo esta capturando por "
             f"subcadena. [{_MARKER}]"
         )
+    # [P1-PLAN-LOTE-623] «melocoton» sigue sin clase, pero ahora suma el canonico del catalogo con el nombre del otro
+    # pais («Duraznos», y su singular): sin eso el alergico al melocoton recibia «durazno».
+    assert _expand_allergy_declarations(["melocoton"]) == {"melocoton", "duraznos", "durazno"}
 
 
 def test_un_plato_sin_el_alergeno_no_se_bloquea() -> None:

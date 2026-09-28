@@ -38,15 +38,28 @@ _LIGADURAS = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
 
 
 @lru_cache(maxsize=1)
-def nombres() -> dict:
-    """{nombre canónico: {locale: nombre}}. Sin el archivo, {}: nada se traduce y todo sigue en español."""
+def _datos() -> dict:
+    """El archivo entero. Sin él (o roto), {}: nada se traduce y todo sigue en español."""
     try:
         with open(_RUTA, encoding="utf-8") as f:
             datos = json.load(f)
-        alimentos = datos.get("alimentos") or {}
-        return {str(k): dict(v) for k, v in alimentos.items() if isinstance(v, dict)}
+        return datos if isinstance(datos, dict) else {}
     except Exception:
         return {}
+
+
+@lru_cache(maxsize=1)
+def nombres() -> dict:
+    """{nombre canónico: {locale: nombre}}. Sin el archivo, {}: nada se traduce y todo sigue en español."""
+    alimentos = _datos().get("alimentos") or {}
+    return {str(k): dict(v) for k, v in alimentos.items() if isinstance(v, dict)}
+
+
+def _variantes(seccion: str) -> dict:
+    """[P1-PLAN-LOTE-623] {canónico: [nombres del mismo alimento en otro país hispano]} de `seccion`."""
+    crudo = _datos().get(seccion) or {}
+    return {str(k): [str(n) for n in v if isinstance(n, str) and n.strip()]
+            for k, v in crudo.items() if isinstance(v, list)} if isinstance(crudo, dict) else {}
 
 
 def nombre_para(canonico: str, locale: str | None) -> str | None:
@@ -91,14 +104,41 @@ def _raices(texto: str) -> tuple:
 
 @lru_cache(maxsize=1)
 def _indice() -> tuple:
-    """(canónico, raíces) por cada forma de escribirlo: el canónico y sus nombres en los 4 idiomas."""
+    """(canónico, raíces) por cada forma de escribirlo: el canónico, sus nombres en los 4 idiomas y [P1-PLAN-LOTE-623]
+    sus nombres inequívocos en otros países hispanos («Melocotón» → Duraznos, «Boniato» → Batata)."""
     filas = []
+    regionales = _variantes("variantes_regionales")
     for canonico, por_locale in nombres().items():
-        for forma in (canonico, *[por_locale.get(loc) for loc in LOCALES]):
+        for forma in (canonico, *[por_locale.get(loc) for loc in LOCALES], *regionales.get(canonico, ())):
             r = _raices(forma or "")
             if r:
                 filas.append((canonico, frozenset(r)))
     return tuple(filas)
+
+
+@lru_cache(maxsize=1)
+def _indice_solo_alergias() -> tuple:
+    """[P1-PLAN-LOTE-623] (canónico, raíces) de los nombres AMBIGUOS entre países: «Plátano» es la banana (Guineo) en
+    España y México y el plátano de cocinar en RD. Solo amplían una alergia —bloquear de más es la dirección segura—;
+    en un rechazo o un buscador le quitarían la banana al dominicano que no quiere plátano."""
+    return tuple((c, frozenset(r)) for c, formas in _variantes("variantes_solo_alergias").items()
+                 if c in nombres() for r in (_raices(f) for f in formas) if r)
+
+
+def _singular(termino: str) -> str:
+    """[P1-PLAN-LOTE-623] El singular español de un canónico normalizado («duraznos» → «durazno», «habichuelas negras»
+    → «habichuela negra», «camarones» → «camaron», «nueces» → «nuez»). El patrón del escáner tolera el plural del
+    término, no el singular, y el canónico del catálogo suele ir en plural: sin esto «Melocotón» no alcanzaba
+    «1 durazno fresco»."""
+    def una(w: str) -> str:
+        if len(w) > 4 and w.endswith("ces"):
+            return w[:-3] + "z"
+        if len(w) > 4 and w.endswith("es") and w[-3] in "lnrdj":
+            return w[:-2]
+        if len(w) > 3 and w.endswith("s") and w[-2] in "aeiou":
+            return w[:-1]
+        return w
+    return " ".join(w if w in _VACIAS else una(w) for w in termino.split(" "))
 
 
 @lru_cache(maxsize=2048)
@@ -131,13 +171,18 @@ def canonicos_que_el_literal_no_alcanza(a_low: str, patron_de) -> list:
     try:
         from constants import strip_accents
         out = []
-        for c in canonicos_para_texto(a_low):
+        # [P1-PLAN-LOTE-623] …y los nombres ambiguos entre países, que sólo valen para esto (ver `_indice_solo_alergias`)
+        raices = frozenset(_raices(a_low))
+        ambiguos = sorted({c for c, r in _indice_solo_alergias() if r <= raices}) if raices else []
+        for c in (*canonicos_para_texto(a_low), *ambiguos):
             canon = strip_accents(str(c).lower())
             # El canónico que el literal ya alcanza («fresa» → «fresas»: el escáner tolera el plural) no suma nada.
             # El criterio es el PATRÓN del escáner, no una raíz: «tomato» y «tomate» comparten raíz y el patrón de
             # «tomato» no encuentra «Tomate».
-            if re.search(patron_de(a_low), canon) is None:
-                out.append(canon)
+            # [P1-PLAN-LOTE-623] el singular también: el patrón de «duraznos» no encuentra «1 durazno fresco».
+            for termino in dict.fromkeys((canon, _singular(canon))):
+                if re.search(patron_de(a_low), termino) is None and termino not in out:
+                    out.append(termino)
         return out
     except Exception:
         return []

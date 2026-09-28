@@ -5,7 +5,11 @@
   "Estos nombres son para LEER y para ENTENDER lo que el usuario escribe (buscar, alergias, gustos): se resuelven al",
   "canónico antes de llegar al motor. Nunca entran en `pantry_names_match` ni en los alias del catálogo.",
   "`en-US` es el `name_en` de la base (instantánea scripts/data/catalogo_nutricion_2026_09_12.json).",
-  "Fila nueva en el catálogo sin fila aquí: se pinta en español (o con su `name_en`) y el test lo avisa."
+  "Fila nueva en el catálogo sin fila aquí: se pinta en español (o con su `name_en`) y el test lo avisa.",
+  "[P1-PLAN-LOTE-623 · 2026-09-27] `variantes_regionales`: el MISMO alimento con el nombre de otro país hispano",
+  "(Melocotón = Duraznos, Boniato = Batata). Entran en el índice de las traducciones: alergias, rechazos y pools.",
+  "`variantes_solo_alergias`: nombres AMBIGUOS entre países («Plátano» es banana en ES/MX y de cocinar en RD);",
+  "solo amplían una alergia (bloquear de más es lo seguro) y nunca un rechazo ni un buscador."
  ],
  "alimentos": {
   "Aceite de achiote": {
@@ -2102,5 +2106,146 @@
    "fr-FR": "Igname",
    "it-IT": "Igname"
   }
+ },
+ "variantes_regionales": {
+  "Duraznos": [
+   "Melocotón",
+   "Melocotones"
+  ],
+  "Durazno en almíbar": [
+   "Melocotón en almíbar",
+   "Melocotones en almíbar"
+  ],
+  "Chinola": [
+   "Maracuyá",
+   "Parchita",
+   "Parcha",
+   "Fruta de la pasión"
+  ],
+  "Auyama": [
+   "Calabaza",
+   "Zapallo",
+   "Ahuyama"
+  ],
+  "Batata": [
+   "Boniato",
+   "Camote",
+   "Moniato"
+  ],
+  "Vainitas": [
+   "Judías verdes",
+   "Ejotes",
+   "Chauchas",
+   "Habichuelas tiernas"
+  ],
+  "Plátano verde": [
+   "Plátano macho"
+  ],
+  "Plátano maduro": [
+   "Plátano macho",
+   "Plátano macho maduro"
+  ],
+  "Habichuelas negras": [
+   "Frijoles negros",
+   "Frijol negro",
+   "Alubias negras",
+   "Judías negras",
+   "Porotos negros",
+   "Caraotas negras"
+  ],
+  "Habichuelas rojas": [
+   "Frijoles rojos",
+   "Frijol rojo",
+   "Alubias rojas",
+   "Judías rojas",
+   "Porotos rojos",
+   "Caraotas rojas"
+  ],
+  "Habichuelas blancas": [
+   "Frijoles blancos",
+   "Frijol blanco",
+   "Alubias",
+   "Alubias blancas",
+   "Judías blancas",
+   "Porotos blancos",
+   "Caraotas blancas"
+  ],
+  "Tomate": [
+   "Jitomate"
+  ],
+  "Papa": [
+   "Patata",
+   "Patatas"
+  ],
+  "Tayota": [
+   "Chayote",
+   "Chayota",
+   "Güisquil"
+  ],
+  "Ají morrón": [
+   "Pimiento",
+   "Pimiento morrón",
+   "Chile morrón"
+  ],
+  "Maíz dulce en granos": [
+   "Elote",
+   "Choclo"
+  ],
+  "Cerdo": [
+   "Puerco",
+   "Chancho",
+   "Cochino"
+  ],
+  "Yuca": [
+   "Mandioca",
+   "Casava"
+  ],
+  "Guisantes secos": [
+   "Arvejas",
+   "Arvejas secas",
+   "Chícharos"
+  ],
+  "Aguacate": [
+   "Palta"
+  ],
+  "Guineo": [
+   "Banano",
+   "Cambur"
+  ],
+  "Lechosa": [
+   "Papaya",
+   "Fruta bomba"
+  ]
+ },
+ "variantes_solo_alergias": {
+  "Guineo": [
+   "Plátano",
+   "Plátanos"
+  ],
+  "Guineo verde": [
+   "Plátano verde",
+   "Banano verde"
+  ],
+  "Habichuelas negras": [
+   "Frijoles",
+   "Frijol",
+   "Porotos",
+   "Caraotas",
+   "Judías"
+  ],
+  "Habichuelas rojas": [
+   "Frijoles",
+   "Frijol",
+   "Porotos",
+   "Caraotas",
+   "Judías"
+  ],
+  "Habichuelas blancas": [
+   "Frijoles",
+   "Frijol",
+   "Porotos",
+   "Caraotas",
+   "Judías"
+  ]
  }
 }
