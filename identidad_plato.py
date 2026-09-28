@@ -355,7 +355,11 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
             g_cur = 0.0
         if g_cur > 0:
             break
-    if g_cur <= 0 or g_cur >= piso:
+    import huevo_en_unidades as _hu                     # [P1-PLAN-LOTE-801] el huevo se cuenta: piso en unidades enteras
+    _huevo = _hu.tipo(canon)
+    if _huevo:
+        piso = _hu.piso_en_gramos(canon, piso, db)
+    if g_cur <= 0 or g_cur >= piso - (0.5 if _huevo else 0.0):
         return None                      # sin gramos legibles no se toca; y nunca se baja
     mac = db.macros_from_ingredient_string(f"{piso - g_cur:.0f} g de {canon}") or {}
     dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
@@ -378,6 +382,14 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
                     + (f"; {m_p:.1f} g de proteína bajo el techo renal)" if m_p != float("inf") else ")"))
         return None
     linea = f"{objetivo} g de {canon}"
+    if _huevo:                           # [P1-PLAN-LOTE-801] «2 claras de huevo», no «60 g de clara de huevo»
+        _u = _hu.unidades_objetivo(canon, g_cur, objetivo, db)
+        if not _u:
+            return None
+        objetivo, linea = _u[1], _hu.linea(canon, _u[0])
+        mac = db.macros_from_ingredient_string(f"{objetivo - g_cur:.0f} g de {canon}") or {}
+        dk, dg, dp = float(mac.get("kcal") or 0), float(mac.get("fats") or 0), float(mac.get("protein") or 0)
+        _hu.gastar(canon, g_cur, objetivo, db)
     # Por ALIMENTO, nunca por índice (la familia `raw[idx]`): se sustituye la línea de `canon` —ya se comprobó que es una.
     from recipe_contract import _cantidades_lista
 
@@ -394,7 +406,7 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
     margen["grasa"] -= dg
     if "proteina" in margen:
         margen["proteina"] -= dp
-    return f"↑{g_cur:.0f}→{objetivo} g de {canon}"
+    return f"↑{g_cur:.0f}→{objetivo:.0f} g de {canon}"
 
 
 # ─────────────── [P1-PLAN-LOTE-174 · 2026-09-23] lo pobre de los platos del MODELO, también hasta el final ───────────────
@@ -530,7 +542,15 @@ def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional
     if not piso:
         return None
     nueva = f"{piso} g de {alimento}"
-    mac = db.macros_from_ingredient_string(nueva) or {}
+    import huevo_en_unidades as _hu                     # [P1-PLAN-LOTE-801] «0 g de huevo» vuelve como «1 huevo»
+    if _hu.tipo(alimento):
+        _u = _hu.unidades_objetivo(alimento, 0.0, _hu.piso_en_gramos(alimento, piso, db), db)
+        if not _u:
+            return None
+        piso, nueva = _u[1], _hu.linea(alimento, _u[0])
+        mac = db.macros_from_ingredient_string(f"{piso:.0f} g de {alimento}") or {}
+    else:
+        mac = db.macros_from_ingredient_string(nueva) or {}
     dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
     dp = float(mac.get("protein") or 0)
     if dk <= 0 or dk > margen["kcal"] or dg > margen["grasa"] or dp > margen.get("proteina", float("inf")):
@@ -544,7 +564,9 @@ def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional
     margen["grasa"] -= dg
     if "proteina" in margen:
         margen["proteina"] -= dp
-    return f"↑0→{piso} g de {alimento}"
+    if _hu.tipo(alimento):
+        _hu.gastar(alimento, 0.0, piso, db)
+    return f"↑0→{piso:.0f} g de {alimento}"
 
 
 def _es_proteico(alimento: str, db) -> bool:
@@ -625,7 +647,10 @@ def _anadir_faltantes(meal: dict, index: dict, db, allergies, margen, fase) -> l
                     continue
             except Exception:                                                  # noqa: BLE001
                 continue                 # sin escáner, conservador: no se añade
-        mac = db.macros_from_ingredient_string(f"{piso} g de {canon}") or {}
+        import huevo_en_unidades as _hu                 # [P1-PLAN-LOTE-801] el huevo que falta vuelve en unidades
+        if _hu.tipo(canon):
+            piso = _hu.piso_en_gramos(canon, piso, db)
+        mac = db.macros_from_ingredient_string(f"{piso:.0f} g de {canon}") or {}
         dk, dg, dp = float(mac.get("kcal") or 0), float(mac.get("fats") or 0), float(mac.get("protein") or 0)
         if dk <= 0:
             continue
@@ -640,6 +665,13 @@ def _anadir_faltantes(meal: dict, index: dict, db, allergies, margen, fase) -> l
             continue
         linea = f"{objetivo} g de {canon}"
         mac = db.macros_from_ingredient_string(linea) or {}
+        if _hu.tipo(canon):
+            _u = _hu.unidades_objetivo(canon, 0.0, objetivo, db)
+            if not _u:
+                continue
+            linea = _hu.linea(canon, _u[0])
+            mac = db.macros_from_ingredient_string(f"{_u[1]:.0f} g de {canon}") or {}
+            _hu.gastar(canon, 0.0, _u[1], db)
         meal.setdefault("ingredients", []).append(linea)
         raw = meal.get("ingredients_raw")
         if isinstance(raw, list):
@@ -732,11 +764,19 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=N
             if sub:
                 hechos.append(sub)
             continue            # presente: sin margen del día (o sin sitio en él) no se toca
-        linea = f"{piso} g de {canon}"
+        linea = medida = f"{piso} g de {canon}"
+        import huevo_en_unidades as _hu                 # [P1-PLAN-LOTE-801] el huevo de la plantilla vuelve en unidades
+        _u = _hu.unidades_objetivo(canon, 0.0, _hu.piso_en_gramos(canon, piso, db), db) if _hu.tipo(canon) else None
+        if _hu.tipo(canon):
+            if not _u:
+                continue        # sin sitio para un huevo entero más en el día
+            linea, medida = _hu.linea(canon, _u[0]), f"{_u[1]:.0f} g de {canon}"
         if margen is not None and db is not None and margen.get("proteina", float("inf")) != float("inf"):
-            _p257 = float((db.macros_from_ingredient_string(linea) or {}).get("protein") or 0)
+            _p257 = float((db.macros_from_ingredient_string(medida) or {}).get("protein") or 0)
             if _p257 > margen["proteina"] + 0.5:
                 continue        # [P1-PLAN-LOTE-257] con techo renal, lo que falta no vuelve si no cabe
+        if _u:
+            _hu.gastar(canon, 0.0, _u[1], db)
         ings.append(linea)
         raw = meal.get("ingredients_raw")
         if isinstance(raw, list):
@@ -744,7 +784,7 @@ def restaurar_meal(meal: dict, index: dict, *, db=None, allergies=None, margen=N
         presentes.add(canon)
         hechos.append(f"+{linea}")
         if margen is not None and db is not None:
-            mac = db.macros_from_ingredient_string(linea) or {}
+            mac = db.macros_from_ingredient_string(medida) or {}
             margen["kcal"] -= float(mac.get("kcal") or 0)
             margen["grasa"] -= float(mac.get("fats") or 0)
             if "proteina" in margen:
@@ -774,19 +814,21 @@ def restaurar_identidad(days, *, db=None, index=None, allergies=None, objetivos=
     for d in days:
         meals = [m for m in ((d.get("meals") or []) if isinstance(d, dict) else []) if isinstance(m, dict)]
         margen = _margen_del_dia(meals, objetivos)
-        # [P1-PLAN-LOTE-174] con margen, dos pasadas: primero lo PROTEICO (el déficit que el revisor rechaza), después
-        # el resto; sin margen (lote 46) una sola, como siempre.
-        for fase in (("proteina", "resto") if margen is not None else (None,)):
-            for m in meals:
-                try:
-                    hechos = restaurar_meal(m, index, db=db, allergies=allergies, margen=margen, fase=fase)
-                except Exception as e:                                         # noqa: BLE001
-                    logger.debug(f"[P1-PLAN-LOTE-46] identidad no-op en {str((m or {}).get('name'))[:40]}: {e!r}")
-                    hechos = []
-                if hechos:
-                    tocados += 1
-                    logger.info(f"🧩 [P1-PLAN-LOTE-46] identidad del plato restaurada en «{str(m.get('name'))[:48]}»: "
-                                f"{', '.join(hechos)}")
+        # [P1-PLAN-LOTE-801] el sitio del día bajo el tope de huevos enteros (la identidad de la cola corre tras el tope)
+        with __import__("huevo_en_unidades").presupuesto_del_dia(meals):
+            # [P1-PLAN-LOTE-174] con margen, dos pasadas: primero lo PROTEICO (el déficit que el revisor rechaza),
+            # después el resto; sin margen (lote 46) una sola, como siempre.
+            for fase in (("proteina", "resto") if margen is not None else (None,)):
+                for m in meals:
+                    try:
+                        hechos = restaurar_meal(m, index, db=db, allergies=allergies, margen=margen, fase=fase)
+                    except Exception as e:                                     # noqa: BLE001
+                        logger.debug(f"[P1-PLAN-LOTE-46] identidad no-op en {str((m or {}).get('name'))[:40]}: {e!r}")
+                        hechos = []
+                    if hechos:
+                        tocados += 1
+                        logger.info(f"🧩 [P1-PLAN-LOTE-46] identidad del plato restaurada en «{str(m.get('name'))[:48]}»: "
+                                    f"{', '.join(hechos)}")
         if margen is not None and compensar_on():
             try:
                 tocados += compensar_dia(meals, index, db, allergies, objetivos=objetivos)
@@ -861,8 +903,8 @@ def compensar_dia(meals, index, db, allergies=None, objetivos=None) -> int:
             if len(claves) != 1:
                 continue
             canon = str(claves[0][0])
-            if _choca_alergia(canon, allergies):
-                continue
+            if _choca_alergia(canon, allergies) or __import__("huevo_en_unidades").tipo(canon):
+                continue                 # [P1-PLAN-LOTE-801] el huevo no es migaja que se pague en gramos
             piso = _piso_de(canon, db)
             try:
                 g = float(db.grams_from_ingredient_string(linea) or 0)
