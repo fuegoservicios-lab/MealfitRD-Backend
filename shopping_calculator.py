@@ -1191,6 +1191,9 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "membrillo",
         "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
         "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
+        # [P1-PLAN-LOTE-624 · 2026-09-27] (G68) el durazno FRESCO en los cinco países beta, no sólo en US:
+        # «melocotón»/«durazno» resuelven a «Durazno en almíbar» (el doble de kcal, 1,7× de azúcar).
+        "duraznos",
     ),
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismas 46 altas de catálogo MX/CO de este task —
     # también SIN precio RD a propósito (mismo motivo que ES: países beta,
@@ -1207,11 +1210,13 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
         "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
         "hoja santa", "chocolate de mesa", "panela", "huitlacoche",
+        "duraznos",  # [P1-PLAN-LOTE-624] (G68)
     ),
     "CO": (
         "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
         "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
         "borojo", "feijoa", "granadilla", "mora",
+        "duraznos",  # [P1-PLAN-LOTE-624] (G68)
     ),
     # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] 62 altas de catálogo PR/US de este task — también
     # SIN precio RD a propósito (países beta, `pricing_mode='beta_no_prices'`). A diferencia de
@@ -1232,6 +1237,7 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "longaniza puertorriquena", "chuleta ahumada",
         "aceite de achiote", "queso de papa", "especias para arroz con dulce",
         "aceitunas rellenas",
+        "duraznos",  # [P1-PLAN-LOTE-624] (G68)
     ),
     "US": (
         "jamon de sandwich", "crema agria", "crema mitad y mitad",
