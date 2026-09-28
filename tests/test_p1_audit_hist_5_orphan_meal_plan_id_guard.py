@@ -184,8 +184,11 @@ def test_alert_chronic_deferrals_filters_meal_plan_id_not_null():
     # rojo injusto se le responde relajando el test, y entonces se pierde el guard
     # de verdad. Aquí el alias es opcional en el patrón, así que tolera las dos
     # formas sin dejar de exigir el filtro.
+    # [P1-PLAN-LOTE-658] …y un `LEFT JOIN` opcional antes del WHERE (la zona horaria del perfil viaja en la MISMA
+    # consulta para no hacer un SELECT por usuario): la grafía cambia, el filtro que se exige no.
     m = re.search(
-        r"FROM\s+chunk_deferrals(?:\s+(?:AS\s+)?\w+)?\s+WHERE[^;]*?'temporal_gate'[^;]*?GROUP\s+BY",
+        r"FROM\s+chunk_deferrals(?:\s+(?:AS\s+)?\w+)?(?:\s+LEFT\s+JOIN\s+[^;]*?)?\s+WHERE[^;]*?'temporal_gate'"
+        r"[^;]*?GROUP\s+BY",
         norm,
         re.IGNORECASE | re.DOTALL,
     )
