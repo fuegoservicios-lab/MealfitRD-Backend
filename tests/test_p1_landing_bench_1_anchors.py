@@ -304,7 +304,8 @@ def test_structural_facts_are_derived_and_honest():
 def test_report_contract_rejects_unknown_sections():
     import pytest
     r = build_report("structural", structural={"x": 1})
-    assert r["schema_version"] == 1 and r["mode"] == "structural" and "structural" in r
+    # [P1-PLAN-LOTE-749 · 2026-09-28] v1 → v2: el importador del landing exige schema 2 (+ `run`).
+    assert r["schema_version"] == 2 and r["mode"] == "structural" and "structural" in r
     assert set(LANDING_REPORT_SECTIONS) >= set(r) - {"schema_version", "mode"}
     with pytest.raises(ValueError):
         build_report("live", invented_section={})

@@ -16,7 +16,7 @@ clase de condición incumplida.
 
 Qué significa en concreto:
 
-- **Los 20 perfiles clínicos se evalúan TODOS como dominicanos.** `safety`, `gym`, `latency` y
+- **Los 25 perfiles clínicos se evalúan TODOS como dominicanos.** `safety`, `gym`, `latency` y
   `changes` no tienen eje de país: sus cifras describen el motor sirviendo a un usuario de RD. Una
   regresión que sólo afecte a España o a México **no movería una sola de estas cifras**.
 - **Las cifras públicas del landing heredan ese alcance.** Lo que el landing afirma con estos
@@ -47,27 +47,81 @@ ejercita EXACTAMENTE ese espacio — cada chip literal, con la forma de payload 
 | Modo | Necesita | Qué mide | Secciones del JSON |
 |---|---|---|---|
 | `structural` | nada (DB opcional) | hechos contables: reglas clínicas, micros DRI, catálogo | `structural` |
-| `live [N] --conc 2 [--changes] [--save-plans] [--provider openai]` | claves LLM + Neon | genera N planes reales con la matriz y puntúa seguridad + gym + latencia; `--changes` ejercita swap individual y bucle de día. `--provider openai` fuerza TODA la corrida a gpt-5.6 (cero GLM) vía los 4 knobs sancionados (`MEALFIT_FLASH_MODEL`, `MEALFIT_MODEL_FREE_TIER`, `MEALFIT_MODEL_PAID_TIER`, `MEALFIT_PRO_MODEL`); requiere `OPENAI_API_KEY`, fail-loud sin ella. NO reintroduce el override global eliminado (P1-SINGLE-PROVIDER-RESTORE): reviewer/day-gen/swap conservan su routing propio, que YA es OpenAI por defecto | `structural`, `safety`, `gym`, `latency`, `changes` |
-| `remote [N] --api-base URL [--conc 1] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el servidor — para un guest, day-gen/swap/reviewer corren en Luna = OpenAI (P1-DAYGEN-TIER-MODEL/P1-SWAP-LUNA/P1-REVIEWER-TIER-MODELS). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): conc default 1, backoff ante 429 | `meta`, `safety`, `gym`, `latency`, `changes` |
-| `telemetry --days 30` | Neon | series de PROD: éxito de cambios a la primera, banda entregada, fallback rate, PQI, costo por nodo | `telemetry` |
-| `score --plans f.json` | nada | re-puntúa planes crudos de una corrida `live/remote --save-plans` (cambio de scorer sin pagar LLM) | `safety` |
+| `live [N] --conc 2 [--changes] [--save-plans] [--provider openai]` | claves LLM + Neon | genera los planes reales de la matriz (N=0 por defecto = **los 25**) y puntúa seguridad + nutrición + gym + latencia + entrega; `--changes` ejercita swap individual y bucle de día. `--provider openai` fuerza TODA la corrida a la familia OpenAI (`_OPENAI_FORCE_KNOBS`: GPT-6 Luna, cero GLM) vía los 4 knobs sancionados (`MEALFIT_FLASH_MODEL`, `MEALFIT_MODEL_FREE_TIER`, `MEALFIT_MODEL_PAID_TIER`, `MEALFIT_PRO_MODEL`); requiere `OPENAI_API_KEY`, fail-loud sin ella. NO reintroduce el override global eliminado (P1-SINGLE-PROVIDER-RESTORE): reviewer/day-gen/swap conservan su routing propio por tier | `run`, `structural`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
+| `remote [N] --api-base URL [--conc 2] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` (N=0 por defecto = **los 25**) y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el SERVIDOR con los knobs de su deploy ([`llm_tier_routing.md`](llm_tier_routing.md)); el reporte no afirma un modelo, guarda el `/health/version` contra el que midió (`meta.server_version`). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): el workflow corre con conc 2 (default del CLI 1), backoff ante 429 | `run`, `meta`, `safety`, `nutrition`, `gym`, `latency`, `reliability`, `changes` |
+| `telemetry --days 30` | Neon | series de PROD, **solo lo entregado**: éxito de cambios a la primera, banda de las superficies de entrega (`pre-INSERT` + `chunk-T1 semana N`), fallback de los planes persistidos, latencia de las corridas sin fallback; lo descartado aparte (`no_entregados`); PQI, costo por nodo | `run`, `telemetry` |
+| `score --plans f.json` · `score --plans-glob G --forms-root R` | nada (sin LLM) | re-puntúa planes guardados: los de una corrida `live/remote --save-plans` (el denominador sale de `attempted_ids`) o un **corpus real** (un fichero por plan con `final_plan`; el formulario del propio fichero o, con la convención `<dir>__<fichero>.json` de `cola_corpus`, de `<R>/<dir>/<fichero>.json`; expectativas clínicas por `derive_expectations`) | `run`, `safety`, `nutrition`, `gym` |
 
 ```bash
 # desde backend/, con .env cargable
 python scripts/landing_benchmark.py structural
-python scripts/landing_benchmark.py live 5 --conc 2 --changes --save-plans
-python scripts/landing_benchmark.py live 20 --provider openai --conc 2
-python scripts/landing_benchmark.py remote 20 --api-base https://app.bioboros.com --changes
+python scripts/landing_benchmark.py live 5 --conc 2 --changes --save-plans     # smoke: cohorte partial
+python scripts/landing_benchmark.py live --provider openai --conc 2               # los 25
+python scripts/landing_benchmark.py remote --api-base https://app.bioboros.com --conc 2 --changes --architecture v2.2
 python scripts/landing_benchmark.py telemetry --days 30
+python scripts/landing_benchmark.py score --plans landing_plans_1234.json
+python scripts/landing_benchmark.py score --plans-glob "/tmp/cola/*.json" --forms-root /tmp
 ```
 
-Costo estimado de `live` completo (20 perfiles ≈ los 20 del nightly): 30-45 min con `--conc 2`,
-cuota GLM compartida con prod — correr de madrugada RD como el nightly. `--changes` añade
-~6 llamadas Luna por perfil ejercitado.
+Costo estimado de `live`/`remote` completo (25 perfiles): la generación mide hoy mediana ~6 min
+y p90 ~15 por plan, así que con `--conc 2` son ~2-3 h — el workflow remote tiene techo de 330 min
+(antes 170, que no cabía). El gasto de proveedor es el del deploy o de las claves locales —
+correr de madrugada RD como el nightly. `--changes` añade ~6 llamadas de swap por perfil.
+
+## Reporte schema v2 — trazabilidad, nutrición y entrega (P1-PLAN-LOTE-749)
+
+[P1-PLAN-LOTE-749 · 2026-09-28] El reporte pasa a `schema_version: 2`, el formato que importa el
+landing (`bioboros-cinematic/benchmark_import.py` + `contract/benchmark-v22.json`). Test:
+[`tests/test_p1_plan_lote_749.py`](../tests/test_p1_plan_lote_749.py).
+
+- **`run`** (siempre): `id`, `mode`, `architecture` (se DECLARA con `--architecture v1|v2.2`; por
+  defecto `unspecified`, que el importador rechaza — no se adivina), `protocol_version`
+  (`LANDING_BENCHMARK_PROTOCOL_VERSION` = `2.2-prep.1`, el `protocol.version` congelado del landing),
+  `started_at`/`finished_at` UTC, `source_commit` (`git rev-parse HEAD`) y `source_dirty` (`git status`
+  al ARRANCAR; `None` = no verificable, el importador lo rechaza igual que sucio), `country_scope`,
+  `full_profile_count` (25), `profile_count` (intentados), `cohort_status` (`complete` solo si se intentó
+  la matriz ENTERA; `partial`; `not_applicable` en structural/telemetry/corpus), `publication_status`
+  (siempre `candidate`: publica una persona) y `parameters`.
+- **`nutrition`** (live/remote/score), sobre el plan ENTREGADO con funciones puras
+  (`score_plan_nutrition` / `aggregate_nutrition`): por día y macro (kcal, proteína, carbos, grasas) el
+  total RECALCULADO desde las comidas contra el objetivo de la cabecera del plan (`calories`/`macros`,
+  que el motor fija al objetivo). `per_macro_mape_pct` agrega por DÍA evaluado; `macro_mape_pct` es la
+  media de los 4; `worst_macro_mape_pct` el mayor; `four_macros_in_band_pct` = días con las 4 celdas en
+  la **banda del motor** (`engine_band_definition()`: P/C/G en `[BAND_SCORE_LOWER, BAND_SCORE_UPPER]`,
+  kcal `[0.95, 1.05]` con techo `GAINMUSCLE_KCAL_BAND_UPPER` en ganancia muscular). La paridad con
+  `compute_clinical_band_score` la ancla el test (y el replay del 28-sep: 481/481 planes idénticos).
+- **`reliability`** (live/remote): entrega = entregados / intentados; fallback = fallbacks entregados +
+  descartados / intentados; `latency_all_s` incluye los fallos terminales (contrato B-04) y
+  `latency_delivered_s` solo lo entregado. Un plan con `_is_fallback` sin `_partial_repair` es
+  `discarded_fallback` (el FALLBACK-GUARD del router lo descarta con 422/503): **ya no se puntúa como
+  entregado** en `live`, y en `remote` el 422/503 se cuenta como fallback descartado, no como error de red.
+- **`telemetry`** cuenta solo lo entregado (ver la tabla de modos) — antes `banda_entregada` mezclaba
+  269 filas `assemble-tail` (intermedias) con 81 `pre-INSERT` en 30 días.
+- **`--save-plans`** guarda también `attempted_ids` y el estado de entrega, para que `score` reproduzca
+  el denominador sin pagar LLM.
+
+### Replay gratis del 28-sep (corpus de baterías, sin LLM, en el VPS)
+
+`score --plans-glob "/tmp/ia6d_wf_cola744*/*.json" --forms-root /tmp` sobre los planes ya pasados por
+la cola del lote 744 (contrato de receta + pulido). Mide el DATO del plan; **no** es la matriz: son
+perfiles de baterías (bloques de 3 días casi siempre, varios adversariales), así que no sustituye a la
+corrida pagada — sirve para decidir si pagarla.
+
+| corpus | planes (entregados) | violaciones | MAPE kcal · P · C · G | media · peor | 4-en-banda (días) | gym |
+|---|---|---|---|---|---|---|
+| reciente (`_rec`) | 67 (67) | 0 en 848 comidas | 2,56 · 4,12 · 4,34 · 5,08 | 4,03 · grasas 5,08 | 85,8 % (204) | 90,1 |
+| completo | 426 (414; 12 fallbacks `medical_critical` descartados) | 4 alérgenos en 2 planes del 25-sep | 2,85 · 4,42 · 4,40 · 5,18 | 4,21 · grasas 5,18 | 83,1 % (1263) | 88,5 |
+
+Las 4 violaciones, leídas una a una: `salsa de soya` en un plan sin gluten (rd248) y `Harina de
+Negrito` ×3 a un celíaco (rd252). En el corpus reciente, cero. La sonda negativa (inyectar
+`camarones` o `queso cheddar` en un plan con alergia a mariscos y lácteos) marca las dos.
+Contra el landing publicado (`frontend/src/data/benchmark.js`, N=8, junio: MAPE P 1,5 · kcal 2,0 ·
+G 3,1 · C 3,2; 4-en-banda 91,7 %) el replay sale peor en las cinco cifras. El eje `micros` del gym
+(~50) lee el panel persistido, que la cola no recalcula: no concluir nada de él con este corpus.
 
 ## Matriz de perfiles (cobertura del formulario)
 
-20 perfiles en `build_landing_profiles()`. Invariantes ancladas por test: **cada** chip de
+25 perfiles en `build_landing_profiles()`. Invariantes ancladas por test: **cada** chip de
 condición, medicamento y alergia aparece ≥1 vez; las 3 dietas y los 4 objetivos aparecen;
 Embarazo/Lactancia solo en perfiles `female` (regla del wizard); máx. 3 condiciones reales
 (cap del wizard, embarazo exento).
@@ -92,6 +146,11 @@ Embarazo/Lactancia solo en perfiles `female` (regla del wizard); máx. 3 condici
 | 18 | alergias_mar_nuez_soya | — | — | Mariscos, Frutos Secos, Soya | scan C2 + goal performance |
 | 19 | vegetariana | — | — | vegetarian | P1-DIET-HARD-GUARD |
 | 20 | vegana_dm2 | Diabetes T2 | Metformina | vegan | cruce dieta estricta × condición |
+| 21 | renal_hta | Enfermedad Renal, Hipertensión | Losartán | — | precedencias dm2+renal / hta+renal |
+| 22 | anemia_ferropenica | Anemia | — | — | regla `anemia` |
+| 23 | gota_alopurinol | Gota / Ácido Úrico | Alopurinol | — | regla `gout` (condición + fármaco) |
+| 24 | higado_graso | Hígado Graso | — | — | regla `nafld` |
+| 25 | imao_tiramina | — | Antidepresivo IMAO | — | tiramina ↔ IMAO (crisis hipertensiva) |
 
 ## Métrica → claim del landing (pipeline de publicación)
 
@@ -112,7 +171,8 @@ dueño → editar el SSOT frontend → los guard-tests validan. Los SSOT fronten
 | `safety.min_meals_compliance_pct` | «5-6 tomas en hipoglucemia, insulina o cirugía bariátrica» (FeaturesPage) | pendiente de 1ª corrida live |
 | `changes.swap.ok_pct` / `telemetry.changes` | futura cifra «cambios de plato que salen a la primera» | serie prod nació 2026-08-05 |
 | `latency.generation_s` / `telemetry.generacion_latencia` | «Normalmente de 4 a 5 minutos» (FAQ /como-funciona) — hoy SIN fuente | verificar antes de mantenerlo |
-| `gym.aggregate.banda` + nightly MAPE | `benchmark.MACROS` / `VERSUS` (serie N=8 JUN 2026) | refrescar serie con corrida ≥N=20 |
+| `nutrition.aggregate.{macro_mape_pct, worst_macro_mape_pct, four_macros_in_band_pct}` | pilar B-01 del contrato v2.2 del landing (`benchmark_import.py`) — reemplaza a `gym.banda` como fuente | desde P1-PLAN-LOTE-749 |
+| `gym.aggregate.banda` + nightly MAPE | `benchmark.MACROS` / `VERSUS` (serie N=8 JUN 2026) | refrescar serie con corrida completa (N=25) |
 
 **Regla de honestidad** (heredada de `macro_baseline._validated`): jamás publicar una cifra de una
 corrida que no se pueda re-correr; N=8 oscila ±20 pt — para claims públicos usar N≥20.
@@ -128,8 +188,8 @@ Cuando una métrica sale mal, esta tabla dice QUÉ tocar (sin redeploy cuando es
 | `safety.min_meals_compliance_pct` | distribución de tomas | reglas de slots por condición en el skeleton/prompts de day-gen |
 | `safety.fs9_flag_presente_pct` | gate FS9 | `requires_medication_review` + merge de `requires_professional_review` en `_apply_deterministic_clinical_layer` |
 | `vitamin_k.variability = high` | variedad de hoja verde | `_HIGH_VIT_K_TERMS` (medication_rules) + variedad same-day |
-| `gym.banda` / MAPE nightly | motor de macros | `MEALFIT_MACRO_REBALANCE`, `MEALFIT_MACRO_SOLVER_ENABLED`, `MEALFIT_PORTION_QUANTIZE` (la precisión final la fija el MOTOR, no la generación) |
-| `gym.entrega` (fallbacks) | robustez del pipeline | circuit breaker `MEALFIT_CB_*`, red cross-provider `gpt-5.6-luna` (P1-NET-LUNA), reintentos `should_retry` |
+| `nutrition.*` (MAPE, 4-en-banda) / `gym.banda` / MAPE nightly | motor de macros | `MEALFIT_MACRO_REBALANCE`, `MEALFIT_MACRO_SOLVER_ENABLED`, `MEALFIT_PORTION_QUANTIZE` (la precisión final la fija el MOTOR, no la generación) |
+| `gym.entrega` / `reliability.fallback_rate_pct` | robustez del pipeline | circuit breaker `MEALFIT_CB_*`, red cross-provider `gpt-6-luna` (P1-NET-LUNA), reintentos `should_retry` |
 | `changes.swap.ok_pct` / latencia | superficie swap | `MEALFIT_CHAT_AGENT_SWAP_MODEL`, `MEALFIT_SWAP_EFFORT_INDIVIDUAL` (medium ~16,5 s) / `MEALFIT_SWAP_EFFORT_DAY` (low ~8,2 s), `MEALFIT_SWAP_TARGET_FROM_SLOT` |
 | `changes.regen_day` | bucle serial de día | mismas palancas de swap; el día es 4-5 llamadas EN SERIE — la latencia total escala lineal |
 | `telemetry.fallback_rate` | entrega | cron `_plan_fallback_rate_alert_job` (umbral `MEALFIT_FALLBACK_RATE_THRESHOLD`) |
@@ -174,8 +234,9 @@ deploy, re-correr los ids `3,4,9,10,13,17,19,20` y comparar contra la línea bas
 
 ## Relación con los demás harnesses
 
-- **No duplica** el MAPE de macros: eso es del nightly (`benchmark_macro_compliance.py` + baseline
-  `tests/fixtures/macro_baseline.json`). Este reporte referencia la banda vía el eje `banda` del gym.
+- **Mide su propio MAPE desde P1-PLAN-LOTE-749** (sección `nutrition`) con la banda del motor; el
+  nightly (`benchmark_macro_compliance.py` + `tests/fixtures/macro_baseline.json`) sigue siendo el
+  gate de regresión con sus 20 perfiles de texto libre — no son intercambiables.
 - **Compone** `plan_gym.score_plan` tal cual (mismos 7 ejes) — un cambio de pesos del gym se
   refleja aquí sin tocar nada.
 - El modo `telemetry` es la vista agregada de series que ya existen (`pipeline_metrics`,
