@@ -113,7 +113,9 @@ def test_la_tupla_plana_se_deriva_y_no_pierde_ni_inventa(sc):
 
 
 # [P1-PLAN-LOTE-624] ES/MX/CO/PR +1 cada uno: «duraznos» (el fresco), que antes sólo tenía US.
-@pytest.mark.parametrize("cc,n", [("ES", 32), ("MX", 28), ("CO", 18), ("PR", 18), ("US", 38),
+# [P1-PLAN-LOTE-790 · 2026-09-28] ES +1 «trucha» (también CO) y MX +1 «chile en polvo» (también US):
+# el sello `catalogo_de_otro_pais` los marcaba ajenos y en España y México se venden. La plana no cambia.
+@pytest.mark.parametrize("cc,n", [("ES", 33), ("MX", 29), ("CO", 18), ("PR", 18), ("US", 38),
                                   ("DO", 0)])
 def test_cada_pais_conserva_el_tamano_de_su_bloque(sc, cc, n):
     """Los tamaños salen de los bloques del fuente, no de mi criterio: T5 declaró 32 altas de ES,

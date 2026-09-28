@@ -1,0 +1,3147 @@
+{
+"leido": "2026-09-28",
+"fuente": "public.master_ingredients (Neon prod, SELECT de solo lectura): columnas de envase y si la fila tiene precio RD",
+"filas": [
+{
+"name": "Aceite de achiote",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Aceite de coco",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 213.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Aceite de oliva",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 230.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Aceite de sésamo",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Aceite vegetal",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 1300.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Aceitunas",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 142.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Aceitunas rellenas",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Acelgas",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Achiote",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Aderezo ranch",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Adobo",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Aguacate",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Ajo",
+"category": "Vegetales",
+"default_unit": "cabeza",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Ajo en polvo",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 85.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Ajonjolí",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Ají cubanela",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Ají morrón",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Albahaca seca",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": "sobre",
+"container_weight_g": 25.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Alcachofa",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": "unidad",
+"container_weight_g": 128.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Alcaparrado",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Alioli",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Almejas",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Almendra marcona",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Almendras fileteadas",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Anchoas",
+"category": "Proteínas",
+"default_unit": "lata",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Apio",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Arenque",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Arequipe",
+"category": "Despensa",
+"default_unit": "pote",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Arracacha",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Arroz blanco",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 3
+},
+{
+"name": "Arroz integral",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Arándanos",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 450.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Arándanos rojos",
+"category": "Frutas",
+"default_unit": "funda",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Atún en agua",
+"category": "Proteínas",
+"default_unit": "lata",
+"market_container": "lata",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Auyama",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Avena",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 600.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Azafrán",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Azúcar morena",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "funda",
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Bacalao",
+"category": "Proteínas",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Bacalaítos",
+"category": "Proteínas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Bagels",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Batata",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Berenjena",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Berro",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 100.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Bok choy",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": "paquete",
+"container_weight_g": 250.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Bolitas de papa",
+"category": "Despensa",
+"default_unit": "funda",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Boquerones",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Borojó",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Brócoli",
+"category": "Vegetales",
+"default_unit": "cabeza",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Bulgur",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 680.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Butifarra",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Cacao en polvo",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 200.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Calabacín",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Calamar",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 907.18,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Camarones",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Canela en polvo",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": "sobre",
+"container_weight_g": 14.2,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Cangrejo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Carne de res",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Carne de res molida",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Carne molida mixta",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Casabe",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 283.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Casabe albahaca",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 312.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Cebada",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Cebolla",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Cebolla en polvo",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 78.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Cebollín",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Cecina",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Cerdo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Cereza maraschino",
+"category": "Frutas",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 3
+},
+{
+"name": "Champiñones",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Champús",
+"category": "Despensa",
+"default_unit": "litro",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chicharrón",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "libra",
+"container_weight_g": 453.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Chile ancho",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile chipotle",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile de árbol",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile en polvo",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile guajillo",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile habanero",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile jalapeño",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile mulato",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile pasilla",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile poblano",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chile serrano",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chili con carne",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chinola",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Chistorra",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chivo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Chocolate de mesa",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chontaduro",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chorizo español",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chorizo mexicano",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chorizo santarrosano",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chorizo verde",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Chuleta ahumada",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Cilantro",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Ciruela",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Ciruela pasa",
+"category": "Frutas",
+"default_unit": "paquete",
+"market_container": "tarro",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Clara de huevo",
+"category": "Proteínas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Coco",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": "unidad",
+"container_weight_g": 300.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Coditos",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 400.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Coles de Bruselas",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 900.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Coliflor",
+"category": "Vegetales",
+"default_unit": "cabeza",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Comino",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "pote",
+"container_weight_g": 28.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Conejo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Cordero",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Costilla de cerdo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Crema agria",
+"category": "Lácteos",
+"default_unit": "envase",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Crema mexicana",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Crema mitad y mitad",
+"category": "Lácteos",
+"default_unit": "envase",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Cuajada",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Cundeamor",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 300.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Curry en polvo",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 57.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Curuba",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Cúrcuma",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Durazno en almíbar",
+"category": "Frutas",
+"default_unit": "lata",
+"market_container": "lata",
+"container_weight_g": 431.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Duraznos",
+"category": "Frutas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Dátiles",
+"category": "Frutas",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Edamame",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 500.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Ensalada de macarrones",
+"category": "Despensa",
+"default_unit": "envase",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Epazote",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Espaguetis",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 400.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Especias para arroz con dulce",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Espinacas",
+"category": "Vegetales",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 450.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Espárragos",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 450.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Feijoa",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Fideos",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 350.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Filete de pescado blanco",
+"category": "Proteínas",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Flor de Jamaica",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Fresas",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 3
+},
+{
+"name": "Frijol cargamanto",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Frijoles horneados",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Frijoles pintos",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 800.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Frijoles refritos",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Galletas Graham",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Galletas de soda",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": 600.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Gallina criolla",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "libra",
+"container_weight_g": 453.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Gambas",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Gandules",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Garbanzos",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Granada",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 113.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Granadilla",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Granola",
+"category": "Despensa",
+"default_unit": "g",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Guanábana",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Guascas",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Guayaba",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Guineo",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Guineo verde",
+"category": "Víveres",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Guisantes secos",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Habas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Habichuelas blancas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Habichuelas negras",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Habichuelas rojas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Harina de Negrito",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 290.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Harina de maíz precocida",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 1000.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Harina de trigo",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Harina de yuca",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Higo",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Hoja santa",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Huevo",
+"category": "Proteínas",
+"default_unit": "cartón",
+"market_container": "cartón",
+"container_weight_g": 900.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Huevos rellenos",
+"category": "Proteínas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Huitlacoche",
+"category": "Vegetales",
+"default_unit": "lata",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Hummus",
+"category": "Despensa",
+"default_unit": "pote",
+"market_container": "pote",
+"container_weight_g": 283.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Hígado de res",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Jamón de cocinar",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Jamón de pavo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Jamón de sándwich",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Jamón ibérico",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Jamón serrano",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Jarabe de arce",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Jengibre",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Judías blancas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Judías pintas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Jícama",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Kale",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Kiwi",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 450.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Kéfir",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "pote",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Kétchup",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Laurel",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "pote",
+"container_weight_g": 100.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Leche",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "cartón",
+"container_weight_g": 1000.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Leche de almendras",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "carton",
+"container_weight_g": 946.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Leche de avena",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "carton",
+"container_weight_g": 1000.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Leche de cabra en polvo",
+"category": "Lácteos",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 340.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Leche de coco",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "carton",
+"container_weight_g": 946.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Leche de soya",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "carton",
+"container_weight_g": 946.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Leche descremada",
+"category": "Lácteos",
+"default_unit": "litro",
+"market_container": "cartón",
+"container_weight_g": 1000.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Leche evaporada",
+"category": "Lácteos",
+"default_unit": "lata",
+"market_container": "carton",
+"container_weight_g": 290.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Lechosa",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Lechuga",
+"category": "Vegetales",
+"default_unit": "cabeza",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Lechuga romana",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": "paquete",
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Lentejas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Limón",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Linaza",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Lomo embuchado",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Longaniza dominicana",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Longaniza puertorriqueña",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Lulo",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Malvaviscos",
+"category": "Despensa",
+"default_unit": "funda",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Mandarina",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Mango",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Mantequilla",
+"category": "Lácteos",
+"default_unit": "tarro",
+"market_container": "tarro",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Mantequilla de almendras",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "tarro",
+"container_weight_g": 200.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Mantequilla de maní",
+"category": "Despensa",
+"default_unit": "pote",
+"market_container": null,
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Manzana",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": "funda",
+"container_weight_g": 907.18,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Maní",
+"category": "Despensa",
+"default_unit": "g",
+"market_container": "pote",
+"container_weight_g": 300.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Mapuey",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Masa para pie",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Mazapán",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Maíz dulce en granos",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": "lata",
+"container_weight_g": 425.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Mejillones",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 907.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Melón",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Membrillo",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Membrillo dulce",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Merey",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "tarro",
+"container_weight_g": 113.0,
+"con_precio": true,
+"market_packages_n": 3
+},
+{
+"name": "Mero",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Mezcla para panqueques",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Miel",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "pote",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Molondrones",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Mora",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Morcilla",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Mostaza",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Muslo de pollo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Nabo",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Naranja",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Nata",
+"category": "Lácteos",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Natilla",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Nopal",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Nori",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": "paquete",
+"container_weight_g": 28.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Nueces mixtas",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 100.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Nueces pecanas",
+"category": "Despensa",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Nuez de Castilla",
+"category": "Despensa",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Níspero",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Orégano dominicano",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 90.7,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Palmito",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": "lata",
+"container_weight_g": 400.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pan blanco familiar",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 754.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pan de agua",
+"category": "Despensa",
+"default_unit": "unidad",
+"market_container": "unidad",
+"container_weight_g": 60.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pan de maíz",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Pan integral familiar",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 780.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pan integral personal",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 615.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pan rallado",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pan sobao",
+"category": "Despensa",
+"default_unit": "unidad",
+"market_container": "unidad",
+"container_weight_g": 70.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Panapén",
+"category": "Víveres",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Panceta ibérica",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Panecillos de mantequilla",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Panecillos ingleses",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Panela",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Papa",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": "malla",
+"container_weight_g": 453.59,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Papas ralladas",
+"category": "Despensa",
+"default_unit": "funda",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Pasas",
+"category": "Frutas",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 250.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pasta integral",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 500.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pavo molido",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pavochón",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Pechuga de pavo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pechuga de pollo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pepino",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pepperoni",
+"category": "Proteínas",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Pera",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Percebes",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Perejil",
+"category": "Vegetales",
+"default_unit": "mazo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Pernil",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": "libra",
+"container_weight_g": 453.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pimentón",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 85.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pimienta negra",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": "sobre",
+"container_weight_g": 14.2,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Pique",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Pistachos",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "tarro",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Piña",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Piñones",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Plátano maduro",
+"category": "Víveres",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Plátano verde",
+"category": "Víveres",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Polvo de hornear",
+"category": "Despensa",
+"default_unit": "pote",
+"market_container": "pote",
+"container_weight_g": 150.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Pretzels",
+"category": "Despensa",
+"default_unit": "funda",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Puerro",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": "paquete",
+"container_weight_g": 300.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Pulpo",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso blanco",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso cheddar",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso cottage",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": "pote",
+"container_weight_g": 680.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Queso crema",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": "pote",
+"container_weight_g": 226.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso de hoja",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso de papa",
+"category": "Lácteos",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Queso en hebras",
+"category": "Lácteos",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Queso gouda",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso mozzarella",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Queso parmesano",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": "pote",
+"container_weight_g": 142.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Queso provolone",
+"category": "Lácteos",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Queso ricotta",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": "pote",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Quinoa",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 340.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Recao",
+"category": "Vegetales",
+"default_unit": "manojo",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Remolacha",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Repollo",
+"category": "Vegetales",
+"default_unit": "cabeza",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Repollo morado",
+"category": "Vegetales",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Requesón",
+"category": "Lácteos",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Ron de cocina",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Rábano",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 200.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Rúcula",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 57.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Sal",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 454.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Salami",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Salchicha italiana",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Salchichas",
+"category": "Proteínas",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 802.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Salmón",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 85.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Salsa barbacoa",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Salsa de salchicha",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Salsa de soya",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "frasco",
+"container_weight_g": 295.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Salsa de tomate",
+"category": "Despensa",
+"default_unit": "lata",
+"market_container": "lata",
+"container_weight_g": 200.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Salsa inglesa",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Sandía",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Sardinas en lata",
+"category": "Proteínas",
+"default_unit": "lata",
+"market_container": "lata",
+"container_weight_g": 125.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Sazonador para tacos",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Sazón con culantro y achiote",
+"category": "Despensa",
+"default_unit": "sobre",
+"market_container": "caja",
+"container_weight_g": 40.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Semillas de calabaza",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "tarro",
+"container_weight_g": 227.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Semillas de chía",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 566.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Semillas de girasol",
+"category": "Despensa",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 400.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Sobrasada",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Sofrito",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Soya texturizada",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 200.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Suero costeño",
+"category": "Lácteos",
+"default_unit": "botella",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Suero de mantequilla",
+"category": "Lácteos",
+"default_unit": "envase",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Sémola de maíz",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Tamarindo",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": "paquete",
+"container_weight_g": 453.59,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Tayota",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Tilapia",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Tocineta",
+"category": "Proteínas",
+"default_unit": "libra",
+"market_container": "libra",
+"container_weight_g": 453.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Tofu firme",
+"category": "Proteínas",
+"default_unit": "unidad",
+"market_container": "lata",
+"container_weight_g": 539.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Tomate",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Tomillo",
+"category": "Despensa",
+"default_unit": "frasco",
+"market_container": "sobre",
+"container_weight_g": 14.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Toronja",
+"category": "Frutas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Tortilla de maíz",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Tortilla de trigo",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 210.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Tortilla integral",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": "paquete",
+"container_weight_g": 342.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Trucha",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Tuna de nopal",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Turrón",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Uchuva",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Uva",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Vainilla",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 148.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Vainitas",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Vieira",
+"category": "Proteínas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Vinagre balsámico",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "pote",
+"container_weight_g": 250.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Vinagre blanco",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 473.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Vinagre de manzana",
+"category": "Despensa",
+"default_unit": "botella",
+"market_container": "botella",
+"container_weight_g": 473.0,
+"con_precio": true,
+"market_packages_n": 1
+},
+{
+"name": "Wafles",
+"category": "Despensa",
+"default_unit": "paquete",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Xoconostle",
+"category": "Frutas",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": false,
+"market_packages_n": 0
+},
+{
+"name": "Yautía",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Yema de huevo",
+"category": "Proteínas",
+"default_unit": "unidad",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Yogur de coco",
+"category": "Lácteos",
+"default_unit": "unidad",
+"market_container": "pote",
+"container_weight_g": 170.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Yogurt",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": "pote",
+"container_weight_g": 150.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Yogurt de cabra",
+"category": "Lácteos",
+"default_unit": "frasco",
+"market_container": "frasco",
+"container_weight_g": 113.4,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Yogurt griego entero",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": null,
+"container_weight_g": 150.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Yogurt griego sin azúcar",
+"category": "Lácteos",
+"default_unit": "pote",
+"market_container": "pote",
+"container_weight_g": 150.0,
+"con_precio": true,
+"market_packages_n": 2
+},
+{
+"name": "Yuca",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Zanahoria",
+"category": "Vegetales",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+},
+{
+"name": "Ñame",
+"category": "Víveres",
+"default_unit": "lb",
+"market_container": null,
+"container_weight_g": null,
+"con_precio": true,
+"market_packages_n": 0
+}
+]
+}
