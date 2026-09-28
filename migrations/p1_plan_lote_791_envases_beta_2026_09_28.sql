@@ -135,7 +135,7 @@ SET market_container   = v.envase,
     container_source   = v.fuente
 FROM (VALUES
     ('Dátiles', 'paquete' ,    340, 'DO', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: DO sin datos en OFF: US declarado. OFF US en:dates n=35: mediana = moda 340 g (12 oz)'),
-    ('Cúrcuma', 'frasco'  ,  435.6, 'DO', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: OFF DO: único producto dominicano con cantidad, Badia ground turmeric 16 oz (435,6 g); US n=33 bimodal (57 g / 454 g). Revisar con captura')
+    ('Cúrcuma', 'frasco'  ,     57, 'DO', '[P1-PLAN-LOTE-791] Open Food Facts (ODbL), revisado a mano 2026-09-28: OFF DO: único producto dominicano con cantidad, Badia 16 oz (435,6 g), formato grande; OFF US n=33: moda global 454 g (x9, bolsas a granel sin marca), frasco de especiero 57 g (x7: Badia, McCormick, Trader Joe''s) -> 57 g, el frasco de 2 oz. La fila se usa en los seis países. Revisar con captura')
 ) AS v(name, envase, gramos, pais, fuente)
 WHERE m.name = v.name
   AND m.container_weight_g IS NULL
