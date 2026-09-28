@@ -37,7 +37,8 @@ if str(_BACKEND) not in sys.path:
 import culinary_coherence as cc  # noqa: E402
 import culinary_context as cx  # noqa: E402
 
-# Filas REALES del catálogo (SELECT del 28-sep): nombre, métodos, listo-para-comer y alias tal cual.
+# Filas del catálogo real (SELECT del 28-sep): nombre, métodos y listo-para-comer tal cual; los ALIAS van RECORTADOS a
+# los que estos tests necesitan (el Queso blanco real, p. ej., también lleva «queso» a secas).
 _CAT = [
     {"name": "Huevo", "prep_methods": ["hervir", "plancha", "freir", "hornear", "guisar", "saltear"], "ready_to_eat": False,
      "category": "Proteínas", "aliases": ["huevos", "huevos enteros"]},
@@ -243,11 +244,18 @@ def test_v1_el_condimento_como_OBJETO_directo_sigue_acusado(idx):
     assert _v1(["Guisa 8-10 minutos con el orégano y la sal."], idx) == set()
 
 
-def test_v1_el_agua_de_atun_en_agua_no_lo_vuelve_condimento(idx):
-    """La exención mira la CABEZA del nombre: «Atún en agua» no es agua. rdv592: «suma el atún desmenuzado, orégano y 2
-    cdas de agua y guisa 5-6 min» — el orégano calla; el atún (catálogo sin 'guisar') se sigue juzgando."""
-    assert _v1(["Aparte calienta 1½ cdas de aceite a fuego medio; suma el atún desmenuzado, orégano y 2 cdas de agua y "
-                "guisa 5-6 min."], idx) == {"Atún en agua"}
+def test_v1_el_agua_dentro_del_nombre_no_lo_vuelve_condimento():
+    """La exención mira la CABEZA del nombre: «X en agua» no es agua. Texto de rdv592 («suma el atún desmenuzado, orégano y
+    2 cdas de agua y guisa 5-6 min»): el orégano calla y el alimento se sigue juzgando.
+
+    [P1-PLAN-LOTE-745 · ronda 1] Con un alimento SINTÉTICO: el test fijaba antes que el «Atún en agua» REAL se acusara
+    de guisar, y el atún guisado es un plato dominicano normal — eso es un hueco del catálogo (lo decide el dueño), no
+    un hallazgo que un test deba dar por bueno."""
+    i2 = cc.build_culinary_index(_CAT + [{"name": "Conserva de prueba en agua", "prep_methods": ["ninguno"],
+                                          "ready_to_eat": True, "category": "Despensa",
+                                          "aliases": ["conserva de prueba"]}])
+    assert _v1(["Aparte calienta 1½ cdas de aceite a fuego medio; suma la conserva de prueba desmenuzada, orégano y 2 "
+                "cdas de agua y guisa 5-6 min."], i2) == {"Conserva de prueba en agua"}
 
 
 def test_v1_un_verbo_negado_no_es_una_instruccion(idx):
@@ -392,6 +400,108 @@ def test_v7a_los_verdaderos_SIGUEN_disparando(idx):
 def test_v7a_la_rama_de_cifras_no_cambia(idx):
     assert _v7a(["1½ ajíes cubanela en rodajas", "2 huevos"], ["Rebana 2 huevos duros."], idx) == []
     assert _v7a(["3 huevos"], ["Bate 2 huevos."], idx) == ["Huevo"]
+
+
+# ───────────────────────────────────────────── ronda 1 de la revisión: ninguna regla nueva se come un verdadero
+# Cada caso de abajo disparaba en la base y la primera versión del lote lo callaba (pruebas de una línea del revisor).
+
+@pytest.mark.parametrize("paso, espera", [
+    # el tope de seguridad y el plazo de conservación comparten paso con un marinado de verdad
+    ("Marina el pollo con ajo y limón 2 horas en la nevera; no lo dejes a temperatura ambiente más de 2 horas.", 120),
+    ("Remoja las lentejas 8 horas (no las dejes a temperatura ambiente más de 2 horas).", 480),
+    ("Marina el pollo 3 horas en la nevera y refrigera lo que sobre dentro de 2 horas.", 180),
+    # «lo que sobre» sin plazo no es un tope: la masa sí reposa 1 hora
+    ("Deja reposar la masa 1 hora tapada y refrigera lo que sobre.", 60),
+    # la nota de la dosis en OTRA cláusula del mismo paso no borra el remojo
+    ("Remoja las habichuelas 8 horas; si tomas levotiroxina, separa este plato 4 horas de la dosis.", 480),
+    # «acuesta los filetes» es cocina; sólo «acostarte» es el consejo de no tumbarse tras cenar
+    ("Acuesta los filetes sobre la cebolla y marina 2 horas en la nevera.", 120),
+])
+def test_v8a_las_exclusiones_nuevas_actuan_sobre_su_frase_no_sobre_el_paso(paso, espera):
+    assert cx.hidden_wait_minutes([paso])[0] == espera, paso
+    assert cx.check_hidden_time(_meal([paso, "Cocina 10 min."], prep_time="15 min")) is not None
+
+
+def test_v8a_dentro_de_sin_verbo_de_conservacion_no_es_un_plazo():
+    """«cocínalo dentro de 24 horas» no conserva nada: el paso sigue pidiendo 3 h de marinado (como en la base)."""
+    assert cx.hidden_wait_minutes(["Marina el pollo 3 horas en la nevera y cocínalo dentro de 24 horas."])[0] >= 180
+
+
+def test_v8a_la_conservacion_de_antes_del_lote_sigue_mirandose_por_paso_DECISION_PENDIENTE():
+    """Decisión PENDIENTE del dueño, no un olvido: `_RE_ALMACEN` («guarda», «consume dentro», «sobras»…) calla el paso
+    ENTERO, como en la base. Pasarlo a cláusula destapa 9 + 135 comidas de los dos corpus, todas la nota de la legumbre
+    SECA de abajo. Si el dueño decide que ese remojo es tiempo oculto, este test se invierte a propósito."""
+    nota = ("💡 Cocción previa: remoja las habichuelas rojas secas 8-12 h y hiérvelas 60-90 min hasta que estén tiernas, "
+            "y escúrrelas (puedes cocinar la tanda de varios días y guardarla en la nevera hasta 4 días).")
+    assert cx.hidden_wait_minutes([nota])[0] == 0
+    # y la conservación sola sigue sin contar
+    assert cx.hidden_wait_minutes(["Guarda las sobras en la nevera hasta 3 días."])[0] == 0
+    assert cx.hidden_wait_minutes(["Consume dentro de 24 horas."])[0] == 0
+
+
+@pytest.mark.parametrize("prep_time", ["20 min (sin reposo)", "25 min (no requiere remojo)",
+                                       "40 min (guarda en la nevera)", "20 min sin marinar", "30 min (en la nevera)"])
+def test_v8a_el_prep_time_que_NIEGA_o_solo_menciona_la_espera_no_la_declara(prep_time):
+    m = _meal(["Marina el pollo 4 horas en la nevera.", "Ásalo 8 min."], prep_time=prep_time)
+    assert cx.check_hidden_time(m) is not None, prep_time
+
+
+@pytest.mark.parametrize("prep_time", ["10 min + refrigeración", "10 min (más refrigeración)", "10 min más reposo nocturno",
+                                       "10 min más refrigeración", "15 min + toda la noche en remojo",
+                                       "15 min y reposo en la nevera"])
+def test_v8a_el_prep_time_que_SUMA_la_espera_la_declara(prep_time):
+    """Las seis formas del corpus son aditivas («+ refrigeración», «más reposo»)."""
+    m = _meal(["Montaje: refrigera la mezcla durante la noche; al servir, coloca encima el mango."], prep_time=prep_time)
+    assert cx.check_hidden_time(m) is None, prep_time
+
+
+def _v2(recipe, idx, ingredients=()):
+    return [v["food"] for v in cc._v2_estado_imposible(1, _meal(recipe, ingredients), idx)]
+
+
+def test_v2_el_dueno_salta_los_condimentos(idx):
+    assert _v2(["Sirve la pechuga de pollo con sal y pimienta (ya está cocida)."], idx) == ["Pechuga de pollo"]
+
+
+def test_v2_el_acompanante_con_con_no_le_quita_el_estado_a_la_cabeza(idx):
+    """«la pechuga … con la cebolla (ya viene cocida)»: la cebolla es la más cercana, pero la frase habla de la pechuga."""
+    assert _v2(["Añade la pechuga de pollo desmenuzada con la cebolla (ya viene cocida) y mezcla."], idx) == [
+        "Pechuga de pollo"]
+    # el caso del corpus no se reabre: el atún (listo para comer) es el dueño natural y el huevo de al lado no se acusa
+    assert _v2(["Sirve el huevo revuelto con atún en agua (ya viene cocido)."], idx) == []
+
+
+def test_v2_sin_dueno_en_su_oracion_mira_la_anterior(idx):
+    assert _v2(["Incorpora el filete de pescado blanco. Ya viene cocido, así que solo caliéntalo 1 minuto."], idx) == [
+        "Filete de pescado blanco"]
+    # y el sujeto pospuesto sigue siendo el de su oración, aunque la anterior nombre otro alimento
+    assert _v2(["Revuelve los huevos 3 min. Ya viene cocido el filete de pescado blanco: sírvelo al lado."], idx) == [
+        "Filete de pescado blanco"]
+
+
+def test_v1_mientras_no_es_una_negacion(idx):
+    """«Mientras se hornea el queso de hoja» SÍ hornea el queso de hoja (catálogo: sólo crudo)."""
+    assert _v1(["Mientras se hornea el queso de hoja 10 minutos, prepara la ensalada."], idx) == {"Queso de hoja"}
+    # el caso del corpus: el sujeto de «mientras se hornean» no está en el catálogo ⇒ no se acusa a los de la frase
+    assert _v1(["El Toque de Fuego: hornea las papas 22-25 minutos. Mezcla el queso de hoja con el jugo de limón "
+                "mientras se hornean."], idx) == set()
+
+
+def test_v7a_el_adjetivo_de_tamano_no_es_la_palabra_contada(idx):
+    """«2 pequeñas tortillas integrales» cuenta tortillas, no «pequeñas»."""
+    for ing in ("2 pequeñas tortillas integrales", "2 medianas tortillas integrales", "2 grandes tortillas integrales"):
+        assert _v7a([ing], ["Calienta la tortilla integral 1 min.", "Rellena la tortilla integral con el pollo."],
+                    idx) == ["Tortilla integral"], ing
+
+
+def test_v7a_trocear_en_rodajas_una_pieza_contable_DECISION_PENDIENTE(idx):
+    """Decisión de producto PENDIENTE del dueño (revisión del 745, defecto 6): hoy «corta el huevo duro en rodajas» y
+    «corta el guineo en rodajas» vuelven colectiva a la pieza, igual que «corta el tomate en cubitos» — y el check calla
+    aunque la lista compre 2. «En mitades» sí sigue contando uno (test de arriba). En el corpus, los 74 casos que esta
+    regla calla son casi todos tomate, pechuga o filete en masa: el efecto neto es bueno. Si el dueño decide que una
+    pieza contable en rodajas sigue siendo UNA, este test se invierte a propósito."""
+    assert _v7a(["2 huevos"], ["Hierve el huevo 10 min.", "Corta el huevo duro en rodajas."], idx) == []
+    assert _v7a(["2 guineos"], ["Pela y corta el guineo en rodajas.", "Sirve con la avena."], idx) == []
 
 
 # ───────────────────────────────────────────── anclas

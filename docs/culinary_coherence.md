@@ -1567,20 +1567,27 @@ espejo y no cambió ninguna decisión.
 **Las reglas** (tooltip-anchors `P1-PLAN-LOTE-745-V1/-V2/-V7A/-V8A`):
 
 - **V8a** (`culinary_context.hidden_wait_minutes`): una cláusula que habla de un fármaco (dosis, levotiroxina,
-  pastilla…) o de no acostarse, y un paso que abre con «⚕», no son tiempo del plato; el TOPE de seguridad alimentaria
-  («no lo dejes a temperatura ambiente más de 2 horas», «refrigera lo que sobre dentro de 2 horas») es conservación;
-  y un `prep_time` que nombra el reposo («10 min más reposo nocturno») ya lo declaró. «Reposa a temperatura ambiente
-  1 hora», el remojo de la víspera y la avena de «la noche anterior» siguen disparando.
-- **V2**: el estado «ya viene/ya está cocido» es del alimento que lo PRECEDE en su oración (o, si nada lo precede, del
-  que lo sigue). En los dos corpus todos los dueños eran el atún en agua (listo para comer). El pescado FRESCO «(ya
-  viene cocido)» de P1-CLOSER-NOTE-FUSED-FRESHCOCIDO sigue disparando.
-- **V1**: condimentos (la cabeza del nombre en `CONDIMENT_EXEMPT`: «Atún en agua» NO es agua) no se acusan; un verbo
-  negado («sin», «no», «ni», «nunca», «sin dejar que», «mientras») no es una orden; un verbo dentro del nombre de un
-  alimento («polvo de hornear», «queso de freír») tampoco; «cocción», «licuadora» y «tostadora» son sustantivos; y
-  «dorar» se satisface con saltear, freír, plancha, tostar u hornear. «Cuece el casabe», «dora el queso de hoja» y
-  «licúa la pechuga» siguen disparando.
+  pastilla…) o de que la PERSONA se acueste («acostarte», «te acuestes»; «acuesta los filetes» es cocina), y un paso
+  que abre con «⚕», no son tiempo del plato; el TOPE de seguridad alimentaria («no lo dejes a temperatura ambiente más
+  de 2 horas») y el PLAZO de conservación con su verbo («refrigera lo que sobre dentro de 2 horas»; «cocínalo dentro
+  de 24 horas» no es un plazo) se RECORTAN de la cláusula antes de contar horas; y un `prep_time` que SUMA el reposo
+  («10 min más reposo nocturno», «+ refrigeración») ya lo declaró — el que lo niega o sólo lo menciona («sin reposo»,
+  «no requiere remojo», «guarda en la nevera») no. «Reposa a temperatura ambiente 1 hora», el remojo de la víspera y
+  la avena de «la noche anterior» siguen disparando.
+- **V2**: el estado «ya viene/ya está cocido» es de su dueño: el alimento que lo PRECEDE en su oración saltando
+  condimentos (y, si ese no es listo-para-comer y va tras «con», también aquel al que acompaña); si nada lo precede, el
+  sujeto pospuesto («ya viene cocido el filete»); si la oración no nombra ninguno, el último de la oración anterior. En
+  los dos corpus todos los dueños eran el atún en agua (listo para comer). El pescado FRESCO «(ya viene cocido)» de
+  P1-CLOSER-NOTE-FUSED-FRESHCOCIDO sigue disparando.
+- **V1**: condimentos (la cabeza del nombre en `CONDIMENT_EXEMPT`: «X en agua» NO es agua) no se acusan salvo como
+  objeto directo; un verbo negado («sin», «no», «ni», «nunca», «sin dejar que») no es una orden; tras «mientras (se)»
+  el verbo sólo acusa a su objeto directo, y a nadie si no es del catálogo; un verbo dentro del nombre de un alimento
+  («polvo de hornear», «queso de freír») no es un verbo; «cocción», «licuadora» y «tostadora» son sustantivos; y
+  «dorar» se satisface con saltear, freír, plancha, tostar u hornear. «Cuece el casabe», «dora el queso de hoja»,
+  «mientras se hornea el queso de hoja» y «licúa la pechuga» siguen disparando.
 - **V7a** (rama del número gramatical): se busca el singular de la palabra que la lista CUENTA (tortas, hojas,
-  dientes; o el nombre ya plural, «aceitunas»), sólo cuenta como evidencia tras un determinante singular, fuera de
+  dientes; o el nombre ya plural, «aceitunas»; saltando el tamaño antepuesto, «2 pequeñas tortillas»), sólo cuenta como
+  evidencia tras un determinante singular, fuera de
   las notas y del punto de cocción («hasta que la clara cuaje»), y calla si algún paso lo mide en masa («300 g de
   filete») o lo trocea («corta el tomate en cubitos», «en piezas», «en porciones»; «en mitades» no). «Hierve el huevo…
   sirve el huevo duro» con 2 huevos y «rellena la tortilla» con 2 tortillas siguen disparando.
@@ -1593,3 +1600,41 @@ mezcla» se lee como «Pasas». Tocar esa metadata es una migración que decide 
 Los 18 V8a que quedan en el corpus grande son esperas reales (avena de la víspera, remojo de legumbres) — cinco de
 ellas OPCIONALES o condicionales («3 minutos (o desde la noche anterior)», «si el tiempo lo permite», «si los gandules no están cocidos»), que es una decisión de
 producto: ¿debe avisar el plato de una espera que el paso ofrece como alternativa?
+
+### Ronda 1 de la revisión: ninguna regla nueva se come un verdadero
+
+La revisión adversaria probó cada regla con pruebas de una línea que la BASE acusaba y la primera versión callaba. Todas
+llevan ahora su test en `tests/test_p1_plan_lote_745.py` (sección «ronda 1»):
+
+- **V8a por cláusula, no por paso.** `_norm` borra la puntuación, así que el `re.split(r"[.;:]")` de después no partía
+  nada y las exclusiones nuevas callaban el paso ENTERO: «marina el pollo 2 horas en la nevera; no lo dejes a
+  temperatura ambiente más de 2 horas» salía 0. Ahora el paso se parte CRUDO por `.;:()` (sin partir «1.5» ni «8:00»)
+  y la medicación se mira por cláusula; el tope y el plazo de conservación se RECORTAN de su cláusula, de modo que
+  «deja reposar la masa 1 hora y refrigera lo que sobre» o «marina 3 horas y refrigera lo que sobre dentro de 2 horas»
+  siguen pidiendo su espera. `dentro de N` sólo es plazo con un verbo de conservación delante, y el consejo de no
+  tumbarse es `acostarte`/`te acuestes` («acuesta los filetes» es cocina).
+- **La conservación de ANTES del lote se queda por paso, a propósito.** Pasar `_RE_ALMACEN` a cláusula destapa 9 + 135
+  comidas de los dos corpus, todas la nota «💡 Cocción previa: remoja las habichuelas secas 8-12 h y hiérvelas 60-90 min
+  (puedes … guardarla en la nevera hasta 4 días)», callada hoy por su «guarda». **Decisión pendiente del dueño**: ¿el
+  remojo de la legumbre SECA que la nota ofrece como alternativa es tiempo oculto del plato? Un test lo deja escrito.
+- **`prep_time`**: sólo la forma ADITIVA declara la espera («+», «más», «y» delante); «(sin reposo)», «(no requiere
+  remojo)» o «(guarda en la nevera)» ya no silencian esperas de 2-8 h.
+- **V1 «mientras»** no es una negación: tras «mientras (se)» sólo se acusa al objeto directo del verbo («mientras se
+  hornea el queso de hoja» dispara) y a nadie si no es del catálogo (el caso del corpus: «… mientras se hornean [las
+  papas]»).
+- **V2**: el dueño salta condimentos («la pechuga con sal y pimienta (ya está cocida)»), sube al alimento al que
+  acompaña tras «con» cuando el más cercano no es listo-para-comer («la pechuga … con la cebolla (ya viene cocida)»),
+  toma el sujeto pospuesto y, si la oración no nombra a nadie, el último alimento de la anterior («Incorpora el filete
+  de pescado blanco. Ya viene cocido, …»). El atún en agua con acompañante («el huevo revuelto con atún en agua (ya viene
+  cocido)») sigue sin acusar al huevo.
+- **V7a**: la palabra contada salta el tamaño antepuesto («2 pequeñas tortillas integrales» cuenta tortillas).
+- **Decisión pendiente del dueño**: «corta el huevo duro / el guineo en rodajas» vuelve colectiva a la pieza, igual que
+  el tomate en cubitos, y V7a calla aunque la lista compre 2. En el corpus los 74 casos que esa regla calla son casi
+  todos tomate, pechuga o filete (efecto neto bueno); un test deja escrita la conducta actual para que invertirla sea
+  a propósito.
+
+Validación de la ronda (árbol de la primera versión → árbol corregido, sin IA ni DB): corpus reciente 59 comidas (7,0 %)
+→ 59 (7,0 %), 0 hallazgos nuevos y 0 perdidos (sólo cambia el texto de la evidencia del único V8a, que ahora es la
+cláusula y no el paso); corpus de 426 planes, V1 45 → 45, V2 0 → 0, V7a 53 → 53, V8a 18 → 18, alimento por alimento;
+biblioteca de 193 recetas RD de `deterministic_day`, V1/V2/V8a idénticos (V7a no se mide ahí: la biblioteca no trae
+las líneas de compra).

@@ -174,14 +174,30 @@ def equipment_block(form_data) -> str:
 _RE_HORAS = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:h\b|hrs?\b|horas?\b)")
 _RE_NOCHE = re.compile(r"toda la noche|la noche anterior|desde la vispera|la vispera|de un dia para otro|"
                        r"durante la noche|toda una noche|de la noche a la manana")
-#: una cláusula de CONSERVACIÓN habla del plato hecho, no de una espera para hacerlo
+#: una cláusula de CONSERVACIÓN habla del plato hecho, no de una espera para hacerlo. [P1-PLAN-LOTE-745 · ronda 1] Se
+#: mira sobre el PASO entero, como siempre se miró de hecho (ver `_RE_CORTE_CLAUSULA`).
 _RE_ALMACEN = re.compile(r"\bguard|\bconserv|\bdura\b|\bduran\b|se mantien|aguanta|refrigera(?:do|da)?\b.*\bhasta|"
-                         r"consume(?:lo|la|los|las)? (?:dentro|antes)|dentro de las?\b|\bcongel|\bsobra"
-                         # [P1-PLAN-LOTE-745] el LÍMITE de seguridad alimentaria es conservación, no espera: «no lo dejes
-                         # a temperatura ambiente más de 2 horas», «refrigera lo que sobre dentro de 2 horas» (4 comidas
-                         # del corpus de 426 planes). Sólo el TOPE («… más de»): «reposa a temperatura ambiente 1 hora»
-                         # sí es una espera y sigue contando.
-                         r"|temperatura ambiente (?:por |durante )?mas de|lo que sobre\b|dentro de \d")
+                         r"consume(?:lo|la|los|las)? (?:dentro|antes)|dentro de las?\b|\bcongel|\bsobra")
+# [P1-PLAN-LOTE-745 · 2026-09-28 · ronda 1] El LÍMITE de seguridad alimentaria y el PLAZO de conservación no son una
+# espera: «no lo dejes a temperatura ambiente más de 2 horas», «refrigera lo que sobre dentro de 2 horas» (4 comidas
+# del corpus de 426 planes). Se RECORTAN de la cláusula antes de contar horas, en vez de descartar la cláusula entera:
+# «marina el pollo 3 horas en la nevera y refrigera lo que sobre dentro de 2 horas» sigue pidiendo sus 3 horas. Sólo el
+# TOPE («… más de»): «reposa a temperatura ambiente 1 hora» es una espera y cuenta. Y «dentro de N horas» sólo es un
+# plazo con un verbo de conservación delante: «cocínalo dentro de 24 horas» no conserva nada.
+_H_NUM = r"\d+(?: \d+)?\s*(?:h|hrs?|horas?)\b"
+_RE_PLAZO_CONSERVACION = re.compile(
+    r"temperatura ambiente (?:por |durante )?mas de (?:las? )?" + _H_NUM
+    + r"|\b(?:refriger|consum|guard|conserv|congel)\w*(?: \w+){0,5}? dentro de (?:las? )?" + _H_NUM)
+# Las exclusiones NUEVAS del lote (fármaco, tope y plazo) se aplican por CLÁUSULA del paso CRUDO: `_norm` borra la
+# puntuación, así que partir después de normalizar —lo que hacía el código— no parte nada, y la primera versión del
+# lote callaba el paso entero («marina el pollo 2 horas; no lo dejes a temperatura ambiente más de 2 horas» salía 0). El
+# punto y los dos puntos entre cifras («1.5 horas», «8:00») no parten.
+#
+# `_RE_ALMACEN` (la conservación de antes del lote) se queda sobre el PASO entero A PROPÓSITO: pasarlo a cláusula
+# destapa, medido sobre los dos corpus, 9 + 135 comidas nuevas —todas la nota «💡 Cocción previa: remoja las habichuelas
+# secas 8-12 h y hiérvelas 60-90 min (puedes … guardarla en la nevera hasta 4 días)», callada hoy por su «guarda». Si
+# ese remojo de la legumbre SECA opcional es tiempo oculto del plato es una decisión del dueño, no de este lote.
+_RE_CORTE_CLAUSULA = re.compile(r"(?<!\d)[.:]|[.:](?!\d)|[;()]")
 _RE_ESPERA = re.compile(r"remoj|descongel|marin|adob|repos|macer|ferment|leud|enfri|refriger|cuaj|hidrat|dej")
 _RE_MIN = re.compile(r"(\d{1,3})\s*min")
 _NOCHE_MIN = 8 * 60
@@ -193,18 +209,25 @@ _NOCHE_MIN = 8 * 60
 # clínica entera (la marca de `_is_recipe_safety_note_step`): consejo médico, no cocina. La nota de seguridad (⚠) y la
 # de cocción previa (💡) NO se saltan: un «remoja 8-12 h» ahí SÍ es tiempo del plato.
 # tooltip-anchor: P1-PLAN-LOTE-745-V8A
-# Ojo: `_norm` borra la puntuación, así que el `re.split(r"[.;:]")` de abajo no parte nada y esto se mira por PASO.
-# Por eso «pastilla» excluye la «pastilla de caldo»: con ella en el paso, un marinado real dejaría de contar.
+# [ronda 1] Se mira por CLÁUSULA del paso crudo (`_RE_CORTE_CLAUSULA`): «remoja las habichuelas 8 horas; si tomas
+# levotiroxina, separa este plato 4 horas de la dosis» sigue pidiendo su remojo. «pastilla» excluye la «pastilla de
+# caldo», que es cocina.
 _RE_MEDICACION = re.compile(r"\bdosis\b|levotiroxina|levothyroxin|\bmedicament|\bmedicin|\bpildora|"
                             r"\bpastilla(?!\s+de\s+caldo)|\bfarmaco|\bcapsula|\beutirox|\bsynthroid"
                             # el consejo de ESTILO DE VIDA tampoco es tiempo del plato: «evita acostarte durante las 2-3
-                            # horas posteriores a la cena» (gastritis)
-                            r"|\bacostar|\bacuest")
+                            # horas posteriores a la cena» (gastritis). La PERSONA que se acuesta, no el filete: «acuesta
+                            # los filetes sobre la cebolla y marina 2 horas» es cocina y cuenta.
+                            r"|\bacostarte\b|\bacostarse\b|\bte acuestes\b")
 _NOTA_CLINICA = "⚕"   # ⚕ — prefijo de la nota clínica por condición
-# Un `prep_time` que NOMBRA la espera ya la declaró: «10 min más reposo nocturno», «10 min (más refrigeración)», «10 min
-# + refrigeración» (3 comidas del corpus de 426 planes). `declared_prep_minutes` sólo lee minutos, así que sin esto se
-# acusaba justo al plato que sí avisó.
-_RE_PREP_DECLARA_ESPERA = re.compile(r"repos|refriger|nevera|noche|nocturn|vispera|remoj|marin|hidrat|ferment|leud")
+# Un `prep_time` que SUMA la espera ya la declaró: «10 min más reposo nocturno», «10 min (más refrigeración)», «10 min
+# + refrigeración» (las formas del corpus de 426 planes son todas aditivas). `declared_prep_minutes` sólo lee minutos,
+# así que sin esto se acusaba justo al plato que sí avisó. [ronda 1] Sólo la forma ADITIVA («+», «más» o «y» delante):
+# «20 min (sin reposo)», «25 min (no requiere remojo)» o «40 min (guarda en la nevera)» NIEGAN o sólo mencionan la
+# espera, y callarlos silenciaba esperas reales de 2-8 h que la base acusaba. El «+» se lee «más» antes de `_norm`,
+# que lo borraría.
+_RE_PREP_DECLARA_ESPERA = re.compile(
+    r"(?<!\bsin )(?<!\bno )\b(?:mas|y)\s+(?:(?:el|la|los|las|un|una|de|del|en|toda|\d+|h|hrs?|horas?)\s+){0,3}"
+    r"(?:repos|refriger|nocturn|vispera|remoj|marin|hidrat|ferment|leud|noche)")
 
 
 def _es_nota_clinica(paso) -> bool:
@@ -213,23 +236,27 @@ def _es_nota_clinica(paso) -> bool:
 
 def hidden_wait_minutes(pasos) -> tuple:
     """`(minutos, evidencia)` de la espera MÁS larga que los pasos piden en horas (o «toda la noche»). `(0, "")` si
-    ninguna. Se lee por cláusula: «marina 2 horas» cuenta; «dura 3 días en la nevera» y «consume dentro de 24 horas»
-    son conservación y no cuentan; «hornea 1 hora» es cocción activa y sí cuenta (el reloj corre igual)."""
+    ninguna. «marina 2 horas» cuenta; «dura 3 días en la nevera» y «consume dentro de 24 horas» son conservación y no
+    cuentan (por PASO); una nota de medicación o el tope de seguridad no cuentan (por CLÁUSULA, ver `_RE_CORTE_CLAUSULA`);
+    «hornea 1 hora» es cocción activa y sí cuenta (el reloj corre igual)."""
     mejor, evidencia = 0, ""
     for p in (pasos or []):
         if _es_nota_clinica(p):
             continue                                   # [P1-PLAN-LOTE-745] consejo médico, no un paso de cocina
-        for clausula in re.split(r"[.;:]", _norm(p).replace(" , ", " ")):
-            c = clausula.strip()
-            if not c or _RE_ALMACEN.search(c) or _RE_MEDICACION.search(c):
+        if _RE_ALMACEN.search(_norm(p)):
+            continue                                   # conservación: por PASO, como antes (ver `_RE_CORTE_CLAUSULA`)
+        for cruda in _RE_CORTE_CLAUSULA.split(str(p or "")):   # [P1-PLAN-LOTE-745 · ronda 1] partir ANTES de `_norm`
+            c = _norm(cruda)
+            if not c or _RE_MEDICACION.search(c):
                 continue
+            c_horas = _RE_PLAZO_CONSERVACION.sub(" ", c)   # el tope/plazo de conservación no es tiempo del plato
             mins = 0
-            for m in _RE_HORAS.finditer(c):
+            for m in _RE_HORAS.finditer(c_horas):
                 try:
                     mins = max(mins, int(round(float(m.group(1).replace(",", ".")) * 60)))
                 except ValueError:
                     continue
-            if _RE_NOCHE.search(c):
+            if _RE_NOCHE.search(c_horas):
                 mins = max(mins, _NOCHE_MIN)
             if mins > mejor:
                 mejor, evidencia = mins, c[:120]
@@ -270,7 +297,7 @@ def check_hidden_time(meal, *, minimo_min: int = 60) -> Optional[dict]:
         declarado = declared_prep_minutes(meal)
         if declarado is not None and declarado >= espera:
             return None
-        if _RE_PREP_DECLARA_ESPERA.search(_norm(meal.get("prep_time") or "")):
+        if _RE_PREP_DECLARA_ESPERA.search(_norm(str(meal.get("prep_time") or "").replace("+", " mas "))):
             return None                                # [P1-PLAN-LOTE-745] el plato ya dice que reposa o remoja
         return {"espera_min": espera, "declarado_min": declarado, "evidencia": ev}
     except Exception:

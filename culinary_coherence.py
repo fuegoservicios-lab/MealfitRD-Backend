@@ -600,8 +600,9 @@ def _iter_meals(plan_data: dict):
 #     la cláusula para la salvaguarda del destinatario válido; sólo dejan de ser ACUSADOS — salvo cuando son el OBJETO
 #     DIRECTO del verbo («hierve la canela en polvo», el caso que P1-PLAN-LOTE-67 fija): ver `_v1_objeto_directo`.
 #   · un verbo NEGADO no es una instrucción: «(sin empanizar ni freír)», «(no lo humedezcas ni lo hiervas)», «nunca se
-#     remoja ni se hierve», «sin dejar que hierva», «sin cocción», «mientras se hornean». La guarda mira SÓLO lo que
-#     precede al verbo en su cláusula, así que «No lo hiervas todavía. Hierve el casabe» sigue acusando.
+#     remoja ni se hierve», «sin dejar que hierva», «sin cocción». La guarda mira SÓLO lo que precede al verbo en su
+#     cláusula, así que «No lo hiervas todavía. Hierve el casabe» sigue acusando. «mientras» no niega (ronda 1): ver
+#     `_V1_MIENTRAS_RE`.
 #   · un verbo DENTRO del nombre de un alimento es parte del nombre: «polvo de hornear», «queso de freír» (alias de
 #     Queso blanco). La regla de la mezcla (P1-CULINARY-CONTRACT-BATTER) ya lo esquivaba con ≥3 alimentos; con dos
 #     («mide 30 g de avena y ¼ cdta de polvo de hornear») acusaba a la avena de hornearse.
@@ -616,7 +617,13 @@ def _iter_meals(plan_data: dict):
 # tooltip-anchor: P1-PLAN-LOTE-745-V1
 _V1_METODOS_DORAR = frozenset({"saltear", "freir", "plancha", "tostar", "hornear"})
 _V1_NEGADO_RE = re.compile(
-    r"(?:\b(?:sin|no|ni|nunca|jamas)|\bsin\s+dejar\s+que|\bmientras)(?:\s+(?:lo|la|los|las|le|les|se))*\s+$")
+    r"(?:\b(?:sin|no|ni|nunca|jamas)|\bsin\s+dejar\s+que)(?:\s+(?:lo|la|los|las|le|les|se))*\s+$")
+# [P1-PLAN-LOTE-745 · ronda 1] «mientras» NO niega: «mientras se hornea el queso de hoja 10 minutos, prepara la
+# ensalada» SÍ hornea el queso de hoja. Lo que cambia es el SUJETO: el verbo va con lo que lo sigue, no con los demás
+# alimentos de la frase. Así que tras «mientras (se)» sólo se acusa al objeto directo (`_v1_objeto_directo`), y si no
+# es un alimento del catálogo —«mezcla el yogurt con el jugo de limón mientras se hornean [las papas]», el caso del
+# corpus— no se acusa a nadie.
+_V1_MIENTRAS_RE = re.compile(r"\bmientras(?:\s+(?:lo|la|los|las|le|les|se))*\s+$")
 _V1_NO_ES_VERBO_RE = re.compile(r"cocci[oó]n|(?:licuadora|tostadora)s?")
 
 
@@ -693,6 +700,11 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                 clause_start, clause_end = _clause_bounds(paso_norm, start)
                 if _V1_NEGADO_RE.search(paso_norm[clause_start:start]):
                     continue
+                solo_objeto = None                    # [P1-PLAN-LOTE-745 · ronda 1] «mientras se hornea X»: sólo X
+                if _V1_MIENTRAS_RE.search(paso_norm[clause_start:start]):
+                    solo_objeto = _v1_objeto_directo(paso_norm, end, clause_end, _spans_alimento)
+                    if solo_objeto is None:
+                        continue
                 # [P1-PLAN-LOTE-745] «dorar» se satisface con cualquier método que dore
                 metodos_ok = _V1_METODOS_DORAR if paso_norm[start:end].startswith("dor") else {met}
                 etiqueta = "dorar" if paso_norm[start:end].startswith("dor") else met
@@ -745,6 +757,8 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                 for food in foods:
                     if food in accepting or (food, met) in accused:
                         continue
+                    if solo_objeto is not None and food != solo_objeto:
+                        continue
                     if _v1_es_condimento(food) and food != _v1_objeto_directo(
                             paso_norm, end, clause_end, _spans_alimento):
                         continue                      # [P1-PLAN-LOTE-745] el medio o el aliño, no el objeto
@@ -766,16 +780,50 @@ def _v1_verbo_alimento(day, meal, index) -> list:
     return out
 
 
-def _v2_dueno_del_estado(texto_norm: str, pos: int, spans: list):
-    """[P1-PLAN-LOTE-745 · 2026-09-28] El alimento al que se refiere «ya viene cocido» que empieza en `pos`: el más
-    cercano que lo PRECEDE en su misma oración («atún en agua (ya viene cocido)», «el casabe ya está cocido») y, si nada
-    lo precede, el primero que lo sigue («ya viene cocido el pollo»). `None` si la oración no nombra ninguno."""
+# [P1-PLAN-LOTE-745 · ronda 1] «la pechuga … CON la cebolla (ya viene cocida)»: lo que va tras «con» es el acompañante,
+# y la frase habla también de la cabeza. «ya viene cocido EL filete»: el sujeto pospuesto, justo detrás del estado.
+_V2_ACOMPANANTE_RE = re.compile(r"\bcon\s+(?:(?:el|la|los|las|un|una|unos|unas)\s+)?$")
+_V2_POSPUESTO_RE = re.compile(r"\w*\s+(?:(?:el|la|los|las|un|una)\s+)?")
+
+
+def _v2_duenos_del_estado(texto_norm: str, m_estado, spans: list, index: dict) -> list:
+    """[P1-PLAN-LOTE-745 · 2026-09-28] Los alimentos a los que se refiere el «ya viene cocido» de `m_estado`, en orden:
+
+    1. el más cercano que lo PRECEDE en su oración («atún en agua (ya viene cocido)», «el casabe ya está cocido»),
+       saltando condimentos («la pechuga de pollo con sal y pimienta (ya está cocida)»: la sal no viene cocida) y, si
+       ese dueño no es listo-para-comer y va tras «con», también el alimento al que acompaña;
+    2. si nada lo precede, el sujeto POSPUESTO («ya viene cocido el filete de pescado blanco»);
+    3. si la oración no nombra ninguno, el último alimento de la oración ANTERIOR («Incorpora el filete de pescado
+       blanco. Ya viene cocido, así que solo caliéntalo»);
+    4. y si tampoco, el primero que lo sigue en su oración.
+
+    [ronda 1] Las reglas 1 (condimentos y «con») y 3 las pidió la revisión: con «el más cercano» a secas, la pimienta, la
+    cebolla o nadie eran el dueño y el pescado/pollo CRUDO declarado cocido —el caso de seguridad— callaba."""
+    pos = m_estado.start()
     ini, fin = _clause_bounds(texto_norm, pos)
-    antes = [s for s in spans if ini <= s[0] and s[1] <= pos]
+    utiles = [s for s in spans if not _v1_es_condimento(s[2])]
+    antes = [s for s in utiles if ini <= s[0] and s[1] <= pos]
     if antes:
-        return max(antes, key=lambda s: s[1])[2]
-    despues = [s for s in spans if pos <= s[0] and s[1] <= fin]
-    return min(despues, key=lambda s: s[0])[2] if despues else None
+        i = len(antes) - 1
+        duenos = [antes[i][2]]
+        while (i > 0 and (index.get(_norm(antes[i][2])) or {}).get("ready_to_eat") is not True
+               and _V2_ACOMPANANTE_RE.search(texto_norm[antes[i - 1][1]:antes[i][0]])):
+            i -= 1
+            duenos.append(antes[i][2])
+        return duenos
+    mp = _V2_POSPUESTO_RE.match(texto_norm, m_estado.end())
+    if mp:
+        for s in utiles:
+            if s[0] == mp.end() and s[1] <= fin:
+                return [s[2]]
+    previas = [b for b in clause_bounds(texto_norm) if b[1] <= ini]
+    if previas:
+        p_ini, p_fin = previas[-1]
+        en_previa = [s for s in utiles if p_ini <= s[0] and s[1] <= p_fin]
+        if en_previa:
+            return [en_previa[-1][2]]
+    despues = [s for s in utiles if pos <= s[0] and s[1] <= fin]
+    return [despues[0][2]] if despues else []
 
 
 def _v2_estado_imposible(day, meal, index) -> list:
@@ -798,9 +846,9 @@ def _v2_estado_imposible(day, meal, index) -> list:
         spans = _catalog_food_spans(t, index)
         acusados = []
         for m in estados:
-            food = _v2_dueno_del_estado(tn, m.start(), spans)
-            if food and food not in acusados:
-                acusados.append(food)
+            for food in _v2_duenos_del_estado(tn, m, spans, index):
+                if food not in acusados:
+                    acusados.append(food)
         for food in acusados:
             meta = index.get(_norm(food)) or {}
             if meta.get("ready_to_eat") is False:      # NULL ⇒ fail-open
@@ -1457,6 +1505,11 @@ _V7_SECABLES_RE = re.compile(
 _V7_RANGO_RE = re.compile(_V7_CANT + r"\s*(?:-|–|—|\ba\b)\s*$")
 
 
+# [P1-PLAN-LOTE-745 · ronda 1] Adjetivo de tamaño antepuesto a la palabra contada («2 pequeñas tortillas», «3 medianos
+# tomates»): no es lo que la cifra cuenta. Se salta sólo mientras quede otra palabra detrás.
+_V7_ADJ_TAMANO_RE = re.compile(r"(?:pequen|median|grand|enter|chiquit|chic)[a-z]*")
+
+
 def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma", contado: "dict | None" = None) -> dict:
     """{alimento: total de PIEZAS} de «N <alimento>» — sin unidad de medida por medio.
 
@@ -1506,7 +1559,11 @@ def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma", contado: "dict
         if contado is not None:
             # [P1-PLAN-LOTE-745] la PALABRA que la cifra cuenta: «2 tortas pequeñas de casabe» cuenta tortas,
             # «2 hojas de laurel» cuenta hojas, «5 aceitunas» cuenta aceitunas (ya en plural).
+            # [ronda 1] saltando el adjetivo de TAMAÑO antepuesto: «2 pequeñas tortillas integrales» cuenta tortillas —
+            # con «pequenas» de palabra contada, el singular «la tortilla integral» nunca casaba y el check callaba.
             _pal = re.sub(r"^de\s+", "", cola).split()
+            while len(_pal) > 1 and _V7_ADJ_TAMANO_RE.fullmatch(_pal[0]):
+                _pal.pop(0)
             if _pal:
                 contado.setdefault(crudos[0], _pal[0])
     return out
