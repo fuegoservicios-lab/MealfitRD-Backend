@@ -46,6 +46,8 @@ LO QUE TAMPOCO SE TOCA. El `priceCurrency: "DOP"` del JSON-LD de `index.html` de
 de **precio 0** (el plan gratuito), así que no miente sobre ningún cobro; y el copy de marketing
 que vende «comida dominicana» es P1-27, una decisión del dueño. Meter cualquiera de los dos aquí
 sería colar una decisión de producto dentro de un arreglo factual.
+[P1-PLAN-LOTE-793 · 2026-09-28] La moneda ya la decidió el dueño (G95): hoy es USD, como el apex;
+la ancla `test_p1_plan_lote_793.py`.
 """
 from __future__ import annotations
 
