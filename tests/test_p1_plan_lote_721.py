@@ -3,9 +3,9 @@
 La mitad del servidor la ancla `test_p1_plan_lote_720.py`; la del cliente, `frontend/src/__tests__/lote721.test.jsx`.
 Aquí va lo que ninguno de los dos ve solo, porque vive en la COSTURA:
 
-  1. El vocabulario del origen: las etiquetas de la ficha (`FichaDeComida.getOrigenes`) son EXACTAMENTE
-     `ficha_comida.ORIGENES_DE_COMIDA`. Un origen nuevo sin etiqueta sale en blanco; una etiqueta sin origen no sale
-     nunca.
+  1. El vocabulario del origen. [P1-PLAN-LOTE-762] La ficha ya no PINTA el origen (el dueño: «que no aparezcan
+     detalles innecesarios»); solo lo usa para decidir si la receta del plan es la de ese plato (`plan_meal`), y ese
+     valor tiene que seguir existiendo en `ficha_comida.ORIGENES_DE_COMIDA`.
   2. Lo que la ficha pide existe: `GET /api/diary/meal/{id}` y «Registrar otra vez» con los campos de
      `RepeatMealRequest`; el componedor manda `origin` y `ManualMealRequest` lo acepta.
   3. La foto NO viaja: la promesa de la Política de Privacidad («No retenemos la imagen una vez procesada») sigue
@@ -38,12 +38,12 @@ def _b(rel: str) -> str:
     return (_BACKEND / rel).read_text(encoding="utf-8")
 
 
-def test_las_etiquetas_de_la_ficha_son_el_vocabulario_del_servidor():
+def test_el_origen_que_la_ficha_usa_es_del_vocabulario_del_servidor():
     ficha = _f("src/components/dashboard/FichaDeComida.jsx")
-    i = ficha.index("const getOrigenes = (t) => {")
-    bloque = ficha[i:ficha.index("};", i)]
-    claves = set(re.findall(r"^\s*(\w+): \{ Icono:", bloque, re.M))
-    assert claves == set(fc.ORIGENES_DE_COMIDA)
+    usados = set(re.findall(r"fuente === '(\w+)'", ficha))
+    assert usados, "la ficha ya no mira el origen: revisar este contrato"
+    assert usados <= set(fc.ORIGENES_DE_COMIDA)
+    assert "getOrigenes" not in ficha   # [762] las etiquetas de origen ya no se pintan
 
 
 def test_lo_que_la_ficha_pide_existe():
@@ -68,7 +68,11 @@ def test_el_origen_estimado_cruza_de_un_lado_al_otro():
 def test_la_foto_no_viaja():
     almacen = _f("src/utils/fotosDeComidas.js")
     assert not re.search(r"fetchWithAuth|fetch\(|XMLHttpRequest|sendBeacon|/api/", almacen)
-    assert "Solo en este dispositivo" in _f("src/components/dashboard/FichaDeComida.jsx")
+    # [P1-PLAN-LOTE-762] el pie «Solo en este dispositivo» salió de la ficha; la promesa sigue: la foto sale del
+    # almacén del dispositivo y la ficha no la pide a ninguna ruta
+    ficha = _f("src/components/dashboard/FichaDeComida.jsx")
+    assert "useFotoDeComida(userId, meal?.id, 'foto')" in ficha
+    assert not re.search(r"fetchWithAuth\([^)]*(foto|photo)", ficha, re.I) and "photo_url" not in ficha
     # el servidor no tiene dónde guardarla: ni columna en la migración del lote ni en la ficha que devuelve
     mig = _b("migrations/p1_plan_lote_720_consumed_meals_origen_2026_09_28.sql")
     assert not re.search(r"image|photo_url|foto", mig.split("ADD COLUMN", 1)[1], re.I)
