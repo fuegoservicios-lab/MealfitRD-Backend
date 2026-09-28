@@ -152,10 +152,17 @@ def test_la_migracion_comprueba_los_datos_antes_de_imponer(codigo):
 
 def test_no_promete_haberse_aplicado(sql):
     """Una migración escrita no es una migración aplicada. El fichero tiene que decirlo, porque el
-    modo de fallo de este repo es justo el contrario: dar por hecho lo cableado."""
+    modo de fallo de este repo es justo el contrario: dar por hecho lo cableado.
+
+    [P1-PLAN-LOTE-643 · 2026-09-27] (G91) Se aplicó el 2026-08-23 y este test seguía exigiendo que el
+    fichero dijera «pendiente»: anclaba la grafía del defecto. El fichero NO se reescribe (su checksum
+    está en `schema_migrations`); el estado vive en el libro, y el test ahora mira el libro."""
     assert re.search(r"NO se ha aplicado|pendiente de aplicar|aplica el due", sql, re.I), (
-        "la migración no declara que está pendiente de aplicar en producción"
+        "la migración no declara cómo se aplica"
     )
+    libro = (_BACKEND / "docs" / "migrations_ledger.md").read_text(encoding="utf-8")
+    fila = next(l for l in libro.splitlines() if l.startswith("| `p3_country_db_check_2026_08_22.sql`"))
+    assert "aplicada 2026-08-23" in fila and "PENDIENTE" not in fila, fila
 
 
 # ── El endpoint ─────────────────────────────────────────────────────────────────────────────────

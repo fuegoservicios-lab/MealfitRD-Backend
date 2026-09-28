@@ -43,7 +43,7 @@ cada grupo, porque «aplicada» sin evidencia es la misma mentira con una tabla:
 | Datos (sin DDL) | `asumida aplicada: el producto corre sobre ella` | No hay objeto que mirar. Es una suposición, y la nota lo dice. |
 | `p1_audit_1_drop_dead_webhook_trigger.sql` | `migración de DROP, ausencia del objeto verificada` | El trigger y la función NO existen: eso es lo que la migración hace. |
 | `p1_form_9_health_profile_jsonb_merge.sql`, `p1_new_5_user_fk_cascade_consolidate.sql` | `superseded … no aplica en Neon` | Era Supabase: una RPC sustituida por `PATCH /api/profile` y FKs a `auth.users`, esquema que en Neon no existe. |
-| `p3_country_db_check_2026_08_22.sql` | **sin fila, PENDIENTE** | Es del plan de países; la aplica quien lo lleve, con `--apply`. |
+| `p3_country_db_check_2026_08_22.sql` | aplicada 2026-08-23 21:50 UTC (`angel`) | [P1-PLAN-LOTE-643 · 2026-09-27] Verificado en Neon: fila en `schema_migrations` y la constraint `user_profiles_country_supported` existe. Esta fila la daba por pendiente un mes después de aplicarla. |
 
 Dos falsos positivos de la auditoría que NO son pendientes: `p0_3_backfill_plan_anchors.sql`
 (la constraint que «falta» está citada en un comentario del fichero) y las constraints
