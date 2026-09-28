@@ -3762,22 +3762,22 @@ COUNTRY_PROFILES = {
     # revés. ES/MX/CO compran por kilos y su báscula da gramos.
     "DO": {"name_es": "República Dominicana", "currency": "DOP", "is_beta": False,
            "has_native_prices": True,  "default_tz_offset_min": 240,
-           "unit_system": "imperial"},
+           "unit_system": "imperial", "emergency_number": "911"},
     "ES": {"name_es": "España",               "currency": "EUR", "is_beta": True,
            "has_native_prices": False, "default_tz_offset_min": -60,
-           "unit_system": "metric"},
+           "unit_system": "metric", "emergency_number": "112"},
     "US": {"name_es": "Estados Unidos",       "currency": "USD", "is_beta": True,
            "has_native_prices": False, "default_tz_offset_min": 300,
-           "unit_system": "imperial"},
+           "unit_system": "imperial", "emergency_number": "911"},
     "MX": {"name_es": "México",               "currency": "MXN", "is_beta": True,
            "has_native_prices": False, "default_tz_offset_min": 360,
-           "unit_system": "metric"},
+           "unit_system": "metric", "emergency_number": "911"},
     "PR": {"name_es": "Puerto Rico",          "currency": "USD", "is_beta": True,
            "has_native_prices": False, "default_tz_offset_min": 240,
-           "unit_system": "imperial"},
+           "unit_system": "imperial", "emergency_number": "911"},
     "CO": {"name_es": "Colombia",             "currency": "COP", "is_beta": True,
            "has_native_prices": False, "default_tz_offset_min": 300,
-           "unit_system": "metric"},
+           "unit_system": "metric", "emergency_number": "123"},
 }
 
 
@@ -4650,11 +4650,15 @@ def coach_country_context(country=None) -> str:
     name_es = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
     if not name_es:
         return ""
+    # [P1-PLAN-LOTE-741] (G94) ante síntomas de alarma la IA tendía al 9-1-1 de RD: el número va con el país
+    _emerg = (COUNTRY_PROFILES.get(canon) or {}).get("emergency_number")
     return (
         f"\n🌍 PAÍS DEL USUARIO: {name_es}. Adapta tus recomendaciones a ingredientes, "
         f"cortes y preparaciones cotidianos y disponibles en {name_es}. Si una herramienta "
         "devuelve un término regional que pueda no reconocerse allí, explícalo antes de "
-        "recomendarlo.\n"
+        "recomendarlo."
+        + (f" Si hablas de emergencias, el número de emergencias en {name_es} es el {_emerg}." if _emerg else "")
+        + "\n"
     )
 
 
