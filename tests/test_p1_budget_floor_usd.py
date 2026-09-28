@@ -84,8 +84,9 @@ def _budget_min_total_del_frontend() -> dict:
 
 @pytest.mark.parametrize("dias,esperado", [(7, 80.0), (15, 140.0), (30, 260.0)])
 def test_usd_tiene_piso_propio(nc, dias, esperado):
-    """El número no es nuevo: es el que el producto ya declara y del que se derivaron EUR/MXN/COP
-    (EUR×0,95, MXN×18, COP×4200 sobre estos mismos 80/140/260)."""
+    """El número no es nuevo: es el que el producto ya declara. [P1-PLAN-LOTE-792] El dueño lo
+    mantuvo al pasar las demás monedas al método del Banco Mundial: lo respalda el USDA Thrifty
+    Food Plan (EUR/MXN/COP ya no se derivan de él por tipo de cambio)."""
     assert nc._budget_cycle_floor_for_currency(dias, "USD") == esperado
 
 
@@ -140,14 +141,23 @@ def test_el_gate_de_usd_deja_de_depender_del_tipo_de_cambio(nc, knob_on, monkeyp
 
 def test_un_presupuesto_por_debajo_del_piso_declarado_se_bloquea(nc, knob_on):
     """La dirección del cambio: el umbral SUBE de 66,67 a 80. Nadie que pase el formulario queda
-    fuera (el frontend ya bloquea en 80); se cierra la ventana de quien entra por la API."""
+    fuera (el frontend ya bloquea en 80); se cierra la ventana de quien entra por la API.
+
+    [reconvertido · P1-PLAN-LOTE-792 · 2026-09-28] Por decisión del dueño, que el piso bloquee o
+    sólo oriente lo decide el país de MERCADO. Mercado DO (el visitante de EE. UU. en RD, o sin
+    país): bloquea contra el mismo piso de US$80. Mercado US o PR (beta, lista sin precios): avisa
+    con esa misma cifra y el plan se genera — ver test_p1_plan_lote_792.py."""
     fd = {"weight": "75", "height": "175", "age": "35", "gender": "male",
           "activityLevel": "moderate", "goal": "maintain", "budget": "custom",
           "budgetAmount": "70", "budgetCurrency": "USD", "groceryFrequency": "weekly",
-          "householdSize": "1", "country": "US"}
+          "householdSize": "1", "country": "DO"}
     ok, detail = nc.validate_budget_sufficient(fd)
-    assert ok is False, "US$70/semana pasa el gate pese a estar bajo el piso declarado (US$80)"
+    assert ok is False, "US$70/semana pasa el gate en mercado DO pese a estar bajo el piso (US$80)"
     assert detail, "bloquea sin explicar por qué"
+    assert detail["min_budget"] >= 80, "el piso comparado ya no es el declarado"
+    ok_us, aviso = nc.validate_budget_sufficient(dict(fd, country="US"))
+    assert ok_us is True and aviso["warning_code"] == "budget_below_goal_floor_advisory"
+    assert aviso["min_budget"] == detail["min_budget"], "mismo piso: sólo cambia bloquear↔orientar"
 
 
 def test_el_mensaje_no_habla_en_pesos_dominicanos(nc, knob_on):

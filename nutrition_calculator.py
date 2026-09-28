@@ -1920,22 +1920,28 @@ def _budget_cycle_floor_dop(days: int) -> float:
         f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_DOP", float(default), lambda v: v >= 0.0)
 
 
-# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Pisos TOTALES por ciclo en EUR/MXN/COP,
-# PROVISIONALES: derivados del piso USD (BUDGET_MIN_TOTAL.USD del frontend —
-# 80/140/260) por un factor fijo documentado (ruling R2-F1 del plan) — EUR×0.95,
-# MXN×18, COP×4200 — redondeado a una cifra amable. Fase 3 los sustituye por
-# precios reales de mercado del país (`has_native_prices=False`, ver
-# COUNTRY_PROFILES). Espejo EXACTO del frontend
-# (frontend/src/config/formValidation.js BUDGET_MIN_TOTAL); test de paridad
-# cross-file en test_p1_country_system_f1.py (sección T6).
+# [P1-PLAN-LOTE-792 · 2026-09-28] (G13, salida (a), DECISIÓN DEL DUEÑO) Pisos TOTALES por ciclo en
+# EUR/MXN/COP con FUENTE, no por tipo de cambio. Hasta aquí eran conversiones FX de la cesta dominicana
+# (P1-COUNTRY-SYSTEM-F1: EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200) y el de Colombia pedía 437.500 COP/semana
+# (≈1,88 M/mes) a una persona de 2500 kcal: más que el salario mínimo mensual de su país.
 #
-# Aritmética (crudo → redondeado a cifra amable):
-#   EUR: 80×0.95=76→75   140×0.95=133→135   260×0.95=247→245
-#   MXN: 80×18=1440→1400 140×18=2520→2500   260×18=4680→4700
-#   COP: 80×4200=336000→350000 140×4200=588000→600000 260×4200=1092000→1100000
-_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR = {7: "75", 15: "135", 30: "245"}
-_BUDGET_CYCLE_FLOOR_DEFAULTS_MXN = {7: "1400", 15: "2500", 30: "4700"}
-_BUDGET_CYCLE_FLOOR_DEFAULTS_COP = {7: "350000", 15: "600000", 30: "1100000"}
+# Fuente: Banco Mundial, «Food Prices for Nutrition 5.0», indicador CoHD_LCU (coste de una dieta sana por
+# persona y día, en moneda local), licencia CC BY 4.0; datos del 2026-07-21.
+# Método: piso semanal = dieta sana × 7 × 4,286. El 4,286 es la proporción que ya guarda el piso dominicano
+# (RD$4.000) respecto a su propia dieta sana: cada moneda guarda con la suya la misma proporción que DO.
+# Escalones como en DO (4.000 → 7.000 → 13.000): ×1,75 a 15 días y ×3,25 a 30, redondeados a la unidad.
+#   EUR: 75 (igual que antes)        → 131 (131,25) · 244 (243,75)
+#   MXN: 1.500                       → 2.625        · 4.875
+#   COP: 240.000                     → 420.000      · 780.000
+#   USD: 80 (se mantiene: lo respalda el USDA Thrifty Food Plan) → 140 · 260 — ver P1-BUDGET-FLOOR-USD abajo.
+#   Puerto Rico usa lo declarado para US: comparte la moneda en COUNTRY_PROFILES, no lleva fila propia.
+# Espejo EXACTO del frontend (frontend/src/config/formValidation.js BUDGET_MIN_TOTAL); paridad cross-file en
+# test_p1_country_system_f1.py (T6), test_p1_budget_floor_usd.py y test_p1_plan_lote_792.py.
+# Que el piso BLOQUEE o sólo ORIENTE no lo decide la moneda sino el país de mercado: `_piso_solo_orienta`.
+# tooltip-anchor: P1-PLAN-LOTE-792
+_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR = {7: "75", 15: "131", 30: "244"}
+_BUDGET_CYCLE_FLOOR_DEFAULTS_MXN = {7: "1500", 15: "2625", 30: "4875"}
+_BUDGET_CYCLE_FLOOR_DEFAULTS_COP = {7: "240000", 15: "420000", 30: "780000"}
 
 # [P1-BUDGET-FLOOR-USD · 2026-08-21] USD es la moneda de DOS de los cinco países beta (US y PR) y
 # era la única sin piso propio: caía al `else` histórico, que multiplica lo declarado por
@@ -1957,10 +1963,10 @@ _BUDGET_CYCLE_FLOOR_DEFAULTS_COP = {7: "350000", 15: "600000", 30: "1100000"}
 #
 # El umbral SUBE (66,67 → 80), o sea que se vuelve más estricto: nadie que hoy pase el formulario
 # queda fuera (el frontend ya bloquea en 80); se cierra la ventana de quien entra por la API.
-# Lo que esto NO cierra es la otra mitad de P1-19: los pisos de EUR/MXN/COP siguen siendo
-# conversiones de tipo de cambio y no cestas medidas en cada país. Eso es curación de datos y
-# decisión del dueño — inventar aquí la compra semanal de España sería la clase de afirmación sin
-# respaldo que la auditoría de procedencia del catálogo ya costó.
+# [P1-PLAN-LOTE-792 · 2026-09-28] La otra mitad de P1-19 (EUR/MXN/COP como conversiones FX) la
+# cerró el dueño con el método del Banco Mundial (arriba), y USD 80 se mantiene con el respaldo del
+# USDA Thrifty Food Plan. Lo que cambió para US y PR es que en su mercado (beta, lista sin precios)
+# el piso ORIENTA en vez de bloquear — ver `_piso_solo_orienta`.
 # tooltip-anchor: P1-BUDGET-FLOOR-USD
 _BUDGET_CYCLE_FLOOR_DEFAULTS_USD = {7: "80", 15: "140", 30: "260"}
 
@@ -1973,8 +1979,8 @@ _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY = {
 
 
 def _budget_cycle_floor_for_currency(days: int, currency: str) -> float:
-    """[P1-COUNTRY-SYSTEM-F1] Piso TOTAL del ciclo en EUR/MXN/COP, PROVISIONAL
-    (ver comentario de `_BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY` arriba).
+    """[P1-COUNTRY-SYSTEM-F1] Piso TOTAL del ciclo en EUR/MXN/COP/USD (fuente y método en el
+    comentario de `_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR` arriba — P1-PLAN-LOTE-792).
     `currency` fuera de {EUR,MXN,COP} (incluido 'DOP'/'USD') delega en
     `_budget_cycle_floor_dop` SIN tocarlo — mismo fallback conservador que ese
     piso ya usa para ciclos no estándar. Knob por ciclo×moneda:
@@ -2111,52 +2117,33 @@ def min_budget_for_goals(form_data: dict) -> dict:
     }
 
 
-def _piso_sin_procedencia(currency: str) -> bool:
-    """[P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] ¿El piso de esta moneda es un número SIN
-    procedencia, o sea una conversión FX de la cesta dominicana en vez de una cesta real?
+def _piso_solo_orienta(form_data: dict) -> bool:
+    """[P1-PLAN-LOTE-792 · 2026-09-28] ¿El piso de presupuesto sólo ORIENTA (aviso) en vez de
+    BLOQUEAR (422)? Sí cuando el país de MERCADO del usuario está en modo beta sin precios.
 
-    EL DEFECTO QUE CIERRA (medido contra el endpoint público de producción): un colombiano
-    que declara 200.000 COP/semana —cifra realista— recibía 422 y no podía generar plan. Para
-    2500 kcal el piso sube a 437.500 COP/semana ≈ 1,88 M COP/mes para UNA persona: por encima
-    del salario mínimo mensual de su país. El número no salía de ninguna cesta colombiana; el
-    comentario de la derivación lo dice: EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200.
+    ANTES (P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23, `_piso_sin_procedencia(currency)`) lo decidía
+    la MONEDA: EUR/MXN/COP avisaban porque su piso era una conversión FX de la cesta dominicana, y
+    USD quedaba fuera a mano. Así, un usuario de Estados Unidos o de Puerto Rico con US$70/semana
+    recibía 422 aunque la lista que se le iba a generar sale SIN precios: en un mercado beta
+    `compute_shopping_cost_summary` devuelve None y el pase de abaratamiento es inalcanzable, o sea
+    que el piso bloqueaba con una cifra que después no usa nadie.
 
-    Y pasado el gate ese número era estructuralmente inútil: al ser país beta la lista sale
-    sin precios, `compute_shopping_cost_summary` devuelve None y el pase de abaratamiento
-    queda inalcanzable. O sea que bloqueaba con una cifra que después no usaba nadie.
+    AHORA (decisión del dueño): los pisos tienen fuente (Banco Mundial, CoHD_LCU — ver
+    `_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR`) y lo que decide aviso-o-bloqueo es el MERCADO. El visitante
+    de EE. UU. en RD (mercado DO, paga en USD) sigue con el gate duro: su mercado sí tiene precios.
 
-    *Un número sin procedencia puede orientar; no puede impedir una compra.* Mientras el país
-    no tenga precios propios, el piso pasa de BLOQUEO a AVISO: el hint se sigue mostrando como
-    orientación y el usuario puede generar su plan.
+    La pregunta ya tiene dueño: `constants.pricing_mode_for_form_data` (país de mercado por la
+    ÚNICA puerta `country_for_form_data` + el SSOT `pricing_mode_for_country`). Con el sistema de
+    países apagado devuelve None ⇒ gate duro, byte-idéntico al de antes. Un país que gane precios
+    propios vuelve a bloquear SOLO, sin tocar este código.
 
-    LA PREGUNTA YA TENÍA DUEÑO. Delega en `constants.pricing_mode_for_country`, la ÚNICA
-    puerta que decide si un país tiene precios propios. Consultar el campo del perfil aquí a
-    mano habría sido la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez, y que
-    P3-PRICING-MODE-SSOT-BLANKET vigila en CI: ese guard cazó exactamente este código en el
-    gate del deploy, antes de que llegara a producción. Las segundas tablas no nacen
-    divergiendo: divergen después, y en silencio.
-
-    ⚠️ USD queda FUERA a propósito, y conviene decirlo en vez de que parezca un olvido: su
-    piso arrastra el MISMO defecto (4000/50=80, 7000/50=140, 13000/50=260 son la cesta
-    dominicana entre 50), pero es la moneda del camino histórico —el que lleva meses en
-    producción— y ensancharle la puerta es una decisión de producto separada, no un efecto
-    lateral de arreglar el de Colombia. Curar cestas reales por país con fuente citada (la
-    salida (a) del gap) sigue abierta para las cinco.
+    tooltip-anchor: _piso_solo_orienta (test_p1_plan_lote_792.py)
     """
-    cur = str(currency or "").upper()
-    if cur in ("DOP", "USD"):
-        return False
     try:
-        from constants import COUNTRY_PROFILES, pricing_mode_for_country
+        from constants import pricing_mode_for_form_data
     except Exception:
         return False  # sin SSOT no se degrada nada: fail-closed respecto al cambio
-    # Basta que UN país con esa moneda tenga precios propios para que el piso deje de ser un
-    # número inventado: ahí hay una cesta real detrás.
-    paises = [cc for cc, p in COUNTRY_PROFILES.items()
-              if str(p.get("currency", "")).upper() == cur]
-    if not paises:
-        return False
-    return all(pricing_mode_for_country(cc) == "beta_no_prices" for cc in paises)
+    return pricing_mode_for_form_data(form_data) == "beta_no_prices"
 
 
 def validate_budget_sufficient(form_data: dict) -> tuple:
@@ -2240,14 +2227,14 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
             "calórica menor). No bajamos la calidad nutricional para encajar en un presupuesto "
             "demasiado bajo."
         )
-        # [P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23] Aqui se decidia el 422. Si el piso de
-        # esta moneda es una conversion FX de la cesta dominicana (ver
-        # `_piso_sin_procedencia`), NO puede impedir una compra: se degrada a AVISO. El
-        # mensaje —el mismo, con sus cifras— sigue viajando para que el frontend lo muestre
+        # [P1-COUNTRY-BUDGET-FLOOR-FX · 2026-08-23 → P1-PLAN-LOTE-792 · 2026-09-28] Aqui se
+        # decide el 422. En un país de MERCADO beta (lista sin precios) el piso NO puede impedir
+        # una compra: se degrada a AVISO, pague en la moneda que pague (US/PR con USD incluidos).
+        # El mensaje —el mismo, con sus cifras— sigue viajando para que el frontend lo muestre
         # como orientacion; lo que cambia es que el plan se genera.
-        if new_currency and _piso_sin_procedencia(currency):
+        if _piso_solo_orienta(form_data):
             logger.info(
-                "[P1-COUNTRY-BUDGET-FLOOR-FX] aviso (no bloqueo) currency=%s declared=%s piso=%s",
+                "[P1-PLAN-LOTE-792] aviso (no bloqueo) mercado beta currency=%s declared=%s piso=%s",
                 currency, round(declared), round(min_in_currency),
             )
             return True, {

@@ -40,7 +40,7 @@ constants.py — SSOT del literal `'beta_no_prices'`).
 | 9 | Finalizer de receta (swap/chat-modify) | `finalize_single_meal_recipe_coherence(..., country="DO")` — hilvana el gate anterior a su propio `_night_rice_autofix` interno | [`graph_orchestrator.py`](../graph_orchestrator.py) | T4 (fix-round 1) |
 | 10 | §16 contrato de horario en el prompt | `build_meal_timing_rules(meal_type, country="DO")` — DO idéntico byte a byte; beta omite la enumeración negativa (labels dominicanos intencionales) y usa `_SLOT_POSITIVE_HINT_NEUTRAL` | [`constants.py`](../constants.py) | T4 |
 | 11 | Fecha local del usuario | `user_tz_offset_min(user_id)` — los 4 SQL con `'America/Santo_Domingo'` hardcodeado pasan a `NOW() - make_interval(mins => offset)`; fallback 240 preservado | [`db_facts.py`](../db_facts.py) (helper); call sites en `db_facts.py`/`tools.py`/`proactive_agent.py` | T5 |
-| 12 | Presupuesto multi-moneda | `budget_floor_in_currency(days, currency, min_budget_dop)` + pisos EUR/MXN/COP (factores fijos provisionales, ver spec); `validate_budget_sufficient` emite el 422 en la moneda del usuario | [`nutrition_calculator.py`](../nutrition_calculator.py) (floor), [`:2010`](../nutrition_calculator.py) (validate) | T6 |
+| 12 | Presupuesto multi-moneda | `budget_floor_in_currency(days, currency, min_budget_dop)` + pisos EUR/MXN/COP/USD con fuente (Banco Mundial, ver «Pisos de presupuesto por país» abajo); `validate_budget_sufficient` responde en la moneda del usuario y `_piso_solo_orienta` decide por el país de MERCADO si el piso bloquea (422) o avisa | [`nutrition_calculator.py`](../nutrition_calculator.py) (floor), [`:2010`](../nutrition_calculator.py) (validate) | T6 |
 | 13 | Piso de presupuesto en frontend | `effectiveBudgetCurrency(country, budgetCurrency, countrySystemUI)` — resuelve DOP/USD siempre; EUR/MXN/COP solo tras `COUNTRY_SYSTEM_UI` + país beta con esa moneda | [`frontend/src/config/formValidation.js:258`](../../frontend/src/config/formValidation.js#L258) | T6 |
 | 14 | Flag de modo beta de precios | `pricing_mode_for_form_data(form_data)` estampado en `plan_data['_pricing_mode']` dentro de `assemble_plan_node`, ANTES del bloque de agregación de listas | [`graph_orchestrator.py`](../graph_orchestrator.py) | T7 |
 | 15 | Choke point del aggregator | `_strip_prices_for_beta_pricing_mode(res)` al final de `get_shopping_list_delta` — cubre los ~15 callers reales (agent/cron_tasks/routers/plans/tools) sin threadear un parámetro por función | [`shopping_calculator.py`](../shopping_calculator.py) (strip), [`:12173`](../shopping_calculator.py) (`get_shopping_list_delta`) | T7 |
@@ -370,6 +370,35 @@ inerte (byte-identidad DO). Test:
   sustituyen).
 - Menor: el boost del seeder por tercio-más-barato loguea en beta (precios NULL) — cosmético,
   el pool salió correcto.
+
+## Pisos de presupuesto por país (P1-PLAN-LOTE-792 · 2026-09-28)
+
+Decisión del dueño que cierra la salida (a) de G13 (`P1-COUNTRY-BUDGET-FLOOR-FX`): los pisos de EUR/MXN/COP
+dejan de ser conversiones de tipo de cambio de la cesta dominicana (EUR=USD×0,95 · MXN=USD×18 · COP=USD×4200)
+y pasan a tener fuente.
+
+- **Fuente:** Banco Mundial, *Food Prices for Nutrition 5.0*, indicador `CoHD_LCU` (coste de una dieta sana
+  por persona y día, en moneda local), licencia CC BY 4.0; datos del 2026-07-21.
+- **Método:** piso semanal = dieta sana × 7 × 4,286. El 4,286 es la proporción que ya guarda el piso
+  dominicano (RD$4.000) respecto a su propia dieta sana: cada moneda guarda con la suya la misma proporción.
+  Escalones como en DO (4.000 → 7.000 → 13.000): ×1,75 a 15 días y ×3,25 a 30, redondeados a la unidad.
+
+| Moneda | 7 días | 15 días | 30 días | Nota |
+|---|---|---|---|---|
+| DOP | 4.000 | 7.000 | 13.000 | referencia del método |
+| EUR | 75 | 131 | 244 | 7 d igual que antes; 131,25 y 243,75 redondeados |
+| MXN | 1.500 | 2.625 | 4.875 | antes 1.400 / 2.500 / 4.700 |
+| COP | 240.000 | 420.000 | 780.000 | antes 350.000 / 600.000 / 1.100.000 |
+| USD | 80 | 140 | 260 | se mantiene: lo respalda el USDA Thrifty Food Plan; Puerto Rico usa lo de US |
+
+**Aviso en vez de bloqueo, por país de mercado.** Que el piso bloquee (422 `budget_below_goal_floor`) o sólo
+oriente (`budget_below_goal_floor_advisory`, el plan se genera) lo decide `_piso_solo_orienta(form_data)` con
+`pricing_mode_for_form_data`: mercado en `beta_no_prices` ⇒ aviso, pague en la moneda que pague. Antes lo
+decidía la moneda y USD estaba excluida a mano, así que US y PR recibían 422 con una lista que sale sin
+precios. El visitante de EE. UU. en RD (mercado DO, paga en USD) sigue con el gate duro. El wizard espeja la
+regla con `pisoSoloOrienta(country)` (`frontend/src/config/countries.js`). Con el sistema de países apagado
+nada cambia (gate duro, camino FX histórico). Tests: `test_p1_plan_lote_792.py`,
+`test_p1_country_budget_floor_fx.py`, `test_p1_budget_floor_usd.py`.
 
 ## Tests
 
