@@ -386,9 +386,191 @@ _CUERPOS = {
 # Un solo diccionario: título y cuerpo se resuelven igual y nada impide que una cadena
 # sirva de ambos. Separarlos en dos tablas obligaría a saber cuál es cuál en el punto de
 # traducción, que es justo lo que NO sabe el cuello de botella.
+# [P1-PLAN-LOTE-645 · 2026-09-27] Los 25 textos que el guard no veía: el ALIAS del import en el `target=` del
+# Thread (cinco «Tu plan necesita una revisión») y los textos guardados antes en una variable. Más las cuatro
+# frases completas de `_build_zero_log_push_payload`, que arma el cuerpo por partes: la traducción busca el
+# texto ENTERO que sale, así que la pieza sola no traduciría nada.
+_LOTE_645 = {
+    'Tu plan necesita una revisión': {
+        "en-US": 'Your plan needs a review',
+        "pt-BR": 'Seu plano precisa de uma revisão',
+        "fr-FR": 'Votre plan a besoin d’une révision',
+        "it-IT": 'Il tuo piano ha bisogno di una revisione',
+    },
+    'Tu plan necesita atención': {
+        "en-US": 'Your plan needs attention',
+        "pt-BR": 'Seu plano precisa de atenção',
+        "fr-FR": 'Votre plan demande votre attention',
+        "it-IT": 'Il tuo piano ha bisogno di attenzione',
+    },
+    'Tu plan necesita regenerarse': {
+        "en-US": 'Your plan needs to be regenerated',
+        "pt-BR": 'Seu plano precisa ser gerado de novo',
+        "fr-FR": 'Votre plan doit être régénéré',
+        "it-IT": 'Il tuo piano va rigenerato',
+    },
+    'No pudimos generar tu plan': {
+        "en-US": "We couldn't generate your plan",
+        "pt-BR": 'Não conseguimos gerar seu plano',
+        "fr-FR": 'Nous n’avons pas pu générer votre plan',
+        "it-IT": 'Non siamo riusciti a generare il tuo piano',
+    },
+    'Loguea tus comidas para continuar': {
+        "en-US": 'Log your meals to continue',
+        "pt-BR": 'Registre suas refeições para continuar',
+        "fr-FR": 'Enregistrez vos repas pour continuer',
+        "it-IT": 'Registra i tuoi pasti per continuare',
+    },
+    'Loguea más comidas para que el plan aprenda': {
+        "en-US": 'Log more meals so your plan can learn',
+        "pt-BR": 'Registre mais refeições para o plano aprender',
+        "fr-FR": 'Enregistrez plus de repas pour que le plan apprenne',
+        "it-IT": 'Registra più pasti perché il piano impari',
+    },
+    'Tu plan se está generando sin tu feedback': {
+        "en-US": 'Your plan is being generated without your feedback',
+        "pt-BR": 'Seu plano está sendo gerado sem o seu feedback',
+        "fr-FR": 'Votre plan se génère sans vos retours',
+        "it-IT": 'Il tuo piano si sta generando senza il tuo feedback',
+    },
+    'Tu próximo bloque espera más feedback': {
+        "en-US": 'Your next block is waiting for more feedback',
+        "pt-BR": 'Seu próximo bloco espera mais feedback',
+        "fr-FR": 'Votre prochain bloc attend plus de retours',
+        "it-IT": 'Il tuo prossimo blocco aspetta più feedback',
+    },
+    'Pool atómico degradado: lost-updates posibles': {
+        "en-US": 'Atomic pool degraded: lost updates possible',
+        "pt-BR": 'Pool atômico degradado: lost-updates possíveis',
+        "fr-FR": 'Pool atomique dégradé : lost-updates possibles',
+        "it-IT": 'Pool atomico degradato: lost-update possibili',
+    },
+    'Detectamos datos inválidos en la fecha de inicio de tu plan. Tócalo para regenerarlo con tu nevera actual.': {
+        "en-US": "We found invalid data in your plan's start date. Tap to regenerate it with your current fridge.",
+        "pt-BR": 'Detectamos dados inválidos na data de início do seu plano. Toque para gerá-lo de novo com sua geladeira atual.',
+        "fr-FR": 'Nous avons détecté des données invalides dans la date de début de votre plan. Touchez pour le régénérer avec votre frigo actuel.',
+        "it-IT": 'Abbiamo rilevato dati non validi nella data di inizio del tuo piano. Tocca per rigenerarlo con il tuo frigo attuale.',
+    },
+    'Detectamos ingredientes que ya no están en tu nevera. Actualízala para que generemos los días siguientes.': {
+        "en-US": 'Some ingredients are no longer in your fridge. Update it so we can generate the next days.',
+        "pt-BR": 'Detectamos ingredientes que não estão mais na sua geladeira. Atualize-a para gerarmos os próximos dias.',
+        "fr-FR": 'Certains ingrédients ne sont plus dans votre frigo. Mettez-le à jour pour que nous générions les jours suivants.',
+        "it-IT": 'Alcuni ingredienti non sono più nel tuo frigo. Aggiornalo così generiamo i prossimi giorni.',
+    },
+    'Detectamos que tu historial reciente no tiene suficiente información para generar el siguiente bloque. Ábrelo para que lo revisemos juntos.': {
+        "en-US": "Your recent history doesn't have enough information to generate the next block. Open it so we can review it together.",
+        "pt-BR": 'Seu histórico recente não tem informação suficiente para gerar o próximo bloco. Abra-o para revisarmos juntos.',
+        "fr-FR": 'Votre historique récent ne contient pas assez d’informations pour générer le prochain bloc. Ouvrez-le pour que nous le revoyions ensemble.',
+        "it-IT": 'La tua cronologia recente non ha abbastanza informazioni per generare il prossimo blocco. Aprilo per rivederlo insieme.',
+    },
+    'Detectamos un problema al continuar tu plan. Ábrelo para regenerarlo con tu nevera actual.': {
+        "en-US": 'We ran into a problem continuing your plan. Open it to regenerate it with your current fridge.',
+        "pt-BR": 'Houve um problema ao continuar seu plano. Abra-o para gerá-lo de novo com sua geladeira atual.',
+        "fr-FR": 'Un problème est survenu en poursuivant votre plan. Ouvrez-le pour le régénérer avec votre frigo actuel.',
+        "it-IT": 'C’è stato un problema nel continuare il tuo piano. Aprilo per rigenerarlo con il tuo frigo attuale.',
+    },
+    'Detectamos un problema con el historial de tu plan. Ábrelo para que lo revisemos juntos.': {
+        "en-US": "We found a problem with your plan's history. Open it so we can review it together.",
+        "pt-BR": 'Detectamos um problema no histórico do seu plano. Abra-o para revisarmos juntos.',
+        "fr-FR": 'Nous avons détecté un problème dans l’historique de votre plan. Ouvrez-le pour que nous le revoyions ensemble.',
+        "it-IT": 'Abbiamo rilevato un problema nella cronologia del tuo piano. Aprilo per rivederlo insieme.',
+    },
+    'Detectamos un problema con la fecha de inicio de tu plan. Ábrelo para que lo revisemos juntos.': {
+        "en-US": "We found a problem with your plan's start date. Open it so we can review it together.",
+        "pt-BR": 'Detectamos um problema com a data de início do seu plano. Abra-o para revisarmos juntos.',
+        "fr-FR": 'Nous avons détecté un problème avec la date de début de votre plan. Ouvrez-le pour que nous le revoyions ensemble.',
+        "it-IT": 'Abbiamo rilevato un problema con la data di inizio del tuo piano. Aprilo per rivederlo insieme.',
+    },
+    'Detectamos un problema técnico con tu plan que impide continuar generando los próximos días. Tócalo para regenerarlo con tu nevera actual.': {
+        "en-US": 'A technical problem is keeping us from generating the next days of your plan. Tap to regenerate it with your current fridge.',
+        "pt-BR": 'Um problema técnico impede continuar gerando os próximos dias do seu plano. Toque para gerá-lo de novo com sua geladeira atual.',
+        "fr-FR": 'Un problème technique empêche de générer les prochains jours de votre plan. Touchez pour le régénérer avec votre frigo actuel.',
+        "it-IT": 'Un problema tecnico impedisce di generare i prossimi giorni del tuo piano. Tocca per rigenerarlo con il tuo frigo attuale.',
+    },
+    'Hubo un problema y tu plan no llegó a generarse. Abre Bioboros y vuelve a generarlo con tu nevera actual.': {
+        "en-US": "Something went wrong and your plan wasn't generated. Open Bioboros and generate it again with your current fridge.",
+        "pt-BR": 'Houve um problema e seu plano não foi gerado. Abra o Bioboros e gere-o de novo com sua geladeira atual.',
+        "fr-FR": 'Un problème est survenu et votre plan n’a pas été généré. Ouvrez Bioboros et générez-le à nouveau avec votre frigo actuel.',
+        "it-IT": 'C’è stato un problema e il tuo piano non è stato generato. Apri Bioboros e generalo di nuovo con il tuo frigo attuale.',
+    },
+    'Loguea las comidas que hiciste estos días — el siguiente bloque del plan se ajusta a partir de eso.': {
+        "en-US": 'Log the meals you had these days — the next block of your plan adjusts to them.',
+        "pt-BR": 'Registre as refeições que você fez nestes dias — o próximo bloco do plano se ajusta a partir disso.',
+        "fr-FR": 'Enregistrez les repas de ces derniers jours — le prochain bloc du plan s’ajuste à partir de là.',
+        "it-IT": 'Registra i pasti di questi giorni — il prossimo blocco del piano si adatta a partire da lì.',
+    },
+    'No hemos visto qué comiste de tu plan actual. Loguea tus comidas en el diario para que el siguiente bloque aprenda de ti.': {
+        "en-US": "We haven't seen what you ate from your current plan. Log your meals in the diary so the next block learns from you.",
+        "pt-BR": 'Ainda não vimos o que você comeu do seu plano atual. Registre suas refeições no diário para o próximo bloco aprender com você.',
+        "fr-FR": 'Nous n’avons pas vu ce que vous avez mangé de votre plan actuel. Enregistrez vos repas dans le journal pour que le prochain bloc apprenne de vous.',
+        "it-IT": 'Non abbiamo visto cosa hai mangiato del tuo piano attuale. Registra i tuoi pasti nel diario perché il prossimo blocco impari da te.',
+    },
+    'No pudimos completar parte de tu plan automáticamente. Abre Bioboros y regenera tu plan para que volvamos a generarlo con tu nevera actual.': {
+        "en-US": "We couldn't complete part of your plan automatically. Open Bioboros and regenerate your plan so we can generate it again with your current fridge.",
+        "pt-BR": 'Não conseguimos completar parte do seu plano automaticamente. Abra o Bioboros e gere seu plano de novo com sua geladeira atual.',
+        "fr-FR": 'Nous n’avons pas pu compléter automatiquement une partie de votre plan. Ouvrez Bioboros et régénérez votre plan avec votre frigo actuel.',
+        "it-IT": 'Non siamo riusciti a completare automaticamente parte del tuo piano. Apri Bioboros e rigenera il piano con il tuo frigo attuale.',
+    },
+    'No pudimos confirmar tu zona horaria, así que tu plan se pausó para no generar días desfasados. Tócalo para regenerarlo con tu nevera actual.': {
+        "en-US": "We couldn't confirm your time zone, so your plan was paused to avoid generating days out of sync. Tap to regenerate it with your current fridge.",
+        "pt-BR": 'Não conseguimos confirmar seu fuso horário, então seu plano foi pausado para não gerar dias defasados. Toque para gerá-lo de novo com sua geladeira atual.',
+        "fr-FR": 'Nous n’avons pas pu confirmer votre fuseau horaire : votre plan a été mis en pause pour ne pas générer de jours décalés. Touchez pour le régénérer avec votre frigo actuel.',
+        "it-IT": 'Non siamo riusciti a confermare il tuo fuso orario, quindi il piano è in pausa per non generare giorni sfasati. Tocca per rigenerarlo con il tuo frigo attuale.',
+    },
+    'Tu plan se pausó porque no pudimos reconstruir el historial de aprendizaje de los días previos. Tócalo para regenerarlo con tu nevera actual.': {
+        "en-US": "Your plan was paused because we couldn't rebuild the learning history of the previous days. Tap to regenerate it with your current fridge.",
+        "pt-BR": 'Seu plano foi pausado porque não conseguimos reconstruir o histórico de aprendizado dos dias anteriores. Toque para gerá-lo de novo com sua geladeira atual.',
+        "fr-FR": 'Votre plan a été mis en pause car nous n’avons pas pu reconstruire l’historique d’apprentissage des jours précédents. Touchez pour le régénérer avec votre frigo actuel.',
+        "it-IT": 'Il tuo piano è in pausa perché non siamo riusciti a ricostruire la cronologia di apprendimento dei giorni precedenti. Tocca per rigenerarlo con il tuo frigo attuale.',
+    },
+    'Un día programado de tu plan quedó fuera del rango actual. Tócalo para regenerarlo con tu nevera actual.': {
+        "en-US": 'A scheduled day of your plan fell outside the current range. Tap to regenerate it with your current fridge.',
+        "pt-BR": 'Um dia programado do seu plano ficou fora do intervalo atual. Toque para gerá-lo de novo com sua geladeira atual.',
+        "fr-FR": 'Un jour programmé de votre plan est sorti de la plage actuelle. Touchez pour le régénérer avec votre frigo actuel.',
+        "it-IT": 'Un giorno programmato del tuo piano è finito fuori dall’intervallo attuale. Tocca per rigenerarlo con il tuo frigo attuale.',
+    },
+    'Llevas varios bloques sin registrar comidas. Loguea en el diario para que los siguientes se ajusten a ti': {
+        "en-US": "You've gone several blocks without logging meals. Log in the diary so the next ones adjust to you",
+        "pt-BR": 'Você está há vários blocos sem registrar refeições. Registre no diário para os próximos se ajustarem a você',
+        "fr-FR": 'Vous n’avez pas enregistré de repas depuis plusieurs blocs. Enregistrez-les dans le journal pour que les suivants s’ajustent à vous',
+        "it-IT": 'Da diversi blocchi non registri i pasti. Registrali nel diario perché i prossimi si adattino a te',
+    },
+    'Llevas varios bloques sin registrar comidas. Loguea en el diario para que los siguientes se ajusten a ti.': {
+        "en-US": "You've gone several blocks without logging meals. Log in the diary so the next ones adjust to you.",
+        "pt-BR": 'Você está há vários blocos sem registrar refeições. Registre no diário para os próximos se ajustarem a você.',
+        "fr-FR": 'Vous n’avez pas enregistré de repas depuis plusieurs blocs. Enregistrez-les dans le journal pour que les suivants s’ajustent à vous.',
+        "it-IT": 'Da diversi blocchi non registri i pasti. Registrali nel diario perché i prossimi si adattino a te.',
+    },
+    "Llevas varios bloques sin registrar comidas. Loguea en el diario para que los siguientes se ajusten a ti, o elige 'Continuar sin registrar' en el banner para que generemos los próximos días con tu nevera actual.": {
+        "en-US": "You've gone several blocks without logging meals. Log in the diary so the next ones adjust to you, or choose 'Continue without logging' in the banner and we'll generate the next days with your current fridge.",
+        "pt-BR": "Você está há vários blocos sem registrar refeições. Registre no diário para os próximos se ajustarem a você, ou escolha 'Continuar sem registrar' no aviso para gerarmos os próximos dias com sua geladeira atual.",
+        "fr-FR": 'Vous n’avez pas enregistré de repas depuis plusieurs blocs. Enregistrez-les dans le journal pour que les suivants s’ajustent à vous, ou choisissez « Continuer sans enregistrer » dans le bandeau pour que nous générions les prochains jours avec votre frigo actuel.',
+        "it-IT": "Da diversi blocchi non registri i pasti. Registrali nel diario perché i prossimi si adattino a te, oppure scegli 'Continua senza registrare' nel banner e genereremo i prossimi giorni con il tuo frigo attuale.",
+    },
+    'Tu siguiente bloque está en pausa porque no tenemos registro de tus comidas. ': {
+        "en-US": 'Your next block is paused because we have no record of your meals. ',
+        "pt-BR": 'Seu próximo bloco está pausado porque não temos registro das suas refeições. ',
+        "fr-FR": 'Votre prochain bloc est en pause car nous n’avons aucun enregistrement de vos repas. ',
+        "it-IT": 'Il tuo prossimo blocco è in pausa perché non abbiamo registrato i tuoi pasti. ',
+    },
+    "Tu siguiente bloque está en pausa porque no tenemos registro de tus comidas. Abre el diario para loguear, o tap 'Continuar sin registrar' para que generemos los próximos días con tu nevera actual.": {
+        "en-US": "Your next block is paused because we have no record of your meals. Open the diary to log them, or tap 'Continue without logging' and we'll generate the next days with your current fridge.",
+        "pt-BR": "Seu próximo bloco está pausado porque não temos registro das suas refeições. Abra o diário para registrar, ou toque em 'Continuar sem registrar' para gerarmos os próximos dias com sua geladeira atual.",
+        "fr-FR": 'Votre prochain bloc est en pause car nous n’avons aucun enregistrement de vos repas. Ouvrez le journal pour les enregistrer, ou touchez « Continuer sans enregistrer » pour que nous générions les prochains jours avec votre frigo actuel.',
+        "it-IT": "Il tuo prossimo blocco è in pausa perché non abbiamo registrato i tuoi pasti. Apri il diario per registrarli, oppure tocca 'Continua senza registrare' e genereremo i prossimi giorni con il tuo frigo attuale.",
+    },
+    'Tu siguiente bloque está en pausa porque no tenemos registro de tus comidas. Abre el diario y loguea lo que hayas comido para que aprenda de ti.': {
+        "en-US": "Your next block is paused because we have no record of your meals. Open the diary and log what you've eaten so it can learn from you.",
+        "pt-BR": 'Seu próximo bloco está pausado porque não temos registro das suas refeições. Abra o diário e registre o que você comeu para ele aprender com você.',
+        "fr-FR": 'Votre prochain bloc est en pause car nous n’avons aucun enregistrement de vos repas. Ouvrez le journal et enregistrez ce que vous avez mangé pour qu’il apprenne de vous.',
+        "it-IT": 'Il tuo prossimo blocco è in pausa perché non abbiamo registrato i tuoi pasti. Apri il diario e registra cosa hai mangiato perché impari da te.',
+    },
+}
+
 _CATALOGO: dict = {}
 _CATALOGO.update(_TITULOS)
 _CATALOGO.update(_CUERPOS)
+_CATALOGO.update(_LOTE_645)
 
 
 def translate_push_text(texto, locale) -> str:

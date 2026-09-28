@@ -133,6 +133,27 @@ def _literales_de_los_call_sites() -> set:
             arbol = ast.parse(io.open(p, encoding="utf-8").read())
         except Exception:  # noqa: BLE001
             continue
+        # [P1-PLAN-LOTE-645 · 2026-09-27] Dos cegueras más, medidas por la auditoría de idiomas:
+        #   · el ALIAS de import (`from utils_push import send_push_notification as _p0b_push`) en el `target=`
+        #     del Thread: cinco «Tu plan necesita una revisión» salían en español sin que el guard los viera;
+        #   · el texto guardado antes en una VARIABLE (`action_title = "…"`, luego `title=action_title`).
+        funciones = set(_FUNCIONES_DE_PUSH)
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.ImportFrom) and n.module == "utils_push":
+                funciones |= {a.asname for a in n.names if a.name in _FUNCIONES_DE_PUSH and a.asname}
+        textos_de = {}
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str):
+                for t in n.targets:
+                    if isinstance(t, ast.Name):
+                        textos_de.setdefault(t.id, set()).add(n.value.value)
+
+        def _anota(c):
+            if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.strip():
+                fuera.add(c.value)
+            elif isinstance(c, ast.Name):
+                fuera.update(x for x in textos_de.get(c.id, ()) if x.strip())
+
         for nodo in ast.walk(arbol):
             if not isinstance(nodo, ast.Call):
                 continue
@@ -155,7 +176,7 @@ def _literales_de_los_call_sites() -> set:
                 objetivo = kw_t.get("target")
                 nombre_objetivo = (getattr(objetivo, "id", None)
                                    or getattr(objetivo, "attr", None))
-                if nombre_objetivo not in _FUNCIONES_DE_PUSH:
+                if nombre_objetivo not in funciones:
                     continue
                 candidatos = []
                 # `kwargs={"title": …, "body": …}`
@@ -169,18 +190,16 @@ def _literales_de_los_call_sites() -> set:
                 if isinstance(tup, (ast.Tuple, ast.List)):
                     candidatos += list(tup.elts[1:3])
                 for c in candidatos:
-                    if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.strip():
-                        fuera.add(c.value)
+                    _anota(c)
                 continue
 
-            if nombre not in _FUNCIONES_DE_PUSH:
+            if nombre not in funciones:
                 continue
             kw = {k.arg: k.value for k in nodo.keywords if k.arg}
             candidatos = [kw.get("title"), kw.get("body")]
             candidatos += list(nodo.args[1:3])
             for c in candidatos:
-                if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.strip():
-                    fuera.add(c.value)
+                _anota(c)
     return fuera
 
 
