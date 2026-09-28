@@ -6,8 +6,8 @@
     "chicharrón de cerdo": "Mismo caso que 'chicharron de cerdo' (variante con tilde) -- ver esa entrada.",
     "fideos integrales": "Pre-fase: sin resolver (passthrough). 'Fideos' (alta ES T5) matchea via su alias bare 'fideos' (CONTAINS). Candidato alternativo 'Pasta integral' (fila pre-fase) NO tiene 'fideos integrales' como alias -- no hay retargeteo desde una fila establecida. Macro similar (kcal 371 vs 370.5, protein 13g vs 13.5g, carbs 74.7g vs 73.1g) salvo fibra (3.2g vs 10.1g) -- divergencia menor, no clínicamente peligrosa como el caso chicharrón."
   },
-  "corpus_size": 1635,
-  "generated_at": "2026-09-28T16:22:19.379746+00:00",
+  "corpus_size": 1634,
+  "generated_at": "2026-09-28T20:03:51.859776+00:00",
   "mapping": {
     "Aceite de Oliva": "Aceite de oliva",
     "Aceite de coco": "Aceite de coco",
@@ -1554,7 +1554,6 @@
     "tostadas de maiz": "Tostadas de maíz",
     "tostadas de maiz horneadas": "Tostadas de maíz",
     "tostadas de maiz integrales": "Tostadas de maíz",
-    "tostadas de tortilla de maiz": "Tostadas de tortilla de maiz",
     "tostadas horneadas de maiz": "Tostadas de maíz",
     "tostones": "Tostones",
     "trigo bulgur": "Bulgur",
