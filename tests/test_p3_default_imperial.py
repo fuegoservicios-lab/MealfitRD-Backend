@@ -71,9 +71,11 @@ def test_settings_height_unit_defaults_to_ft_with_preconversion():
     pre-convierte la altura cm previa a ft+in para que los inputs
     imperiales arranquen poblados (no vacíos requiriendo toggle manual)."""
     src = _read(_SETTINGS_JSX)
-    # Default 'ft' en useState(heightUnit).
+    # Default 'ft' en useState(heightUnit). [P1-PLAN-LOTE-715 · 2026-09-28] Salvo que el usuario eligiera cm en el
+    # formulario (`_heightInputUnit`): arrancar en pies a quien escribió 187 cm era cambiarle la unidad sin pedirlo.
     assert re.search(
-        r"const\s*\[\s*heightUnit\s*,\s*setHeightUnit\s*\]\s*=\s*useState\(\s*['\"]ft['\"]\s*\)",
+        r"const\s*\[\s*heightUnit\s*,\s*setHeightUnit\s*\]\s*=\s*useState\(\s*(?:['\"]ft['\"]"
+        r"|\(\s*\)\s*=>\s*\(\s*formData\?\._heightInputUnit\s*===\s*['\"]cm['\"]\s*\?\s*['\"]cm['\"]\s*:\s*['\"]ft['\"]\s*\))\s*\)",
         src,
     ), (
         "Settings `heightUnit` no defaultea a 'ft'. Ver "
@@ -126,14 +128,22 @@ def test_settings_cleanup_reverts_to_ft_not_cm():
     )
     assert fn_match, "_revertBodyMetricsToOriginal no encontrada"
     body = fn_match.group(1)
-    # Revierte a 'ft', NO a 'cm'.
-    assert re.search(r"setHeightUnit\(\s*['\"]ft['\"]\s*\)", body), (
+    # Revierte a 'ft', NO a 'cm' (salvo que el usuario eligiera cm en el formulario, P1-PLAN-LOTE-715).
+    assert re.search(
+        r"setHeightUnit\(\s*(?:['\"]ft['\"]|formData\?\._heightInputUnit\s*===\s*['\"]cm['\"]\s*\?\s*['\"]cm['\"]\s*:\s*['\"]ft['\"])\s*\)",
+        body,
+    ), (
         "`_revertBodyMetricsToOriginal` no setea heightUnit a 'ft' — "
         "tras cleanup vuelve a métrico, perdiendo elección imperial. "
         "Ver P3-DEFAULT-IMPERIAL · 2026-05-20."
     )
-    # Pre-popula ft/in desde cm (cálculo presente).
-    assert "2.54" in body, (
-        "Conversión cm → ft+in ausente del revert (falta divisor 2.54). "
-        "Inputs ft/in quedan vacíos tras cleanup."
-    )
+    # Pre-popula ft/in desde cm (cálculo presente). [P1-PLAN-LOTE-715] El cálculo vive en `cmAPiesPulgadas`
+    # (redondeo sin «12 in»), compartido con el arranque.
+    if "cmAPiesPulgadas(" in body:
+        m_fn = re.search(r"const\s+cmAPiesPulgadas\s*=\s*\([^)]*\)\s*=>\s*\{(.+?)\n\};", src, re.DOTALL)
+        assert m_fn and "2.54" in m_fn.group(1), "cmAPiesPulgadas perdió la conversión cm → in (2.54)."
+    else:
+        assert "2.54" in body, (
+            "Conversión cm → ft+in ausente del revert (falta divisor 2.54). "
+            "Inputs ft/in quedan vacíos tras cleanup."
+        )

@@ -99,7 +99,9 @@ def test_el_worker_de_chunks_fija_la_atribucion_antes_de_generar_y_la_deshace_en
     cabeza = src[i:i + 5000]
     assert "_llm_attr_toks = _set_llm_attr(user_id, meal_plan_id)" in cabeza
     assert "tooltip-anchor: chunk_worker_llm_attribution" in cabeza
-    j = src.index("_reset_llm_attr(_llm_attr_toks)")
+    # [P1-PLAN-LOTE-719] El reset del finally se busca por su comentario: `_soltar_contexto_del_hilo` (las salidas
+    # tempranas, que viven fuera de ese try) tiene su propia llamada, más arriba.
+    j = src.index("_reset_llm_attr(_llm_attr_toks)", src.index("# [P1-PLAN-LOTE-15] deshacer la atribución LLM de este chunk"))
     assert j > i, "el reset pertenece al worker"
     assert "_CHUNK_WORKER_CTX.pickup_attempts = None" in src[j - 800:j], "el reset vive junto a la limpieza del contexto thread-local, en el finally"
 

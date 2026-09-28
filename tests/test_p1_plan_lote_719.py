@@ -90,6 +90,45 @@ def test_dreaming_salta_al_usuario_con_la_memoria_pausada(monkeypatch):
     assert res["status"] == "skipped_memory_paused"
 
 
+def test_el_worker_que_difiere_un_chunk_no_deja_la_atribucion_puesta():
+    """Un chunk diferido porque el usuario ya está lockeado salía del worker por una de sus cuatro salidas tempranas,
+    FUERA del try cuyo finally deshace la atribución LLM: el hilo (y, en la suite, el test siguiente) se quedaba con
+    `plan_id_var` y `pickup_attempts` del chunk anterior — `test_p1_plan_lote_15` fallaba según el orden."""
+    from unittest.mock import patch
+    import cron_tasks
+    from graph_orchestrator import user_id_var
+    from llm_attribution import plan_id_var
+
+    tareas = [{"id": 1, "user_id": "u-719", "meal_plan_id": "plan-719", "week_number": 1,
+               "days_offset": 0, "days_count": 7, "pipeline_snapshot": "{}"}]
+
+    def escribir(query, params=None, returning=False):
+        if "UPDATE plan_chunk_queue" in query and "FOR UPDATE SKIP LOCKED" in query:
+            return tareas
+        return []   # el INSERT del lock no devuelve fila: otro worker lo tiene → se difiere
+
+    with patch("cron_tasks.execute_sql_write", side_effect=escribir), \
+         patch("cron_tasks.execute_sql_query", return_value={"id": "plan-719", "status": "active"}), \
+         patch("concurrent.futures.ThreadPoolExecutor") as ejecutor:
+        ejecutor.return_value.__enter__.return_value.map = lambda f, it: [f(x) for x in it]
+        cron_tasks.process_plan_chunk_queue()
+
+    assert plan_id_var.get() is None and user_id_var.get() is None
+    assert getattr(cron_tasks._CHUNK_WORKER_CTX, "pickup_attempts", None) is None
+
+
+def test_las_cuatro_salidas_tempranas_sueltan_el_contexto():
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "cron_tasks.py").read_text(encoding="utf-8")
+    i = src.index("def _chunk_worker(task):")
+    fin = src.index("        try:\n            # [GAP 3 FIX: GUARD validar plan activo y no-fallido]", i)
+    tramo = src[src.index("def _soltar_contexto_del_hilo():", i):fin]
+    retornos = re.findall(r"\n( +)return\n", tramo)
+    assert len(retornos) == 4
+    assert len(re.findall(r"_soltar_contexto_del_hilo\(\)\n +return\n", tramo)) == 4
+
+
 def test_la_busqueda_semantica_de_hechos_respeta_la_pausa(monkeypatch):
     """La generación de planes (RAG del contexto) seguía usando lo aprendido con la memoria pausada."""
     import db_facts

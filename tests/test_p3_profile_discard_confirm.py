@@ -105,8 +105,10 @@ def test_volver_button_gates_on_body_metrics_changed():
     handler = m_onclick.group(1)
 
     cuerpo = _cuerpo_js(src, f"const {handler}")
+    # [P1-PLAN-LOTE-716 · 2026-09-28] El gate cubre también el borrador de nombre/edad/sexo:
+    # `(bodyMetricsChanged || profileDraftChanged) && activeSection === 'profile'`.
     assert re.search(
-        r"bodyMetricsChanged\s*&&\s*activeSection\s*===\s*['\"]profile['\"]",
+        r"\(?\s*bodyMetricsChanged(?:\s*\|\|\s*\w+)*\s*\)?\s*&&\s*activeSection\s*===\s*['\"]profile['\"]",
         cuerpo,
     ), (
         f"Gate `bodyMetricsChanged && activeSection === 'profile'` ausente de "

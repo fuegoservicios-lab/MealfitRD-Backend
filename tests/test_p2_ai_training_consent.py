@@ -56,9 +56,33 @@ def test_endpoints_wired_with_auth():
     )
     assert "update_ai_training_consent" in src
     # Default fail-secure en el GET: perfil ausente/None → False.
-    assert re.search(r'ai_training_consent"\)\)\s*if\s+profile\s+else\s+False', src), (
+    # [P1-PLAN-LOTE-717 · 2026-09-28] El GET lee la columna con `_leer_consentimiento_ia`: sin fila o NULL ⇒ False
+    # (el default de siempre), pero una base caída LANZA y el endpoint responde 503 en vez de «no consientes».
+    assert "_leer_consentimiento_ia" in src and 'bool((fila or {}).get("ai_training_consent"))' in src, (
         "El GET debe defaultear FALSE (opt-in fail-secure) con perfil ausente."
     )
+
+
+def test_get_sin_fila_es_false_y_base_caida_lanza(monkeypatch):
+    import db
+    from routers.preferences import _leer_consentimiento_ia
+
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: None)
+    assert _leer_consentimiento_ia("u-717") is False
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: {"ai_training_consent": None})
+    assert _leer_consentimiento_ia("u-717") is False
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: {"ai_training_consent": True})
+    assert _leer_consentimiento_ia("u-717") is True
+
+    def _caida(*a, **k):
+        raise RuntimeError("pool agotado")
+    monkeypatch.setattr(db, "execute_sql_query", _caida)
+    try:
+        _leer_consentimiento_ia("u-717")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("una base caída no puede leerse como «no consiente»")
 
 
 def test_corpus_gate_ssot():
