@@ -4192,6 +4192,13 @@ def apply_recalc_plan_regime(
     if _source != "plan":
         return _country, plan_data.get("_pricing_mode"), _source
 
+    # [P1-PLAN-LOTE-641 · 2026-09-27] (G42) Con el sistema de países apagado —la palanca de emergencia del flip—,
+    # `country_for_form_data` dice 'DO' también para un sello español: se LEE así (el motor se comporta como RD) pero no
+    # se escribe. Antes se sellaba `_country='DO'` y se borraba `_pricing_mode`, y al volver a encender el plan seguía
+    # siendo dominicano: el rollback no tenía vuelta.
+    if not _env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+        return _country, pricing_mode_for_country(_country), _source
+
     _previous_country = plan_data.get("_country")
     _had_pricing_mode = "_pricing_mode" in plan_data
     _previous_pricing_mode = plan_data.get("_pricing_mode")
