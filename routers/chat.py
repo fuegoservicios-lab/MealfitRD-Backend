@@ -33,23 +33,6 @@ from bg_executor import submit_bg_task
 # `_KNOBS_REGISTRY` y es visible en `/health/version`.
 from knobs import _env_int, _env_float
 
-# [P1-CHAT-TTS-TIMEOUT-HARDCODED · 2026-05-24] Knob del timeout `httpx` para
-# ElevenLabs TTS. Pre-fix el `httpx.AsyncClient(timeout=15.0)` era literal
-# hardcoded — si ElevenLabs degradaba latencia (incident regional), no había
-# rollback sin redeploy. El test blanket `test_p1_new_httpx_timeout` cubría
-# `routers/billing.py`; `chat.py` quedó fuera del scope original y exhibía
-# el patrón prohibido. Default 15.0s = preserva comportamiento previo. Clamp
-# [1.0, 60.0]: el piso defiende contra `=0.001` accidental (rompe en
-# latencia normal), el techo contra `=120` que dejaría workers FastAPI
-# bloqueados más allá de la SLA del frontend (60s total-graph timeout).
-# Auto-registrado en `_KNOBS_REGISTRY` → visible en `/health/version`.
-# Tooltip-anchor: P1-CHAT-TTS-TIMEOUT-HARDCODED.
-_TTS_HTTPX_TIMEOUT_S = _env_float(
-    "MEALFIT_TTS_HTTPX_TIMEOUT_S",
-    15.0,
-    validator=lambda v: 1.0 <= v <= 60.0,
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -530,15 +513,7 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
 from fastapi.responses import Response
 import asyncio
 import os
-import httpx
 
-# [P1-CHAT-TTS-1 · 2026-05-11] Rate limiter para el TTS proxy. 60 calls/min
-# por user_id autenticado (IP fallback para anon — pero el endpoint rechaza
-# anons explícitamente abajo, así que el IP-bucket es defensa adicional contra
-# burst pre-auth). Voice mode genera chunks ~1/seg, 60/min cubre conversación
-# fluida sin pegarle al cap. Singleton módulo-level — mismo patrón que
-# `_PLAN_GEN_LIMITER` en routers/plans.py.
-_CHAT_TTS_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
 
 
 # [P1-CHAT-STREAM-RL · 2026-05-19] Rate limiter de los endpoints
@@ -558,9 +533,9 @@ _CHAT_TTS_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
 #   - Conversación humana típica: ~1-2 prompts/min. 30/min cubre con margen
 #     amplio para un user que itera fast (correcciones rápidas, "más",
 #     "no, otra cosa").
-#   - Voice mode (call_mode) genera ~1 chunk/seg pero cada chunk va al
-#     endpoint /tts (cap separado 60/min), NO al /stream. /stream solo
-#     recibe el prompt completo del user, una vez por turn.
+#   - Voice mode (call_mode): el audio lo dice el propio dispositivo
+#     (P1-PLAN-LOTE-682); /stream solo recibe lo que el usuario dijo,
+#     una vez por turno, igual que un mensaje escrito.
 #   - Bots/scrapers: 30/min limita hard el daño en burst — incluso si un
 #     atacante autenticado intenta spam, 30 prompts × 30 segundos = 15
 #     respuestas LLM, no 200.
@@ -627,168 +602,10 @@ _CHAT_STREAM_LIMITER = RateLimiter(
     period_seconds=60,
 )
 
-# [P1-CHAT-TTS-1 · 2026-05-11] Cap de longitud del texto enviado a
-# ElevenLabs. La API factura por carácter; sin cap, un user (o un atacante
-# autenticado) puede mandar 100kB y agotar el cupo del OWNER. Voice mode
-# del frontend produce chunks cortos (<300 chars típico, response completa
-# <1500). 1500 es safe upper bound; si en el futuro se requieren textos
-# más largos, considerar streaming chunked TTS.
-_CHAT_TTS_MAX_TEXT_CHARS = 1500
-
-
-@router.post("/tts")
-async def api_chat_tts(
-    data: dict = Body(...),
-    verified_user_id: Optional[str] = Depends(_CHAT_TTS_LIMITER),
-):
-    """[P1-CHAT-TTS-1 · 2026-05-11] TTS proxy a ElevenLabs.
-
-    ANTES (pre-fix):
-      - Sin `Depends(...)`. Cualquiera con la URL podía POSTear texto
-        arbitrario; el servidor reenviaba a ElevenLabs con la API key
-        server-side. Vector: bot scraper + texto largo → cup del owner
-        consumido en horas.
-      - Sin cap de `len(text)`. Forwarding pasaba al request a ElevenLabs
-        tal cual.
-      - Sin `log_api_usage`. Cero accounting per-user de costo TTS.
-
-    DESPUÉS:
-      - `RateLimiter(max_calls=60, period_seconds=60)` requiere
-        Authorization Bearer válido (`get_verified_user_id` injerida por
-        el limiter). Rechazamos 401 si la cadena de auth no resolvió.
-      - `len(text) <= _CHAT_TTS_MAX_TEXT_CHARS` (1500). 413 si excede.
-      - `log_api_usage(verified_user_id, "elevenlabs_tts")` por call —
-        permite SRE auditar costo per-user, detectar bursts anómalos, y
-        es el path correcto para un futuro paywall TTS (hoy NO bypassea
-        `verify_api_quota` porque TTS es UX feature, NO genera plan; pero
-        el registro queda para reasoning).
-
-    Tooltip-anchor: P1-CHAT-TTS-1-AUTH
-    """
-    if not verified_user_id:
-        # `RateLimiter` resuelve el bucket por IP cuando no hay auth, pero
-        # NO rechaza la request. Para TTS necesitamos auth obligatoria
-        # (cost-bearing endpoint).
-        raise HTTPException(status_code=401, detail="Authentication required for TTS.")
-
-    text = data.get("text")
-    if not isinstance(text, str) or not text.strip():
-        raise HTTPException(status_code=400, detail="Missing text")
-    text = text.strip()
-    if len(text) > _CHAT_TTS_MAX_TEXT_CHARS:
-        raise HTTPException(
-            status_code=413,
-            detail=f"TTS text exceeds {_CHAT_TTS_MAX_TEXT_CHARS} chars (got {len(text)}).",
-        )
-
-    # Load and strip the API key to prevent whitespace or quotation errors
-    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip().strip('"').strip("'")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ElevenLabs API Key no configurada.")
-
-    # Voz "Rachel" predeterminada (fuerte en inglés/multilingüe) o equivalente
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL") # Bella
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": api_key
-    }
-
-    payload = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75
-        }
-    }
-
-    # [P1-TTS-FINALLY-LOG · 2026-05-15] Billing idempotente vía finally — mismo
-    # patrón que P2-AUDIT-NEW-2 cerró para `/chat/stream`.
-    #
-    # ANTES (P1-CHAT-TTS-1 original):
-    #   `log_api_usage` vivía DENTRO del `async with httpx.AsyncClient` solo en
-    #   path de éxito. Si la request a ElevenLabs lanzaba `TimeoutError`,
-    #   `httpx.HTTPStatusError`, `httpx.ConnectError`, etc, el accounting NO
-    #   se ejecutaba. ElevenLabs factura POR CARÁCTER SUBMITIDO (no por
-    #   response devuelto): si la request llegó al servidor antes del timeout,
-    #   ellos cobraron al owner y el usuario quedó sin charge en su cuota
-    #   mensual. Vector: usuario malicioso provoca timeouts deliberados (URL
-    #   bloqueada en cliente / network throttling) → tokens TTS gastados sin
-    #   cobrar a cuota.
-    #
-    # FIX:
-    #   - `_billed` flag dedupea (defensivo, finally corre una sola vez).
-    #   - `_request_started` activa cuando entramos al `async with` httpx
-    #     (api_key validado, url construida). Si fallamos ANTES de eso
-    #     (auth, missing api_key), finally NO factura — esos errores no
-    #     consumieron crédito en ElevenLabs.
-    #   - Timeout-specific catch emite `pipeline_metrics` con
-    #     `node='tts_timeout'` para que SRE pueda graficar la incidencia.
-    _tts_billed = False
-    _tts_request_started = False
-
-    try:
-        _tts_request_started = True
-        # [P1-CHAT-TTS-TIMEOUT-HARDCODED · 2026-05-24] timeout via knob, no literal.
-        async with httpx.AsyncClient(timeout=_TTS_HTTPX_TIMEOUT_S) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            return Response(content=resp.content, media_type="audio/mpeg")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Error ElevenLabs {e.response.status_code}: {e.response.text}")
-        raise HTTPException(status_code=500, detail="Error en generación TTS")
-    except (httpx.TimeoutException, asyncio.TimeoutError) as _e_timeout:
-        logger.error(f"[P1-TTS-FINALLY-LOG] Timeout ElevenLabs ({_e_timeout!r})")
-        try:
-            from db_core import execute_sql_write
-            import json as _json_tts
-            # [P2-PROD-AUDIT-3 · 2026-05-30] INSERT síncrono offloaded del event
-            # loop (handler async). Ver nota en el finally.
-            await asyncio.to_thread(
-                execute_sql_write,
-                """
-                INSERT INTO pipeline_metrics
-                    (user_id, session_id, node, duration_ms, retries,
-                     tokens_estimated, confidence, metadata)
-                VALUES (%s, NULL, %s, 0, 0, %s, 0, %s::jsonb)
-                """,
-                (
-                    verified_user_id,
-                    "tts_timeout",
-                    len(text),
-                    _json_tts.dumps({
-                        "provider": "elevenlabs",
-                        "timeout_threshold_s": _TTS_HTTPX_TIMEOUT_S,
-                        "char_count": len(text),
-                    }, ensure_ascii=False),
-                ),
-            )
-        except Exception as _tick_err:
-            logger.debug(f"[P1-TTS-FINALLY-LOG] tick timeout falló: {_tick_err}")
-        raise HTTPException(status_code=504, detail="Timeout en generación TTS")
-    except Exception as e:
-        logger.error(f"Error general llamando a ElevenLabs: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error en generación TTS")
-    finally:
-        # [P1-TTS-FINALLY-LOG · 2026-05-15] Cobrar accounting siempre que
-        # se haya iniciado la request a ElevenLabs, sin importar success/
-        # error/timeout. Best-effort try/except: un fallo de DB no debe
-        # tumbar la response del usuario.
-        if _tts_request_started and not _tts_billed and verified_user_id:
-            try:
-                # [P2-PROD-AUDIT-3 · 2026-05-30] `log_api_usage` es un INSERT
-                # síncrono (roundtrip DB ~10-200ms); este `finally` corre en CADA
-                # request TTS (incl. el success path), y este handler es `async def`
-                # → llamarlo directo bloqueaba el event loop del worker uvicorn.
-                # Hermano del contrato P1-ASYNC-SYNC-DB-BLOCKING (plans.py usa
-                # asyncio.to_thread; billing.py usa _run_sync_db_in_thread).
-                await asyncio.to_thread(log_api_usage, verified_user_id, "elevenlabs_tts")
-                _tts_billed = True
-            except Exception as _audit_err:
-                logger.warning(f"[P1-TTS-FINALLY-LOG] log_api_usage tts falló: {_audit_err}")
+# [P1-PLAN-LOTE-682 · 2026-09-28] Aquí vivía `POST /tts`: el proxy a ElevenLabs del viejo Modo Llamada.
+# Sin llamadores desde mayo (P1-DEADCODE-TTS) y reemplazado por la voz del propio dispositivo
+# (`speechSynthesis`, frontend `utils/vozDelCoach.js`): ya no se manda texto a ElevenLabs, y un endpoint
+# muerto que aún podía gastar su saldo (y créditos de plan: `elevenlabs_tts` caía en la lista negativa) sale.
 
 @router.post("/feedback")
 async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):

@@ -74,13 +74,6 @@ def test_anchor_async_sync_in_plans():
     )
 
 
-def test_anchor_tts_timeout_in_chat():
-    src = _read(_CHAT)
-    assert "P1-CHAT-TTS-TIMEOUT-HARDCODED" in src, (
-        "Falta anchor `P1-CHAT-TTS-TIMEOUT-HARDCODED` en backend/routers/chat.py."
-    )
-
-
 # ---------------------------------------------------------------------------
 # Sección 2 — `asyncio` importado + helper/uso en los 3 routers
 # ---------------------------------------------------------------------------

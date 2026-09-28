@@ -41,6 +41,16 @@ def test_las_reglas_de_voz_van_al_final_y_mandan():
         assert regla in _CHAT_CALL_MODE_RULES, regla
 
 
+def test_elevenlabs_ya_no_esta_en_el_backend():
+    """La voz la pone el dispositivo: el proxy `POST /tts` a ElevenLabs (sin llamadores desde mayo) salió, y con él
+    su limitador, su tope de caracteres y su knob. Si vuelve un TTS de pago, tiene que ser una decisión visible
+    (y la política de privacidad tiene que volver a nombrar al proveedor)."""
+    chat = Path(__file__).resolve().parents[1].joinpath("routers", "chat.py").read_text(encoding="utf-8", errors="replace")
+    for resto in ('@router.post("/tts")', "api.elevenlabs.io", "ELEVENLABS_API_KEY", "_CHAT_TTS_LIMITER",
+                  "_CHAT_TTS_MAX_TEXT_CHARS", "MEALFIT_TTS_HTTPX_TIMEOUT_S", '"elevenlabs_tts"'):
+        assert resto not in chat, resto
+
+
 def test_el_stream_elige_el_prompt_de_voz_con_is_call_mode():
     src = Path(__file__).resolve().parents[1].joinpath("agent.py").read_text(encoding="utf-8", errors="replace")
     assert "_base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT" in src

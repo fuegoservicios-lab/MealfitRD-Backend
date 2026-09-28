@@ -131,15 +131,6 @@ def test_p2_tools_medical_clinical_llm_timeout():
     assert "P2-LLM-TIMEOUT-SWEEP" in src
 
 
-def test_p2_chat_tts_db_writes_offloaded():
-    """Los INSERTs sync del handler async de TTS deben ir por asyncio.to_thread."""
-    src = _read("routers", "chat.py")
-    body = _fn_body(src, "async def api_chat_tts(", end_marker="@router.post(\"/feedback\")")
-    assert 'await asyncio.to_thread(log_api_usage, verified_user_id, "elevenlabs_tts")' in body
-    assert "await asyncio.to_thread(\n                execute_sql_write," in body
-
-
-# ════════════════════════════════════════════════════════════════════ P2 ENV normalize
 def test_p2_is_production_helper_ssot():
     knobs_src = _read("knobs.py")
     assert "def is_production() -> bool:" in knobs_src
