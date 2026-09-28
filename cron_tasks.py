@@ -31237,7 +31237,9 @@ __PLAN_MODE_GATE__
                             _current_timeout = CHUNK_PIPELINE_TIMEOUT_SECONDS
                             if _pantry_attempt > 0 or _pickup_attempts > 1:
                                 _current_timeout = int(_current_timeout * 1.5)
-                        
+                            # [P1-PLAN-LOTE-707] nunca menos que el presupuesto del propio pipeline (su hilo corre igual)
+                            _current_timeout = __import__("espera_del_chunk").espera_del_pipeline(_current_timeout)
+
                             _t0 = time.time()
                             result = _fut.result(timeout=_current_timeout)
                         except _cf.TimeoutError:
