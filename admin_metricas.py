@@ -418,21 +418,26 @@ def bloque_activos_dia(ctx: _Ctx) -> dict:
     return {"id": "activos_dia", "seccion": "Usuarios",
             "titulo": "Usuarios activos por semana" if unidad == "week" else "Usuarios activos por día",
             "tipo": "serie", "puntos": _serie(ctx, filas, _entero),
-            "nota": "Personas distintas que registraron una comida o escribieron al coach ese día. Sin tus cuentas."}
+            "nota": ("Personas distintas que registraron una comida o escribieron al coach "
+                     f"{'esa semana' if unidad == 'week' else 'ese día'}. Sin tus cuentas.")}
 
 
 def bloque_embudo(ctx: _Ctx) -> dict:
+    # Como en `_actividad_sql`: un mensaje de antes del 15-sep no lleva `user_id` y se atribuye por su sesión; sin
+    # esto, en 90 días el embudo decía que menos cuentas nuevas usaron el coach de las que lo usaron.
     zona = _ZONA
     r = _uno(
         "SELECT COUNT(*) AS cuentas, "
         "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM public.meal_plans mp WHERE mp.user_id = p.id)) AS con_plan, "
         "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM public.consumed_meals cm WHERE cm.user_id = p.id)) AS con_comida, "
-        "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM public.agent_messages am WHERE am.user_id = p.id "
-        "AND am.role = 'user')) AS con_coach, "
+        "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM public.agent_messages am "
+        "LEFT JOIN public.agent_sessions se ON se.id = am.session_id "
+        "WHERE COALESCE(am.user_id, se.user_id) = p.id AND am.role = 'user')) AS con_coach, "
         "COUNT(*) FILTER (WHERE (SELECT COUNT(DISTINCT x.dia) FROM ("
         " SELECT (cm.consumed_at AT TIME ZONE %s)::date AS dia FROM public.consumed_meals cm WHERE cm.user_id = p.id"
         " UNION SELECT (am.created_at AT TIME ZONE %s)::date FROM public.agent_messages am"
-        " WHERE am.user_id = p.id AND am.role = 'user') x) >= 2) AS volvieron "
+        " LEFT JOIN public.agent_sessions se ON se.id = am.session_id"
+        " WHERE COALESCE(am.user_id, se.user_id) = p.id AND am.role = 'user') x) >= 2) AS volvieron "
         f"FROM public.user_profiles p WHERE p.created_at >= {_VENTANA} AND p.id::text <> ALL(%s::text[])",
         (zona, zona, ctx.dias, ctx.fuera))
     total = int(r.get("cuentas") or 0)

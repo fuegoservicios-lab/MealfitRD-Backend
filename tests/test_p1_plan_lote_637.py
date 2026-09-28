@@ -163,6 +163,23 @@ def test_el_embudo_de_las_cuentas_nuevas(monkeypatch):
     assert e["nota"] == "Nadie se registró en estos 7 días." and e["pasos"][0]["texto"] == "—"
 
 
+def test_el_embudo_atribuye_los_mensajes_viejos_por_su_sesion(monkeypatch):
+    # antes del 15-sep los mensajes no llevan `user_id`: sin la sesión, «Escribieron al coach» contaba de menos
+    f, capturadas = _con()
+    monkeypatch.setattr(am, "execute_sql_query", f)
+    am.metricas(90)
+    q = next(q for q, _ in capturadas if "con_plan" in q)
+    assert q.count("LEFT JOIN public.agent_sessions se ON se.id = am.session_id") == 2
+    assert "am.user_id = p.id" not in q
+
+
+def test_la_nota_semanal_no_dice_ese_dia(monkeypatch):
+    f, _ = _con()
+    monkeypatch.setattr(am, "execute_sql_query", f)
+    assert "esa semana" in _bloque(am.metricas(90), "activos_dia")["nota"]
+    assert "ese día" in _bloque(am.metricas(7), "activos_dia")["nota"]
+
+
 def test_el_escaner_con_poca_muestra_no_pinta_porcentajes(monkeypatch):
     f, _ = _con(**{"vision_scan_resultado' AND metadata": {"n": 2, "fallidos": 1, "p50": 7900.0, "p90": 7900.0}})
     monkeypatch.setattr(am, "execute_sql_query", f)
