@@ -21,7 +21,7 @@ def _fake620(query, params=None, **kw):
     if "FROM public.meal_plans" in q:
         return [{"estado": "complete", "n": 3}, {"estado": "partial", "n": 1}]
     if "FROM public.plan_chunk_queue" in q:
-        return [{"status": "pending", "n": 6}, {"status": "completed", "n": 5}]
+        return {"programados": 6, "listos": 1, "en_curso": 0, "atrasados": 0, "esperan_usuario": 0}
     if "SUM(cost_usd_micros)" in q and "GROUP BY" in q:
         nodos = ["day_generator", "vision_scan", "planner", "reviewer", "chat_call_model", "culinary_judge",
                  "self_critique", "compressor", "nodo_nuevo_x", "fact_extractor_extract_facts"]
@@ -48,10 +48,11 @@ def test_cifras_principales_y_subfilas(monkeypatch):
     r = am.metricas(7)
     destacados = {b["id"]: [f["etiqueta"] for f in b["filas"] if f.get("destacado")] for b in r["bloques"]
                   if b["tipo"] == "kpis"}
-    assert destacados == {"uso": ["Activas en 7 días", "Comidas registradas"],
+    # lote 637: las alertas salen de Planes (van a «Requiere atención») y el coach destaca personas, no la tasa
+    assert destacados == {"cuentas": [],
                           "escaner": ["Fotos analizadas", "Platos registrados con el escáner"],
-                          "coach": ["Mensajes del usuario", "Tasa de 👎"],
-                          "planes": ["Planes creados", "Alertas del sistema abiertas"]}
+                          "coach": ["Mensajes de usuarios", "Personas que lo usaron"],
+                          "planes": ["Planes creados"]}
     esc = _filas(_bloque(r, "escaner"))
     assert esc["Cambió un ingrediente"]["nivel"] == 1 and esc["Tecleó las macros"]["nivel"] == 1
     # una fila destacada se pinta aparte, arriba: sus subfilas quedarían colgando de la fila de encima. Por eso las
@@ -82,12 +83,13 @@ def test_el_escaner_pide_su_propia_fila(monkeypatch):
 def test_planes_y_cola_en_espanol(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake620)
     planes = _filas(_bloque(am.metricas(7), "planes"))
-    assert planes["Estado de los planes"]["valor"] == ""
+    assert planes["Estado de esos planes"]["valor"] == ""
     assert planes["Completos"]["valor"] == "3" and planes["Completos"]["nivel"] == 1
     assert planes["Parciales"]["valor"] == "1"
-    assert planes["Bloques en cola"]["valor"] == "11"
-    assert planes["Pendientes"]["valor"] == "6" and planes["Pendientes"]["nivel"] == 1
-    assert planes["Completados"]["valor"] == "5"
+    # lote 637: la cola es la de AHORA, no los bloques creados en el periodo
+    assert planes["Bloques en la cola ahora"]["valor"] == "7"
+    assert planes["Programados para más adelante"]["valor"] == "6" and planes["Programados para más adelante"]["nivel"] == 1
+    assert planes["Listos para generarse"]["valor"] == "1"
 
 
 def test_gasto_con_nombres_legibles_barras_y_resto_agrupado(monkeypatch):
@@ -135,9 +137,9 @@ def test_la_nota_larga_se_corta_en_una_palabra(monkeypatch):
 def test_el_escaner_avisa_desde_cuando_registra(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake620)
     desde = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)
-    assert _bloque(am.metricas(30), "escaner")["nota"] == f"Se registra desde el {desde:%d-%m-%Y}."
-    # si ya registraba antes del periodo, no hay nada que avisar
-    assert "nota" not in _bloque(am.metricas(1), "escaner")
+    assert f"Se registra desde el {desde:%d-%m-%Y}." in _bloque(am.metricas(30), "escaner")["nota"]
+    # si ya registraba antes del periodo, no hay nada que avisar (lote 637: la nota sigue diciendo «sin tus cuentas»)
+    assert "Se registra" not in _bloque(am.metricas(1), "escaner")["nota"]
 
 
 def test_sigue_sin_filtrar_identidad(monkeypatch):

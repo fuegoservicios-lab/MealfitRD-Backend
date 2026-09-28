@@ -42,6 +42,27 @@ Uso, Escáner, Coach, Planes, Gasto de IA y Banco del analizador (tabla `analyze
 frontend solo lo pinta: una métrica nueva es solo backend. Un bloque que falla sale «No disponible» sin tumbar a los
 demás.
 
+### Lote 637-639 (28-sep): el panel se entiende
+
+El dueño: «se ve feo y poco entendible». Medido antes del cambio: «3 activas» incluía al dueño probando; «11 alertas
+abiertas» eran 6 notas `info` y 5 avisos; «Bloques en cola» eran los creados en el periodo, no los que esperan; el
+Escáner pintaba porcentajes de 2 fotos; ningún número tenía contra qué compararse.
+
+- **Secciones** (`seccion` en cada bloque, el pintor abre un título por cambio): Resumen → Requiere atención →
+  Usuarios → Producto → Costes → Calidad del escáner.
+- **Tipos nuevos**: `resumen` (cifra + cambio frente al periodo anterior con `tono` bueno/malo/aviso/neutro + `ayuda`),
+  `avisos` (alertas agrupadas por el PREFIJO de `alert_key` —lo de detrás de «:» son ids y nunca sale—, traducidas en
+  `_ALERTA`, con `nivel` crítico/aviso/info), `serie` (barras por día; por semana con más de 31 días; días del reloj de
+  RD) y `embudo` (qué hicieron las cuentas nuevas del periodo). Las filas `kpis` aceptan `ayuda`.
+- **Sin las cuentas admin** (las de `MEALFIT_ADMIN_USER_IDS` + `plan_tier='admin'`) en todo lo que cuenta personas; el
+  gasto SÍ las incluye (el dinero sale igual) y la cola también (es salud del sistema).
+- **Cola «ahora»**: programados / listos / generándose / esperan al usuario / atrasados (turno pasado hace >2 h). Los
+  atrasados cuentan como aviso en el estado del sistema.
+- **Escáner con menos de 20 fotos**: conteos y tiempo, sin porcentajes.
+- La pestaña del navegador dice «Panel de administración» (`RouteTitle.RUTAS_INTERNAS`), sin indexar.
+
+Tests: `test_p1_plan_lote_637.py`; frontend `lote638.test.jsx`, `lote639.test.jsx`.
+
 ## Cómo se enciende (con permiso del dueño)
 
 1. Aplicar `p1_plan_lote_574_admin_access_log_2026_09_27.sql` (y la 572 del banco) con `scripts/apply_migration.py --apply`.

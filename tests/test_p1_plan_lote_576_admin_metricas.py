@@ -10,26 +10,42 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 
 def _fake(query, params=None, fetch_one=False, fetch_all=False):
+    # [P1-PLAN-LOTE-637] el panel creció (resumen, avisos, series, embudo, cuentas sin admin): el orden importa, las
+    # consultas nuevas se reconocen antes que las viejas por su texto propio.
     q = " ".join(query.split())
-    if "FROM public.user_profiles" in q:
-        return {"n": 12}
+    if "plan_tier = 'admin'" in q:
+        return []
+    if "FROM public.system_alerts" in q:
+        return []
+    if "FROM public.plan_chunk_queue" in q:
+        return {"programados": 0, "listos": 0, "en_curso": 0, "atrasados": 0, "esperan_usuario": 0}
+    if "date_trunc" in q:
+        return []
     if "COUNT(DISTINCT u)" in q:
         return {"n": 5}
+    if "con_plan" in q:
+        return {"cuentas": 0}
+    if "plan_tier AS tier" in q:
+        return [{"tier": "gratis", "n": 12}]
+    if "subscription_status" in q:
+        return {"n": 0}
+    if "FROM public.user_profiles" in q:
+        return {"n": 12}
     if "FROM public.consumed_meals" in q:
         return {"n": 40}
+    if "vision_scan_resultado" in q and "MIN(created_at)" in q:
+        return {"desde": None}
     if "vision_scan_resultado" in q:
         return {"n": 20, "fallidos": 2, "p50": 4200.0, "p90": 9100.0}
     if "scan_outcome" in q:
         return {"n": 10, "corregidos": 4, "cambiar": 2, "describelo": 1, "cantidades": 3, "dudas": 1, "macros": 0,
                 "desvio": 0.18}
     if "FROM public.agent_messages" in q:
-        return {"preguntas": 30, "respuestas": 31, "up": 6, "down": 2}
+        return {"preguntas": 30, "respuestas": 31, "personas": 4, "up": 6, "down": 2}
+    if "'generation_status' = 'failed'" in q:
+        return {"n": 0}
     if "FROM public.meal_plans" in q:
         return [{"estado": "complete", "n": 3}, {"estado": "partial", "n": 1}]
-    if "FROM public.plan_chunk_queue" in q:
-        return [{"status": "completed", "n": 9}]
-    if "FROM public.system_alerts" in q:
-        return {"n": 1}
     if "SUM(cost_usd_micros)" in q and "GROUP BY" in q:
         return [{"funcion": "vision_scan", "llamadas": 14, "micros": 30000}]
     if "SUM(cost_usd_micros)" in q:
@@ -45,17 +61,20 @@ def _bloque(r, bid):
     return next(b for b in r["bloques"] if b["id"] == bid)
 
 
-def test_los_seis_bloques_redactados(monkeypatch):
+def test_los_bloques_redactados(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake)
     r = am.metricas(7)
-    assert [b["id"] for b in r["bloques"]] == ["uso", "escaner", "coach", "planes", "gasto", "analizador"]
-    uso = {f["etiqueta"]: f["valor"] for f in _bloque(r, "uso")["filas"]}
-    assert uso == {"Cuentas": "12", "Activas en 7 días": "5", "Comidas registradas": "40"}
+    # [P1-PLAN-LOTE-637] «uso» se repartió entre el resumen y la sección Usuarios
+    assert [b["id"] for b in r["bloques"]] == ["resumen", "atencion", "activos_dia", "embudo", "cuentas", "coach",
+                                               "planes", "escaner", "gasto_dia", "gasto", "analizador"]
+    cuentas = {f["etiqueta"]: f["valor"] for f in _bloque(r, "cuentas")["filas"]}
+    assert cuentas["Cuentas"] == "12" and cuentas["Comidas registradas en 7 días"] == "40"
+    assert _bloque(r, "resumen")["tarjetas"][0]["valor"] == "5"
     esc = {f["etiqueta"]: f["valor"] for f in _bloque(r, "escaner")["filas"]}
     assert esc["Análisis fallidos"] == "10 %" and esc["Corregidos por el usuario"] == "40 %"
     assert esc["Tiempo de análisis (mediana / p90)"] == "4.2 s / 9.1 s"
     coach = {f["etiqueta"]: f["valor"] for f in _bloque(r, "coach")["filas"]}
-    assert coach["Tasa de 👎"] == "25 %"
+    assert coach["Respuestas con 👎"] == "25 %"  # lote 637: con valoraciones
     gasto = _bloque(r, "gasto")
     assert gasto["tipo"] == "tabla" and gasto["filas"] == [["Escáner de fotos", "14", "US$0.03"]]  # lote 620
     assert "US$0.28" in gasto["titulo"]
@@ -75,9 +94,9 @@ def test_un_bloque_roto_no_tumba_los_demas(monkeypatch):
         return _fake(query, params, **kw)
     monkeypatch.setattr(am, "execute_sql_query", _roto)
     r = am.metricas(7)
-    assert _bloque(r, "analizador") == {"id": "analizador", "titulo": "Banco del analizador", "tipo": "error",
-                                        "error": "No disponible"}
-    assert _bloque(r, "uso")["tipo"] == "kpis"
+    assert _bloque(r, "analizador") == {"id": "analizador", "seccion": "Calidad del escáner",
+                                        "titulo": "Banco del analizador", "tipo": "error", "error": "No disponible"}
+    assert _bloque(r, "cuentas")["tipo"] == "kpis"
 
 
 def test_los_dias_se_acotan(monkeypatch):
@@ -92,16 +111,15 @@ def test_planes_y_gasto_no_pintan_texto_libre(monkeypatch):
         if "FROM public.meal_plans" in query:
             return [{"estado": "juan@correo.com mi mensaje", "n": 1}, {"estado": "complete", "n": 2},
                     {"estado": "otra cosa", "n": 4}]
-        if "FROM public.plan_chunk_queue" in query:
-            return [{"status": "raro con espacios", "n": 1}]
         if "SUM(cost_usd_micros)" in query and "GROUP BY" in query:
             return [{"funcion": "Nodo Raro@x", "llamadas": 1, "micros": 10000}]
         return _fake(query, params, **kw)
     monkeypatch.setattr(am, "execute_sql_query", _fake2)
     r = am.metricas(7)
     planes = {f["etiqueta"]: f["valor"] for f in _bloque(r, "planes")["filas"]}
-    # lote 620: en español y sin «· » (la subfila va en `nivel`); lo inseguro sigue siendo «otro»
-    assert planes["Otro estado"] == "5" and planes["Completos"] == "2" and planes["Otro"] == "1"
+    # lote 620: en español y sin «· » (la subfila va en `nivel`); lo inseguro sigue siendo «otro». Lote 637: la cola
+    # ya no se agrupa por estado crudo (se cuenta por columnas fijas), así que no hay «Otro» de la cola.
+    assert planes["Otro estado"] == "5" and planes["Completos"] == "2"
     assert _bloque(r, "gasto")["filas"] == [["Otro", "1", "US$0.01"]]
     assert "@" not in json.dumps(r, ensure_ascii=False)
 
