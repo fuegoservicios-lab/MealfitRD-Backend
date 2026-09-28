@@ -26,4 +26,7 @@ def test_el_frontend_precarga_y_guarda_copia_vieja():
         return
     assert (_FRONT / "src" / "utils" / "precargaDePaginas.js").exists()
     cache = (_FRONT / "src" / "utils" / "pantryCache.js").read_text(encoding="utf-8")
-    assert "export const getStaleInventory" in cache and "export const borrarCacheDeInventario" in cache
+    # [P1-PLAN-LOTE-742] el borrado vive en el módulo mínimo del arranque y pantryCache lo re-exporta
+    assert "export const getStaleInventory" in cache and "export { borrarCacheDeInventario };" in cache
+    minimo = (_FRONT / "src" / "utils" / "inventarioEnMemoria.js").read_text(encoding="utf-8")
+    assert "export const borrarCacheDeInventario" in minimo

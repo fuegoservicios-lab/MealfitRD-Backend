@@ -92,7 +92,8 @@ def test_inventory_cache_reads_localstorage_fallback():
     )
     # Sanity: hidrata _inventoryEntry desde localStorage para siguientes
     # llamadas (fast path).
-    assert re.search(r"_inventoryEntry\s*=\s*parsed", body), (
+    # [P1-PLAN-LOTE-742] el estado vive en `inventarioEnMemoria.js` y pantryCache lo usa como `_INV.entrada`
+    assert re.search(r"(?:_inventoryEntry|_INV\.entrada)\s*=\s*parsed", body), (
         "Tras leer de localStorage, debe hidratar `_inventoryEntry` para "
         "que próximas llamadas usen fast path. Ver "
         "P1-PANTRY-CACHE-LOCALSTORAGE."
@@ -106,7 +107,7 @@ def test_invalidate_also_clears_localstorage():
     src = _read(_PANTRY_CACHE_JS)
     body = _extract_export(src, "invalidateInventoryCache")
     assert body, "invalidateInventoryCache no encontrada"
-    assert re.search(r"_inventoryEntry\s*=\s*null", body), (
+    assert re.search(r"(?:_inventoryEntry|_INV\.entrada)\s*=\s*null", body), (  # [P1-PLAN-LOTE-742]
         "invalidateInventoryCache no resetea in-memory entry."
     )
     # Debe llamar _safeLsRemove o localStorage.removeItem.
