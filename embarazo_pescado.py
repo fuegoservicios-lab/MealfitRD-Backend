@@ -25,6 +25,89 @@ _PESCADO = re.compile(r"\b(?:filetes?\s+de\s+dorado|(?:filetes?\s+de\s+)?(?:pesc
                       r"langostinos?|calamar(?:es)?|pulpo|mejillones|langosta|cangrejo))\b", re.IGNORECASE)
 _SUSTITUTOS = ("Pechuga de pollo", "Pechuga de pavo", "Carne de res", "Cerdo")
 
+# [P1-PLAN-LOTE-783 · 2026-09-28] El pescado de LATA se come tal cual; su sustituto, no. Con el tope, «Mezcla el atún en agua
+# (ya viene cocido) con el tomate… sirve frío» quedaba «mezcla pechuga de pavo en agua (ya viene cocido)… sirve frío», y la
+# batería real de lactancia servía «Acompaña con pechuga de pavo en agua» en un revoltillo «…y pavo en agua»: carne CRUDA,
+# fría, a una embarazada o lactante (el aviso de 74 °C del 737 no dice CUÁNDO cocinarla). Si el pescado cambiado era de
+# lata, la frase del envase se va entera (nombre, descripción y pasos), «(ya viene cocido)» se cae, «escurre» pasa a
+# «desmenuza» y, si ningún paso cocina el sustituto, lleva la «💡 Cocción previa» del lote 407 (74 °C, tras el Mise en
+# place). El pescado fresco sigue como estaba: sus pasos ya lo cocinan. Knob `MEALFIT_PREGNANCY_FISH_SUB_COOK`.
+# tooltip-anchor: P1-PLAN-LOTE-783
+_SUFIJOS_ENVASE = (" en agua", " en aceite", " en salmuera", " en lata", " de lata",
+                   " enlatado", " enlatada", " enlatados", " enlatadas")
+_PESCADO_ENVASE = re.compile("(?:" + _PESCADO.pattern + r")(?:\s+(?:en\s+(?:agua|aceite|salmuera|lata)|de\s+lata|"
+                             r"enlatad[oa]s?)\b)?", re.IGNORECASE)
+_LISTO_RE = re.compile(r"\ben\s+(?:agua|aceite|salmuera)\b|\blatas?\b|enlatad", re.IGNORECASE)
+_LATA_POR_DEFECTO_RE = re.compile(r"\bat[uú]n\b|\bsardinas?\b|\barenque", re.IGNORECASE)
+_FRESCO_RE = re.compile(r"\bfresc[oa]s?\b|\bfiletes?\b|\bpostas?\b|\blomos?\b|\brodajas?\b", re.IGNORECASE)
+_YA_VIENE_RE = re.compile(r"\s*\((?:ya\s+viene|viene\s+ya)\s+cocid[oa]s?\)", re.IGNORECASE)
+_CLAVE_SUSTITUTO = {"pechuga de pollo": "pollo", "pechuga de pavo": "pavo", "carne de res": "res", "cerdo": "cerdo"}
+
+
+def _sub_cocina_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_PREGNANCY_FISH_SUB_COOK", True)
+    except Exception:                                                          # noqa: BLE001
+        return True
+
+
+def _es_de_lata(linea) -> bool:
+    """¿Pescado que se come tal cual? «en agua/aceite», lata; el atún, la sardina y el arenque lo son salvo que la línea
+    diga fresco, filete, posta, lomo o rodaja."""
+    s = str(linea or "")
+    return bool(_LISTO_RE.search(s) or (_LATA_POR_DEFECTO_RE.search(s) and not _FRESCO_RE.search(s)))
+
+
+def _cocinar_sustituto(meal: dict, nombre: str) -> int:
+    """Tras cambiar pescado de lata por `nombre` (crudo): fuera «(ya viene cocido)», «escurre» → «desmenuza» y, si ningún
+    paso lo cocina, la «💡 Cocción previa» del 407 tras el Mise en place. Nº de cambios; 0 ante cualquier error."""
+    try:
+        import pasos_cantidades as pc
+        rec = meal.get("recipe")
+        clave = _CLAVE_SUSTITUTO.get(str(nombre or "").lower())
+        if not isinstance(rec, list) or not rec or not clave:
+            return 0
+        nucleo = re.escape(str(nombre).lower().split(" de ")[0])        # «pechuga», «carne», «cerdo»
+        sub = r"(?:(?:el|la|los|las)\s+)?" + re.escape(str(nombre).lower())
+        n = 0
+        nuevos = []
+        for p in rec:
+            q = p
+            if isinstance(p, str) and not pc._es_nota(p) and re.search(nucleo, p, re.IGNORECASE):
+                q = _YA_VIENE_RE.sub("", p)
+                if q.strip().lower().startswith("mise en place"):
+                    # «escurre el atún» del Mise en place: crudo no se escurre, y la cocción previa ya lo desmenuza
+                    q = re.sub(r"\b[Ee]scurre\s+" + sub + r"\s*(?:y\s+|;\s*|,\s*)", "", q, flags=re.IGNORECASE)
+                    q = re.sub(r"(?:\s*[,;]\s*|\s+y\s+)[Ee]scurre\s+" + sub + r"\b", "", q, flags=re.IGNORECASE)
+                    q = re.sub(r"\b[Ee]scurre\s+" + sub + r"\b\s*", "", q, flags=re.IGNORECASE)
+                    if re.fullmatch(r"\s*mise en place\s*:?\s*\.?\s*", q, re.IGNORECASE):
+                        n += 1
+                        continue
+                q = re.sub(r"\b([Ee])scurre\s+e\s+incorpora\b", lambda m: "Incorpora" if m.group(1) == "E" else "incorpora", q)
+                q = re.sub(r"\b([Ee])scurre\b(?=[^.;]{0,20}" + nucleo + ")",
+                           lambda m: "Desmenuza" if m.group(1) == "E" else "desmenuza", q)
+                n += q != p
+            nuevos.append(q)
+        pasos = " . ".join(pc._sa(str(p).lower()) for p in nuevos if isinstance(p, str) and not pc._es_nota(p))
+        if not re.search(pc._VERBO_COCCION_407 + pc._SINONIMOS_407.get(clave, clave), pasos):
+            clase, art = pc._clase_407(clave, str(nombre).lower())
+            nota = pc._NOTA_PROT_407[clase].format(n=art)
+            if nota not in nuevos:
+                i_mise = next((i for i, x in enumerate(nuevos)
+                               if isinstance(x, str) and x.strip().lower().startswith("mise en place")), None)
+                pos = (i_mise + 1) if i_mise is not None else 0
+                nuevos[pos:pos] = [nota]
+                n += 1
+        if n:
+            meal["recipe"] = nuevos
+            logger.info(f"🐟 [P1-PLAN-LOTE-783] {str(meal.get('name'))[:44]!r}: el {str(nombre).lower()} que sustituye al "
+                        f"pescado de lata se cocina ({n} cambio(s))")
+        return n
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-783] no-op: {type(e).__name__}: {e}")
+        return 0
+
 
 def tope_g() -> int:
     try:
@@ -111,20 +194,26 @@ def limitar_pescado(plan, form_data, db=None) -> int:
                 acumulado += gramos                  # sin sustituto limpio el plato se queda como está
                 continue
             try:
+                listo = _sub_cocina_on() and any(_es_de_lata(meal["ingredients"][i]) for i in idx)  # [P1-PLAN-LOTE-783]
                 tokens: set = set()            # los pasos dicen «la tilapia», no «filete de tilapia»: los tres
                 for i in idx:
                     g = _PESCADO.search(meal["ingredients"][i]).group(0).lower()
                     base = re.sub(r"^filetes?\s+de\s+", "", g)
                     tokens |= {g, base, base.split()[0]}
+                if listo:                      # [P1-PLAN-LOTE-783] la frase del envase se va entera
+                    tokens |= {t + suf for t in list(tokens) for suf in _SUFIJOS_ENVASE}
                 for campo in ("ingredients", "ingredients_raw"):
                     lineas = meal.get(campo)
                     if not isinstance(lineas, list):
                         continue
                     meal[campo] = [(f"{round(_gramos(x, db)) or 100} g de {nombre.lower()}"
                                     if isinstance(x, str) and _PESCADO.search(x) else x) for x in lineas]
-                meal["name"] = dish_naming.sustituir_alimento(meal, _PESCADO, nombre.split(" de ")[-1].capitalize()
+                meal["name"] = dish_naming.sustituir_alimento(meal, _PESCADO_ENVASE if listo else _PESCADO,
+                                                              nombre.split(" de ")[-1].capitalize()
                                                               if nombre.startswith("Pechuga") else nombre)
                 go._rewrite_recipe_steps_after_subs(meal, [(sorted(tokens, key=len, reverse=True), nombre.lower())])
+                if listo:
+                    _cocinar_sustituto(meal, nombre)  # [P1-PLAN-LOTE-783] crudo: se cocina, no se «escurre»
                 meal.pop("_display", None)
                 meal["_embarazo_pescado_cap"] = nombre
                 try:

@@ -1036,7 +1036,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # presupuesto de «almendras fileteadas», 1,5 % de las comidas del corpus) pasa a «maní picado».
 # [P1-PLAN-LOTE-782 · 2026-09-28] (backend) El cerrador de proteína comparaba la congruencia por SUBCADENA: «agua» (de
 # «Atún en agua») estaba dentro de «aguacate», y 86 de 1.244 desayunos del corpus recibían 35-300 g de atún. Por palabra.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-782 · 2026-09-28"
+# [P1-PLAN-LOTE-783 · 2026-09-28] (backend) Embarazo: el tope de pescado cambiaba el atún EN LATA por pechuga de pavo
+# y dejaba «mezcla pechuga de pavo en agua (ya viene cocido)… sirve frío»: carne cruda servida fría. Ahora se cocina.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-783 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
