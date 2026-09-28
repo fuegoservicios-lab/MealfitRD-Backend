@@ -1126,8 +1126,8 @@ def is_baking_pantry_staple(name) -> bool:
 # P1-BAKING-STAPLES (receta los usa, compra no los trae), ahora para un país entero en vez de 4
 # staples de horneado. Mismo mecanismo (keep unpriced, ~1 paquete estimado, categoría propia),
 # SEGUNDO registro de tokens con SU PROPIO knob de rollback — nunca toca
-# `_BAKING_PANTRY_STAPLE_TOKENS`/`is_baking_pantry_staple` (byte-identidad DO/knob-off intacta:
-# estos nombres NUNCA aparecen en un plan DO — `dish_templates.json` no los referencia). Si el
+# `_BAKING_PANTRY_STAPLE_TOKENS`/`is_baking_pantry_staple`. [G59 · P1-PLAN-LOTE-705] NO byte-idéntico en DO: Adobo, Sofrito,
+# Kétchup, Aderezo ranch salen en planes DO (28-sep: 13 planes/21 d, 0 ítems sin precio; el PDF avisa «estimado parcial»). Si el
 # owner sube alguno con precio real, `_is_verified_for_shopping` gana primero y este keep queda
 # no-op (mismo contrato que P1-BAKING-STAPLES).
 # [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M3] CORRECCIÓN de una claim previa de este
