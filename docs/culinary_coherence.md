@@ -1638,3 +1638,6 @@ Validación de la ronda (árbol de la primera versión → árbol corregido, sin
 cláusula y no el paso); corpus de 426 planes, V1 45 → 45, V2 0 → 0, V7a 53 → 53, V8a 18 → 18, alimento por alimento;
 biblioteca de 193 recetas RD de `deterministic_day`, V1/V2/V8a idénticos (V7a no se mide ahí: la biblioteca no trae
 las líneas de compra).
+Replay de la cola (contrato + pulido, que consulta V1/V7a en `retirar_sin_lista`) sobre los 426 planes crudos, en el
+VPS y sin IA: árbol base (`3ce2c235`) contra el árbol corregido de esta ronda, **426 de 426 salidas byte-idénticas**
+(los 67 planes del corpus reciente van dentro), con las dos listas de md5 guardadas junto a los scripts de la ronda.
