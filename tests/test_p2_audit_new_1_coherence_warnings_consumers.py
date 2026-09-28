@@ -142,8 +142,11 @@ def test_frontend_file_imports_and_invokes_helper(path: Path, recalc_key: str) -
     src = path.read_text(encoding="utf-8")
 
     # A) Import del helper
+    # [P1-PLAN-LOTE-629] o perezoso: `import('../utils/renderCoherenceWarnings').then(({ emitCoherenceToast }) => …)`
+    # (AssessmentContext va en el JS de arranque; el contrato es que el toast se emita, no la forma del import).
     import_pattern = re.compile(
-        r"import\s+\{\s*[^}]*emitCoherenceToast[^}]*\}\s+from\s+['\"][^'\"]*renderCoherenceWarnings['\"]",
+        r"import\s+\{\s*[^}]*emitCoherenceToast[^}]*\}\s+from\s+['\"][^'\"]*renderCoherenceWarnings['\"]"
+        r"|import\(\s*['\"][^'\"]*renderCoherenceWarnings['\"]\s*\)\s*\.then\(\s*\(\s*\{\s*[^}]*emitCoherenceToast",
     )
     assert import_pattern.search(src), (
         f"P2-AUDIT-NEW-1 violation: {path.name} no importa "
