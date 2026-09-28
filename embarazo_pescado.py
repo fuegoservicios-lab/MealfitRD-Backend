@@ -157,6 +157,53 @@ def _sustituto(dia: dict, meal: dict, vetos: list, go):
     return None
 
 
+# [P1-PLAN-LOTE-785 · 2026-09-28] El punto del PESCADO no sirve para el ave ni la carne. Con el tope, «forma tortitas y
+# hornéalas… hasta que el huevo esté cocido y el pescado alcance 63 °C» quedaba «…y pechuga de pavo alcance 63 °C» (corpus
+# de la cola 744, embarazo): el ave pide 74 °C y la carne 71 °C — las cifras de las notas del 407 y del 737. En la frase
+# que nombra al sustituto: 60-69 °C → su temperatura, y «hasta que se desmenuce / esté opaco» → «hasta que no quede
+# rosada por dentro». Las demás cifras (el horno a 200 °C) no se tocan. Knob `MEALFIT_PREGNANCY_FISH_SUB_COOK`.
+# tooltip-anchor: P1-PLAN-LOTE-785
+_TEMP_PESCADO_RE = re.compile(r"\b6\d\s*°\s*[Cc]\b")
+_PUNTO_PESCADO_RE = re.compile(r"\b(?:se\s+desmenuce(?:\s+(?:f[aá]cilmente|con\s+(?:un|el)\s+tenedor))?|"
+                               r"(?:est[eé]n?|quede[n]?)\s+opac[oa]s?(?:\s+y\s+firmes?)?)", re.IGNORECASE)
+
+
+def _punto_del_sustituto(meal: dict, nombre: str) -> int:
+    """En los pasos (no en las notas), la frase que nombra al sustituto deja el punto del pescado por el suyo. Nº de pasos
+    cambiados; 0 ante cualquier error."""
+    try:
+        import pasos_cantidades as pc
+        rec = meal.get("recipe")
+        clave = _CLAVE_SUSTITUTO.get(str(nombre or "").lower())
+        if not isinstance(rec, list) or not rec or not clave:
+            return 0
+        grados = "74 °C" if clave in ("pollo", "pavo") else "71 °C"
+        rosado = "rosado" if clave == "cerdo" else "rosada"
+        nucleo = re.compile(r"\b(?:" + re.escape(str(nombre).lower().split(" de ")[0]) + "|" + re.escape(clave) + r")\b",
+                            re.IGNORECASE)
+        n = 0
+        for i, p in enumerate(rec):
+            if not isinstance(p, str) or pc._es_nota(p) or not nucleo.search(p):
+                continue
+            partes = re.split(r"((?<!\d)[.;](?!\d))", p)
+            for j, cl in enumerate(partes):
+                if nucleo.search(cl):
+                    cl2 = _TEMP_PESCADO_RE.sub(grados, cl)
+                    cl2 = _PUNTO_PESCADO_RE.sub(f"no quede {rosado} por dentro", cl2)
+                    partes[j] = cl2
+            q = "".join(partes)
+            if q != p:
+                rec[i] = q
+                n += 1
+        if n:
+            meal["recipe"] = rec
+            logger.info(f"🌡️ [P1-PLAN-LOTE-785] {str(meal.get('name'))[:44]!r}: el {str(nombre).lower()} lleva su punto "
+                        f"({grados}), no el del pescado")
+        return n
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-785] no-op: {type(e).__name__}: {e}")
+        return 0
+
 def limitar_pescado(plan, form_data, db=None) -> int:
     """Devuelve cuántas comidas cambió. Muta `plan`."""
     cap = tope_g()
@@ -214,6 +261,8 @@ def limitar_pescado(plan, form_data, db=None) -> int:
                 go._rewrite_recipe_steps_after_subs(meal, [(sorted(tokens, key=len, reverse=True), nombre.lower())])
                 if listo:
                     _cocinar_sustituto(meal, nombre)  # [P1-PLAN-LOTE-783] crudo: se cocina, no se «escurre»
+                if _sub_cocina_on():
+                    _punto_del_sustituto(meal, nombre)  # [P1-PLAN-LOTE-785] 74 °C el ave, no los 63 °C del pescado
                 meal.pop("_display", None)
                 meal["_embarazo_pescado_cap"] = nombre
                 try:

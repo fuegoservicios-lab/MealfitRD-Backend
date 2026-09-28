@@ -1040,7 +1040,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # y dejaba «mezcla pechuga de pavo en agua (ya viene cocido)… sirve frío»: carne cruda servida fría. Ahora se cocina.
 # [P1-PLAN-LOTE-784 · 2026-09-28] (backend) «Montaje: marina pechuga de pollo cocido con el limón» con 1½ pechugas CRUDAS
 # en la lista y ningún paso que las cocine (perfil sin tiempo): el 407 no conocía «marina» ni «acompaña». Cocción previa.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-784 · 2026-09-28"
+# [P1-PLAN-LOTE-785 · 2026-09-28] (backend) Embarazo: el pescado fresco cambiado por pavo conservaba su punto —«…y
+# pechuga de pavo alcance 63 °C»—; el ave pide 74 °C y la carne 71 °C, en la frase que nombra al sustituto.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-785 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
