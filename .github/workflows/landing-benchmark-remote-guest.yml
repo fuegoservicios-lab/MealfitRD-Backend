@@ -9,17 +9,23 @@
 # fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [P1-LANDING-BENCH-1 · 2026-08-07] Corrida del benchmark del landing en modo REMOTE
 # (cuenta de invitado) — CERO secrets: el runner llama al API de PRODUCCIÓN como
-# user_id=guest y el servidor genera con sus propias claves (routing por tier: para un
-# guest, day-gen/swap/reviewer corren en gpt-5.6 Luna = OpenAI — P1-DAYGEN-TIER-MODEL /
-# P1-SWAP-LUNA / P1-REVIEWER-TIER-MODELS). El scoring (seguridad clínica + gym 7 ejes)
-# es local al runner con los scorers puros de landing_benchmarks.py.
+# user_id=guest y el servidor genera con sus propias claves y SU routing de modelos (knobs
+# del deploy; docs/llm_tier_routing.md — el reporte guarda /health/version en vez de
+# afirmar un modelo). El scoring (seguridad clínica + nutrición + gym 7 ejes) es local al
+# runner con los scorers puros de landing_benchmarks.py.
+#
+# [P1-PLAN-LOTE-749 · 2026-09-28] Por defecto corre la MATRIZ ENTERA (25 perfiles: el
+# default "20" dejaba fuera renal/anemia/gota/hígado graso/IMAO) con --conc 2 y un techo de
+# 330 min: 25 generaciones de ~6-10 min en serie no cabían en los 170 de antes. Reporte
+# schema v2 (bloque `run` con commit/protocolo/cohorte) que importa el landing.
 #
 # Por qué Actions: un sandbox de desarrollo con egress restringido no alcanza el deploy;
 # el runner sí. Paths ROOT-relative (convención macro-benchmark-nightly.yml).
 #
 # Trigger doble: push del PROPIO archivo en la rama del P-fix (SMOKE automático n=3) +
-# workflow_dispatch manual (default n=20, la matriz completa). Concurrencia 1 y con
-# backoff 429 en el cliente: el /analyze de prod tiene RateLimiter 3/60s per IP.
+# workflow_dispatch manual (default n=0 = la matriz completa, 25). Concurrencia 2 y con
+# backoff 429 en el cliente: el /analyze de prod tiene RateLimiter 3/60s per IP (2 en vuelo
+# con generaciones de minutos no lo rozan).
 name: landing-benchmark-remote-guest
 
 # Permisos MINIMOS. Sin este bloque, el `GITHUB_TOKEN` hereda los del repo, que
@@ -32,8 +38,8 @@ on:
   workflow_dispatch:
     inputs:
       n:
-        description: "límite de perfiles (0 = los 20 de la matriz)"
-        default: "20"
+        description: "límite de perfiles (0 = la matriz entera, 25 perfiles)"
+        default: "0"
       ids:
         description: "perfiles específicos, p.ej. '3,4,12,15' (gana sobre n; vacío = usar n)"
         default: ""
@@ -42,6 +48,9 @@ on:
         default: "true"
       api_base:
         description: "URL base del deploy (vacío = auto-descubrir)"
+        default: ""
+      architecture:
+        description: "arquitectura que se mide (v1 | v2.2 del contrato del landing; vacío = unspecified)"
         default: ""
   push:
     branches: [claude/landing-benchmarks-plan-generation-5ujyio]
@@ -70,13 +79,20 @@ concurrency:
 jobs:
   landing-benchmark-remote-guest:
     runs-on: ubuntu-latest
-    timeout-minutes: 170
+    # [P1-PLAN-LOTE-749] 25 perfiles × ~6-10 min (p90 ~15) a conc 2 ≈ 2-3 h + backoffs 429;
+    # 170 min no cabía. 330 queda bajo el tope de 360 de los runners hospedados.
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Descubrir API base del deploy
         id: discover
+        # [P1-PLAN-LOTE-749 · ronda 2] También este input viaja por `env:`: interpolado dentro del
+        # script, un `api_base` con `"; …` se ejecutaba como shell (la ronda 1 solo cubrió el paso
+        # del benchmark).
+        env:
+          IN_API_BASE: ${{ github.event.inputs.api_base }}
         run: |
-          BASE="${{ github.event.inputs.api_base }}"
+          BASE="$IN_API_BASE"
           if [ -z "$BASE" ]; then
             for host in https://app.bioboros.com https://mealfitrd.com https://www.mealfitrd.com https://bioboros.com; do
               code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$host/health" || true)
@@ -107,25 +123,42 @@ jobs:
       - name: Install backend deps (scorers locales)
         run: pip install -q -r requirements.txt
       - name: Benchmark remote (guest) contra el deploy
+        # [P1-PLAN-LOTE-749 · ronda 1] Los inputs del dispatch viajan por `env:` y se CITAN: antes
+        # `architecture` se interpolaba sin comillas dentro del script (texto libre ejecutado como
+        # shell). El stdout va a $RUNNER_TEMP: un `tee run_stdout.txt` en la raíz del checkout
+        # creaba un fichero sin trackear mientras el runner medía `git status`, y TODA corrida salía
+        # `source_dirty=True` (el importador del landing la rechaza).
+        env:
+          IN_N: ${{ github.event.inputs.n }}
+          IN_IDS: ${{ github.event.inputs.ids }}
+          IN_CHANGES: ${{ github.event.inputs.changes }}
+          IN_ARCH: ${{ github.event.inputs.architecture }}
+          API_BASE: ${{ steps.discover.outputs.base }}
         run: |
+          set -o pipefail
           # dispatch → inputs; push → env PUSH_RUN_* (editables arriba).
-          N="${{ github.event.inputs.n || '' }}"; [ -z "$N" ] && N="$PUSH_RUN_N"
-          IDS="${{ github.event.inputs.ids || '' }}"; [ -z "$IDS" ] && IDS="$PUSH_RUN_IDS"
-          CHANGES="${{ github.event.inputs.changes || '' }}"; [ -z "$CHANGES" ] && CHANGES="$PUSH_RUN_CHANGES"
-          EXTRA=""
-          [ "$CHANGES" = "true" ] && EXTRA="--changes"
-          [ -n "$IDS" ] && EXTRA="$EXTRA --ids $IDS"
-          PYTHONPATH=. python scripts/landing_benchmark.py remote "$N" \
-            --api-base "${{ steps.discover.outputs.base }}" \
-            --conc 1 $EXTRA --save-plans \
-            --out landing_benchmark_remote.json | tee run_stdout.txt
+          # [P1-PLAN-LOTE-749 · 2026-09-28] Antes el fallback `ids || PUSH_RUN_IDS` también
+          # corría en un DISPATCH con `ids` vacío: «vacío = usar n» acababa corriendo los 5 ids
+          # del smoke (4,9,17,19,20), y los ids ganan sobre n. Cada evento lee SOLO lo suyo.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            N="$IN_N"; IDS="$IN_IDS"; CHANGES="$IN_CHANGES"; ARCH="$IN_ARCH"
+          else
+            N="$PUSH_RUN_N"; IDS="$PUSH_RUN_IDS"; CHANGES="$PUSH_RUN_CHANGES"; ARCH=""
+          fi
+          [ -z "$N" ] && N=0
+          ARGS=(remote "$N" --api-base "$API_BASE" --conc 2 --save-plans
+                --out landing_benchmark_remote.json)
+          [ "$CHANGES" = "true" ] && ARGS+=(--changes)
+          [ -n "$IDS" ] && ARGS+=(--ids "$IDS")
+          [ -n "$ARCH" ] && ARGS+=(--architecture "$ARCH")
+          PYTHONPATH=. python scripts/landing_benchmark.py "${ARGS[@]}" | tee "$RUNNER_TEMP/run_stdout.txt"
       - name: Resumen al step summary
         if: always()
         run: |
           {
             echo "## Landing benchmark remote-guest — resumen"
             echo '```'
-            tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
+            tail -30 "$RUNNER_TEMP/run_stdout.txt" 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           # El JSON al LOG (no solo al artifact): el sandbox que orquesta esto no

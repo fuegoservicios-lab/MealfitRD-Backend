@@ -53,3 +53,10 @@ scratch/
 # Helpers ad-hoc one-off (no deben commitearse al repo)
 append_*.py
 scratch_*.py
+
+# [P1-PLAN-LOTE-749 · ronda 1] Salidas del benchmark del landing (scripts/landing_benchmark.py:
+# --out, --save-plans y el stdout de los workflows). Sin ignorarlas, una corrida anterior en el
+# mismo árbol marcaba la siguiente `source_dirty=True` y el importador del landing la rechazaba.
+landing_benchmark_*.json
+landing_plans_*.json
+run_stdout.txt
