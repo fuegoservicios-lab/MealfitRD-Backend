@@ -9,6 +9,8 @@ observación que además sigue («sin embargo, se detecta…») se queda, salvo 
 Los guards DETERMINISTAS (alérgeno/dieta/rechazo/piso) corren después y conservan la última palabra.
 
 El knob `MEALFIT_REVIEWER_NON_ISSUES_ADVISORY` vive en `graph_orchestrator` (registro de knobs) y se lee al llamar.
+[P1-PLAN-LOTE-746 · 2026-09-28] Los partes de cumplimiento («No se detectan alérgenos declarados», «Dieta 'balanced'
+respetada») los decide `revisor_confirmaciones` (knob propio `MEALFIT_REVIEWER_CONFIRMATIONS_DISCARD`).
 tooltip-anchor: P1-PLAN-LOTE-227-NO-DEFECTOS
 """
 from __future__ import annotations
@@ -30,7 +32,8 @@ _SELF_NEGATING_TAIL_RX = re.compile(
     r"(?:por lo que|as[ií] que|de modo que)\s+no (?:hay|existe|es|constituye) (?:una |ninguna )?violaci[oó]n",
     re.IGNORECASE)
 _ISSUE_CONTINUES_RX = re.compile(
-    r"sin embargo|no obstante|pero (?:adem[aá]s|se detecta|el plan)|se detecta(?:n)? (?:una|un|que)|aunque (?:el plan|se)",
+    r"sin embargo|no obstante|pero (?:adem[aá]s|se detecta|el plan)|se detecta(?:n)? (?:una|un|que)|aunque (?:el plan|se)|"
+    r"\bexcepto\b|\bsalvo\b|a excepci[oó]n de",   # [P1-PLAN-LOTE-746] «el plan es seguro excepto por…» afirma un defecto
     re.IGNORECASE)
 # [P1-PLAN-LOTE-255 · 2026-09-25] «Posible reactividad cruzada» con un alimento que el usuario NO declaró no es un
 # defecto: batería rd252 (maní + sésamo + «piña» escrita a mano) — el revisor rechazó como CRÍTICO la linaza «por el
@@ -61,7 +64,8 @@ def _downgrade_reviewer_non_issues(approved, issues, severity):
             _ultima = [s for s in re.split(r"(?<=[.;!?])\s+", t.strip()) if s.strip()][-1:] or [""]
             _niega = ((_SELF_NEGATING_ISSUE_RX.search(t) and not _ISSUE_CONTINUES_RX.search(t))
                       or bool(_SELF_NEGATING_TAIL_RX.search(_ultima[0]))
-                      or bool(_CROSS_REACTIVITY_RX.search(t)))   # [P1-PLAN-LOTE-255]
+                      or bool(_CROSS_REACTIVITY_RX.search(t))   # [P1-PLAN-LOTE-255]
+                      or __import__("revisor_confirmaciones").es_confirmacion_sin_defecto(t))  # [P1-PLAN-LOTE-746]
             (avisos if _niega else real).append(it)
         if not avisos:
             return approved, real, severity, []

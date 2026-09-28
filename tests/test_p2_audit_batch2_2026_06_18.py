@@ -70,8 +70,11 @@ def test_resolution_coverage_drift_cron_and_registration():
 def test_review_failed_rate_cron_and_registration():
     assert "def _review_failed_delivered_rate_alert_job():" in _CRON
     assert "review_failed_delivered_rate_high" in _CRON      # alert_key
-    assert "metadata->>'review_passed' = 'false'" in _CRON   # filtro correcto
-    assert "node = 'clinical_band'" in _CRON                 # reusa la métrica existente
+    # [P1-PLAN-LOTE-746 · 2026-09-28] el conteo vive en `entregas_revisadas` (una por bloque ENTREGADO, no por corrida)
+    _ENT = (_BE / "entregas_revisadas.py").read_text(encoding="utf-8")
+    assert '__import__("entregas_revisadas").contar_entregas_revisadas(lookback_h)' in _CRON
+    assert "metadata->>'review_passed' AS review_passed" in _ENT   # filtro correcto (se compara con 'false')
+    assert "node = 'clinical_band'" in _ENT                        # reusa la métrica existente
     assert 'get_job("review_failed_delivered_rate_alert")' in _CRON
     assert "_review_failed_delivered_rate_alert_job," in _CRON
 

@@ -6285,29 +6285,15 @@ def _review_failed_delivered_rate_alert_job():
     lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", 72), 168))
     min_samples = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_REVFAIL_RATE_THRESHOLD", 0.20)
-    _n = 0
+    _n = _n_corridas = 0
     _rf = 0
     _rate = None
     _alert_emitted = False
     _skip = None
     try:
-        rows = execute_sql_query(
-            """
-            SELECT COUNT(*) AS delivered,
-                   COUNT(*) FILTER (WHERE metadata->>'review_passed' = 'false') AS review_failed
-              FROM pipeline_metrics
-             WHERE node = 'clinical_band'
-               AND created_at > NOW() - (%s || ' hours')::interval
-               AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
-            """,
-            (str(lookback_h),), fetch_all=True
-        ) or []
-        if rows:
-            try:
-                _n = int(rows[0].get("delivered") or 0)
-                _rf = int(rows[0].get("review_failed") or 0)
-            except (TypeError, ValueError):
-                _n, _rf = 0, 0
+        # [P1-PLAN-LOTE-746 · 2026-09-28] ENTREGAS, no corridas: `clinical_band` se emite por corrida del pipeline y el
+        # bloque 9 de 3957a669 corrió 4 veces para 1 entrega (27-sep). Lógica en `entregas_revisadas`.
+        _n, _rf, _n_corridas = __import__("entregas_revisadas").contar_entregas_revisadas(lookback_h)
         if _n < min_samples:
             _skip = f"insufficient_samples ({_n}<{min_samples})"
         else:
@@ -6324,12 +6310,13 @@ def _review_failed_delivered_rate_alert_job():
                     (
                         alert_key,
                         "Tasa de entregas que fallaron el review sobre el umbral",
-                        f"El {int(_rate * 100)}% de las generaciones no-fallback de las últimas {lookback_h}h "
-                        f"se entregó FALLANDO el review ({_rf}/{_n}, > umbral {int(threshold * 100)}%). Plan "
-                        f"entregado con review_passed=false (variedad/repetición/skeleton-fidelity) — revisar "
-                        f"el reviewer/retry budget del pipeline inicial.",
+                        f"El {int(_rate * 100)}% de las entregas no-fallback de las últimas {lookback_h}h "
+                        f"se entregó FALLANDO el review ({_rf}/{_n} entregas, {_n_corridas} corridas, > umbral "
+                        f"{int(threshold * 100)}%). Plan entregado con review_passed=false (variedad/repetición/"
+                        f"skeleton-fidelity) — revisar el reviewer/retry budget del pipeline.",
                         json.dumps({"review_failed_rate": _rate, "n_review_failed": _rf, "n_delivered": _n,
-                                    "lookback_h": lookback_h, "threshold": threshold}, ensure_ascii=False),
+                                    "n_corridas": _n_corridas, "lookback_h": lookback_h, "threshold": threshold},
+                                   ensure_ascii=False),
                     ),
                 )
                 _alert_emitted = True
@@ -6356,7 +6343,7 @@ def _review_failed_delivered_rate_alert_job():
                 """,
                 (_rate if _rate is not None else -1.0,
                  json.dumps({"n_delivered": _n, "n_review_failed": _rf, "review_failed_rate": _rate,
-                             "alert_emitted": _alert_emitted, "skip_reason": _skip,
+                             "n_corridas": _n_corridas, "alert_emitted": _alert_emitted, "skip_reason": _skip,
                              "threshold": threshold, "lookback_h": lookback_h}, ensure_ascii=False)),
             )
         except Exception:

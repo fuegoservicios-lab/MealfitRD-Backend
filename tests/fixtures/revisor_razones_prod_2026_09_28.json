@@ -1,0 +1,257 @@
+{
+ "_doc": "[P1-PLAN-LOTE-746 · 2026-09-28] Razones de rechazo del revisor médico en producción, 29-ago → 28-sep (journal de mealfit-backend: 140 rechazos, 210 razones). llm = las 38 que escribió el revisor LLM, clasificadas; deterministas = una muestra por clase de las 172 que añaden los guards deterministas (todas problema real por construcción). revision_0925 = la revisión 04:33:03 del 25-sep (bloque 92328ff7 semana 2), cinco razones y ningún defecto.",
+ "llm": [
+  {
+   "n": 1,
+   "texto": "Prohibición temporal de textura/concepto 'tortitas horneadas': 'Arepita dulce de avena' (Día 1 merienda) y 'Tostadas horneadas de huevo, avena y zanahoria' (Día 2 desayuno) son recetas conceptualmente similares (masas horneadas tipo tortita con polvo de hornear) que el perfil pide evitar tras los rechazos recientes.",
+   "clase": "real",
+   "motivo": "preferencia temporal del perfil (textura tortita) violada"
+  },
+  {
+   "n": 2,
+   "texto": "Violaron la dieta vegetariana: la Cena del Día 3 (Almuerzo del Día 3) 'Bolitas horneadas de plátano verde rellenas de Pechuga de pollo con brócoli' contiene 150 g de pechuga de pollo (carne), prohibida para pacientes vegetarianos.",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 3,
+   "texto": "Viola la dieta vegetariana: la Cena del Día 7 ('Bowl cremoso de avena salada al caldo') incluye ½ pechuga de pollo (≈100 g). Cero carne permitida para vegetariano.",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 4,
+   "texto": "Ingesta frecuente de queso, yogurt griego y leche: no es violación de alergia (paciente sin alergias), pero confirmar que es aceptable para el perfil vegetariano (lacto-ovo permitido).",
+   "clase": "no_problema",
+   "motivo": "dice que no es violación: lácteos permitidos en lacto-ovo"
+  },
+  {
+   "n": 5,
+   "texto": "Violación de dieta vegetariana: el Almuerzo del Día 4 incluye '½ pechuga de pollo (~100 g)' (carne de ave).",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 6,
+   "texto": "Violación de dieta vegetariana: la Cena del Día 7 incluye '40 g de pechuga de pollo' (carne de ave).",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 7,
+   "texto": "Violeración de dieta vegetariana: la Cena del Día 14 se titula 'Guiso ligero de papa y pollo con queso blanco y espinacas', lo que implica pollo (carne), prohibido en dieta vegetariana. Aunque el pollo no aparece en la lista de ingredientes, el nombre de la comida lo incluye, lo que representa un riesgo de incluir producto animal en el plan.",
+   "clase": "real",
+   "motivo": "el título del plato dice pollo en un plan vegetariano"
+  },
+  {
+   "n": 8,
+   "texto": "Viola la dieta vegetariana: la Cena del Día 12 incluye ½ pechuga de pollo (≈100 g), un producto cárnico prohibido para vegetarianos.",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 9,
+   "texto": "Problema menor: la Merienda del Día 12 incluye plátano (55 g); la prohibición temporal indicaba evitar plátano maduro como acompañamiento principal; verificar que sea plátano verde y no maduro.",
+   "clase": "ambiguo",
+   "motivo": "pide verificar si el plátano es verde o maduro; no afirma el defecto"
+  },
+  {
+   "n": 10,
+   "texto": "Día 23, Cena: 'Atún guisado' contiene atún (pescado), lo cual viola la dieta vegetariana del paciente (cero carne, pollo, pescado o mariscos).",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 11,
+   "texto": "Día 3 Cena: incluye '1 tortilla integral', y las prohibiciones temporales del perfil especifican cero tolerancia con tortilla/tortitas criollas. Ingrediente reemplazable (ej: pan integral o arepa de maíz).",
+   "clase": "real",
+   "motivo": "alimento con prohibición temporal del perfil de gustos"
+  },
+  {
+   "n": 12,
+   "texto": "Día 2 Almuerzo ('Tortitas crujientes de harina con lentejas y calabacín') incluye ½ pechuga de pollo (~100 g), lo cual viola la dieta vegetariana del paciente.",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 13,
+   "texto": "Día 2 Cena incluye plátano maduro, ingrediente prohibido temporalmente en el perfil de gustos del usuario (rechazo reciente, 7 días).",
+   "clase": "real",
+   "motivo": "alimento con prohibición temporal del perfil de gustos"
+  },
+  {
+   "n": 14,
+   "texto": "Día 2 Cena 'Gratén criollo' contiene 150 g de pechuga de pollo: violación CRÍTICA de la dieta vegetariana (ningún producto cárnico está permitido).",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 15,
+   "texto": "Día 2 Cena incluye plátano maduro, ingrediente prohibido temporalmente según el perfil de gustos.",
+   "clase": "real",
+   "motivo": "alimento con prohibición temporal del perfil de gustos"
+  },
+  {
+   "n": 16,
+   "texto": "Día 3 Almuerzo incluye 55 g de plátano maduro, ingrediente prohibido temporalmente según el perfil de gustos.",
+   "clase": "real",
+   "motivo": "alimento con prohibición temporal del perfil de gustos"
+  },
+  {
+   "n": 17,
+   "texto": "Dieta vegetariana violada: el Día 1 en la cena incluye 'Pechuga de pollo' (guiso de berenjena con pechuga de pollo).",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 18,
+   "texto": "Dieta vegetariana violada: el Día 2 en la cena incluye 'Pechuga de pollo horneado'.",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 19,
+   "texto": "El Almuerzo del Día 2 ('Ceviche fresco de lentejas') contiene plátano maduro (55 g), un ingrediente prohibido temporalmente por el usuario (rechazo reciente con cero tolerancia).",
+   "clase": "real",
+   "motivo": "alimento con prohibición temporal del perfil de gustos"
+  },
+  {
+   "n": 20,
+   "texto": "Nota: el nombre 'Ceviche' sugiere pescado crudo, pero los ingredientes son vegetarianos (lentejas); no es violación de la dieta vegetariana, solo riesgo de seguridad alimentaria genérico ya advertido en el plan.",
+   "clase": "no_problema",
+   "motivo": "dice que no es violación: ceviche de lentejas, riesgo ya advertido"
+  },
+  {
+   "n": 21,
+   "texto": "Día 3 Cena: incluye '½ pechuga de pollo', lo cual viola la dieta vegetariana del paciente (cero carne/pollo/pescado).",
+   "clase": "real",
+   "motivo": "carne o pescado en dieta vegetariana"
+  },
+  {
+   "n": 22,
+   "texto": "Día 1 Almuerzo: incluye 'plátano maduro', ingrediente con prohibición temporal activa (rechazado recientemente por el usuario).",
+   "clase": "real",
+   "motivo": "alimento con prohibición temporal del perfil de gustos"
+  },
+  {
+   "n": 23,
+   "texto": "Día 1, Cena: el título del plato menciona 'Pechuga de pollo' aunque los ingredientes son vegetarianos (soya texturizada). No viola la dieta vegetariana a nivel de ingredientes, pero el nombre puede inducir a confusión y debería corregirse.",
+   "clase": "real",
+   "motivo": "el nombre del plato dice pechuga de pollo en un plan vegetariano"
+  },
+  {
+   "n": 24,
+   "texto": "Día 2, Cena contiene '1 tortilla de trigo', que entra en el formato tortilla prohibido temporalmente por el perfil de gustos (rechazo reciente de preparaciones en formato tortilla/tortita). Violación regenerable, no médica.",
+   "clase": "real",
+   "motivo": "tortilla con prohibición temporal del perfil (preferencia real)"
+  },
+  {
+   "n": 25,
+   "texto": "Nota menor: Día 1 Merienda usa 'tortitas redondas de casabe'; verificar que el generador evite el formato 'tortita' prohibido aunque el casabe no sea tortilla criolla de trigo.",
+   "clase": "ambiguo",
+   "motivo": "pide verificar el formato tortita del casabe; no afirma el defecto"
+  },
+  {
+   "n": 26,
+   "texto": "El plan concentra lácteos ricos en calcio (leche, yogur y queso) junto con varias comidas que aportan hierro, lo que puede reducir la absorción de hierro relevante para la anemia. Se recomienda separar los lácteos al menos 2 horas de las comidas principales con carne, pescado, soya o de cualquier suplemento de hierro.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 27,
+   "texto": "La anemia requiere separar los lácteos (yogurt, leche y quesos) de las comidas con fuentes de hierro no hemo; el plan combina repetidamente lácteos con avena, maní, soya, edamame, huevo y otras fuentes de hierro, lo que puede reducir su absorción. Ajustar los horarios o combinaciones y confirmar con el médico tratante.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 28,
+   "texto": "La carga elevada de lácteos ricos en calcio (aproximadamente 194 g de queso más múltiples porciones de yogurt) se consume junto con fuentes de hierro, lo que puede reducir significativamente la absorción del hierro no hemo en un paciente con anemia.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 29,
+   "texto": "El plan contiene cantidades importantes de soya texturizada, edamame y productos integrales de trigo, cuyos fitatos pueden disminuir adicionalmente la biodisponibilidad del hierro; no se contempla separación temporal de estos inhibidores respecto a las comidas ricas en hierro.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 30,
+   "texto": "Día 3, almuerzo: el queso de hoja (≈62 g) se consume junto con costilla de cerdo y pasta integral, fuentes de hierro cuya absorción puede reducirse por el calcio. En un paciente con anemia, separar los lácteos de esta comida por al menos 2 horas.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 31,
+   "texto": "Día 3, desayuno: la leche y el queso se consumen junto con avena, que contiene hierro no hemo; el calcio puede reducir su absorción. Conviene separar los lácteos de las comidas destinadas a aportar hierro.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 32,
+   "texto": "Para la anemia, el plan concentra múltiples inhibidores de la absorción de hierro (soya texturizada, edamame, avena, harina integral, maní y semillas) junto con lácteos ricos en calcio, y aporta cantidades mínimas de hierro hemo; esto puede comprometer el manejo de la anemia. Debe redistribuirse el calcio respecto a las fuentes de hierro, reforzarse la vitamina C con estas comidas y considerarse un mayor aporte de hierro biodisponible según indicación clínica.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 33,
+   "texto": "En el contexto de anemia, varias comidas combinan fuentes de hierro con grandes cantidades de lácteos y/o inhibidores de absorción como avena, trigo integral, soya, edamame, maní y semillas. Esto puede reducir la absorción del hierro; se recomienda redistribuir los lácteos y mantener vitamina C junto a las fuentes de hierro.",
+   "clase": "real",
+   "motivo": "anemia: lácteos/inhibidores junto a fuentes de hierro (clínico)"
+  },
+  {
+   "n": 34,
+   "texto": "El plan incluye Hígado? No. Pero incluye alimentos rechazados: Brócoli y Coliflor no aparecen. Sin embargo, el paciente rechazó 'Hígado', 'Brócoli' y 'Coliflor' — ninguno aparece en el plan, por lo que no hay violación por rechazos.",
+   "clase": "no_problema",
+   "motivo": "concluye que ningún rechazo aparece: no hay violación"
+  },
+  {
+   "n": 35,
+   "texto": "El plan contiene 7 días (Día 4 a Día 7) pero el plan solicitado es de 3 días; esto es una inconsistencia estructural, no un riesgo médico.",
+   "clase": "no_problema",
+   "motivo": "número de días mal leído (bloque de días 4-7) y se declara no riesgo médico"
+  },
+  {
+   "n": 36,
+   "texto": "No se detectan alérgenos declarados (paciente sin alergias).",
+   "clase": "no_problema",
+   "motivo": "confirma ausencia de alérgenos (paciente sin alergias)"
+  },
+  {
+   "n": 37,
+   "texto": "No se detectan violaciones de condiciones médicas (paciente sin condiciones ni medicamentos).",
+   "clase": "no_problema",
+   "motivo": "confirma ausencia de violaciones de condiciones (paciente sin condiciones)"
+  },
+  {
+   "n": 38,
+   "texto": "Dieta 'balanced' respetada; no hay restricciones vegetarianas/veganas/sin gluten declaradas.",
+   "clase": "no_problema",
+   "motivo": "confirma dieta balanced respetada, sin restricciones declaradas"
+  }
+ ],
+ "deterministas": [
+  "Día 3 omitió múltiples proteínas clave asignadas: ['frutos secos (merey/almendras)', 'pavo molido']",
+  "El plan no incluye NINGUNA preparación transformada: incluye al menos una preparación real con los mismos macros (panqueques de avena, arepitas, bollitos de yuca, revoltillo, guiso, locrio de almuerzo) en vez de solo staples servidos.",
+  "DÉFICIT DE PROTEÍNA (rechazo clínico — ganancia muscular): el plan no alcanza el piso de proteína en Día 1: 121g de 135g. Cada comida PRINCIPAL (almuerzo y cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, res, huevos, queso) dimensionada en gramos para que cada día sume al menos 90% del target (135g). NO dependas solo de leguminosas/almidón en las comidas principales.",
+  "MISMA PROTEÍNA REPETIDA EL MISMO DÍA (rechazo de variedad): la misma proteína principal (p.ej. HUEVO, pollo, pavo, cerdo, res, pescado, atún) aparece en 2+ comidas del mismo día — comer lo mismo el mismo día fatiga. Usa una proteína DISTINTA en cada comida del día. Está BIEN repetir un alimento en DÍAS DISTINTOS (p.ej. huevo el lunes y el miércoles), pero NO dos veces el mismo día. Rota: huevo, pollo, res, cerdo, pescado, atún, queso, yogur, legumbres. [P1-STAPLE-FOODS] Si este alimento es un BÁSICO declarado del usuario, esta repetición TODAVÍA se rechazó porque las técnicas coincidieron (o no se pudo distinguirlas) — usa técnicas GENUINAMENTE distintas (hervido vs revuelto, guisado vs horneado); 'revoltillo'/'huevo revuelto' y 'horneado'/'al horno' son la MISMA técnica con otro nombre.",
+  "COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día 3, cena: «Tarta ligera de Arroz integral, maíz y parmesano con ensalada de pepino» es arroz/locrio/moro (\"arroz de noche\"), que no corresponde al cena dominicano. Cámbialo por un plato propio del horario. La cena es más ligera que el almuerzo: pescado/pollo a la plancha, tortilla/revoltillo de cena, sopa ligera, wrap o bowl de proteína + vegetales + un tubérculo (batata/yuca/casabe). Evita el \"arroz de noche\" y los guisos pesados.",
+  "COHERENCIA RECETAS LISTA: 1 divergencia(s) críticas (foods: Orégano dominicano). action=reject_minor.",
+  "SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en 5 de 12 comidas (máximo 3). Reemplaza el huevo en al menos 2 comida(s) por otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, res molida magra, queso de freír, yogur griego, habichuelas) — NO uses huevo como relleno por defecto. Mantén el huevo solo en desayunos/platos donde es el protagonista.",
+  "Error en la estructura del revisor médico. Forzando regeneración por seguridad clínica.",
+  "Error transitorio del revisor médico (infraestructura/parse) — reintentando.",
+  "MISMO PLATO REPETIDO ENTRE DÍAS (rechazo de variedad): 'guiso' en 3 días. El mismo plato-base no debe repetirse en 3+ días del plan — varía la preparación (guisado, al horno, a la plancha, en tortitas/croquetas) o cambia la base entre días.",
+  "DIETA INCOMPATIBLE (rechazo de restricción declarada): el plan contiene producto(s) animal(es) incompatibles con la dieta 'vegetarian' del usuario. DEBES reemplazarlos por alternativas vegetales que resuelvan (leguminosas, etc.). Violaciones: '¾ pechuga de pollo (≈150 g)' (carne) en Bolitas horneadas de plátano verde rellenas de Pechuga de pollo con brócoli",
+  "PRECISIÓN DE MACROS BAJA: varios días tienen macros fuera de la banda objetivo (90-112% del target diario) — y las CALORÍAS diarias quedaron lejos del objetivo en la mayoría de los días. Reajusta las PORCIONES (gramos) de cada comida para que la suma diaria de proteína, carbohidratos y grasas caiga dentro de la banda objetivo, sin cambiar los platos.",
+  "ERRORES DE DESPENSA HALLADOS OBLIGANDO A CORREGIR:\n- Ingredientes COMPLETAMENTE INEXISTENTES en inventario: 1 rebanada de pan integral familiar, ½ guineo maduro, 50 ml de leche, Hielo al gusto, 10 g de semillas de linaza, ¼ pechuga de pollo (≈50 g), 1 rebanada de pan integral familiar, 1 morrón rojo (ajíes), 15 g de batata cocida y majada, 1 cda de azúcar moreno, ½ pechuga de pollo (≈100 g).\nCorrige tu respuesta bajando las porciones estrictamente numéricas al límite exacto, O eliminando/sustituyendo ingredientes.",
+  "REPETICIÓN DETECTADA: Los siguientes platos principales ya aparecieron en planes recientes y deben ser reemplazados por alternativas completamente diferentes: Pica pollo casero al horno con tostones al aire, Salami guisado con yuca, cebolla y camarones, Avena cocida con leche evaporada, maní, queso cottage y yogurt griego entero.",
+  "PAREO CHOCANTE FRUTA+SALADO (rechazo de coherencia de sabor): un plato combina fruta dulce dominante (mango, piña, lechosa, papaya, melón…) con una base salada (arroz u otro almidón, huevo revuelto, o crucíferas como coliflor/brócoli). La fruta dulce va con yogur/avena/nueces/queso fresco o sola — NUNCA con arroz, huevo salado ni vegetales salados (evita 'arroz con mango', 'revoltillo con mango', 'coliflor y mango'). Reemplaza la fruta por una guarnición salada coherente, o muévela a una merienda con yogur/avena."
+ ],
+ "revision_0925": [
+  "El plan incluye Hígado? No. Pero incluye alimentos rechazados: Brócoli y Coliflor no aparecen. Sin embargo, el paciente rechazó 'Hígado', 'Brócoli' y 'Coliflor' — ninguno aparece en el plan, por lo que no hay violación por rechazos.",
+  "El plan contiene 7 días (Día 4 a Día 7) pero el plan solicitado es de 3 días; esto es una inconsistencia estructural, no un riesgo médico.",
+  "No se detectan alérgenos declarados (paciente sin alergias).",
+  "No se detectan violaciones de condiciones médicas (paciente sin condiciones ni medicamentos).",
+  "Dieta 'balanced' respetada; no hay restricciones vegetarianas/veganas/sin gluten declaradas."
+ ]
+}
