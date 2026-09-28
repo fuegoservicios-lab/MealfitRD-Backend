@@ -57,17 +57,32 @@ _TECHO_CEROS_PCT = {
 # Filas con kcal 0 Y las tres macros 0. Las dos que existen hoy, con su veredicto.
 _FORMA_CASCARON = {
     "Sal": "CORRECTA — NaCl no tiene calorías ni macros; 38.758 mg de sodio es ~39% en peso",
-    "Sazón con culantro y achiote": "A CURAR — declara `usda` y no trae nada salvo el sodio",
+    # [P1-PLAN-LOTE-740] verificado contra la API de USDA el 2026-09-28: FDC 172242 «Seasoning mix, dry, sazon,
+    # coriander & annatto» (SR Legacy) trae 0 kcal, 0 macros y 17 000 mg de sodio. La fila es fiel a su fuente.
+    "Sazón con culantro y achiote": "CORRECTA — fiel a FDC 172242 (SR Legacy): 0 kcal, 0 macros, 17.000 mg de sodio",
 }
+
+# [P1-PLAN-LOTE-740] (G67) La línea base saltaba ENTERA sin DB, y fuera de FastAPI el catálogo sale vacío: nunca corría.
+# Sin filas de la DB se usa la foto versionada del catálogo (SELECT de solo lectura sobre prod); se refresca con ese SELECT.
+_FOTO = __import__("pathlib").Path(__file__).parent / "fixtures" / "catalogo_micros_2026_09_28.json"
+
+
+def cargar_filas():
+    """(filas, origen): las de la DB si las hay; si no, las de la foto. Nunca salta."""
+    try:
+        import shopping_calculator as sc
+        rows = sc.get_master_ingredients() or []
+    except Exception:
+        rows = []
+    if rows:
+        return rows, "db"
+    import json
+    return json.loads(_FOTO.read_text(encoding="utf-8"))["filas"], "foto"
 
 
 @pytest.fixture(scope="module")
 def filas():
-    import shopping_calculator as sc
-    rows = sc.get_master_ingredients() or []
-    if not rows:
-        pytest.skip("catálogo no disponible (sin DB)")
-    return rows
+    return cargar_filas()[0]
 
 
 def _cero(v) -> bool:
