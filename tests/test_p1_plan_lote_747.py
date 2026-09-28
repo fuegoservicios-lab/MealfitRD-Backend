@@ -17,14 +17,18 @@ El pre-chequeo (`nevera_refutada.prechequeo`, antes del bucle de reintentos del 
   1. SSOT de las guardas: si `_pantry_gate_waiver_reason` da un motivo (flexible, advisory, invitado, Nevera virtual,
      autonomía del `initial_plan` —y con ella P1-FIRST-PURCHASE-PAUSE—), no hace nada. Ninguna guarda decide sola.
   2. Evidencia: la última refutación del plan (`plan_data._pantry_refutation`, escrita por la guarda de existencia al
-     agotar sus reintentos) con sus líneas INEXISTENTES y la huella BRUTA de la Nevera de ese momento.
+     agotar sus reintentos) con sus líneas INEXISTENTES, la huella BRUTA de la Nevera de ANTES de los intentos
+     (∩ la de después: una compra durante la corrida no entra) y la huella del GENERADOR que falló. Un éxito estricto
+     de la guarda la borra.
   3. La Nevera no creció desde entonces (huella bruta: ni alimento nuevo ni más cantidad) — las reservas no cuentan:
      suben y bajan solas y no son una compra.
   4. La MISMA medida de la guarda (`validate_ingredients_against_pantry` + `compras_pequenas.tolerar`) sigue
      rechazando esas líneas contra la Nevera de hoy.
-  ⇒ entra directo por donde el sistema acababa: la pausa `pantry_violation_after_retries` (mismo helper, mismo push);
-     el recovery de siempre decide lo demás (TTL → flexible, tope de ciclos).
-La evidencia caduca (`MEALFIT_PANTRY_REFUTED_PRECHECK_MAX_AGE_H`, 336 h): cada dos semanas se vuelve a probar de verdad.
+  5. El bloque sigue vivo (`_validate_chunk_pre_llm`).
+  ⇒ entra directo por donde el sistema acababa: la pausa `pantry_violation_after_retries` (mismo helper con la marca
+     `_pantry_pause_precheck_at`, mismo push si la pausa ocurrió); el recovery de siempre decide lo demás.
+La evidencia caduca (`MEALFIT_PANTRY_REFUTED_PRECHECK_MAX_AGE_H`, 168 h), vale sólo para el mismo generador
+(proveedor + modelos por tier) y `MEALFIT_PANTRY_REFUTED_PRECHECK_EPOCH` la invalida toda sin apagar el pre-chequeo.
 Knob `MEALFIT_PANTRY_REFUTED_PRECHECK` (True) — apagado, conducta previa exacta (ni lee ni escribe).
 
 tooltip-anchor: P1-PLAN-LOTE-747
@@ -62,6 +66,10 @@ INVENTARIO = [
 REFUTADAS_S3 = ["10 g de aguacate", "10 g de arroz blanco", "45 g de guineo"]
 REFUTADAS_S4 = ["½ guineo", "10 g de semillas de linaza", "120 g de edamame cocido", "30 g de proteína whey",
                 "20 g de semillas de girasol", "15 g de aguacate", "30 g de arroz blanco crudo"]
+#: Huella del generador en los tests (época del knob | proveedor | modelo del usuario | modelo primario del day-gen).
+MODELOS = "zai|glm-5.3-flash|gpt-6-luna"
+GENERADOR = "1|" + MODELOS
+
 REFUTADAS_S7 = ["15 g de aguacate", "95 g de edamame cocido", "2 rebanadas de pan integral familiar",
                 "80 g de camarones cocidos", "½ guineo maduro (74 g)", "15 g de arroz blanco crudo",
                 "15 g de berenjena", "150 g de edamame cocido"]
@@ -100,9 +108,12 @@ def nr(monkeypatch):
     monkeypatch.delenv("MEALFIT_PANTRY_REFUTED_PRECHECK_MAX_AGE_H", raising=False)
     monkeypatch.setenv("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", "true")
     escrituras, metricas = [], []
+    monkeypatch.delenv("MEALFIT_PANTRY_REFUTED_PRECHECK_EPOCH", raising=False)
     monkeypatch.setattr(m, "_leer_bruto", lambda user_id: _filas(INVENTARIO))
     monkeypatch.setattr(m, "_escribir", lambda sql, params: escrituras.append((sql, params)))
     monkeypatch.setattr(m, "_metrica", lambda **kw: metricas.append(kw))
+    # El generador que escribiría el bloque (proveedor + modelos por tier): fijo en los tests.
+    monkeypatch.setattr(m, "_generador_actual", lambda user_id: MODELOS, raising=False)
     m._escrituras, m._metricas = escrituras, metricas
     return m
 
@@ -113,18 +124,20 @@ def worker(monkeypatch):
     import cron_tasks
     pausas, pushes = [], []
     monkeypatch.setattr(cron_tasks, "_pause_chunk_for_pantry_refresh",
-                        lambda task_id, user_id, week_number, fresh_inventory, reason="empty_pantry", notify=True:
+                        lambda task_id, user_id, week_number, fresh_inventory, reason="empty_pantry", notify=True,
+                        precheck=False:
                         pausas.append({"task_id": task_id, "week": week_number, "reason": reason,
                                        "n": len(fresh_inventory or [])}))
     monkeypatch.setattr(cron_tasks, "_dispatch_push_notification", lambda **kw: pushes.append(kw))
+    monkeypatch.setattr(cron_tasks, "_validate_chunk_pre_llm", lambda task_id, meal_plan_id, user_id: "ok")
     return pausas, pushes
 
 
 def _evidencia(lineas, inv=INVENTARIO, horas=10):
     at = (datetime.now(timezone.utc) - timedelta(hours=horas)).isoformat()
     import nevera_refutada as m
-    return {"v": 1, "at": at, "week": 4, "chunk_kind": "rolling_refill", "lines": list(lineas),
-            "bruto": m.huella_bruta(_filas(inv))}
+    return {"v": 2, "at": at, "week": 4, "chunk_kind": "rolling_refill", "lines": list(lineas),
+            "bruto": m.huella_bruta(_filas(inv)), "gen": GENERADOR}
 
 
 def _pre(m, *, plan_data, chunk_kind="rolling_refill", form_data=None, snap=None):
@@ -246,7 +259,10 @@ def test_knob_apagado_conducta_previa_exacta(nr, worker, monkeypatch):
     leidas = []
     monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: leidas.append(user_id) or _filas(INVENTARIO))
     assert _pre(nr, plan_data={"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is False
-    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),)) is False
+    assert nr.huella_inicial("u-1") is None
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
+                        bruto_inicio=nr.huella_bruta(_filas(INVENTARIO))) is False
+    assert nr.olvidar("p-1", "u-1", {"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is False
     assert pausas == [] and nr._escrituras == [] and leidas == []
 
 
@@ -264,7 +280,8 @@ def test_un_fallo_al_decidir_deja_correr_al_llm(nr, worker, monkeypatch):
 
 def test_registrar_escribe_quirurgico_y_con_dueno(nr):
     assert nr.registrar("p-1", "u-1", 4, "rolling_refill",
-                        (_resultado_guarda(REFUTADAS_S4[:3]), _resultado_guarda(REFUTADAS_S4[3:]))) is True
+                        (_resultado_guarda(REFUTADAS_S4[:3]), _resultado_guarda(REFUTADAS_S4[3:])),
+                        bruto_inicio=nr.huella_bruta(_filas(INVENTARIO))) is True
     (sql, params), = nr._escrituras
     assert "jsonb_set" in sql and "'{_pantry_refutation}'" in sql and "'{_plan_modified_at}'" in sql
     assert re.search(r"WHERE id = %s AND user_id = %s\s*$", sql.strip())
@@ -272,16 +289,19 @@ def test_registrar_escribe_quirurgico_y_con_dueno(nr):
     assert params[1:] == ("p-1", "u-1")
     assert ev["lines"] == REFUTADAS_S4 and ev["week"] == 4 and ev["chunk_kind"] == "rolling_refill"
     assert ev["bruto"] == nr.huella_bruta(_filas(INVENTARIO))
+    assert ev["gen"] == GENERADOR and ev["v"] == 2
 
 
 def test_sin_lineas_inexistentes_no_hay_evidencia(nr):
-    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", ("CANTIDADES: excede", True, None)) is False
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", ("CANTIDADES: excede", True, None),
+                        bruto_inicio=nr.huella_bruta(_filas(INVENTARIO))) is False
     assert nr._escrituras == []
 
 
 def test_el_ciclo_completo_registrar_y_despues_prechequear(nr, worker):
     pausas, _ = worker
-    nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),))
+    nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
+                 bruto_inicio=nr.huella_inicial("u-1"))
     ev = json.loads(nr._escrituras[0][1][0])
     assert _pre(nr, plan_data={"_pantry_refutation": ev}) is True and len(pausas) == 1
 
@@ -340,6 +360,7 @@ def test_la_refutacion_se_registra_antes_de_pisar_la_correccion_anterior():
     assert w.rindex("Violación persistente tras", 0, pausa) < gancho
     linea = w[w.rfind("\n", 0, gancho):w.index("\n", gancho)]
     assert 'form_data.get("_pantry_correction")' in linea and "_val_result" in linea
+    assert "bruto_inicio=_nr_bruto0" in linea, "la base de la evidencia es la Nevera de ANTES de los intentos"
 
 
 def test_el_modulo_consulta_la_ssot_con_los_mismos_argumentos_que_la_guarda():
@@ -360,7 +381,196 @@ def test_knob_registrado_y_marker_anclado(nr):
     from knobs import _KNOBS_REGISTRY
     nr.activo()
     nr.max_edad_h()
+    nr.epoca()
     assert "MEALFIT_PANTRY_REFUTED_PRECHECK" in _KNOBS_REGISTRY
     assert "MEALFIT_PANTRY_REFUTED_PRECHECK_MAX_AGE_H" in _KNOBS_REGISTRY
+    assert "MEALFIT_PANTRY_REFUTED_PRECHECK_EPOCH" in _KNOBS_REGISTRY
     assert _CRON.count("P1-PLAN-LOTE-747") >= 2
     assert "tooltip-anchor: P1-PLAN-LOTE-747" in _MOD.read_text(encoding="utf-8")
+
+
+# ─────────────── ronda 1 de la revisión adversaria ───────────────
+# Cada test reproduce un defecto de la revisión (rojo contra 438185c3) y fija su arreglo.
+
+def test_defecto1_una_compra_durante_la_corrida_no_entra_en_la_base(nr, worker, monkeypatch):
+    """La base de la evidencia es la Nevera de ANTES de los intentos (∩ la de después), no la del final: lo que el
+    usuario compra mientras el LLM corre no lo vio ninguna guarda y no puede quedar «refutado» una semana."""
+    pausas, _ = worker
+    antes = nr.huella_bruta(_filas(INVENTARIO))
+    comprado = INVENTARIO + [("Pechuga de pollo", 2, "lb")]  # compra a mitad de la corrida (no es lo refutado)
+    monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas(comprado))
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
+                        bruto_inicio=antes) is True
+    ev = json.loads(nr._escrituras[-1][1][0])
+    assert "pechuga de pollo|lb" not in ev["bruto"], "la compra de durante la corrida entró en la base refutada"
+    assert ev["bruto"] == antes
+    # El bloque siguiente, con esa compra en la Nevera, SÍ corre el LLM.
+    fd = {"current_pantry_ingredients": _nevera_neta(comprado)}
+    assert _pre(nr, plan_data={"_pantry_refutation": ev}, form_data=fd) is False and pausas == []
+
+
+def test_defecto1_la_base_es_la_interseccion_y_sin_lectura_inicial_no_hay_evidencia(nr, monkeypatch):
+    antes = nr.huella_bruta(_filas(INVENTARIO))
+    comido = [(n, q / 2, u) if n == "Yogurt" else (n, q, u) for n, q, u in INVENTARIO if n != "Uva"]
+    monkeypatch.setattr(nr, "_leer_bruto", lambda user_id: _filas(comido))
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),), bruto_inicio=antes)
+    ev = json.loads(nr._escrituras[-1][1][0])
+    assert ev["bruto"] == nr.huella_bruta(_filas(comido)), "min(antes, después) por alimento"
+    n = len(nr._escrituras)
+    assert nr.registrar("p-1", "u-1", 4, "rolling_refill", (_resultado_guarda(REFUTADAS_S4),),
+                        bruto_inicio=None) is False
+    assert len(nr._escrituras) == n
+
+
+def test_defecto1_la_huella_inicial_se_toma_antes_de_refrescar_la_nevera():
+    w = _cuerpo_worker()
+    gancho = w.index('__import__("nevera_refutada").prechequeo(')
+    refresco = w.rindex("form_data = _refresh_chunk_pantry(", 0, gancho)
+    inicial = w.rindex('_nr_bruto0 = __import__("nevera_refutada").huella_inicial(user_id)', 0, gancho)
+    assert inicial < refresco, "la huella inicial debe leerse ANTES de capturar la Nevera que validará la guarda"
+    assert w[inicial:refresco].count("\n") <= 1, "pegada al refresco: nada entre la lectura bruta y la neta"
+    assert w.count("_nr_bruto0 = ") == 1
+
+
+def test_defecto2_un_exito_estricto_borra_la_evidencia(nr):
+    plan_data = {"_pantry_refutation": _evidencia(REFUTADAS_S4), "days": []}
+    assert nr.olvidar("p-1", "u-1", plan_data) is True
+    (sql, params), = nr._escrituras
+    assert "plan_data - '_pantry_refutation'" in sql and "'{_plan_modified_at}'" in sql
+    assert re.search(r"WHERE id = %s AND user_id = %s AND plan_data \? '_pantry_refutation'\s*$", sql.strip())
+    assert params == ("p-1", "u-1")
+    assert "_pantry_refutation" not in plan_data, "la copia en memoria del worker tampoco la conserva"
+    assert nr.olvidar("p-1", "u-1", plan_data) is False and len(nr._escrituras) == 1, "sin evidencia no escribe"
+
+
+def test_defecto2_el_worker_olvida_la_evidencia_cuando_la_guarda_aprueba_sin_waiver():
+    w = _cuerpo_worker()
+    rama = w.index("if _val_result is True:")
+    olvido = w.index('__import__("nevera_refutada").olvidar(meal_plan_id, user_id, prior_plan_data)', rama)
+    assert olvido < w.index("_qty_mode = (", rama), "se olvida en cuanto la EXISTENCIA pasa, antes de las cantidades"
+    assert w.rindex("if _pantry_snapshot and _exist_waiver:", 0, rama) < rama, "sólo tras descartar el waiver"
+
+
+def test_defecto3_otro_generador_invalida_la_evidencia(nr, monkeypatch):
+    ev = _evidencia(REFUTADAS_S4)
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") == ev
+    monkeypatch.setattr(nr, "_generador_actual", lambda user_id: "openai|gpt-6-luna|gpt-6-luna")
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") is None
+    monkeypatch.setattr(nr, "_generador_actual", lambda user_id: None)
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") is None, \
+        "sin poder saber qué generador correría, no se predice"
+
+
+def test_defecto3_la_epoca_del_knob_invalida_toda_evidencia(nr, monkeypatch):
+    ev = _evidencia(REFUTADAS_S4)
+    monkeypatch.setenv("MEALFIT_PANTRY_REFUTED_PRECHECK_EPOCH", "2")
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") is None
+
+
+def test_defecto3_evidencia_sin_generador_no_vale(nr):
+    ev = dict(_evidencia(REFUTADAS_S4))
+    ev.pop("gen")
+    assert nr.evidencia_vigente({"_pantry_refutation": ev}, _nevera_neta(INVENTARIO), "u-1", "DO") is None
+
+
+def test_defecto3_la_caducidad_por_defecto_es_una_semana(nr):
+    assert nr.max_edad_h() == 168
+    seis = _evidencia(REFUTADAS_S4, horas=24 * 6)
+    ocho = _evidencia(REFUTADAS_S4, horas=24 * 8)
+    assert nr.evidencia_vigente({"_pantry_refutation": seis}, _nevera_neta(INVENTARIO), "u-1", "DO") == seis
+    assert nr.evidencia_vigente({"_pantry_refutation": ocho}, _nevera_neta(INVENTARIO), "u-1", "DO") is None
+
+
+def test_defecto3_el_generador_real_se_resuelve_sin_lanzar(monkeypatch):
+    """Sin sustituir: la huella real del generador (proveedor + modelo del usuario + modelo del day-gen) sale como
+    texto; si algo de la resolución falla, None (y entonces ni se registra ni se predice)."""
+    import nevera_refutada as m
+    import llm_provider
+    monkeypatch.setattr(llm_provider, "get_user_tier", lambda user_id: "gratis")
+    g = m._generador_actual("u-1")
+    assert isinstance(g, str) and g.count("|") == 2 and llm_provider.llm_provider_name() in g
+    monkeypatch.setattr(llm_provider, "llm_provider_name", lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    assert m._generador_actual("u-1") is None
+
+
+@pytest.mark.parametrize("estado", ["plan_missing", "chunk_terminal", "chunk_unknown"])
+def test_defecto5_sin_pausa_ni_push_si_el_bloque_ya_no_esta_vivo(nr, worker, monkeypatch, estado):
+    """El pre-chequeo corre antes de `_validate_chunk_pre_llm`: un bloque cancelado o un plan borrado entre la recogida
+    y el pre-chequeo no se pausa ni avisa — se devuelve al bucle, cuya 1.ª vuelta limpia (cancelar/liberar)."""
+    import cron_tasks
+    pausas, pushes = worker
+    monkeypatch.setattr(cron_tasks, "_validate_chunk_pre_llm", lambda task_id, meal_plan_id, user_id: estado)
+    assert _pre(nr, plan_data={"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is False
+    assert pausas == [] and pushes == [] and nr._metricas == []
+
+
+def test_defecto5_sin_push_si_la_pausa_fue_desplazada(nr, worker, monkeypatch):
+    import cron_tasks
+    _, pushes = worker
+    llamadas = []
+    monkeypatch.setattr(cron_tasks, "_pause_chunk_for_pantry_refresh",
+                        lambda *a, **kw: llamadas.append(kw) or False)
+    assert _pre(nr, plan_data={"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is True, "el bloque ya no es nuestro"
+    assert len(llamadas) == 1 and pushes == [], "C1-PAUSE-CAS: desplazado ⇒ ni pausa ni push"
+
+
+def test_defecto5_la_pausa_dice_si_ocurrio(monkeypatch):
+    import cron_tasks
+    monkeypatch.setattr(cron_tasks, "execute_sql_query", lambda *a, **kw: {"pipeline_snapshot": {}})
+    monkeypatch.setattr(cron_tasks, "_dispatch_pantry_nudge", lambda user_id: True)
+    monkeypatch.setattr(cron_tasks, "_cas_pause_chunk_to_pending_user_action", lambda *a: False)
+    assert cron_tasks._pause_chunk_for_pantry_refresh("t", "u", 3, [], reason="x") is False
+    monkeypatch.setattr(cron_tasks, "_cas_pause_chunk_to_pending_user_action", lambda *a: True)
+    assert cron_tasks._pause_chunk_for_pantry_refresh("t", "u", 3, [], reason="x") is True
+
+
+def test_defecto6_la_huella_ni_se_corta_ni_depende_del_orden(nr):
+    filas = [{"ingredient_name": f"Alimento {i:03d}", "quantity": 1, "unit": "g"} for i in range(450)]
+    h = nr.huella_bruta(filas)
+    assert len(h) == 450, "cortar la huella deja fuera alimentos (y con ellos las compras de esos alimentos)"
+    assert nr.huella_bruta(list(reversed(filas))) == h
+    src = _MOD.read_text(encoding="utf-8")
+    assert "ORDER BY" in src[src.index("def _leer_bruto"):src.index("def _escribir")]
+
+
+def test_defecto7_el_push_tiene_una_sola_copia():
+    import push_i18n
+    import nevera_refutada as m
+    assert "Tu plan necesita revisión de ingredientes" not in _CRON, "el texto vive en UN sitio (nevera_refutada)"
+    assert m.PUSH_TITULO in push_i18n.push_catalog_keys() and m.PUSH_CUERPO in push_i18n.push_catalog_keys()
+    w = _cuerpo_worker()
+    pausa = w.index('reason="pantry_violation_after_retries",')
+    assert '__import__("nevera_refutada").avisar(user_id)' in w[pausa:pausa + 400]
+
+
+def test_defecto8_el_prechequeo_no_escribe_una_correccion_que_nadie_lee(nr, worker):
+    fd = {"current_pantry_ingredients": _nevera_neta(INVENTARIO), "_fresh_pantry_source": "live"}
+    assert nr.prechequeo(task_id="t-1", user_id="u-1", meal_plan_id="p-1", week_number=7, chunk_kind="rolling_refill",
+                         snap={}, form_data=fd, plan_data={"_pantry_refutation": _evidencia(REFUTADAS_S4)},
+                         country="DO") is True
+    assert "_pantry_correction" not in fd
+
+
+def test_defecto9_la_pausa_del_prechequeo_lleva_su_marca(nr, worker, monkeypatch):
+    import cron_tasks
+    llamadas = []
+    monkeypatch.setattr(cron_tasks, "_pause_chunk_for_pantry_refresh", lambda *a, **kw: llamadas.append(kw))
+    assert _pre(nr, plan_data={"_pantry_refutation": _evidencia(REFUTADAS_S4)}) is True
+    assert llamadas[0].get("precheck") is True and llamadas[0].get("reason") == "pantry_violation_after_retries"
+
+
+def test_defecto9_el_helper_sella_y_limpia_la_marca(monkeypatch):
+    """La marca sólo describe la pausa VIVA del pre-chequeo: una pausa posterior por la vía normal la quita y
+    resolver la pausa la borra (`_PANTRY_PAUSE_LIVE_KEYS`)."""
+    import cron_tasks
+    escritos = []
+    monkeypatch.setattr(cron_tasks, "execute_sql_query",
+                        lambda *a, **kw: {"pipeline_snapshot": {"_pantry_pause_precheck_at": "vieja"}})
+    monkeypatch.setattr(cron_tasks, "_dispatch_pantry_nudge", lambda user_id: True)
+    monkeypatch.setattr(cron_tasks, "_cas_pause_chunk_to_pending_user_action",
+                        lambda task_id, snap_json, tag: escritos.append(json.loads(snap_json)) or True)
+    cron_tasks._pause_chunk_for_pantry_refresh("t", "u", 3, [], reason="pantry_violation_after_retries", precheck=True)
+    cron_tasks._pause_chunk_for_pantry_refresh("t", "u", 3, [], reason="pantry_violation_after_retries")
+    assert escritos[0]["_pantry_pause_precheck_at"] != "vieja"
+    assert "_pantry_pause_precheck_at" not in escritos[1]
+    assert "_pantry_pause_precheck_at" in cron_tasks._PANTRY_PAUSE_LIVE_KEYS

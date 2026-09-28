@@ -10457,6 +10457,7 @@ _PANTRY_PAUSE_LIVE_KEYS = (
     "_pantry_pause_reminder_hours",
     "_pantry_pause_reminders",
     "_pantry_pause_last_reminder_at",
+    "_pantry_pause_precheck_at",  # [P1-PLAN-LOTE-747]
 )
 
 
@@ -13460,7 +13461,7 @@ def _cas_pause_chunk_to_pending_user_action(task_id, snapshot_json: str, log_tag
     return True
 
 
-def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = "empty_pantry", notify: bool = True):
+def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = "empty_pantry", notify: bool = True, precheck: bool = False) -> bool:
     """Pauses chunk generation when the live pantry is too empty to preserve the zero-waste promise.
 
     [P0-DASH-CHIP-HONESTY · 2026-05-09] Tooltip-anchor:
@@ -13503,12 +13504,17 @@ def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_numbe
     else:
         pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
     pause_snapshot["_pantry_pause_reminder_hours"] = CHUNK_PANTRY_EMPTY_REMINDER_HOURS
+    # [P1-PLAN-LOTE-747] marca de la pausa que el pre-chequeo de nevera_refutada puso SIN correr el LLM; sólo describe
+    # la pausa viva (otra pausa la quita; resolverla también: `_PANTRY_PAUSE_LIVE_KEYS`). Devuelve si la pausa ocurrió.
+    pause_snapshot.pop("_pantry_pause_precheck_at", None)
+    if precheck:
+        pause_snapshot["_pantry_pause_precheck_at"] = datetime.now(timezone.utc).isoformat()
 
     # [C1-PAUSE-CAS · 2026-05-29] CAS ownership-aware (ver _cas_pause_chunk_to_pending_user_action).
     if not _cas_pause_chunk_to_pending_user_action(
         task_id, json.dumps(pause_snapshot, ensure_ascii=False), "pantry_refresh"
     ):
-        return  # desplazado: no pausamos ni notificamos.
+        return False  # desplazado: no pausamos ni notificamos.
     logger.warning(
         f"[P1-3/PANTRY] Chunk {week_number} pausado para {user_id}: inventario fresco insuficiente "
         f"({len(fresh_inventory or [])} items brutos)."
@@ -13519,6 +13525,7 @@ def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_numbe
     if notify:
         # [P2-PANTRY-NUDGE-THROTTLE · 2026-07-11] canal único con cooldown 6h + copy claro.
         _dispatch_pantry_nudge(user_id)
+    return True
 
 
 def _pause_chunk_for_final_inventory_validation(
@@ -30964,6 +30971,7 @@ __PLAN_MODE_GATE__
                         # objetivos/señales, pero no la identidad del plan ya encolado.
                         form_data = _merge_chunk_live_profile(form_data, chunk_health_profile)
 
+                    _nr_bruto0 = __import__("nevera_refutada").huella_inicial(user_id)  # [P1-PLAN-LOTE-747] Nevera bruta ANTES de capturar la que validará la guarda: base de una posible refutación
                     form_data = _refresh_chunk_pantry(user_id, form_data, snapshot_form_data, task_id=task_id, week_number=week_number)
                     if form_data.get("_pantry_paused"):
                         return
@@ -31320,6 +31328,7 @@ __PLAN_MODE_GATE__
                             )
                             _val_result = __import__("compras_pequenas").tolerar(_val_result)  # [P1-PLAN-LOTE-660] 1-2 compras pequeñas con la Nevera exigida
                             if _val_result is True:
+                                __import__("nevera_refutada").olvidar(meal_plan_id, user_id, prior_plan_data)  # [P1-PLAN-LOTE-747] la guarda aprobó sin waiver: una refutación previa de esta Nevera deja de valer
                                 # [P0-B] Existencia OK. Validamos cantidades según el modo configurado.
                                 #   off      → aceptar tal cual.
                                 #   advisory → loguear violaciones, anotarlas en form_data y aceptar.
@@ -31490,7 +31499,7 @@ __PLAN_MODE_GATE__
                                 # Persistir el feedback final para diagnóstico operacional y
                                 # para que el frontend pueda mostrar al usuario qué ingredientes
                                 # el LLM no pudo resolver tras varios intentos.
-                                __import__("nevera_refutada").registrar(meal_plan_id, user_id, week_number, chunk_kind, (form_data.get("_pantry_correction"), _val_result))  # [P1-PLAN-LOTE-747] evidencia para el pre-chequeo del próximo bloque
+                                __import__("nevera_refutada").registrar(meal_plan_id, user_id, week_number, chunk_kind, (form_data.get("_pantry_correction"), _val_result), bruto_inicio=_nr_bruto0)  # [P1-PLAN-LOTE-747] evidencia para el pre-chequeo del próximo bloque
                                 form_data["_pantry_correction"] = str(_val_result)[:1000]
                                 _pause_chunk_for_pantry_refresh(
                                     task_id,
@@ -31499,15 +31508,7 @@ __PLAN_MODE_GATE__
                                     fresh_inventory=_pantry_snapshot,
                                     reason="pantry_violation_after_retries",
                                 )
-                                _dispatch_push_notification(
-                                    user_id=user_id,
-                                    title="Tu plan necesita revisión de ingredientes",
-                                    body=(
-                                        "No pudimos generar los próximos días con los "
-                                        "ingredientes que tienes. Actualiza tu nevera para continuar."
-                                    ),
-                                    url="/dashboard",
-                                )
+                                __import__("nevera_refutada").avisar(user_id)  # [P1-PLAN-LOTE-747] el push de esta pausa vive en UN sitio (push_i18n traduce por el texto exacto)
                                 return
                         else:
                             _final_validation = _finalize_live_pantry_validation("Inventario actualizado.")
