@@ -1690,3 +1690,6 @@ salen **idénticos a la ronda 1 fila por fila, detalle incluido** (V1 45 y 10, V
 hallazgos nuevos frente a la base; biblioteca de 193 recetas RD de `deterministic_day`, idéntica a la ronda 1 (23
 hallazgos: 21 V8a y 2 V1); golden set idéntico (0 FP en los buenos, 16/16 defectos atrapados). Las sondas del revisor
 vuelven a disparar como en la base salvo lo documentado arriba (el fármaco tras coma, «dorar», la suma sin cifra).
+Replay de la cola (contrato + pulido) sobre los 426 planes crudos, en el VPS y sin IA, esta vez con el árbol FINAL:
+base (`3ce2c235`) contra `40fa4c38` (el commit de código de esta ronda, que ya incluye `e126745b` y `ff071f7c`), **426
+de 426 salidas byte-idénticas** y 0 errores; la lista de md5 de la base es idéntica a la de la ronda 1 (mismo corpus).

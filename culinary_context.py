@@ -203,6 +203,8 @@ def _recorta_plazos(c: str) -> str:
             return m.group(0)                           # sin negación: es una espera, se queda
         return " "
     return _RE_PLAZO_CONSERVACION.sub(_sub, c)
+
+
 # Las exclusiones NUEVAS del lote (fármaco, tope y plazo) se aplican por CLÁUSULA del paso CRUDO: `_norm` borra la
 # puntuación, así que partir después de normalizar —lo que hacía el código— no parte nada, y la primera versión del
 # lote callaba el paso entero («marina el pollo 2 horas; no lo dejes a temperatura ambiente más de 2 horas» salía 0). El
