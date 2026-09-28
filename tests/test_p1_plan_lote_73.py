@@ -51,7 +51,10 @@ def test_el_aviso_pide_el_verbo_de_su_comida(comida, verbo, infinitivo):
 
 def test_el_bucle_pasa_el_verbo_al_prompt():
     import proactive_agent as pa
-    assert "verbo=VERBO_DE_COMIDA.get(meal_to_check," in _src("proactive_agent.py")
+    # [P1-PLAN-LOTE-622] los tres huecos salen de `palabras_de_la_comida` (en español, de estas mismas tablas)
+    src = _src("proactive_agent.py")
+    assert "**palabras_de_la_comida(meal_to_check, _nudge_locale)" in src
+    assert '"verbo": VERBO_DE_COMIDA.get(meal,' in src
     assert set(pa.VERBO_DE_COMIDA) == {"Desayuno", "Almuerzo", "Merienda", "Cena"}
 
 

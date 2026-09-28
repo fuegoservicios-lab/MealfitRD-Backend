@@ -109,6 +109,51 @@ VERBO_DE_COMIDA = {
     "Cena": "cenaste",
 }
 
+# [P1-PLAN-LOTE-622 · 2026-09-27] En inglés el aviso decía «Your 3:45 merienda is just about here—go ahead and merendar
+# now»: el prompt nombraba la comida y sus verbos en español y la directiva de idioma manda dejar en español los nombres
+# de ALIMENTOS, así que el modelo trató «merienda» como uno. El nombre de la comida no es un identificador del motor: va
+# en el idioma del usuario. Cada fila: (nombre, infinitivo, pretérito), en el orden de los huecos del prompt.
+PALABRAS_DE_COMIDA_POR_IDIOMA = {
+    "en-US": {
+        "Desayuno": ("breakfast", "have breakfast", "had breakfast"),
+        "Almuerzo": ("lunch", "have lunch", "had lunch"),
+        "Merienda": ("afternoon snack", "have your afternoon snack", "had your afternoon snack"),
+        "Cena": ("dinner", "have dinner", "had dinner"),
+    },
+    "pt-BR": {
+        "Desayuno": ("café da manhã", "tomar o café da manhã", "tomou o café da manhã"),
+        "Almuerzo": ("almoço", "almoçar", "almoçou"),
+        "Merienda": ("lanche da tarde", "fazer o lanche da tarde", "fez o lanche da tarde"),
+        "Cena": ("jantar", "jantar", "jantou"),
+    },
+    "fr-FR": {
+        "Desayuno": ("petit-déjeuner", "prendre le petit-déjeuner", "pris le petit-déjeuner"),
+        "Almuerzo": ("déjeuner", "déjeuner", "déjeuné"),
+        "Merienda": ("goûter", "prendre le goûter", "pris le goûter"),
+        "Cena": ("dîner", "dîner", "dîné"),
+    },
+    "it-IT": {
+        "Desayuno": ("colazione", "fare colazione", "fatto colazione"),
+        "Almuerzo": ("pranzo", "pranzare", "pranzato"),
+        "Merienda": ("merenda", "fare merenda", "fatto merenda"),
+        "Cena": ("cena", "cenare", "cenato"),
+    },
+}
+
+
+def palabras_de_la_comida(meal: str, locale) -> dict:
+    """Los huecos `missing_meal`/`infinitivo`/`verbo` de `PROACTIVE_PROMPT` en el idioma del usuario. En español (o sin
+    idioma conocido) son los de siempre, byte a byte."""
+    propia = PALABRAS_DE_COMIDA_POR_IDIOMA.get(locale, {}).get(meal) if isinstance(locale, str) else None
+    if propia:
+        nombre, infinitivo, verbo = propia
+        return {"missing_meal": nombre, "verbo": verbo, "infinitivo": infinitivo}
+    return {
+        "missing_meal": meal,
+        "verbo": VERBO_DE_COMIDA.get(meal, f"tomaste tu {str(meal).lower()}"),
+        "infinitivo": INFINITIVO_DE_COMIDA.get(meal, f"tomar tu {str(meal).lower()}"),
+    }
+
 
 # [P1-PLAN-LOTE-133 · 2026-09-20] Las horas por defecto y la hora del aviso, fuera del bucle del cron: la app nativa
 # programa los MISMOS recordatorios en el teléfono (`GET /api/notifications/meal-reminders`) y dos copias de esta cuenta
@@ -1190,9 +1235,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     style_instruction = "Usa un tono de reto amistoso, motivando como si fuera un logro a desbloquear."
                 
                 prompt = PROACTIVE_PROMPT.format(
-                    missing_meal=meal_to_check,
-                    verbo=VERBO_DE_COMIDA.get(meal_to_check, f"tomaste tu {meal_to_check.lower()}"),
-                    infinitivo=INFINITIVO_DE_COMIDA.get(meal_to_check, f"tomar tu {meal_to_check.lower()}"),
+                    **palabras_de_la_comida(meal_to_check, _nudge_locale),   # [P1-PLAN-LOTE-622] en su idioma
                     trigger_time=trigger_time_str,
                     diet_type=diet_type,
                     goals=goals,
