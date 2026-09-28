@@ -2641,3 +2641,11 @@ def budget_prefers_economy(form_data: dict) -> bool:
         return declared_dop < floor_rd * _budget_tight_custom_factor()
     except Exception:
         return False
+
+
+# [P1-PLAN-LOTE-651 · 2026-09-27] (G89) La palanca del piso de presupuesto, en el registro desde el arranque (ver la nota
+# gemela al final de `shopping_calculator.py`). La lectura sigue siendo por llamada.
+try:
+    _budget_floor_enabled()
+except Exception:  # noqa: BLE001 — registrar no puede tumbar el import
+    pass

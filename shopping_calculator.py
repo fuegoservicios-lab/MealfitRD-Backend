@@ -14404,3 +14404,15 @@ def get_realtime_pantry(
     return aggregate_and_deduct_shopping_list(
         all_ingredients, consumed_ingredients, num_days=num_days, multiplier=multiplier
     )
+
+
+# [P1-PLAN-LOTE-651 · 2026-09-27] (G89) Las palancas de rollback del sistema de países, en el registro desde el
+# arranque: el registro solo conoce un knob cuando se LEE, y estas se leían al armar la primera lista. Al FINAL del
+# módulo a propósito (arriba, los accesores aún no existen). La lectura sigue siendo por llamada.
+for _palanca in (_country_catalog_unpriced_keep_enabled, _country_keep_respect_recipe_qty_enabled,
+                 _unit_system_by_country_enabled, _baking_staples_keep_enabled, _seasoning_catalog_keep_enabled):
+    try:
+        _palanca()
+    except Exception:  # noqa: BLE001 — registrar no puede tumbar el import
+        pass
+del _palanca
