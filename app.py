@@ -2038,6 +2038,8 @@ async def lifespan(app: FastAPI):
     # cuyo next_run_time pasó durante el downtime).
     global _APP_START_TIME
     _APP_START_TIME = time.time()
+    # [P1-PLAN-LOTE-651] (G89) las palancas de rollback de países, visibles en el registro desde el arranque
+    __import__("palancas_de_paises").registrar()
     if _SCHEDULER_BOOT_GRACE_S > 0:
         logger.info(
             f"⏳ [P2-AUDIT-NEW-3] Boot grace activo: scheduler_missed_* "

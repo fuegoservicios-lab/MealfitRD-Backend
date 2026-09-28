@@ -23,7 +23,8 @@ PALANCAS = (
 
 def test_las_palancas_estan_en_el_registro_nada_mas_importar():
     # proceso limpio: en la suite, otro test ya pudo haberlas leído y el registro las tendría por casualidad
-    codigo = ("import shopping_calculator, nutrition_calculator\n"
+    codigo = ("import palancas_de_paises\n"
+              "assert palancas_de_paises.registrar() == 6\n"
               "from knobs import get_knobs_registry_snapshot\n"
               "r = get_knobs_registry_snapshot()\n"
               f"print(','.join(k for k in {PALANCAS!r} if k not in r))\n")
@@ -31,6 +32,11 @@ def test_las_palancas_estan_en_el_registro_nada_mas_importar():
     assert out.returncode == 0, out.stderr[-2000:]
     faltan = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
     assert faltan == "", f"palancas de rollback invisibles tras importar: {faltan}"
+
+
+def test_el_arranque_las_registra():
+    src = (_BACKEND / "app.py").read_text(encoding="utf-8")
+    assert "palancas_de_paises" in src and ".registrar()" in src
 
 
 def test_claude_md_no_anuncia_el_knob_que_no_gobierna_nada():

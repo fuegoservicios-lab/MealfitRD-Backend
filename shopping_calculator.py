@@ -1190,10 +1190,7 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
         "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "membrillo",
         "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
-        "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
-        # [P1-PLAN-LOTE-624 · 2026-09-27] (G68) el durazno FRESCO en los cinco países beta, no sólo en US:
-        # «melocotón»/«durazno» resuelven a «Durazno en almíbar» (el doble de kcal, 1,7× de azúcar).
-        "duraznos",
+        "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce", "duraznos",   # [P1-PLAN-LOTE-624]
     ),
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismas 46 altas de catálogo MX/CO de este task —
     # también SIN precio RD a propósito (mismo motivo que ES: países beta,
@@ -1209,14 +1206,12 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "chile ancho", "habanero", "chile de arbol", "pasilla", "mulato", "nopal", "jicama",
         "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
         "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
-        "hoja santa", "chocolate de mesa", "panela", "huitlacoche",
-        "duraznos",  # [P1-PLAN-LOTE-624] (G68)
+        "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "duraznos",   # [P1-PLAN-LOTE-624]
     ),
     "CO": (
         "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
         "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
-        "borojo", "feijoa", "granadilla", "mora",
-        "duraznos",  # [P1-PLAN-LOTE-624] (G68)
+        "borojo", "feijoa", "granadilla", "mora", "duraznos",   # [P1-PLAN-LOTE-624]
     ),
     # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] 62 altas de catálogo PR/US de este task — también
     # SIN precio RD a propósito (países beta, `pricing_mode='beta_no_prices'`). A diferencia de
@@ -1236,8 +1231,7 @@ _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
         "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
         "longaniza puertorriquena", "chuleta ahumada",
         "aceite de achiote", "queso de papa", "especias para arroz con dulce",
-        "aceitunas rellenas",
-        "duraznos",  # [P1-PLAN-LOTE-624] (G68)
+        "aceitunas rellenas", "duraznos",   # [P1-PLAN-LOTE-624] (G68) el fresco también fuera de US
     ),
     "US": (
         "jamon de sandwich", "crema agria", "crema mitad y mitad",
@@ -14404,15 +14398,3 @@ def get_realtime_pantry(
     return aggregate_and_deduct_shopping_list(
         all_ingredients, consumed_ingredients, num_days=num_days, multiplier=multiplier
     )
-
-
-# [P1-PLAN-LOTE-651 · 2026-09-27] (G89) Las palancas de rollback del sistema de países, en el registro desde el
-# arranque: el registro solo conoce un knob cuando se LEE, y estas se leían al armar la primera lista. Al FINAL del
-# módulo a propósito (arriba, los accesores aún no existen). La lectura sigue siendo por llamada.
-for _palanca in (_country_catalog_unpriced_keep_enabled, _country_keep_respect_recipe_qty_enabled,
-                 _unit_system_by_country_enabled, _baking_staples_keep_enabled, _seasoning_catalog_keep_enabled):
-    try:
-        _palanca()
-    except Exception:  # noqa: BLE001 — registrar no puede tumbar el import
-        pass
-del _palanca
