@@ -590,6 +590,64 @@ def _iter_meals(plan_data: dict):
                 yield d.get("day"), m
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-745 · 2026-09-28] V1 — cinco lecturas que no eran una orden de cocción, medidas sobre las 848 comidas
+# recientes del 28-sep (39 V1 en 28 comidas) y las 5 334 del corpus de 426 planes (195 V1 en 135 comidas):
+#
+#   · el MEDIO o el ALIÑO no es el objeto del verbo: «cocínalo en plancha con el aceite de oliva», «guisa con el
+#     orégano y la sal». Aceite/sal/orégano/pimienta acusados de «plancha» o «guisar». Se reusa CONDIMENT_EXEMPT, la
+#     misma exención que V3, V5 y V7f ya aplicaban (V1 era el único check sin ella). Siguen contando como alimentos de
+#     la cláusula para la salvaguarda del destinatario válido; sólo dejan de ser ACUSADOS — salvo cuando son el OBJETO
+#     DIRECTO del verbo («hierve la canela en polvo», el caso que P1-PLAN-LOTE-67 fija): ver `_v1_objeto_directo`.
+#   · un verbo NEGADO no es una instrucción: «(sin empanizar ni freír)», «(no lo humedezcas ni lo hiervas)», «nunca se
+#     remoja ni se hierve», «sin dejar que hierva», «sin cocción», «mientras se hornean». La guarda mira SÓLO lo que
+#     precede al verbo en su cláusula, así que «No lo hiervas todavía. Hierve el casabe» sigue acusando.
+#   · un verbo DENTRO del nombre de un alimento es parte del nombre: «polvo de hornear», «queso de freír» (alias de
+#     Queso blanco). La regla de la mezcla (P1-CULINARY-CONTRACT-BATTER) ya lo esquivaba con ≥3 alimentos; con dos
+#     («mide 30 g de avena y ¼ cdta de polvo de hornear») acusaba a la avena de hornearse.
+#   · «cocción» es un SUSTANTIVO («agua de cocción», «a mitad de cocción», «sin cocción») y «licuadora»/«tostadora»
+#     son APARATOS: ninguno ordena hervir, licuar ni tostar.
+#   · «dorar» no es sólo saltear: dora quien tuesta, fríe, asa a la plancha u hornea. «Dora el casabe en una sartén
+#     seca» es tostarlo (Casabe: tostar) y «dora el plátano maduro» es freírlo (Plátano maduro: freír). El paso que dora
+#     a un alimento que no admite NINGUNO de esos métodos sigue acusando («dora el queso de hoja»: ninguno/crudo).
+#
+# Lo que NO se tocó, a propósito: la metadata del catálogo (Queso blanco sin 'freir' aunque su alias es «queso de
+# freír»; Papa sin 'saltear') — eso lo decide el dueño con una migración, no el escáner.
+# tooltip-anchor: P1-PLAN-LOTE-745-V1
+_V1_METODOS_DORAR = frozenset({"saltear", "freir", "plancha", "tostar", "hornear"})
+_V1_NEGADO_RE = re.compile(
+    r"(?:\b(?:sin|no|ni|nunca|jamas)|\bsin\s+dejar\s+que|\bmientras)(?:\s+(?:lo|la|los|las|le|les|se))*\s+$")
+_V1_NO_ES_VERBO_RE = re.compile(r"cocci[oó]n|(?:licuadora|tostadora)s?")
+
+
+def _v1_es_condimento(food: str) -> bool:
+    """El nombre EMPIEZA por un condimento («Aceite de oliva», «Orégano dominicano», «Pimienta negra»). Anclado al
+    principio a propósito: con `search`, el «agua» de «Atún en agua» lo volvía condimento y el atún guisado dejaba de
+    juzgarse — lo cazó la lectura del diff del corpus, no un test."""
+    n = _norm(food)
+    return any(rx.match(n) for rx in _CONDIMENT_EXEMPT_RES)
+
+
+_V1_ARTICULOS = frozenset({"el", "la", "los", "las", "un", "una", "unos", "unas"})
+
+
+def _v1_objeto_directo(paso_norm: str, end: int, clause_end: int, spans: list):
+    """El alimento que es el OBJETO DIRECTO de la ocurrencia del verbo que acaba en `end`: el que empieza en la primera
+    palabra de contenido tras él (saltando sólo artículos y cifras), o `None`. Más estricto que `_object_inmediato_status`
+    a propósito — aquel salta preposiciones («con», «en») y para él «cocínalo en plancha con el aceite» tiene de objeto
+    al aceite. Aquí la preposición corta: el condimento que se nombra CON ella es el medio o el aliño, y sólo el que
+    sigue al verbo sin nada por medio —«hierve la canela en polvo»— sigue acusado (P1-PLAN-LOTE-67 lo exige)."""
+    for m in _WORD_RE.finditer(paso_norm, end, clause_end):
+        tok = m.group()
+        if tok.isnumeric() or tok in _V1_ARTICULOS:
+            continue
+        for s, _e, name in spans:
+            if s == m.start():
+                return name
+        return None
+    return None
+
+
 def _v1_verbo_alimento(day, meal, index) -> list:
     out = []
     for paso in meal.get("recipe") or []:
@@ -597,6 +655,7 @@ def _v1_verbo_alimento(day, meal, index) -> list:
         if _RE_MONTAJE_STEP.match(paso_norm):
             # [FP1 clase A refuerzo] paso de montaje: nunca cocina, V1 no aplica.
             continue
+        _spans_alimento = None                        # [P1-PLAN-LOTE-745] se calculan sólo si hay algún verbo
         # met_spans: método → spans (start, end) de cada ocurrencia del verbo
         # que resuelve a ese método en ESTE paso. dict en vez de un simple
         # `set`/list de métodos: cinturón y tirantes contra la próxima clave
@@ -618,6 +677,13 @@ def _v1_verbo_alimento(day, meal, index) -> list:
         accused = set()
         for met, spans in met_spans.items():
             for start, end in spans:
+                # [P1-PLAN-LOTE-745] ni un sustantivo/aparato, ni una palabra de un NOMBRE de alimento, ni un verbo negado
+                if _V1_NO_ES_VERBO_RE.fullmatch(paso_norm[start:end]):
+                    continue
+                if _spans_alimento is None:
+                    _spans_alimento = _catalog_food_spans(paso, index)
+                if any(s <= start < e for s, e, _ in _spans_alimento):
+                    continue
                 # [P1-CULINARY-CONTRACT-FP round 3] atribución por CLÁUSULA
                 # (oración), no por paso completo — ver bloque de comentario
                 # sobre `_clause_bounds`. Cada ocurrencia del verbo solo
@@ -625,8 +691,16 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                 # legítima en otra oración del mismo paso ya no desbloquea
                 # la acusación sobre alimentos de oraciones ajenas.
                 clause_start, clause_end = _clause_bounds(paso_norm, start)
+                if _V1_NEGADO_RE.search(paso_norm[clause_start:start]):
+                    continue
+                # [P1-PLAN-LOTE-745] «dorar» se satisface con cualquier método que dore
+                metodos_ok = _V1_METODOS_DORAR if paso_norm[start:end].startswith("dor") else {met}
+                etiqueta = "dorar" if paso_norm[start:end].startswith("dor") else met
                 clause_text = paso_norm[clause_start:clause_end]
-                foods = find_catalog_foods(clause_text, index)
+                # [P1-PLAN-LOTE-745] los alimentos de la cláusula salen de los spans del paso ya calculados (un alias no
+                # cruza «.»/«;», así que es lo mismo que re-escanear la cláusula con `find_catalog_foods`, sin pagar
+                # otra pasada del índice por ocurrencia)
+                foods = list(dict.fromkeys(n for s, e, n in _spans_alimento if clause_start <= s and e <= clause_end))
                 if not foods:
                     continue
                 # [P1-CULINARY-CONTRACT-BATTER] salvaguarda "mezcla": esta
@@ -654,7 +728,7 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                 # con acompañante inocente).
                 accepting = {f for f, meta in metas.items()
                              if meta.get("prep_methods") is not None
-                             and met in meta.get("prep_methods")}
+                             and metodos_ok & set(meta.get("prep_methods"))}
                 safeguard = len(foods) >= 2 and len(accepting) >= 1
                 # [FP1 clase B] si NADIE en la cláusula acepta el método
                 # (accepting vacío) Y el objeto directo inmediato de ESTA
@@ -671,6 +745,9 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                 for food in foods:
                     if food in accepting or (food, met) in accused:
                         continue
+                    if _v1_es_condimento(food) and food != _v1_objeto_directo(
+                            paso_norm, end, clause_end, _spans_alimento):
+                        continue                      # [P1-PLAN-LOTE-745] el medio o el aliño, no el objeto
                     meta = metas[food]
                     prep = meta.get("prep_methods")
                     if prep is None:
@@ -680,22 +757,51 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                     accused.add((food, met))
                     if meta.get("ready_to_eat") is True:
                         out.append(_viol(day, meal, "V1", food,
-                                         f"paso aplica '{met}' a un listo-para-comer: {paso[:120]}",
+                                         f"paso aplica '{etiqueta}' a un listo-para-comer: {paso[:120]}",
                                          "minor", False))
                     else:
                         out.append(_viol(day, meal, "V1", food,
-                                         f"'{met}' no está en prep_methods{tuple(prep)}: {paso[:120]}",
+                                         f"'{etiqueta}' no está en prep_methods{tuple(prep)}: {paso[:120]}",
                                          "minor", False))
     return out
 
 
+def _v2_dueno_del_estado(texto_norm: str, pos: int, spans: list):
+    """[P1-PLAN-LOTE-745 · 2026-09-28] El alimento al que se refiere «ya viene cocido» que empieza en `pos`: el más
+    cercano que lo PRECEDE en su misma oración («atún en agua (ya viene cocido)», «el casabe ya está cocido») y, si nada
+    lo precede, el primero que lo sigue («ya viene cocido el pollo»). `None` si la oración no nombra ninguno."""
+    ini, fin = _clause_bounds(texto_norm, pos)
+    antes = [s for s in spans if ini <= s[0] and s[1] <= pos]
+    if antes:
+        return max(antes, key=lambda s: s[1])[2]
+    despues = [s for s in spans if pos <= s[0] and s[1] <= fin]
+    return min(despues, key=lambda s: s[0])[2] if despues else None
+
+
 def _v2_estado_imposible(day, meal, index) -> list:
+    """[P1-PLAN-LOTE-745 · 2026-09-28] El estado «ya viene/ya está cocido» se atribuye a SU DUEÑO, no a todo el paso.
+
+    Antes, una sola mención del estado acusaba a TODOS los alimentos frescos del texto. El cierre de proteína escribe
+    «Escurre e incorpora atún en agua (ya viene cocido) a la preparación» al final de un paso cuyas oraciones anteriores
+    revuelven huevos o cuecen bulgur — y V2 acusaba al huevo, a la clara, a la yema, al bulgur y a las habichuelas de
+    «ya venir cocidos»: 43 de 43 V2 del corpus del 28-sep (848 comidas), 130 de 130 en el de 426 planes. Ninguno era el
+    atún, que es listo-para-comer. El verdadero sigue intacto: «filete de pescado blanco (ya viene cocido)» —el pescado
+    CRUDO declarado cocido de P1-CLOSER-NOTE-FUSED-FRESHCOCIDO— tiene al pescado de dueño y dispara.
+    tooltip-anchor: P1-PLAN-LOTE-745-V2"""
     out = []
     textos = list(meal.get("recipe") or []) + list(meal.get("ingredients") or [])
     for t in textos:
-        if not _RE_ESTADO.search(_norm(t)):
+        tn = _norm(t)
+        estados = list(_RE_ESTADO.finditer(tn))
+        if not estados:
             continue
-        for food in find_catalog_foods(t, index):
+        spans = _catalog_food_spans(t, index)
+        acusados = []
+        for m in estados:
+            food = _v2_dueno_del_estado(tn, m.start(), spans)
+            if food and food not in acusados:
+                acusados.append(food)
+        for food in acusados:
             meta = index.get(_norm(food)) or {}
             if meta.get("ready_to_eat") is False:      # NULL ⇒ fail-open
                 out.append(_viol(day, meal, "V2", food,
@@ -1351,7 +1457,7 @@ _V7_SECABLES_RE = re.compile(
 _V7_RANGO_RE = re.compile(_V7_CANT + r"\s*(?:-|–|—|\ba\b)\s*$")
 
 
-def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma") -> dict:
+def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma", contado: "dict | None" = None) -> dict:
     """{alimento: total de PIEZAS} de «N <alimento>» — sin unidad de medida por medio.
 
     [P1-PLAN-LOTE-31 · 2026-09-13] `agregar="max"`: en vez de SUMAR las menciones del texto, se queda con la mayor.
@@ -1397,7 +1503,107 @@ def _v7_piezas(texto: str, index: dict, *, agregar: str = "suma") -> dict:
             out[crudos[0]] = max(out.get(crudos[0], 0.0), val)
         else:
             out[crudos[0]] = out.get(crudos[0], 0.0) + val
+        if contado is not None:
+            # [P1-PLAN-LOTE-745] la PALABRA que la cifra cuenta: «2 tortas pequeñas de casabe» cuenta tortas,
+            # «2 hojas de laurel» cuenta hojas, «5 aceitunas» cuenta aceitunas (ya en plural).
+            _pal = re.sub(r"^de\s+", "", cola).split()
+            if _pal:
+                contado.setdefault(crudos[0], _pal[0])
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PLAN-LOTE-745 · 2026-09-28] V7a por número gramatical: qué singular prueba «una sola» y cuál no.
+#
+# Medido sobre las 848 comidas recientes del 28-sep: 42 de los 44 V7a eran la rama del singular, y casi todos ruido
+# (en el corpus de 426 planes: 245 V7a, los más Filete ×48, Huevo ×47, Pechuga ×32, Tomate ×31, Casabe ×27, Limón ×22).
+# Siete lecturas que no prueban «usa una sola»:
+#
+#   · la palabra CONTADA no es la cabeza del nombre: «2 tortas pequeñas de casabe» cuenta TORTAS y «2 hojas de laurel»
+#     cuenta HOJAS — «el casabe», «el laurel» son masa, como «el pan». Y «5 aceitunas» cuenta aceitunas: el nombre YA
+#     es plural y el regex del plural buscaba «aceitunases», así que «las aceitunas» salía «siempre en singular».
+#   · una mención EN MASA («corta 300 g de filete», «bate 1 huevo con 135 g de clara de huevo») dice que la receta
+#     pesa el alimento: el singular es colectivo (y la masa ya la mide V7d).
+#   · «corta el tomate EN CUBITOS / en dados / en rodajas / en tiras»: trocear lo vuelve colectivo, igual que «pica» y
+#     «ralla», que ya lo eran. «Corta el huevo duro en MITADES» no trocea: sigue siendo uno.
+#   · sin artículo no hay número: «cocina huevo a la plancha», «exprime limón», «acompaña con huevo». La evidencia de
+#     «uno» es «el/la/un/una/del/al huevo»; «cada clara» es distributivo.
+#   · el limón como JUGO («el jugo del limón», «exprime el limón») es líquido, no piezas.
+#   · una NOTA (⚠ seguridad alimentaria, ⚕ clínica, 💡 cocción previa, 🤰 embarazo) habla de la clase en abstracto
+#     («cocina el huevo por completo»), no del plato.
+#   · el PUNTO de cocción describe un estado: «escalfa 3 huevos … hasta que la clara cuaje» (con 6 claras en la lista).
+#
+# El detalle nombra la palabra singular que se encontró («huevo»), no la contada («huevos»).
+#
+# Sigue disparando lo que el dueño etiquetó: «rellena la tortilla» con 2 tortillas, «hierve el huevo … sirve el huevo
+# duro» con 2 huevos, «bate los huevos con la clara» con 4 claras. tooltip-anchor: P1-PLAN-LOTE-745-V7A
+_V7A_NOTA_RE = re.compile("seguridad alimentaria|riesgo de salmonella|^\\s*[⚠⚕\U0001F4A1\U0001F930]",
+                          re.IGNORECASE)
+_V7A_DETERMINANTE_RE = re.compile(r"\b(?:el|la|un|una|del|al)\s+$")
+# El PUNTO de cocción describe un estado, no cuenta piezas: «escalfa 3 huevos … hasta que la clara cuaje» habla de la
+# clara de ESOS huevos, no de las 6 claras de la lista; «hasta que el centro del filete alcance 63 °C», igual.
+_V7A_PUNTO_RE = re.compile(r"\bhasta\s+que\s+(?:\w+\s+){0,3}$")
+_V7A_JUGO_RE = re.compile(r"\b(?:jugo|zumo)\s+(?:de|del)\s+(?:(?:el|la|un|una|medio|media)\s+)?$|"
+                          r"\bexprim\w*\s+(?:(?:el|la|un|una|medio|media)\s+)?$")
+_V7A_EN_MASA_RE = re.compile(_V7_CANT + r"\s*(?:gramos?|g|kg|mililitros?|ml|litros?|l|onzas?|oz|lb|libras?|tazas?|"
+                             r"cucharadas?|cucharaditas?|cdas?|cdtas?)\s+(?:de\s+)?(?:(?:el|la|los|las)\s+)?$")
+# Trocear exige las dos mitades en la MISMA cláusula: el verbo de corte ANTES de la mención y «en <trozos>» DESPUÉS
+# («corta el tomate y la cebolla en cubitos»). Con sólo mirar la cláusula, «pela y corta ½ kiwi en cubos y lava el
+# huevo» volvía colectivo al huevo — lo cazó el test del verdadero positivo.
+_V7A_CORTE_RE = re.compile(r"\b(?:cort|trocea|rebana|parte\b|parta\b|divid)")
+_V7A_TROCEA_RE = re.compile(r"\ben\s+(?:\d+\s+)?(?:cubos|cubitos|cuadritos|dados|daditos|rodajas|rodajitas|ruedas|"
+                            r"tiras|tiritas|trozos|trocitos|pedazos|pedacitos|laminas|laminitas|lonjas|rebanadas|"
+                            r"juliana|aros|plumas|bastones|bastoncitos|gajos|medias lunas|brunoise|piezas|porciones)\b")
+
+
+def _v7a_formas(palabra: str) -> tuple:
+    """(regex del singular, regex del plural) de la palabra contada, venga en singular («ajo») o en plural
+    («aceitunas», «limones», «nueces»)."""
+    w = palabra
+    if w.endswith("s") and len(w) > 3:
+        sing = {w[:-1]}
+        if w.endswith("es"):
+            sing.add(w[:-2])
+        if w.endswith("ces"):
+            sing.add(w[:-3] + "z")
+        plur = {w}
+    else:
+        sing = {w}
+        plur = {w + "s", w + "es"}
+    alt = lambda xs: r"\b(?:" + "|".join(re.escape(x) for x in sorted(xs)) + r")\b"
+    return re.compile(alt(sing)), re.compile(alt(plur))
+
+
+def _v7a_singular_es_evidencia(cabeza: str, pasos: list, pasos_norm: list) -> "str | None":
+    """La palabra en singular que prueba que los pasos hablan de UNA sola pieza de `cabeza` (la palabra que la lista
+    cuenta), o `None`: alguna mención en singular con determinante, fuera de una nota y fuera del punto de cocción, sin
+    plural en ningún paso y sin que ningún paso la vuelva masa."""
+    sing, plur = _v7a_formas(cabeza)
+    menciones = [pn for pn in pasos_norm if sing.search(pn) or plur.search(pn)]
+    # Solo dispara si el alimento SÍ aparece en los pasos —si no, es huérfano y lo ve V3— y SIEMPRE en singular.
+    # Una sola mención en plural basta para callarlo: el reparto entre pasos es legítimo.
+    if not menciones or any(plur.search(pn) for pn in menciones):
+        return None
+    # Si algún paso lo convierte en MASA, el singular es colectivo y no dice nada. Se mira la cláusula, no el paso
+    # entero: «ralla el queso; coloca las tortillas» ralla el queso, no las tortillas.
+    for pn in menciones:
+        for mm in sing.finditer(pn):
+            ini, fin = _clause_bounds(pn, mm.start())
+            if _V7_MASIFICA_RE.search(pn[ini:fin]):
+                return None
+            if _V7A_CORTE_RE.search(pn[ini:mm.start()]) and _V7A_TROCEA_RE.search(pn[mm.end():fin]):
+                return None
+            if _V7A_EN_MASA_RE.search(pn[ini:mm.start()]):
+                return None
+    for crudo, pn in zip(pasos, pasos_norm):
+        if _V7A_NOTA_RE.search(str(crudo)):
+            continue
+        for mm in sing.finditer(pn):
+            antes = pn[:mm.start()]
+            if (_V7A_DETERMINANTE_RE.search(antes) and not _V7A_JUGO_RE.search(antes)
+                    and not _V7A_PUNTO_RE.search(antes)):
+                return mm.group()
+    return None
 
 
 def _v7a_lista_compra_de_mas(day, meal, index) -> list:
@@ -1412,8 +1618,9 @@ def _v7a_lista_compra_de_mas(day, meal, index) -> list:
         if not ings or not pasos:
             return []
         en_lista: dict = {}
+        contado: dict = {}                               # [P1-PLAN-LOTE-745] alimento → la palabra que la cifra cuenta
         for ing in ings:
-            for food, n in _v7_piezas(ing, index).items():
+            for food, n in _v7_piezas(ing, index, contado=contado).items():
                 en_lista[food] = en_lista.get(food, 0.0) + n
         usado: dict = {}
         for paso in pasos:
@@ -1444,25 +1651,9 @@ def _v7a_lista_compra_de_mas(day, meal, index) -> list:
             # guard, ese caso era el único falso positivo del detector.
             if comprado < 2 or abs(comprado - round(comprado)) > 0.01:
                 continue
-            cabeza = _norm(food).split()[0]
-            sing = re.compile(r"\b" + re.escape(cabeza) + r"\b")
-            plur = re.compile(r"\b" + re.escape(cabeza) + r"(?:e?s)\b")
-            menciones = [pn for pn in pasos_norm if sing.search(pn) or plur.search(pn)]
-            if not menciones or any(plur.search(pn) for pn in menciones):
-                continue
-            # Si algún paso lo convierte en MASA, el singular es colectivo y no dice nada. Se mira
-            # la cláusula, no el paso entero: «ralla el queso; coloca las tortillas» ralla el
-            # queso, no las tortillas.
-            masificado = False
-            for pn in menciones:
-                for mm in re.finditer(r"\b" + re.escape(cabeza) + r"\w*", pn):
-                    ini, fin = _clause_bounds(pn, mm.start())
-                    if _V7_MASIFICA_RE.search(pn[ini:fin]):
-                        masificado = True
-                        break
-                if masificado:
-                    break
-            if masificado:
+            # [P1-PLAN-LOTE-745] la palabra que la cifra CUENTA, no la cabeza del nombre: ver `_v7a_singular_es_evidencia`
+            cabeza = _v7a_singular_es_evidencia(contado.get(food) or _norm(food).split()[0], pasos, pasos_norm)
+            if not cabeza:
                 continue
             out.append(_viol(day, meal, "V7a", food,
                              f"la lista compra {comprado:g} y los pasos hablan de una sola "

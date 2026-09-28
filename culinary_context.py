@@ -176,10 +176,39 @@ _RE_NOCHE = re.compile(r"toda la noche|la noche anterior|desde la vispera|la vis
                        r"durante la noche|toda una noche|de la noche a la manana")
 #: una cláusula de CONSERVACIÓN habla del plato hecho, no de una espera para hacerlo
 _RE_ALMACEN = re.compile(r"\bguard|\bconserv|\bdura\b|\bduran\b|se mantien|aguanta|refrigera(?:do|da)?\b.*\bhasta|"
-                         r"consume(?:lo|la|los|las)? (?:dentro|antes)|dentro de las?\b|\bcongel|\bsobra")
+                         r"consume(?:lo|la|los|las)? (?:dentro|antes)|dentro de las?\b|\bcongel|\bsobra"
+                         # [P1-PLAN-LOTE-745] el LÍMITE de seguridad alimentaria es conservación, no espera: «no lo dejes
+                         # a temperatura ambiente más de 2 horas», «refrigera lo que sobre dentro de 2 horas» (4 comidas
+                         # del corpus de 426 planes). Sólo el TOPE («… más de»): «reposa a temperatura ambiente 1 hora»
+                         # sí es una espera y sigue contando.
+                         r"|temperatura ambiente (?:por |durante )?mas de|lo que sobre\b|dentro de \d")
 _RE_ESPERA = re.compile(r"remoj|descongel|marin|adob|repos|macer|ferment|leud|enfri|refriger|cuaj|hidrat|dej")
 _RE_MIN = re.compile(r"(\d{1,3})\s*min")
 _NOCHE_MIN = 8 * 60
+# [P1-PLAN-LOTE-745 · 2026-09-28] Una cláusula que habla de un FÁRMACO habla de separar la dosis, no de esperar a que
+# el plato esté listo: «toma la levotiroxina en ayunas y separa estos alimentos … al menos 4 horas de la dosis». Sobre
+# las 848 comidas recientes del 28-sep, 36 de los 37 V8a eran esa nota clínica leída como 4 h de espera oculta (el
+# único verdadero: la avena de «la noche anterior» con 5 min declarados, que sigue disparando). Es el mismo error que
+# P1-PLAN-LOTE-229 cerró en el clamp de tiempos, visto desde el escáner. Y un paso que ABRE con «⚕» es la nota
+# clínica entera (la marca de `_is_recipe_safety_note_step`): consejo médico, no cocina. La nota de seguridad (⚠) y la
+# de cocción previa (💡) NO se saltan: un «remoja 8-12 h» ahí SÍ es tiempo del plato.
+# tooltip-anchor: P1-PLAN-LOTE-745-V8A
+# Ojo: `_norm` borra la puntuación, así que el `re.split(r"[.;:]")` de abajo no parte nada y esto se mira por PASO.
+# Por eso «pastilla» excluye la «pastilla de caldo»: con ella en el paso, un marinado real dejaría de contar.
+_RE_MEDICACION = re.compile(r"\bdosis\b|levotiroxina|levothyroxin|\bmedicament|\bmedicin|\bpildora|"
+                            r"\bpastilla(?!\s+de\s+caldo)|\bfarmaco|\bcapsula|\beutirox|\bsynthroid"
+                            # el consejo de ESTILO DE VIDA tampoco es tiempo del plato: «evita acostarte durante las 2-3
+                            # horas posteriores a la cena» (gastritis)
+                            r"|\bacostar|\bacuest")
+_NOTA_CLINICA = "⚕"   # ⚕ — prefijo de la nota clínica por condición
+# Un `prep_time` que NOMBRA la espera ya la declaró: «10 min más reposo nocturno», «10 min (más refrigeración)», «10 min
+# + refrigeración» (3 comidas del corpus de 426 planes). `declared_prep_minutes` sólo lee minutos, así que sin esto se
+# acusaba justo al plato que sí avisó.
+_RE_PREP_DECLARA_ESPERA = re.compile(r"repos|refriger|nevera|noche|nocturn|vispera|remoj|marin|hidrat|ferment|leud")
+
+
+def _es_nota_clinica(paso) -> bool:
+    return str(paso or "").lstrip().startswith(_NOTA_CLINICA)
 
 
 def hidden_wait_minutes(pasos) -> tuple:
@@ -188,9 +217,11 @@ def hidden_wait_minutes(pasos) -> tuple:
     son conservación y no cuentan; «hornea 1 hora» es cocción activa y sí cuenta (el reloj corre igual)."""
     mejor, evidencia = 0, ""
     for p in (pasos or []):
+        if _es_nota_clinica(p):
+            continue                                   # [P1-PLAN-LOTE-745] consejo médico, no un paso de cocina
         for clausula in re.split(r"[.;:]", _norm(p).replace(" , ", " ")):
             c = clausula.strip()
-            if not c or _RE_ALMACEN.search(c):
+            if not c or _RE_ALMACEN.search(c) or _RE_MEDICACION.search(c):
                 continue
             mins = 0
             for m in _RE_HORAS.finditer(c):
@@ -239,6 +270,8 @@ def check_hidden_time(meal, *, minimo_min: int = 60) -> Optional[dict]:
         declarado = declared_prep_minutes(meal)
         if declarado is not None and declarado >= espera:
             return None
+        if _RE_PREP_DECLARA_ESPERA.search(_norm(meal.get("prep_time") or "")):
+            return None                                # [P1-PLAN-LOTE-745] el plato ya dice que reposa o remoja
         return {"espera_min": espera, "declarado_min": declarado, "evidencia": ev}
     except Exception:
         return None

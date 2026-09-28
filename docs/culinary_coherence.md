@@ -1543,3 +1543,52 @@ estado o corte (`_FLOOR_NOMBRE_GENERICAS`: «fresco», «cocidas», «en cubos»
 haría que cualquier «queso fresco» pareciera dar nombre al plato. tooltip-anchor
 `P1-PLAN-LOTE-70-NO-DROPEAR-LA-IDENTIDAD`.
 
+## El ruido de la capa 1, clase por clase (P1-PLAN-LOTE-745 · 2026-09-28)
+
+Medido el 28-sep sobre 848 comidas recientes (67 planes ya pasados por la cola del 744): la capa 1 marcaba **169
+comidas (19,9 %)** y casi todo era ruido. Cada clase se corrigió con su mecanismo, con tests que llevan el texto REAL
+que la disparaba junto al verdadero que debe seguir disparando (`tests/test_p1_plan_lote_745.py`), y se validó
+escaneando el corpus antes y después y leyendo CADA hallazgo que desaparece.
+
+| check | antes (848 comidas) | después | qué era |
+|---|---|---|---|
+| V8a | 37 comidas | 1 | 36 = la nota de levotiroxina («… al menos 4 horas de la dosis») leída como espera oculta |
+| V2 | 43 hallazgos / 29 comidas | 0 | «Escurre e incorpora atún en agua (ya viene cocido)» acusaba al huevo, la clara, el bulgur… de otra oración |
+| V1 | 39 / 28 | 10 / 10 | aceite/sal/orégano acusados como objeto; «sin freír», «ni lo hiervas»; «polvo de hornear»; «agua de cocción»; «dora el casabe» |
+| V7a | 44 / 44 | 13 / 13 | el singular gramatical: «300 g de filete», «2 tortas de casabe», «5 aceitunas», «cocina huevo…», «corta el tomate en cubitos» |
+| **capa 1** | **169 (19,9 %)** | **59 (7,0 %)** | 140 hallazgos menos, **0 nuevos**; golden set intacto (0 FP en los buenos, 16/16 defectos atrapados) |
+
+Sobre el corpus grande (426 planes, 5 334 comidas): V1 195 → 45, V2 130 → 0, V7a 245 → 53, V8a 98 → 18; la capa 1
+entera pasa de **946 comidas (17,7 %) a 541 (10,1 %)**, con los demás checks idénticos (lo que queda lo dominan V7f
+con 214 y V4 con 142, fuera de este lote). El replay de la cola (contrato + pulido) sobre los 67 planes da salidas
+byte-idénticas con y sin el lote: `retirar_sin_lista` usa V1/V7a como espejo y no cambió ninguna decisión.
+
+**Las reglas** (tooltip-anchors `P1-PLAN-LOTE-745-V1/-V2/-V7A/-V8A`):
+
+- **V8a** (`culinary_context.hidden_wait_minutes`): una cláusula que habla de un fármaco (dosis, levotiroxina,
+  pastilla…) o de no acostarse, y un paso que abre con «⚕», no son tiempo del plato; el TOPE de seguridad alimentaria
+  («no lo dejes a temperatura ambiente más de 2 horas», «refrigera lo que sobre dentro de 2 horas») es conservación;
+  y un `prep_time` que nombra el reposo («10 min más reposo nocturno») ya lo declaró. «Reposa a temperatura ambiente
+  1 hora», el remojo de la víspera y la avena de «la noche anterior» siguen disparando.
+- **V2**: el estado «ya viene/ya está cocido» es del alimento que lo PRECEDE en su oración (o, si nada lo precede, del
+  que lo sigue). En los dos corpus todos los dueños eran el atún en agua (listo para comer). El pescado FRESCO «(ya
+  viene cocido)» de P1-CLOSER-NOTE-FUSED-FRESHCOCIDO sigue disparando.
+- **V1**: condimentos (la cabeza del nombre en `CONDIMENT_EXEMPT`: «Atún en agua» NO es agua) no se acusan; un verbo
+  negado («sin», «no», «ni», «nunca», «sin dejar que», «mientras») no es una orden; un verbo dentro del nombre de un
+  alimento («polvo de hornear», «queso de freír») tampoco; «cocción», «licuadora» y «tostadora» son sustantivos; y
+  «dorar» se satisface con saltear, freír, plancha, tostar u hornear. «Cuece el casabe», «dora el queso de hoja» y
+  «licúa la pechuga» siguen disparando.
+- **V7a** (rama del número gramatical): se busca el singular de la palabra que la lista CUENTA (tortas, hojas,
+  dientes; o el nombre ya plural, «aceitunas»), sólo cuenta como evidencia tras un determinante singular, fuera de
+  las notas y del punto de cocción («hasta que la clara cuaje»), y calla si algún paso lo mide en masa («300 g de
+  filete») o lo trocea («corta el tomate en cubitos», «en piezas», «en porciones»; «en mitades» no). «Hierve el huevo…
+  sirve el huevo duro» con 2 huevos y «rellena la tortilla» con 2 tortillas siguen disparando.
+
+**Lo que queda y no es del escáner** (10 V1 del corpus reciente, 45 del grande): sobre todo metadata del catálogo —
+«Queso blanco» no admite `freir`/`plancha` aunque su alias es «queso de freír» (16 de los 45 del corpus grande), «Tostadas de
+maíz» sin `tostar`, «Papa» sin `saltear`, «maní molido» es alias de «Mantequilla de maní»—, y un homógrafo: «pasa la
+mezcla» se lee como «Pasas». Tocar esa metadata es una migración que decide el dueño, no el escáner.
+
+Los 18 V8a que quedan en el corpus grande son esperas reales (avena de la víspera, remojo de legumbres) — cinco de
+ellas OPCIONALES o condicionales («3 minutos (o desde la noche anterior)», «si el tiempo lo permite», «si los gandules no están cocidos»), que es una decisión de
+producto: ¿debe avisar el plato de una espera que el paso ofrece como alternativa?
