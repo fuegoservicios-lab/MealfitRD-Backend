@@ -56,7 +56,7 @@ def cocido_en_pasos(meal: dict) -> bool:
     for p in (meal.get("recipe") or []):
         if not isinstance(p, str) or _NOTA_RE.search(p):
             continue
-        for cl in re.split(r"[.;]", _sa(p)):
+        for cl in re.split(r"(?<=[.;])\s+", _sa(p)):   # [P1-PLAN-LOTE-52] con espacio: no corta «1.5 tazas»
             huevo = bool(_HUEVO_RE.search(cl))
             if _CUAJA_RE.search(cl) or (huevo and _COCCION_RE.search(cl)):
                 return True

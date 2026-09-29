@@ -47,7 +47,7 @@ def _calentado(pasos: list) -> bool:
     for p in pasos:
         if not isinstance(p, str) or _NOTA_RE.search(p):
             continue
-        for cl in re.split(r"[.;]", _sa(p)):
+        for cl in re.split(r"(?<=[.;])\s+", _sa(p)):   # [P1-PLAN-LOTE-52] con espacio: no corta «1.5 tazas»
             queso = bool(_QUESO_RE.search(cl))
             if (queso or en_mezcla) and _CALOR_RE.search(cl):
                 return True
