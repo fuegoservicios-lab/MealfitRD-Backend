@@ -5143,6 +5143,9 @@ def execute_tools(state: ChatState):
 # Tooltip-anchor: P1-DIARY-CLAIM-VERIFY
 
 _DIARY_WRITE_TOOLS = ("log_consumed_meal", "correct_consumed_meal")
+from diario_afirmacion import (   # [P1-PLAN-LOTE-904]
+    frase_es_solo_de_agua, mensaje_sin_nada_que_registrar, participio_describe_estado,
+)
 
 # Afirmaciones de registro. Sin `\b` final en las raíces verbales a propósito:
 # cubre "registrada/registrado/registré/anotada/anoté/apunté" sin enumerar cada
@@ -5275,8 +5278,25 @@ def _diary_claim_sentences(text: str) -> list:
         _antes = text[_ini + 1:m.start()]
         if _RE_AUX_DE_OFERTA.search(_antes) and _RE_CONDICION_DEL_USUARIO.search(_antes):
             continue
+        # [P1-PLAN-LOTE-904] «Te anoté un vaso de agua» (el agua no es el diario) y «Con el desayuno anotado, lo que
+        # sigue es…» (un estado, no un registro de este turno): ver diario_afirmacion.py.
+        if frase_es_solo_de_agua(_frase, _RE_MEAL_WORDS) or participio_describe_estado(_antes):
+            continue
         out.append(_frase)
     return out
+
+
+def _usuario_sin_nada_que_registrar(messages: list) -> bool:
+    """[P1-PLAN-LOTE-904] El último mensaje del usuario es charla corta o ruido: no había comida que anotar."""
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage):
+            c = msg.content
+            texto = c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict))
+            if isinstance(c, list) and any(isinstance(p, dict) and p.get("type") != "text" for p in c):
+                return False   # con foto sí puede haber algo que anotar
+            return mensaje_sin_nada_que_registrar(texto)
+    return False
 
 
 def _diary_tool_called_this_turn(messages: list) -> bool:
@@ -5467,7 +5487,8 @@ def route_tools(state: ChatState):
         if isinstance(contenido, list):  # algunos providers parten el content
             contenido = " ".join(str(p) for p in contenido)
         if (_reply_claims_diary_write(contenido) and not _diary_tool_called_this_turn(messages)
-                and not _claim_backed_by_other_write(contenido, messages)):
+                and not _claim_backed_by_other_write(contenido, messages)
+                and not _usuario_sin_nada_que_registrar(messages)):   # [P1-PLAN-LOTE-904] «Ah», «Hey hola»
             return "nudge_diary_tool"
 
     # [P1-PLAN-LOTE-168] ¿Registró otra comida y dejó fuera la del plato de la foto?
