@@ -28,7 +28,7 @@ def _etiquetar(meal, form=_EMBARAZO):
 def test_el_queso_blanco_se_dora_en_un_paso():
     rec = _etiquetar(_GUISO)
     i = next(i for i, p in enumerate(rec) if p.startswith("El Toque de Fuego"))
-    assert rec[i].endswith("5-7 minutos. Dora el queso blanco pasteurizado en la sartén caliente, 1-2 minutos por lado, hasta "
+    assert rec[i].endswith("5-7 minutos. Calienta el queso blanco pasteurizado en la sartén caliente, 1-2 minutos por lado, hasta "
                            "que humee y esté bien caliente por dentro (74 °C)."), rec[i]   # [P1-PLAN-LOTE-863]
     assert rec[i + 1].startswith("Montaje"), rec
     assert any("Seguridad alimentaria (embarazo)" in p for p in rec), "la nota sigue"
@@ -37,11 +37,12 @@ def test_el_queso_blanco_se_dora_en_un_paso():
 
 def test_plato_frio_ya_calentado_o_lactancia_sin_paso():
     vasito = {**_GUISO, "name": "Vasito fresco de yogur natural con mango y queso blanco fresco"}
-    assert not any("Dora el queso" in p for p in _etiquetar(vasito))
+    assert not any("Calienta el queso" in p for p in _etiquetar(vasito))
     dorado = copy.deepcopy(_GUISO)
     dorado["recipe"][1] += " Dora el queso blanco en la sartén 2 minutos por lado."
-    assert sum("Dora el queso" in p for p in _etiquetar(dorado)) == 1, "el suyo, no otro"
-    assert not any("Dora el queso" in p for p in _etiquetar(_GUISO, {"medicalConditions": ["Lactancia"]}))
+    rec_d = _etiquetar(dorado)
+    assert sum("Dora el queso" in p for p in rec_d) == 1 and not any("Calienta el queso" in p for p in rec_d), rec_d
+    assert not any("Calienta el queso" in p for p in _etiquetar(_GUISO, {"medicalConditions": ["Lactancia"]}))
     # el queso mezclado en la masa se cuece con ella (pastelitos al airfryer de la batería)
     pastelitos = {**_GUISO, "name": "Pastelitos de nabo al airfryer con queso blanco pasteurizado y edamame",
                   "recipe": ["Mise en place: pela y corta 250 g de nabo; desmenuza 20 g de queso blanco fresco.",
@@ -49,7 +50,7 @@ def test_plato_frio_ya_calentado_o_lactancia_sin_paso():
                              "y el perejil, forma pastelitos y pincélalos con aceite. Cocina en el airfryer a 200 °C "
                              "durante 8-10 minutos, hasta que estén dorados.",
                              "Montaje: presenta los pastelitos recién hechos."]}
-    assert not any("Dora el queso" in p for p in _etiquetar(pastelitos))
+    assert not any("Calienta el queso" in p for p in _etiquetar(pastelitos))
 
 
 def test_cottage_se_queda_con_la_nota():
@@ -57,4 +58,4 @@ def test_cottage_se_queda_con_la_nota():
                "ingredients": ["150 g de lechosa", "10 g de maní", "70 g de queso cottage pasteurizado"],
                "recipe": ["Mise en place: corta la lechosa.", "Montaje: sirve la lechosa con el maní y el cottage."]}
     rec = _etiquetar(cottage)
-    assert not any("Dora el queso" in p for p in rec) and any("humee" in p for p in rec)
+    assert not any("Calienta el queso" in p for p in rec) and any("humee" in p for p in rec)

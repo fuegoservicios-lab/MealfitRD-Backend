@@ -34,7 +34,7 @@ def _etiquetar(meal):
 def test_la_orden_de_no_calentar_el_queso_se_va_y_el_queso_se_dora():
     rec = _etiquetar(_NABO)
     assert not any("No calientes el queso" in p for p in rec), rec
-    assert "Dora el queso blanco pasteurizado en la sartén caliente" in rec[1], rec[1]
+    assert "Calienta el queso blanco pasteurizado en la sartén caliente" in rec[1], rec[1]
     assert "Calienta el edamame cocido en agua hirviendo 2-3 minutos." in rec[1], "lo demás del paso se queda"
     assert _etiquetar({**_NABO, "recipe": rec}) == rec, "idempotente"
 
@@ -51,4 +51,4 @@ def test_el_paso_nombra_el_queso_de_la_lista():
                            "El Toque de Fuego: tuesta el casabe 1-2 min por lado.",
                            "Montaje: coloca sobre el casabe el queso fresco pasteurizado y la lechosa."]}
     rec = _etiquetar(merienda)
-    assert "Dora el queso fresco pasteurizado en la sartén caliente" in rec[1], rec[1]
+    assert "Calienta el queso fresco pasteurizado en la sartén caliente" in rec[1], rec[1]

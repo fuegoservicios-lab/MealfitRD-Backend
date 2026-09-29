@@ -49,6 +49,10 @@ _NO_CALENTAR_RE = re.compile(r"\s*\b(?:No|Nunca)\s+(?:lo\s+|la\s+)?(?:calientes|
                              r"[^.;]*?\bqueso\b[^.;]*[.;]?", re.IGNORECASE)
 
 
+_DORA_VIEJO_868_RE = re.compile(r"\bDora (el queso (?:blanco|fresco|de hoja) pasteurizado) en la sartén caliente, 1-2 minutos "
+                                r"por lado, hasta que humee")
+
+
 def _calentado(pasos: list) -> bool:
     en_mezcla = False
     for p in pasos:
@@ -78,6 +82,13 @@ def insertar_paso(meal: dict) -> bool:
         # [P1-PLAN-LOTE-866] la orden de NO calentar el queso se va (en el embarazo, lo manda la seguridad)
         sin_no = [_NO_CALENTAR_RE.sub("", x).rstrip() if isinstance(x, str) and not _NOTA_RE.search(x) else x
                   for x in pasos]
+        # [P1-PLAN-LOTE-868] la frase que escribían 807/863 («Dora el queso blanco pasteurizado… hasta que humee») pasa al
+        # verbo del contrato en los planes ya guardados que vuelven por el escudo
+        sin_no = [_DORA_VIEJO_868_RE.sub(r"Calienta \1 en la sartén caliente, 1-2 minutos por lado, hasta que humee", x)
+                  if isinstance(x, str) else x for x in sin_no]
+        if sin_no != pasos:
+            meal["recipe"] = sin_no
+            meal.pop("_display", None)
         if _calentado(sin_no):
             return False
         pasos = sin_no
@@ -89,7 +100,10 @@ def insertar_paso(meal: dict) -> bool:
             nombre = ("el queso de hoja pasteurizado" if "de hoja" in m.group(0) else
                       "el queso fresco pasteurizado" if m.group(0).endswith("fresco") else
                       "el queso de freír" if "freir" in m.group(0) else "el queso blanco pasteurizado")
-            frase = (f"Dora {nombre} en la sartén caliente, 1-2 minutos por lado, hasta que humee y esté bien caliente "
+            # [P1-PLAN-LOTE-868] el queso blanco/fresco/de hoja es listo para comer: se CALIENTA hasta que humee, no se
+            # «dora» (contrato culinario V1; el reparador 426 ya lo escribe así) — sólo el queso de freír se dora
+            verbo = "Dora" if "freir" in m.group(0) else "Calienta"
+            frase = (f"{verbo} {nombre} en la sartén caliente, 1-2 minutos por lado, hasta que humee y esté bien caliente "
                      f"por dentro (74 °C).")
         meal["recipe"] = __import__("paso_de_seguridad").poner(pasos, frase)   # [P1-PLAN-LOTE-863] dentro del Toque de Fuego
         return True
