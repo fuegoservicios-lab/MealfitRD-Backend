@@ -307,3 +307,186 @@ def test_do_las_fichas_que_el_replay_encontro_rotas(monkeypatch, desc, ingredien
     p = {"_country": "DO", "days": [{"day": 1, "meals": [_comida(desc, ingredientes, "Merienda")]}]}
     dv.aplicar_plan(p)
     assert p["days"][0]["meals"][0]["desc"] == despues, p["days"][0]["meals"][0]["desc"]
+
+
+# ---------------------------------------------------------------- ronda del revisor: 8 fichas rotas que DO publicaba
+# El revisor leyó las juntas de corte de los 1 014 cambios únicos de DO (no con detectores de patrón fijo, que estas
+# 8 esquivaban): seis clases, todas del metalenguaje del 854. Textos literales del corpus.
+@pytest.mark.parametrize("antes,despues", [
+    # (1) «como base distinta a…» dejaba «como.» / «como,»: la base es verdad, la comparación no
+    ("Bowl frío y armable con tiras de pechuga de pollo salteadas al limón y ajo sobre kale, zanahoria y puerro "
+     "crujientes, con tortilla integral tostada en tiras como base distinta a la del almuerzo.",
+     "Bowl frío y armable con tiras de pechuga de pollo salteadas al limón y ajo sobre kale, zanahoria y puerro "
+     "crujientes, con tortilla integral tostada en tiras como base."),
+    ("Cena con identidad propia: quinoa guisada como base distinta al plátano del almuerzo, pollo desmenuzado en un "
+     "guiso ligero de berenjena, vainitas y pimiento, terminado con cilantro fresco. Saciante y sin arroz.",
+     "Quinoa guisada como base, pollo desmenuzado en un guiso ligero de berenjena, vainitas y pimiento, terminado con "
+     "cilantro fresco. Saciante y sin arroz."),
+    ("Cena de sartén única: salmón sellado al limón sobre arepitas de maíz doradas y nabo salteado al wok con ajo y "
+     "cebolla. Proteína animal como protagonista y el maíz como base distinta del arroz del mediodía.",
+     "Cena de sartén única: salmón sellado al limón sobre arepitas de maíz doradas y nabo salteado al wok con ajo y "
+     "cebolla. Proteína animal como protagonista y el maíz como base."),
+    # …y un «como» sin sustantivo que conservar no queda colgando
+    ("Pechuga guisada con cebolla y tomate, como opción distinta al almuerzo.",
+     "Pechuga guisada con cebolla y tomate."),
+    # (2) «Se prepara sin repetir la base…;» dejaba «Se prepara;»: el verbo sin su complemento se va con él
+    ("Una cena ligera de tortitas horneadas con granos de maíz dulce, acompañadas de una salsa fresca de yogurt al ajo y "
+     "coles de Bruselas tiernas. Se prepara sin repetir la base de harina del almuerzo; acompaña con agua para mantener "
+     "una hidratación adecuada.",
+     "Una cena ligera de tortitas horneadas con granos de maíz dulce, acompañadas de una salsa fresca de yogurt al ajo y "
+     "coles de Bruselas tiernas. Acompaña con agua para mantener una hidratación adecuada."),
+    # (3) «…distinta a la del desayuno y el almuerzo» dejaba «y el almuerzo»: la segunda comida sigue la comparación
+    ("Tortitas horneadas de yautía con queso blanco pasteurizado, acompañadas de tomate, lechuga y aguacate; una cena "
+     "casera con una preparación distinta a la del desayuno y el almuerzo.",
+     "Tortitas horneadas de yautía con queso blanco pasteurizado, acompañadas de tomate, lechuga y aguacate; una cena "
+     "casera."),
+    # (4) «Distinta al almuerzo en base y técnica» dejaba «Técnica;»: la dimensión de la comparación se va con ella
+    ("Cena ligera con identidad propia: filete de pescado blanco horneado sobre vegetales al tomate y acompañado de "
+     "bollitos de harina al horno. Distinta al almuerzo en base y técnica; acompaña con agua.",
+     "Filete de pescado blanco horneado sobre vegetales al tomate y acompañado de bollitos de harina al horno. Acompaña "
+     "con agua."),
+    # (5) «…para cerrar el dia variado y ligero» dejaba «…vegetales asados y ligero»: el adjetivo era del tramo quitado
+    ("Cena con identidad propia y cero soya: pinchos de pollo jugosos alternados con aji morron, cebolla y tomate, "
+     "sellados a la plancha y servidos sobre yuca hervida cremosa. Proteina magra, vegetales asados y un carbohidrato "
+     "distinto al del almuerzo para cerrar el dia variado y ligero.",
+     "Cena con cero soya: pinchos de pollo jugosos alternados con aji morron, cebolla y tomate, sellados a la plancha y "
+     "servidos sobre yuca hervida cremosa. Proteina magra y vegetales asados."),
+    # (6) «Una opción de cereal sin yogur, horneada para…» dejaba «Horneada para…» sin su sustantivo (y sin concordar
+    # con «Tortitas»): quitado el sujeto, el participio que lo calificaba se va con él
+    ("Tortitas tiernas de avena con chía y canela, acompañadas de guayaba fresca. Una opción de cereal sin yogur, "
+     "horneada para un desayuno práctico.",
+     "Tortitas tiernas de avena con chía y canela, acompañadas de guayaba fresca."),
+    # …pero «nada» no es un participio (replay de esta ronda: la oración entera se iba)
+    ("Cena ligera y con identidad propia: filete de tilapia al airfryer con limón, ajo y orégano, plátano maduro asado "
+     "que se carameliza solo y un encurtido fresco de repollo morado. Base distinta al almuerzo, nada de arroz de noche.",
+     "Filete de tilapia al airfryer con limón, ajo y orégano, plátano maduro asado que se carameliza solo y un encurtido "
+     "fresco de repollo morado. Nada de arroz de noche."),
+    # …ni el adjetivo que se lee solo: «Lista en menos de 25 minutos.» (G24 CO) se queda
+    ("Arepas de maíz asadas en el budare, rellenas de queso ricotta. Más ligera que el almuerzo, lista en menos de 25 "
+     "minutos.",
+     "Arepas de maíz asadas en el budare, rellenas de queso ricotta. Lista en menos de 25 minutos."),
+])
+def test_ronda_revisor_las_ocho_fichas_rotas_de_do(antes, despues):
+    assert dv.limpiar_metalenguaje(antes) == despues
+
+
+_VEGETARIANA = ("Cena vegetariana con identidad propia: tortilla dorada de plátano maduro y queso de hoja a la plancha, "
+                "servida con ensalada crujiente de repollo, zanahoria y limón.")
+
+
+def test_la_etiqueta_de_dieta_verificada_se_queda():
+    """(9, recomendado) «Cena vegetariana con identidad propia:» perdía «vegetariana» (muñón genérico), mientras «Cena
+    sin gluten:» se conservaba. La dieta es verdad… si los ingredientes no la desmienten (backstop SSOT de dieta)."""
+    ings = ["½ plátano maduro mediano, en rodajas", "25 g de queso de hoja", "1 taza de repollo rallado",
+            "½ zanahoria rallada", "½ limón"]
+    assert dv.limpiar_metalenguaje(_VEGETARIANA, ingredientes=ings) == (
+        "Cena vegetariana: tortilla dorada de plátano maduro y queso de hoja a la plancha, servida con ensalada "
+        "crujiente de repollo, zanahoria y limón.")
+
+
+@pytest.mark.parametrize("ings", [
+    None,                                                                   # sin ingredientes no se puede verificar
+    ["½ plátano maduro mediano", "100 g de pechuga de pollo", "1 taza de repollo rallado", "½ zanahoria rallada"],
+])
+def test_la_etiqueta_de_dieta_que_no_se_puede_verificar_se_va(ings):
+    assert dv.limpiar_metalenguaje(_VEGETARIANA, ingredientes=ings) == (
+        "Tortilla dorada de plátano maduro y queso de hoja a la plancha, servida con ensalada crujiente de repollo, "
+        "zanahoria y limón.")
+
+
+# ---------------------------------------------------------------- las juntas que leí después del arreglo (esta ronda)
+# Tras arreglar las 8 del revisor, el replay se leyó por JUNTAS (una línea por corte, 1 081 distintas de los 857 cambios
+# de metalenguaje de DO): salieron fichas rotas que ningún detector de patrón fijo marcaba. Textos del corpus.
+@pytest.mark.parametrize("antes,despues", [
+    # la segunda mitad de «rompe la repetición de pollo y yautía de otros días» quedaba como objeto de «aporta»
+    ("Gandules guisados con cebolla, ajo y limón, acompañados de plátano verde hervido y espinacas. Un guiso vegetal "
+     "que aporta proteína de legumbre y rompe la repetición de pollo y yautía de otros días.",
+     "Gandules guisados con cebolla, ajo y limón, acompañados de plátano verde hervido y espinacas. Un guiso vegetal "
+     "que aporta proteína de legumbre."),
+    # «de tu [categoría asignada]», «según [la categoría asignada]»: el determinante o la preposición colgando
+    ("Avena que se hidrata sola en leche durante la noche: base de cereal de tu categoría asignada, coronada con melón "
+     "dulce y frío.",
+     "Avena que se hidrata sola en leche durante la noche: base de cereal, coronada con melón dulce y frío."),
+    ("Pan integral tostado con huevo cocido y aguacate. Base de pan/tostadas según la categoría asignada, con el huevo "
+     "cocido como proteína magra.",
+     "Pan integral tostado con huevo cocido y aguacate. Base de pan/tostadas, con el huevo cocido como proteína magra."),
+    # el sujeto sin su verbo ni su objeto: «La porción de quinoa;», «Las arepitas aportan.»
+    ("Una cena ligera de quinoa con vainitas salteadas y queso blanco fresco. La porción de quinoa aporta una base "
+     "distinta a la del almuerzo; acompaña la cena con agua.",
+     "Una cena ligera de quinoa con vainitas salteadas y queso blanco fresco. Acompaña la cena con agua."),
+    ("Una cena caliente, vegetal y sin lácteos, con soya texturizada guisada en tomate, cebolla y cilantro. Las "
+     "arepitas aportan una base criolla distinta a la del almuerzo.",
+     "Una cena caliente, vegetal y sin lácteos, con soya texturizada guisada en tomate, cebolla y cilantro."),
+    # el verbo o el gerundio sin objeto: «que da.», «usando.»
+    ("Plátano verde majado y horneado en capas con queso blanco fresco y cilantro. Un plato caliente y reconfortante "
+     "que da una preparación distinta a la ensalada fría del almuerzo.",
+     "Plátano verde majado y horneado en capas con queso blanco fresco y cilantro. Un plato caliente y reconfortante."),
+    ("Bollitos tiernos de harina de maíz cocidos en un caldo suave de tomate, cebolla y ajo. Se sirve con queso blanco "
+     "fresco y aguacate al final, usando una base distinta a la del almuerzo.",
+     "Bollitos tiernos de harina de maíz cocidos en un caldo suave de tomate, cebolla y ajo. Se sirve con queso blanco "
+     "fresco y aguacate al final."),
+    # el adverbio sin su adjetivo: «y claramente.»
+    ("Pechuga de pollo guisada con tomate, cebolla roja y ajo, servida con yuca hervida y coliflor al limón: una cena "
+     "completa, sin pasta y claramente distinta del almuerzo.",
+     "Pechuga de pollo guisada con tomate, cebolla roja y ajo, servida con yuca hervida y coliflor al limón: una cena "
+     "completa."),                   # «sin pasta» era la justificación (base que rota, regla del 854)
+    # el sustantivo cuyo único calificativo era la comparación: «con un formato.», «con un perfil.», «con una porción.»
+    ("Cena ligera y rápida con sardinas como plato fuerte, acompañadas de tortilla integral, repollo salteado y manzana; "
+     "sin arroz por la noche y con un formato distinto al almuerzo.",
+     "Cena ligera y rápida con sardinas como plato fuerte, acompañadas de tortilla integral, repollo salteado y "
+     "manzana."),                    # ídem «sin arroz por la noche»
+    ("Tiras magras de res horneadas con maíz dulce, zanahoria y pimiento, sin tomate, con un perfil más ligero que el "
+     "almuerzo y base distinta al casabe.",
+     "Tiras magras de res horneadas con maíz dulce, zanahoria y pimiento, sin tomate."),
+    ("Cena ligera, sin arroz, con plátano verde tierno y maní tostado; una preparación sencilla para terminar el día con "
+     "una porción de carbohidrato distinta al almuerzo.",
+     "Cena ligera, sin arroz, con plátano verde tierno y maní tostado; una preparación sencilla para terminar el día."),
+    # la dimensión de la comparación también tras la coma: «distinta al almuerzo en base, técnica y vegetales»
+    ("Pechuga salteada con repollo y zanahoria. Cena con identidad propia, distinta al almuerzo en base, técnica y "
+     "vegetales.",
+     "Pechuga salteada con repollo y zanahoria."),
+    # el propósito del sujeto quitado: «Para no duplicar el tubérculo…» sin nada que lo rija
+    ("Yautía tierna guisada en salsa natural de tomate, cebolla y ajo, con una ensalada fresca de remolacha. Base de "
+     "yautía distinta a la papa del almuerzo, para no duplicar el tubérculo en las comidas fuertes.",
+     "Yautía tierna guisada en salsa natural de tomate, cebolla y ajo, con una ensalada fresca de remolacha."),
+    # «con identidad propia, fibra soluble y proteína completa»: el «con» rige también la lista de sustantivos
+    ("Cena tibia de cebada con apio, tomate y cebolla salteados. Un plato con identidad propia, fibra soluble y proteína "
+     "completa, distinto al almuerzo.",
+     "Cena tibia de cebada con apio, tomate y cebolla salteados. Un plato con fibra soluble y proteína completa."),
+    ("Filete de mero horneado envuelto con puerro y cilantro. Cena con identidad propia, proteína magra y guarnición de "
+     "bajo índice glucémico.",
+     "Filete de mero horneado envuelto con puerro y cilantro. Cena con proteína magra y guarnición de bajo índice "
+     "glucémico."),
+    # «; identidad propia de sartén, …» dejaba el fragmento «; de sartén,»
+    ("Arepitas de maíz doradas, huevo guisado con nabo y una ensalada fresca de repollo con aguacate y limón; identidad "
+     "propia de sartén, sin arroz ni yogur.",
+     "Arepitas de maíz doradas, huevo guisado con nabo y una ensalada fresca de repollo con aguacate y limón; sin arroz "
+     "ni yogur."),
+])
+def test_juntas_rotas_de_esta_ronda(antes, despues):
+    assert dv.limpiar_metalenguaje(antes) == despues
+
+
+@pytest.mark.parametrize("antes,despues", [
+    # torpes (no rotas), baratas de arreglar: la «y» que cerraba la enumeración delante de «que/para»
+    ("Pechuga de pollo horneada sobre pimientos, acompañada de un puré de auyama. Una cena ligera, jugosa y con "
+     "identidad propia que no repite el plato del mediodía.",
+     "Pechuga de pollo horneada sobre pimientos, acompañada de un puré de auyama. Una cena ligera y jugosa que no repite "
+     "el plato del mediodía."),
+    ("Trozos de mapuey hervidos con queso blanco fresco dorado a la plancha. Cena ligera, criolla y con identidad propia "
+     "para cerrar el día.",
+     "Trozos de mapuey hervidos con queso blanco fresco dorado a la plancha. Cena ligera y criolla para cerrar el día."),
+    # «: merienda distinta[, sin repetir…].»: el «distinta» era de la comparación quitada
+    ("Tostadas de casabe con queso blanco fresco bajo en sodio, lechosa y granada fresca: merienda distinta, sin repetir "
+     "la avena del desayuno ni la base del almuerzo.",
+     "Tostadas de casabe con queso blanco fresco bajo en sodio, lechosa y granada fresca."),
+    # la coma entre el núcleo genérico y su predicativo: «Un desayuno, ideal para…», «: cena, lista en…»
+    ("Mangú dominicano cremoso de plátano verde, acompañado de una ensalada de aguacate y kiwi. Un desayuno con "
+     "identidad propia, sin lácteos repetidos, ideal para arrancar el sábado.",
+     "Mangú dominicano cremoso de plátano verde, acompañado de una ensalada de aguacate y kiwi. Un desayuno ideal para "
+     "arrancar el sábado."),
+    ("Wrap de pollo con puerro al limón: cena, distinta al bowl del almuerzo y lista en 10 minutos.",
+     "Wrap de pollo con puerro al limón: cena lista en 10 minutos."),
+])
+def test_torpes_de_esta_ronda(antes, despues):
+    assert dv.limpiar_metalenguaje(antes) == despues

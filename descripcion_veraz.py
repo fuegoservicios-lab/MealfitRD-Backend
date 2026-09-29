@@ -98,7 +98,19 @@ si está («salsa de mango»), una ausencia declarada («sin huevo»). El partic
 leyó cada cambio no-metalenguaje y 100 de metalenguaje, y pasó un detector ampliado por los 1 058 cambios únicos. Salían
 rotas 13 frases (y 4 torpes) del metalenguaje del 854 («que respeta.», «y con para el día», «con lista en 10 minutos», «: cena.»,
 «, aportar energía», «, una merienda.»): arregladas aquí (familia `categoria_del_desayuno` con su verbo o preposición,
-`_PROPIO_Y` ante un predicativo, `_MUNON_TRAS_SIGNO`, el propósito «para romper/evitar»). Con 0 rotas, DO se abre.
+`_PROPIO_Y` ante un predicativo, `_MUNON_TRAS_SIGNO`, el propósito «para romper/evitar»).
+
+Ronda del revisor: ese «0 rotas» era FALSO. Leyendo las juntas de corte (no con detectores) quedaban 8: «como base
+distinta a…» → «como.» (ahora «como base»: el rol es verdad), «Se prepara;», «una cena casera y el almuerzo.»,
+«Técnica;» (la dimensión «en base y técnica» se va con la comparación), «vegetales asados y ligero» (el calificativo
+coordinado con el tramo quitado) y «Horneada para…» (quitado el sujeto, su participio huérfano se va). Después se leyó
+UNA LÍNEA POR JUNTA de los 857 cambios de metalenguaje de DO (1 081 juntas distintas) y salieron 13 más, invisibles
+también a los detectores: «de tu,», «según,», «La porción de quinoa;», «Las arepitas aportan.», «que da.», «usando.»,
+«y claramente.», «con un formato.», «con un perfil.», «Cena, técnica y vegetales.», «Para no duplicar…» sin sujeto,
+«Un plato fibra soluble…» (el «con» regía la lista) y «; de sartén,»; y «…aporta proteína de legumbre y yautía de otros
+días» (la segunda mitad de «rompe la repetición de pollo y yautía» quedaba como objeto del verbo de antes: una frase
+FALSA, no sólo rota). Arregladas con test en rojo; la etiqueta de dieta («Cena vegetariana:») se conserva si el backstop
+SSOT de dieta no la desmiente. La cifra final y la lectura, en `docs/knobs_reference.md` (fila del knob de DO).
 
 tooltip-anchor: P1-PLAN-LOTE-858
 """
@@ -184,7 +196,9 @@ FAMILIAS_DEL_PROMPT: tuple = (
      "rx": r"\b(?:(?:con|de)\s+(?:la\s+)?)?t[eé]cnica\s+asignada\b"},
     {"id": "identidad_propia", "tipo": "modificador",
      "origen": "preparación REAL con identidad propia",
-     "rx": r"\s*(?:\by\s+)?\b(?:con|de)\s+(?:una?\s+)?identidad\s+propia\b|\bidentidad\s+propia\b"},
+     # [P1-PLAN-LOTE-858 · juntas] «…limón; identidad propia de sartén, sin arroz» dejaba el fragmento «; de sartén,»
+     "rx": r"(?<=[;:,]\s)identidad\s+propia\s+de\s+" + _PAL + r"(?=\s*,)"
+           r"|\s*(?:\by\s+)?\b(?:con|de)\s+(?:una?\s+)?identidad\s+propia\b|\bidentidad\s+propia\b"},
     {"id": "nombre_propio", "tipo": "modificador",
      "origen": "un plato con nombre propio se disfruta",
      "rx": r"\s*(?:\by\s+)?\bcon\s+nombre\s+propio\b"},
@@ -216,11 +230,16 @@ FAMILIAS_DEL_PROMPT: tuple = (
 _RX = {f["id"]: re.compile(f["rx"], re.IGNORECASE) for f in FAMILIAS_DEL_PROMPT}
 _CLAUSULAS = [(f["id"], _RX[f["id"]]) for f in FAMILIAS_DEL_PROMPT if f["tipo"] == "clausula"]
 _MODIFICADORES = [(f["id"], _RX[f["id"]]) for f in FAMILIAS_DEL_PROMPT if f["tipo"] == "modificador"]
-_REF_COMIDA = re.compile(r"\b(?:del|al|de\s+la|de\s+las|de\s+los)\s+(?:resto\s+del?\s+|otros\s+|otras\s+)?"
-                         r"(?:" + _COMIDA + r"|d[ií]as?|plan|semana)\b", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · juntas] …y «de otros días» sin artículo: «rompe la repetición de pollo | y yautía de otros días»
+#: dejaba «aporta proteína de legumbre y yautía de otros días».
+_REF_COMIDA = re.compile(r"\b(?:del|al|de\s+la|de\s+las|de\s+los|de(?=\s+(?:otros|otras)\b))\s+"
+                         r"(?:resto\s+del?\s+|otros\s+|otras\s+)?(?:" + _COMIDA + r"|d[ií]as?|plan|semana)\b",
+                         re.IGNORECASE)
 #: [ronda 3 · revisor] …ni «su», «en», «muy», «tan», «por»: «una cena ligera, con muy.», «Su;», «al momento, en.».
+#: [P1-PLAN-LOTE-858 · revisor] …ni «como»: «…en tiras como.», «Quinoa guisada como, pollo…»; [· juntas] ni «tu»,
+#: «según» ni el adverbio sin su adjetivo: «base de cereal de tu,», «según,», «sin pasta y claramente.».
 _COLA_SUELTA = re.compile(r"(?:\s+|^)(?:y|e|o|con|de|del|a|al|para|que|una?|el|la|los|las|es|sin|ni|pero|"
-                          r"su|sus|en|muy|tan|por)$",
+                          r"su|sus|en|muy|tan|por|como|tu|tus|seg[uú]n|claramente|totalmente|completamente)$",
                           re.IGNORECASE)
 _CABEZA_SUELTA = re.compile(r"^(?:y|e|pero)\s+", re.IGNORECASE)
 #: [ronda 3 · revisor] Una aposición («, una cena ligera», «, la merienda del día») no es un miembro de la enumeración.
@@ -228,7 +247,40 @@ _ARTICULO = re.compile(r"(?:una?|el|la|los|las)\b", re.IGNORECASE)
 #: Verbos cuyo objeto era la comparación quitada («ofrece un perfil distinto al…», «aporta una alternativa al…»).
 _VERBO_COLGANTE = re.compile(r"(?:^|\s+)(?:ofrece|aporta|tiene|lleva|brinda|presenta|mantiene|usa|es|queda|resulta|"
                              r"cambia|var[ií]a|rompe|evita|sustituye|reemplaza|"
-                             r"ofreciendo|aportando|manteniendo)$", re.IGNORECASE)
+                             r"ofreciendo|aportando|manteniendo|"
+                             # [P1-PLAN-LOTE-858 · revisor] «Se prepara [sin repetir la base…];» dejaba «Se prepara;»
+                             r"(?:se\s+)?(?:prepara|elabora|cocina|sirve|arma|hace)|"
+                             # [· juntas] «que da.», «Las arepitas aportan.», «…al final, usando.»
+                             r"da|dan|aportan|ofrecen|tienen|llevan|brindan|presentan|mantienen|usan|son|quedan|"
+                             r"resultan|usando|dando|sumando|incluyendo|aprovechando|combinando|variando|cambiando)$",
+                             re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · juntas] El sustantivo cuyo único calificativo era la comparación: «con un formato [distinto al
+#: almuerzo]», «con un perfil [más ligero que el almuerzo]», «con una porción [de carbohidrato distinta…]».
+_NUCLEO_DE_LA_COMPARACION = re.compile(r"(?:^|\s+)(?:(?:con|de|en)\s+)?(?:una?\s+)?(?:perfil|formato|porci[oó]n|"
+                                       r"textura|t[eé]cnica|preparaci[oó]n|opci[oó]n|alternativa|forma|manera|"
+                                       r"versi[oó]n)$", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · juntas] Lo que sigue a «con identidad propia,» y que el «con» también regía (sustantivos).
+_SUSTANTIVO_DE_LISTA = frozenset({"proteina", "proteinas", "fibra", "fibras", "grasa", "grasas", "carbohidrato",
+                                  "carbohidratos", "vegetales", "verduras", "sabor", "sabores", "textura", "texturas",
+                                  "guarnicion", "hierro", "calcio", "energia", "vitaminas", "minerales", "color",
+                                  "colores", "legumbres"})
+#: [P1-PLAN-LOTE-858 · juntas] El sujeto al que la poda dejó sin verbo ni objeto: «La porción de quinoa [aporta una
+#: base distinta…];», «Las arepitas [aportan una base criolla distinta…].».
+_SUJETO = re.compile(r"^(?:el|la|los|las|su|sus)\s", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · revisor] Lo que sigue al «como» de la comparación quitada y es verdad por sí solo: «…tortilla
+#: integral tostada en tiras como base [distinta a la del almuerzo]» → «…como base». Sin él, el «como» se va.
+_COMO_ROL = re.compile(r"(base|guarnici[oó]n|carbohidrato|prote[ií]na)\b", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · revisor] La segunda comida de la comparación: «distinta a la del desayuno | y el almuerzo».
+_COMIDA_SUELTA = re.compile(r"^\s*(?:(?:el|la|los|las)\s+)?(?:resto\s+del?\s+)?" + _COMIDA
+                            + r"(?:\s+(?:de\s+)?(?:ayer|hoy|anterior|siguiente))?\s*$", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · revisor] La dimensión de la comparación: «Distinta al almuerzo en base | y técnica».
+_EN_DIMENSION = re.compile(r"^\s*en\s+" + _PAL + r"\s*$", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · revisor] Un calificativo suelto que coordinaba con el final del tramo quitado: «…para cerrar el
+#: día variado | y ligero». Lista cerrada más los participios.
+_ADJ_SUELTO = re.compile(r"^(?:(?:muy|bien)\s+)?(?:(?:liger|variad|fresc|sencill|complet|r[aá]pid|pr[aá]ctic|equilibrad|"
+                         r"nutritiv|sabros|livian|sustancios|c[aá]lid|energ[eé]tic|perfect|list|balancead|ric)[oa]s?|"
+                         r"(?:reconfortante|saciante|saludable|suave)s?|ideal(?:es)?|" + _L + r"+(?:ad|id)[oa]s?)$",
+                         re.IGNORECASE)
 #: «Cena de identidad propia y alto valor muscular» → «Cena de alto valor muscular»: la preposición es del resto.
 #: [ronda 2 · revisor] …salvo que lo que sigue sea una negación: «un plato de cuchara con identidad propia y sin
 #: lácteos» dejaba «con sin lácteos»; ahí la preposición se va con el modificador («un plato de cuchara sin lácteos»).
@@ -324,11 +376,57 @@ _GENERICA = re.compile(r"^(?:(?:una?|la|el)\s+)?(?:cena|merienda|desayuno|almuer
 #: [P1-PLAN-LOTE-858] El núcleo genérico solo tras un signo, al final: «…con cilantro: cena», «…canela; un desayuno».
 _MUNON_TRAS_SIGNO = re.compile(r"\s*[,;:—]\s*(?:(?:una?|la|el)\s+)?(?:cena|merienda|desayuno|almuerzo|comida|snack|plato|"
                                r"preparaci[oó]n|opci[oó]n)$", re.IGNORECASE)
-_NUCLEO_COMA = re.compile(r"^((?:una?|la|el)\s+(?:cena|merienda|desayuno|almuerzo|comida|plato|opci[oó]n|"
-                          r"preparaci[oó]n)),\s+(?=(?:sin|con)\b)", re.IGNORECASE)
+#: [P1-PLAN-LOTE-858 · juntas] …también tras «:»/«;» y ante el predicativo: «Un desayuno, ideal para…», «: cena, lista
+#: en 10 minutos».
+_NUCLEO_COMA = re.compile(r"(^|[:;]\s+)((?:(?:una?|la|el)\s+)?(?:cena|merienda|desayuno|almuerzo|comida|plato|"
+                          r"opci[oó]n|preparaci[oó]n)),\s+(?=(?:sin|con|ideal(?:es)?|list[oa]s?|perfect[oa]s?)\b)",
+                          re.IGNORECASE)
 #: Lo que queda al final de una oración tras quitar su comparación: «…con aguacate: una cena.»
 _MUNON_FINAL = re.compile(r"^(?:una?|la|el)\s+(?:cena|merienda|desayuno|almuerzo|comida|preparaci[oó]n|opci[oó]n|"
                           r"plato)(?:\s+distint[ao])?$", re.IGNORECASE)
+
+
+#: Sustantivos con forma de participio: no califican a nadie, SON el plato («pescado», «ensalada», «batido»).
+_SUSTANTIVO_EN_ADO = frozenset({"pescado", "pescados", "ensalada", "ensaladas", "tostada", "tostadas", "empanada",
+                                "empanadas", "granada", "granadas", "limonada", "helado", "helados", "batido", "batidos",
+                                "mermelada", "guisado", "guisados", "asado", "salteado", "cocido", "cebada", "bocado",
+                                "bocados", "comida", "comidas", "bebida", "bebidas", "medida", "entrada", "temporada"})
+#: El participio con raíz de verdad: «horneada», «servida», «asada»; no «nada» ni «cada» (replay: «…, nada de arroz de
+#: noche.» se iba entera).
+_PARTICIPIO_HUERFANO = re.compile(r"^" + _L + r"{2,}(?:ad|id)[oa]s?$", re.IGNORECASE)
+
+
+def _calificativo_huerfano(palabra: str, ings: Optional[list]) -> bool:
+    """¿`palabra` (la primera de lo que queda) es un participio («horneada», «servida») y no un alimento? Sólo el
+    participio: «Lista en menos de 25 minutos.» o «Ligera y fresca.» se leen solas (G24, test del 854); «Horneada para
+    un desayuno práctico.» tras «Tortitas…» no concuerda con nada."""
+    w = _sa(palabra.lower())
+    if not palabra or palabra[:1].isupper() or not _PARTICIPIO_HUERFANO.match(palabra) or w in _SUSTANTIVO_EN_ADO:
+        return False
+    try:
+        return not _es_alimento([w], ings or [])
+    except Exception:                                                  # noqa: BLE001
+        return False
+
+
+def _dieta_verificada(texto: str, ings: Optional[list]) -> bool:
+    """[P1-PLAN-LOTE-858 · revisor] «Cena vegetariana con identidad propia:» → «Cena vegetariana:», no «Cena»: la dieta
+    es una afirmación sobre el plato, como «sin gluten». Se queda sólo si los ingredientes no la desmienten, con los
+    SSOT de dieta (`canonicalize_diet_type` y el backstop `_scan_diet_violations`); sin ingredientes, no se afirma."""
+    if not ings:
+        return False
+    try:
+        from constants import canonicalize_diet_type
+        for w in _toks_sa(texto):
+            dieta = canonicalize_diet_type(w)
+            if dieta == "balanced" and w.endswith("s"):
+                dieta = canonicalize_diet_type(w[:-1])
+            if dieta != "balanced":
+                plato = {"days": [{"meals": [{"name": "", "ingredients": list(ings)}]}]}
+                return not _go()._scan_diet_violations(plato, dieta)
+    except Exception as e:                                             # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-858] dieta sin verificar: {e!r}")
+    return False
 
 
 def _tiene_meta(texto: str) -> bool:
@@ -354,15 +452,29 @@ def _podar(s: str) -> str:
     return s
 
 
-def _limpiar_parte(parte: str, ings: Optional[list] = None) -> tuple[str, bool]:
-    """Una «parte» es un tramo sin comas ni «y» que la corten. Devuelve (texto, ¿se quitó por cláusula?)."""
+def _limpiar_parte(parte: str, ings: Optional[list] = None) -> tuple[str, bool, str]:
+    """Una «parte» es un tramo sin comas ni «y» que la corten. Devuelve (texto, ¿se quitó por cláusula?, lo que la
+    cláusula dejó a su derecha — quitado con ella: «en base», «para cerrar el día variado»)."""
     for _id, rx in _CLAUSULAS:
         m = rx.search(parte)
         if not m:
             continue
-        izquierda = _podar(parte[:m.start()])
+        crudo = parte[:m.start()]
+        # [P1-PLAN-LOTE-858 · revisor] «…como base distinta a la del almuerzo» → «…como base» (el rol es verdad);
+        # sin rol que conservar, el «como» lo poda `_COLA_SUELTA`.
+        rol = _COMO_ROL.match(m.group(0)) if re.search(r"\bcomo\s+$", crudo, re.IGNORECASE) else None
+        izquierda = _podar(crudo + rol.group(1) if rol else crudo)
+        if not rol:
+            # [P1-PLAN-LOTE-858 · juntas] «…y con un formato [distinto al almuerzo]» → «…»
+            izquierda = _podar(_NUCLEO_DE_LA_COMPARACION.sub("", izquierda))
         # «…y ofrece un perfil distinto al bowl del almuerzo»: el verbo se queda sin objeto → fuera con él.
-        izquierda = _podar(_VERBO_COLGANTE.sub("", izquierda))
+        sin_verbo = _podar(_VERBO_COLGANTE.sub("", izquierda))
+        # [P1-PLAN-LOTE-858 · juntas] …y si lo que queda es SU sujeto («La porción de quinoa [aporta…]»), sin un «que»
+        # que lo haga relativo («una cena que aporta…» sí se queda: «una cena»), el sujeto se va con el verbo.
+        if sin_verbo != izquierda and _SUJETO.match(sin_verbo) \
+                and not re.search(r"\bque\s+(?:se\s+)?" + _PAL + r"$", izquierda, re.IGNORECASE):
+            sin_verbo = ""
+        izquierda = sin_verbo
         # «Merienda sin lácteos ni cereal repetido»: la cláusula se tragaba una ausencia clínica que es verdad.
         mc = re.match(r"^sin\s+(" + _PAL + r")\s+ni\s+", m.group(0), re.IGNORECASE)
         if mc and _toks_sa(mc.group(1))[0] in _AUSENCIA_CLINICA:
@@ -371,9 +483,9 @@ def _limpiar_parte(parte: str, ings: Optional[list] = None) -> tuple[str, bool]:
                 izquierda = _podar((izquierda + " " + queda).strip())
         # «sin frutas tropicales para variar…»: la ausencia de una BASE es la justificación → fuera; la clínica queda.
         if izquierda and re.match(r"^(?:sin|ni)\b", izquierda, re.IGNORECASE):
-            return _ausencia_que_queda(izquierda, ings), True
-        return izquierda, True
-    return parte, False
+            return _ausencia_que_queda(izquierda, ings), True, parte[m.end():]
+        return izquierda, True, parte[m.end():]
+    return parte, False, ""
 
 
 def _cerrar_enumeracion(izq: str) -> str:
@@ -400,11 +512,22 @@ def _limpiar_segmento(seg: str, ings: Optional[list] = None) -> tuple[str, bool,
     trozos = re.split(r"(\s+[ye]\s+)", seg)
     partes, seps = trozos[0::2], [""] + trozos[1::2]
     salida: list = []                      # [(sep, texto, quitada_por_clausula)]
-    hubo_clausula = proposito = False
+    hubo_clausula = proposito = previa_clausula = False
+    cola = ""
     for sep, parte in zip(seps, partes):
         if proposito or (hubo_clausula and _REF_COMIDA.search(parte)):
             continue                        # «sin repetir el pollo | y el arroz del almuerzo»: sigue la comparación
-        texto, por_clausula = _limpiar_parte(parte, ings)
+        # [P1-PLAN-LOTE-858 · revisor] …y lo que coordina con el tramo que la cláusula se llevó: la otra comida
+        # («distinta a la del desayuno | y el almuerzo»), la otra dimensión («distinta al almuerzo en base | y
+        # técnica») o el otro calificativo («…para cerrar el día variado | y ligero»). Antes quedaban «y el almuerzo.»,
+        # «Técnica;» y «vegetales asados y ligero».
+        if previa_clausula and (_COMIDA_SUELTA.match(parte)
+                                or (_EN_DIMENSION.match(cola) and len(parte.split()) <= 2)
+                                or (cola.split() and _ADJ_SUELTO.match(cola.split()[-1])
+                                    and _ADJ_SUELTO.match(parte.strip()))):
+            continue
+        texto, por_clausula, cola = _limpiar_parte(parte, ings)
+        previa_clausula = por_clausula
         # «para variar los acompañamientos | y moderar la sal»: el propósito quitado se lleva sus coordinadas
         # [P1-PLAN-LOTE-858] …y con «romper/evitar»: «para romper la repetición de queso | y aportar energía» dejaba
         # «, aportar energía» (replay DO).
@@ -477,20 +600,41 @@ def _limpiar_oracion(oracion: str, ings: Optional[list] = None) -> str:
             if not mm:
                 break
             izq, der = cuerpo[:mm.start()], cuerpo[mm.end():]
-            if re.match(r"^\s*y\s", mm.group(0)) and not re.match(r"^\s*\w", der):
+            # [P1-PLAN-LOTE-858 · juntas] …también delante de «que/para»: «ligera, jugosa [y con identidad propia] que
+            # no repite…» → «ligera y jugosa que…»
+            if re.match(r"^\s*y\s", mm.group(0)) and (not re.match(r"^\s*\w", der)
+                                                      or re.match(r"^\s*(?:que|para)\b", der, re.IGNORECASE)):
                 izq = _cerrar_enumeracion(izq)      # «cálido, dulce y con nombre propio» → «cálido y dulce»
             elif der.startswith(",") and len(re.split(r"[,.;:]", izq)[-1].split()) <= 3 \
                     and not any(rx.match(der[1:].lstrip()) for _i, rx in _CLAUSULAS):
-                der = der[1:]                       # «una cena con identidad propia, cálida» → «una cena cálida»
+                # [P1-PLAN-LOTE-858 · juntas] …salvo que siga una lista de sustantivos que el «con» también regía:
+                # «Un plato con identidad propia, fibra soluble y proteína…» → «Un plato con fibra soluble y…»
+                sig = _sa((re.findall(_PAL, der) or [""])[0].lower())
+                con = re.match(r"^\s*(con)\b", mm.group(0), re.IGNORECASE)
+                der = ((" " + con.group(1) + der[1:]) if (con and sig in _SUSTANTIVO_DE_LISTA) else der[1:])
+                # «una cena con identidad propia, cálida» → «una cena cálida»
             cuerpo = izq + der
     cuerpo = _cap(_podar(cuerpo))
     # 3) cláusulas, segmento a segmento
     trozos = re.split(r"(\s*[,;:]\s+|\s+—\s+)", cuerpo)
     segs, seps = trozos[0::2], [""] + trozos[1::2]
     salida: list = []
-    anterior_quitado = False
-    for sep, seg in zip(seps, segs):
+    anterior_quitado = sujeto_quitado = dimension = False
+    for k_seg, (sep, seg) in enumerate(zip(seps, segs)):
+        # [P1-PLAN-LOTE-858 · juntas] «distinta al almuerzo en base, | técnica y vegetales»: la dimensión de la
+        # comparación sigue tras la coma; los miembros cortos que la continúan se van con ella.
+        if dimension and not _tiene_meta(seg) and all(len(p.split()) <= 2 for p in re.split(r"\s+[ye]\s+", seg)):
+            anterior_quitado = True
+            continue
         texto, por_clausula, quitada_tras_y = _limpiar_segmento(seg, ings)
+        dimension = por_clausula and not texto and bool(re.search(r"\b(?:distint|diferent)" + _L + r"*\s.*\ben\s+"
+                                                                  + _PAL + r"\s*$", seg, re.IGNORECASE))
+        if k_seg == 0 and por_clausula and not texto:
+            sujeto_quitado = True
+        # [P1-PLAN-LOTE-858 · juntas] «: merienda distinta, | sin repetir la avena…»: el «distinta» era de la
+        # comparación quitada; sin ella no dice nada («: merienda» queda y el muñón tras el signo se va abajo).
+        if por_clausula and not texto and salida and re.search(r"\s+distint[ao]s?$", salida[-1][1], re.IGNORECASE):
+            salida[-1] = (salida[-1][0], re.sub(r"\s+distint[ao]s?$", "", salida[-1][1], flags=re.IGNORECASE))
         if por_clausula and not texto and salida and re.match(r"^(?:sin|ni)\b", salida[-1][1], re.IGNORECASE) \
                 and len(salida[-1][1].split()) <= 6:
             # «Sin avena ni yogurt, | para no repetir bases del día»: fuera; «sin pescado ni gluten, | distinto…»: queda.
@@ -515,6 +659,14 @@ def _limpiar_oracion(oracion: str, ings: Optional[list] = None) -> str:
         ultimo_recortado = bool(texto) and por_clausula
     if not salida:
         return ""
+    # [P1-PLAN-LOTE-858 · revisor] «Una opción de cereal sin yogur, | horneada para un desayuno práctico.»: la cláusula
+    # se llevó el SUJETO de la oración y el calificativo que lo seguía quedaba huérfano («Horneada para…», sin
+    # concordar con «Tortitas»). Sin su sustantivo la oración no dice nada del plato: fuera entera.
+    # [· juntas] …y lo mismo el propósito que colgaba de él: «Base de yautía distinta a la papa del almuerzo, | para
+    # no duplicar el tubérculo…» dejaba «Para no duplicar el tubérculo en las comidas fuertes.».
+    primera = (re.findall(_PAL, salida[0][1]) or [""])[0]
+    if sujeto_quitado and (_calificativo_huerfano(primera, ings) or primera == "para"):
+        return ""
     if len(salida) > 1 and (anterior_quitado or ultimo_recortado) and _MUNON_FINAL.match(salida[-1][1].strip()):
         salida.pop()                        # «…con aguacate: una cena[, sin arroz y más ligera que el almuerzo].»
     out = salida[0][1]
@@ -527,9 +679,10 @@ def _limpiar_oracion(oracion: str, ings: Optional[list] = None) -> str:
     if mm and not _MUNON_TRAS_SIGNO.search(cuerpo0) and len(out[:mm.start()].split()) >= 3:
         out = out[:mm.start()]
     # «Una cena, sin lácteos.»: la coma que quedó entre el núcleo genérico y su ausencia
-    if not _NUCLEO_COMA.match(cuerpo0):
-        out = _NUCLEO_COMA.sub(r"\1 ", out)
-    if len(out.split()) <= 1 or (len(out.split()) <= 3 and _GENERICA.match(out) and not _tiene_ausencia_clinica(out)):
+    if not _NUCLEO_COMA.search(cuerpo0):
+        out = _NUCLEO_COMA.sub(r"\1\2 ", out)
+    if len(out.split()) <= 1 or (len(out.split()) <= 3 and _GENERICA.match(out) and not _tiene_ausencia_clinica(out)
+                                 and not _dieta_verificada(out, ings)):
         return ""                           # «Una cena ligera.», «Una preparación.»: lo que queda es un muñón
     if _rota(cuerpo0, out):
         return s                            # la poda desparejó un signo: mejor el metalenguaje que la frase rota
