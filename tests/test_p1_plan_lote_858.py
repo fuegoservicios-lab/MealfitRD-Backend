@@ -490,3 +490,68 @@ def test_juntas_rotas_de_esta_ronda(antes, despues):
 ])
 def test_torpes_de_esta_ronda(antes, despues):
     assert dv.limpiar_metalenguaje(antes) == despues
+
+
+# ---------------------------------------------------------------- ronda 3 · revisor: la «y» que se comía la coma
+# «, acompañado de aguacate y melón fresco» sin melón: la regla que vuelve a unir la lista con «y» («con leche, chía y
+# lechosa» → «con leche y chía») unía también el tramo del participio: «…cebollita y revoltillo y acompañado de
+# aguacate». Las 4 fichas literales del corpus del revisor, quitando la fruta de los ingredientes.
+@pytest.mark.parametrize("desc,ingredientes,despues", [
+    ("Mangú suave con cebollita y revoltillo, acompañado de aguacate y melón fresco: un desayuno criollo y saciante "
+     "para empezar el día con buen balance.",
+     ["½ plátano verde mediano (89 g)", "1 huevo", "6 claras de huevo", "½ aguacate", "½ cebolla",
+      "¾ cdta de aceite de oliva", "Sal al gusto"],
+     "Mangú suave con cebollita y revoltillo, acompañado de aguacate: un desayuno criollo y saciante para empezar el "
+     "día con buen balance."),
+    ("Yautía majada con limón y cilantro, acompañada de huevo y fresas frescas: un desayuno dominicano sencillo y "
+     "colorido.",
+     ["¼ pedazo de yautía (≈60 g)", "3 huevos", "¼ cdta de aceite de oliva", "½ limón", "½ cda de cilantro picado",
+      "Sal al gusto", "6 claras de huevo"],
+     "Yautía majada con limón y cilantro, acompañada de huevo: un desayuno dominicano sencillo y colorido."),
+    ("Bollitos tiernos de harina de Negrito, acompañados de huevo y naranja fresca para empezar el día con una comida "
+     "criolla y sustanciosa.",
+     ["25 g de Harina de Negrito", "3 huevos", "¼ cdta de polvo de hornear", "¼ cdta de aceite de oliva",
+      "Sal al gusto", "6 claras de huevo"],
+     "Bollitos tiernos de harina de Negrito, acompañados de huevo."),
+    ("Avena tibia y saciante, acompañada de yogur y mango para empezar el día con fibra y energía estable.",
+     ["35 g de avena", "¾ taza de yogurt griego sin azúcar", "¼ cdta de canela en polvo", "140 ml de agua"],
+     "Avena tibia y saciante, acompañada de yogur."),
+])
+def test_ronda_3_el_tramo_del_participio_no_se_une_con_y(desc, ingredientes, despues):
+    m = _comida(desc, ingredientes, "Desayuno")
+    assert dv.alinear_con_ingredientes(m) >= 1
+    assert m["desc"] == despues, m["desc"]
+
+
+@pytest.mark.parametrize("desc,ingredientes,despues", [
+    # la regla sigue uniendo la enumeración de alimentos (para la que se escribió)
+    ("Avena cremosa cocida con leche, chía y lechosa fresca; un desayuno criollo y saciante.",
+     ["40 g de avena", "1 taza de leche descremada", "1 cda de semillas de chía"],
+     "Avena cremosa cocida con leche y chía; un desayuno criollo y saciante."),
+    # «ensalada» tiene forma de participio y es un plato: se une
+    ("Pechuga jugosa a la plancha con tomate, ensalada y mango fresco; una cena ligera.",
+     ["Pechuga de pollo", "Lechuga", "Tomate"],
+     "Pechuga jugosa a la plancha con tomate y ensalada; una cena ligera."),
+    # replay de mutación (fichas literales del corpus): el alimento con «de» es un miembro, no una cláusula
+    ("Desayuno práctico de pan integral tostado, mantequilla de maní y guayaba fresca; una combinación sencilla para "
+     "empezar el día con energía.",
+     ["1 rebanada de pan integral familiar", "1½ cucharadas de mantequilla de maní",
+      "1 taza de yogurt griego entero pasteurizado"],
+     "Desayuno práctico de pan integral tostado y mantequilla de maní; una combinación sencilla para empezar el día "
+     "con energía."),
+    ("Casabe dorado y crujiente con queso blanco fresco, rodajas de tomate y fresas jugosas: un desayuno dominicano de "
+     "domingo, fresco y sin repetir el pan integral del resto del plan.",
+     ["½ porción de casabe (15 g)", "30 g de queso blanco fresco", "1 tomate mediano", "1 taza de yogurt griego entero"],
+     "Casabe dorado y crujiente con queso blanco fresco y rodajas de tomate: un desayuno dominicano de domingo, fresco "
+     "y sin repetir el pan integral del resto del plan."),
+    # una palabra sola con forma de participio («granada») sigue siendo un miembro
+    ("Un desayuno fresco y sustancioso: avena suave cocida con leche y canela, coronada con lechosa, granada y queso "
+     "fresco blanco desmenuzado para un contraste salado-dulce muy criollo.",
+     ["30 g de avena", "60 g de lechosa", "60 g de guineo", "5 g de semillas de Linaza", "Canela en polvo al gusto",
+      "80 g de yogurt griego entero", "110 ml de agua"],
+     "Un desayuno fresco y sustancioso: avena suave cocida con leche y canela, coronada con lechosa y granada."),
+])
+def test_ronda_3_la_enumeracion_de_alimentos_se_sigue_uniendo(desc, ingredientes, despues):
+    m = _comida(desc, ingredientes, "Plato")
+    assert dv.alinear_con_ingredientes(m) >= 1
+    assert m["desc"] == despues, m["desc"]

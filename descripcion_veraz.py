@@ -1076,6 +1076,19 @@ def _clausula_nueva(texto_sa: str, ingredientes: list) -> bool:
     return bool(_ARTICULO_SA.match(t)) and len(pal) > 1 and pal[1] in _NO_ALIMENTO
 
 
+def _tramo_propio(tramo: str, ingredientes: list) -> bool:
+    """[P1-PLAN-LOTE-858 · ronda 3 · revisor] ¿El tramo que queda tras la última coma es una cláusula propia y no un
+    miembro de la enumeración? «, acompañado de aguacate» (empieza por participio) o lleva «de»/«con» dentro: unirlo
+    con «y» daba «…cebollita y revoltillo y acompañado de aguacate». Dos precisiones medidas en el replay de mutación
+    (quitar cada línea de ingredientes de 2 212 fichas del corpus): el alimento con «de» es un miembro («mantequilla
+    de maní», «rodajas de tomate», «láminas de aguacate») y se sigue uniendo; y una palabra sola con forma de
+    participio también («granada», «ensalada»: `_participio` no la reconoce si el plato no la lleva)."""
+    t = _sa(tramo.lower())
+    if len(re.findall(_PAL, t)) > 1 and _participio(t, ingredientes):
+        return True
+    return bool(re.search(r"\b(?:de|con)\b", t)) and not _alimenticio(t, ingredientes)
+
+
 def _concuerda(desc_sa: str, i_intro: int, intro: str) -> bool:
     """¿El participio («servido») concuerda con el plato de su oración? Se miran dos núcleos: el del tramo tras «:»
     («…: huevos suaves…») y el de la oración («Un desayuno…: …, acompañado de»). Con que uno concuerde, o sin género
@@ -1170,7 +1183,7 @@ def _quitar_miembro(desc: str, clave: str, presentes: set, ingredientes: list) -
         # «con leche, chía y lechosa;» → «con leche, chía» → «con leche y chía»
         mc = re.search(r",\s+(" + _PAL + r"(?:\s+" + _PAL + r"){0,2})\s*$", izq)
         if mc and not re.match(r"(?:con|de|del|sin|a|al|en|para|por|sobre|que|y|una?|el|la|los|las)\b", mc.group(1),
-                               re.IGNORECASE):
+                               re.IGNORECASE) and not _tramo_propio(mc.group(1), ingredientes):
             izq = izq[:mc.start()] + " y " + mc.group(1)
     if not rep and (not izq.strip() or re.search(r"[.!?]\s*$", izq)):
         der = re.sub(r"^\s*[,;:]?\s*", "", der)
