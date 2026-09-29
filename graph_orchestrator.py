@@ -31970,7 +31970,7 @@ def _merge_duplicate_food_lines(days: list) -> list:
                         total = sum(grams)
                         # Unidad de la línea con MAYOR aporte: la que mejor describe el total.
                         dom = members[max(range(len(members)), key=lambda i: grams[i])]
-                        merged = _dup_merge_format(total, dom[2], dom[3])
+                        merged = __import__("formas_de_base").con_forma(_dup_merge_format(total, dom[2], dom[3]), _k[1])  # [P1-PLAN-LOTE-860] el total cocido sigue «cocido»
                         if not merged:
                             continue
                         keep = members[0][0]
