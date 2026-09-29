@@ -9,8 +9,8 @@ tests `tests/test_p1_plan_lote_843*.py`.
 - **Apple, App Review 5.1.2(i)** (texto de nov-2025): hay que decir a qué IA de terceros van los datos personales y obtener
   permiso explícito **antes** del primer envío. El revisor lo prueba sobre una instalación limpia.
 - **RGPD art. 9(2)(a)**: consentimiento explícito para tratar datos de salud.
-- **RGPD art. 49(1)(a)**: la transferencia al proveedor de IA en China (sin decisión de adecuación ni cláusulas firmadas) necesita un
-  consentimiento aparte, informado de sus riesgos.
+- **RGPD art. 49(1)(a)**: la transferencia al proveedor de IA en China (sin decisión de adecuación ni cláusulas
+  firmadas) necesita un consentimiento aparte, informado de sus riesgos.
 - Auditoría 2026-09-29, fila 4 y §A.1 (`docs/superpowers/specs/2026-09-29-legal-appstore-auditoria.md`).
 
 **Vigente** = la cuenta aceptó la versión actual (`AI_CONSENT_VERSION = "ia-2026-10"`) con las **dos** claves de IA

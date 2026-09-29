@@ -530,3 +530,15 @@ dos puntos y la línea vuelve a pasar el mismo control; sin dos puntos en la cab
 palabras) cae al español como antes. Las líneas que siguen cayendo se cuentan en el log (`[P1-PLAN-LOTE-625] N de M
 pasos quedaron en español`). Las cuatro directivas piden además las cifras en dígitos: «trois œufs» por «3 huevos»
 también devolvía el paso al español (el control de cifras sigue igual).
+
+## `P1-PLAN-LOTE-843` — sin permiso para la IA, no se traduce (2026-09-29)
+
+Traducir el plan es mandarlo a un proveedor de IA, y desde el lote 843 eso exige el permiso de la persona
+(`consentimientos.py`, doc `consentimiento_ia.md`). `enrich_plan_display` pregunta `permite_ia(user_id,
+"traduccion_del_plan")` justo después del knob y del idioma, antes de leer el plan: sin permiso devuelve
+`{"enriched_meals": 0, "skipped": "ai_consent"}` y no llama al modelo. Como todos los disparadores pasan por aquí
+(`plan_jobs`, el hilo legacy, `PATCH /api/profile`, el swap persistido, los bloques), basta con un sitio. Para que el
+outbox no queme reintentos contra ese «no», el claim de `plan_jobs` deja los `display_i18n` de quien no dio permiso en
+la cola (condición `condicion_sql_permiso("j.user_id")`) y `ai_consent` es un skip reintentable (`_RETRY_SKIPS`): se
+traduce cuando la persona lo da. El invitado (`traducir_plan_en_memoria`, `/api/plans/guest-display`) depende de su
+cabecera `X-Bioboros-AI-Consent`; sin ella el endpoint responde `skipped: "ai_consent_required"` sin el modelo.
