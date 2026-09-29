@@ -633,6 +633,11 @@ async def api_chat_voz(background_tasks: BackgroundTasks, data: dict = Body(...)
     locale = str((data or {}).get("locale") or "es-DO").strip()[:10]
     if not texto:
         raise HTTPException(status_code=400, detail="Falta el texto.")
+    # [P1-PLAN-LOTE-903 · 2026-09-29] Sin sesión, sin voz de pago: respondía 200 a cualquiera (medido con curl tras
+    # el deploy del 901) y el tope diario es COMÚN, así que un anónimo podía agotarlo y dejar a todos con la voz del
+    # teléfono. 204 = la del teléfono, que es lo que ya hace el cliente con cualquier respuesta que no sea audio.
+    if not verified_user_id:
+        return Response(status_code=204, headers={"X-Voz-Motivo": "sin_sesion"})
     if not voz_en_la_nube_activa():
         return Response(status_code=204, headers={"X-Voz-Motivo": "apagada"})
     if not await asyncio.to_thread(hay_presupuesto):
@@ -665,6 +670,11 @@ async def api_chat_voz_flujo(data: dict = Body(...),
     locale = str((data or {}).get("locale") or "es-DO").strip()[:10]
     if not texto:
         raise HTTPException(status_code=400, detail="Falta el texto.")
+    # [P1-PLAN-LOTE-903 · 2026-09-29] Sin sesión, sin voz de pago: respondía 200 a cualquiera (medido con curl tras
+    # el deploy del 901) y el tope diario es COMÚN, así que un anónimo podía agotarlo y dejar a todos con la voz del
+    # teléfono. 204 = la del teléfono, que es lo que ya hace el cliente con cualquier respuesta que no sea audio.
+    if not verified_user_id:
+        return Response(status_code=204, headers={"X-Voz-Motivo": "sin_sesion"})
     if not voz_en_la_nube_activa():
         return Response(status_code=204, headers={"X-Voz-Motivo": "apagada"})
     if not voz_en_flujo_activa():
