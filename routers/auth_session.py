@@ -25,7 +25,7 @@ import logging
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends, Response, Cookie, Header
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Response, Cookie, Header
 from fastapi.responses import JSONResponse
 
 # [P1-OTP-FIRST-PARTY / P1-OAUTH-FIRST-PARTY · 2026-07-03] La fila espejo de
@@ -365,6 +365,7 @@ _SOCIAL_ERROR_STATUS = {
 @router.post("/apple/native")
 async def apple_native_sign_in(
     response: Response,
+    background_tasks: BackgroundTasks,
     data: dict = Body(...),
     _rl: object = Depends(_APPLE_NATIVE_LIMITER),
 ):
@@ -382,7 +383,12 @@ async def apple_native_sign_in(
     vez): se usa como nombre visible de una cuenta NUEVA, nunca para decidir identidad.
 
     Interruptor de emergencia `MEALFIT_APPLE_SIGNIN=false`: 404, como si no existiera.
-    Fail-secure: token inválido → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-146-ENDPOINT"""
+    Fail-secure: token inválido → 401 sin cookie. tooltip-anchor: P1-PLAN-LOTE-146-ENDPOINT
+
+    [P1-PLAN-LOTE-848 · 2026-09-29] `authorization_code` (opcional, lo manda el binario nuevo): con la sesión ya
+    emitida se canjea en Apple y se guarda el refresh token cifrado, para revocarlo al borrar la cuenta
+    (`apple_tokens`). Va en una tarea DESPUÉS de responder: el login no espera a Apple, y un fallo ahí (o la
+    clave sin configurar) solo se anota. tooltip-anchor: P1-PLAN-LOTE-848-CANJE"""
     from apple_auth import apple_signin_enabled, verify_apple_identity_token
     from social_identity import SocialIdentityError, resolve_social_user
 
@@ -415,6 +421,10 @@ async def apple_native_sign_in(
     if not sesion:
         return Response(status_code=503)
     logger.info(f"🔐 [P1-PLAN-LOTE-146] Apple nativo → sesión first-party (uid={uid[:8]}…, nueva={usuario['created']}).")
+    codigo = str((data or {}).get("authorization_code") or "").strip()
+    if codigo:
+        from apple_tokens import canjear_y_guardar
+        background_tasks.add_task(canjear_y_guardar, uid, codigo)
     return {
         "ok": True,
         "user_id": uid,

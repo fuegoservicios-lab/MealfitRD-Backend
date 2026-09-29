@@ -3717,6 +3717,13 @@ async def api_delete_my_account(
             )
             billing_cancelled = True
 
+        # [P1-PLAN-LOTE-848 · 2026-09-29] Revocar en Apple los tokens de Sign in with Apple ANTES de la purga (que se
+        # lleva la fila del refresh token en cascada). Después de PayPal: si PayPal aborta, la cuenta sigue viva y su
+        # enlace con Apple también. Best-effort: nunca lanza ni bloquea el borrado (App Review 5.1.1(v), fila 3.2).
+        # tooltip-anchor: P1-PLAN-LOTE-848-REVOCAR
+        from apple_tokens import revocar_de_usuario
+        apple_revocacion = await asyncio.to_thread(revocar_de_usuario, verified_user_id)
+
         # 2. Purga determinística de TODA la data user-scoped (motor existente).
         from db_profiles import delete_account_data
         result = await asyncio.to_thread(delete_account_data, verified_user_id, True)
@@ -3737,7 +3744,8 @@ async def api_delete_my_account(
         logger.info(
             f"[P1-ACCOUNT-DELETE-1] borrado de cuenta {verified_user_id}: ok={ok}, "
             f"profile_deleted={profile_deleted}, identity_deleted={identity_deleted}, "
-            f"billing_cancelled={billing_cancelled}, pasos_fallidos={failed_steps}"
+            f"billing_cancelled={billing_cancelled}, pasos_fallidos={failed_steps}, "
+            f"apple_revocacion={apple_revocacion.get('motivo')}"
         )
         if not identity_deleted:
             # La cuenta sigue viva (y entera, si falló el perfil): se conserva la sesión para reintentar.
