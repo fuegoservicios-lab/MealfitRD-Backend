@@ -15,17 +15,24 @@ Aquí viven:
   · `en_posicion(result, "antes"|"despues")`: assemble la llama en los DOS sitios y sólo corre en el que manda el knob
     `MEALFIT_ASSEMBLE_MUTATORS_BEFORE_CHAIN` (default True = antes de la cadena; False = el sitio viejo, detrás).
     Se quedan detrás a propósito: los re-autofix tardíos (detectan lo que la cadena reintroduce), el reconciliador
-    display↔raw (la cadena ya corre el suyo) y el AUTO-PATCH del revisor (posterior al revisor por diseño).
+    display↔raw (la cadena ya corre el suyo), el AUTO-PATCH del revisor (posterior al revisor por diseño) y, además de
+    delante, la fusión de duplicados (ver abajo).
   · El instrumento de la fila `clinical_band_final` (ver `metadata_banda_final`).
 
-Dependencias verificadas (ninguno de los cinco necesita algo que la cadena produzca):
+Dependencias verificadas (replay sin IA del lote sobre 19 pipeline_result del VPS; sonda = los cinco sobre la salida de
+la cadena en el orden nuevo):
   · fantasma de los pasos: lee pasos declarados con cantidad; la cadena no escribe pasos «N g de X» sin su línea (sus
     notas 💪/⚠ se saltan) y su contrato final re-sincroniza los pasos con la lista. Delante de la cadena gana además
     que ya no puede RE-insertar una línea que la cadena retiró (topes, restricciones) y cuyo paso quedó.
   · «queso» genérico: la cadena ya lo corre dentro de `finalize_plan_data_coherence`.
-  · lácteo del nombre: si la cadena quitara el lácteo, `identidad_plato.restaurar_identidad` lo devuelve.
-  · cocido→seco y duplicados: el único escritor de la cadena de «N g de arroz blanco cocido» es el relleno de ganancia
-    muscular, que ya corre ambos detrás de sí (P1-FINALIZE-TAIL-PARITY). El replay lo mide (sonda post-cadena).
+  · lácteo del nombre: si la cadena quitara el lácteo, `identidad_plato.restaurar_identidad` lo devuelve. La sonda lo
+    ve «volver a actuar» tras la cadena, pero es su piso de 30 g peleando con el cerrador, que lo baja: en el orden viejo
+    el pre-INSERT lo bajaba igual (mismo gramaje final o ±5 g).
+  · cocido→seco: el único escritor de la cadena de «N g de arroz blanco cocido» es el relleno de ganancia muscular, que
+    ya lo corre detrás de sí (P1-FINALIZE-TAIL-PARITY). Sonda del replay: 0 de 19 planes lo piden tras la cadena.
+  · duplicados: SÍ depende de la cadena, que crea duplicados (la identidad del plato, los cerradores) y sólo los funde
+    tras el relleno de ganancia muscular. Por eso corre en LOS DOS sitios: antes (los topes ven el total real de una
+    línea fantasma fundida con la suya) y detrás (lo que la cadena duplicó). Ver `en_posicion`.
 tooltip-anchor: P1-PLAN-LOTE-813-MUTADORES-ANTES
 """
 from __future__ import annotations
@@ -46,13 +53,22 @@ def antes_de_cadena() -> bool:
 
 
 def en_posicion(result, posicion: str, ck=None) -> bool:
-    """Corre `aplicar` sólo si `posicion` ('antes' o 'despues' de la cadena) es la que manda el knob. Assemble la llama en
-    los dos sitios, así que los cinco pases corren exactamente una vez. Devuelve si corrió."""
-    if (posicion == "antes") != antes_de_cadena():
-        return False
-    aplicar(result, ck=ck)
-    if posicion == "antes" and ck is not None:
-        ck("pre_assemble_tail_chain")   # el mapa de tramos (P1-ASSEMBLE-PASS-MAP) no carga la cadena a los mutadores
+    """Assemble la llama en los dos sitios ('antes' y 'despues' de la cadena). Knob encendido: 'antes' corre los cinco
+    pases y 'despues' SÓLO la fusión de duplicados, porque la cadena CREA duplicados que nadie más funde (replay del lote:
+    la identidad del plato devuelve «2 rebanadas de pan integral» junto a «Pan integral familiar» en 3 de 19 planes, y
+    sin fundir el pre-INSERT bajó uno de 1,00 a 0,917). Knob apagado: 'despues' corre los cinco, el orden viejo.
+    Devuelve si corrió algo."""
+    if posicion == "antes":
+        if not antes_de_cadena():
+            return False
+        aplicar(result, ck=ck)
+        if ck is not None:
+            ck("pre_assemble_tail_chain")   # el mapa de tramos (P1-ASSEMBLE-PASS-MAP) no carga la cadena a los mutadores
+        return True
+    if antes_de_cadena():
+        fundir_duplicados(result)
+    else:
+        aplicar(result, ck=ck)
     return True
 
 
@@ -115,12 +131,22 @@ def aplicar(result, ck=None) -> None:
 
     # [P1-DUP-FOOD-LINE-MERGE · 2026-07-24] El mismo alimento en dos líneas de la misma comida.
     # Va DESPUÉS del repair de fantasmas (si la línea reinsertada coincide con una existente, aquí se funden) y antes
-    # de la lista.
+    # de la lista. [P1-PLAN-LOTE-813] Con el knob encendido corre además detrás de la cadena (ver `en_posicion`).
+    fundir_duplicados(result)
+
+
+def fundir_duplicados(result) -> None:
+    """[P1-DUP-FOOD-LINE-MERGE] Funde el mismo alimento repetido en una comida. La telemetría se ACUMULA: con el knob
+    encendido corre dos veces (antes de la cadena y detrás). Fail-safe."""
+    import graph_orchestrator as go
+    if not isinstance(result, dict):
+        return
+    log = go.logger
     if go.MERGE_DUPLICATE_FOOD_LINES:
         try:
             _dm = go._merge_duplicate_food_lines(result.get("days") or [])
             if _dm:
-                result["_duplicate_food_lines_merged"] = _dm
+                result["_duplicate_food_lines_merged"] = list(result.get("_duplicate_food_lines_merged") or []) + _dm
                 log.info(f"🔗 [P1-DUP-FOOD-LINE-MERGE] {len(_dm)} grupo(s) fundido(s): " + "; ".join(
                     f"D{d['day']} {d['food']} → {d['into']!r}" for d in _dm[:6]))
         except Exception as _dm_e:

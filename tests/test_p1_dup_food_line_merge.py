@@ -156,7 +156,7 @@ def test_corre_despues_del_fantasma_y_antes_de_la_lista():
     # preceden a la lista de compras.
     import inspect
     import mutadores_de_contenido as _mdc
-    mut = inspect.getsource(_mdc.aplicar)
+    mut = inspect.getsource(_mdc)
     asm = inspect.getsource(go.assemble_plan_node)
     i_list = asm.index("# Calcular shopping lists")
     assert asm.index('_mdc.en_posicion(result, "antes"') < i_list

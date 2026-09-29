@@ -39751,8 +39751,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _trace_misalign(result.get("days"), "pre_shopping_passes")
 
     # [P1-PLAN-LOTE-813 · 2026-09-29] Sitio VIEJO de los 5 mutadores de contenido (fantasma de los pasos, queso nombrado,
-    # lácteo del nombre, cocido→seco, duplicados): sólo corren aquí con MEALFIT_ASSEMBLE_MUTATORS_BEFORE_CHAIN=false.
-    # Código y razones de orden en `mutadores_de_contenido.py`.
+    # lácteo del nombre, cocido→seco, duplicados): los cinco corren aquí con MEALFIT_ASSEMBLE_MUTATORS_BEFORE_CHAIN=false;
+    # encendido, aquí sólo la fusión de duplicados (la cadena los crea). Código y razones en `mutadores_de_contenido.py`.
     _mdc.en_posicion(result, "despues", _ck)
 
     # [P1-MISALIGN-DEEP-TRACE · 2026-07-24] Foto JUSTO ANTES de reparar: es el estado que

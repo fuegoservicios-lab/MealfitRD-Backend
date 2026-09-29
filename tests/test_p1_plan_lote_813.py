@@ -72,8 +72,9 @@ def test_el_orden_interno_de_los_cinco_no_cambia():
     src = inspect.getsource(_mdc().aplicar)
     orden = [src.index(s) for s in ("_repair_declared_but_unlisted_ingredients(", "nombrar_quesos_genericos(",
                                     "_repair_name_phantom_dairy(", "_normalize_cooked_grain_lines(",
-                                    "_merge_duplicate_food_lines(")]
+                                    "fundir_duplicados(result)")]
     assert orden == sorted(orden)
+    assert "_merge_duplicate_food_lines(" in inspect.getsource(_mdc().fundir_duplicados)
 
 
 def test_el_comentario_de_la_cadena_ya_no_dice_ultima_mutacion():
@@ -146,16 +147,33 @@ def test_knob_apagado_orden_viejo_la_linea_escapa_al_tope(_catalogo, monkeypatch
     assert _queso(r) == ["250 g de Queso blanco"], "apagado: la línea nace detrás de la cadena, sin tope"
 
 
-def test_en_posicion_corre_una_sola_vez(_catalogo, monkeypatch):
+def test_en_posicion_los_cinco_una_vez_y_los_duplicados_tambien_detras(monkeypatch):
+    """Encendido: los cinco antes de la cadena y, detrás, SÓLO la fusión de duplicados (la cadena los crea: la identidad
+    del plato devuelve «2 rebanadas de pan integral» junto a «Pan integral familiar»). Apagado: los cinco detrás."""
     m = _mdc()
     llamadas = []
-    monkeypatch.setattr(m, "aplicar", lambda result, ck=None: llamadas.append(1))
+    monkeypatch.setattr(m, "aplicar", lambda result, ck=None: llamadas.append("cinco"))
+    monkeypatch.setattr(m, "fundir_duplicados", lambda result: llamadas.append("duplicados"))
+    esperado = {True: [("antes", "cinco"), ("despues", "duplicados")], False: [("despues", "cinco")]}
     for on in (True, False):
         monkeypatch.setattr(m, "ASSEMBLE_MUTATORS_BEFORE_CHAIN", on)
-        llamadas.clear()
-        m.en_posicion({}, "antes")
-        m.en_posicion({}, "despues")
-        assert llamadas == [1]
+        visto = []
+        for pos in ("antes", "despues"):
+            llamadas.clear()
+            m.en_posicion({}, pos)
+            visto += [(pos, x) for x in llamadas]
+        assert visto == esperado[on], (on, visto)
+
+
+def test_la_fusion_de_duplicados_acumula_su_telemetria(monkeypatch):
+    m = _mdc()
+    tandas = iter([[{"day": 1, "food": "Pan integral", "into": "4 rebanadas de pan integral"}],
+                   [{"day": 2, "food": "Huevo", "into": "3 huevos"}]])
+    monkeypatch.setattr(go, "_merge_duplicate_food_lines", lambda days: next(tandas))
+    r = {"days": []}
+    m.fundir_duplicados(r)
+    m.fundir_duplicados(r)
+    assert [d["day"] for d in r["_duplicate_food_lines_merged"]] == [1, 2], "la 2.ª pasada no pisa la 1.ª"
 
 
 # ─────────────── 3. el instrumento de la fila clinical_band_final ───────────────
