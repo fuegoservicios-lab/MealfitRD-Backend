@@ -498,9 +498,17 @@ _GUISO_QUESO_426_RE = re.compile(
     r"12-15\s+minutos,\s+hasta\s+que\s+esté\s+cocido\s+por\s+dentro;\s*incorpóralo\s+con\s+cuidado\s+para\s+no\s+deshacer\s+"
     r"el\s+resto\.?", re.IGNORECASE)
 _ADJ_HUEVO_426 = (r"(?:\s+(?:dur[oa]s?|bien\s+cocid[oa]s?|cocid[oa]s?|escalfad[oa]s?|pochad[oa]s?|revuelt[oa]s?|batid[oa]s?|"
+                  r"pelad[oa]s?(?:\s+y)?|"   # [P1-PLAN-LOTE-864] «la pechuga de pollo pelados y cortados por la mitad»
                   r"cuajad[oa]s?(?:\s+al\s+airfryer)?|enter[oa]s))+(?:\s+cortad[oa]s?\s+(?:por\s+la\s+mitad|en\s+"
                   r"(?:mitades|rodajas|cuartos)))?(?:\s+en\s+(?:mitades|rodajas|cuartos))?")
 _NOTA_HUEVO_426_RE = re.compile(r"cuaj|firme|yema|clara|escalfad|pochad|sin puntos liquidos")
+# [P1-PLAN-LOTE-864 · 2026-09-29] La cláusula de la «💡 Cocción previa» que sólo manipula el huevo con un pronombre, sin
+# nombrarlo («…; pélalos y córtalos en mitades»): con el huevo cambiado por pechuga, `_nota_426` quitaba «hierve la pechuga…
+# 10-12 min» y se quedaba ésta — batería real de embarazo del 29-sep: «💡 Cocción previa: la pechuga de pollo debe alcanzar
+# 74 °C…; pélalos y córtalos en mitades». Sin el huevo, pelar y partir en mitades no le toca a nada. tooltip-anchor:
+# P1-PLAN-LOTE-864
+_SOLO_PRONOMBRE_864_RE = re.compile(r"^\s*(?:y\s+)?(?:pel|p[aá]rt|cort|enfr[ií]|pasal|hierve)\w*(?:los|las|lo|la)\b[^;]*"
+                                    r"\b(?:pel\w*|mitad(?:es)?|cuartos)\b|^\s*(?:y\s+)?p[eé]l(?:alos|alas|alo|ala)\b")
 
 
 def _label_426(meal) -> str:
@@ -694,10 +702,12 @@ def _nota_426(q: str, lab: str, s_rx) -> tuple:
     qs = _sa(q)
     if "🌱" in q and "usa solo" in qs and s_rx.search(q):
         return None, True                                           # «NO botes pechuga de pollo»: no sobran yemas
-    if s_rx.search(q) and _NOTA_HUEVO_426_RE.search(qs):
+    if s_rx.search(q) and (_NOTA_HUEVO_426_RE.search(qs) or any(_SOLO_PRONOMBRE_864_RE.search(c)    # [P1-PLAN-LOTE-864]
+                                                                  for c in re.split(r";\s*", qs.partition(":")[2]))):
         cabeza, _, resto = q.partition(":")
         clausulas = [c for c in re.split(r";\s*", resto) if c.strip()]
-        quedan = [c for c in clausulas if not (s_rx.search(c) and _NOTA_HUEVO_426_RE.search(_sa(c)))]
+        quedan = [c for c in clausulas if not (s_rx.search(c) and _NOTA_HUEVO_426_RE.search(_sa(c)))
+                  and not _SOLO_PRONOMBRE_864_RE.search(_sa(c))]   # [P1-PLAN-LOTE-864] «pélalos y córtalos en mitades»
         if lab == "pollo" and len(quedan) < len(clausulas) and "74" not in _sa(" ".join(quedan)):
             quedan.insert(0, "la pechuga de pollo debe alcanzar 74 °C en la parte más gruesa")
         if not quedan:
@@ -758,12 +768,20 @@ def huevo_sustituido(meal) -> int:
             if _pilar(q) == "montaje":
                 if lab in _SERVIR_426:
                     q2 = re.sub(r"(?:(?:las|los)\s+(?:mitades|rodajas|cuartos)\s+de\s+|(?:los|las|el|la)\s+)?(?:\d+\s+)?(?:"
-                                + _SUST_426[lab] + ")" + _ADJ_HUEVO_426, servir, q, flags=re.IGNORECASE)
+                                + _SUST_426[lab] + r")(?:\s+en\s+(?:tiras|cubos))?" + _ADJ_HUEVO_426, servir, q,   # [P1-PLAN-LOTE-864]
+                                flags=re.IGNORECASE)
                     q2 = re.sub(r"\bde el\b", "del", re.sub(r"\ba el\b", "al", q2))
                     n += q2 != q
                     q = q2
                 nuevos.append(q)
                 continue
+            if lab == "pollo" and _pilar(q) == "mise en place":
+                # [P1-PLAN-LOTE-864] «ten listos 2 huevos bien cocidos» → «ten listos ½ pechuga de pollo bien cocidos»: la
+                # pechuga se cocina en el Toque de Fuego; en la mise en place sólo se tiene lista (y concuerda)
+                q3 = re.sub(r"\bten\s+list[oa]s?\s+(" + _CANT_426 + r")(pechuga(s?)\s+de\s+pollo)(?:\s+bien\s+cocid[oa]s?)?",
+                            lambda m: f"ten lista{m.group(3)} {m.group(1)}{m.group(2)}", q, flags=re.IGNORECASE)
+                n += q3 != q
+                q = q3
             q2, k = _reescribir_paso_426(q, lab, s_rx, estado)
             n += k
             if q2:
