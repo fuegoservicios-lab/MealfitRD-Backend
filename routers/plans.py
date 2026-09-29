@@ -2532,6 +2532,10 @@ def _postprocess_pipeline_result(
     if _repausar and actual_user_id:  # [P1-PLAN-LOTE-717] pausó mientras se generaba: el plan nuevo queda pausado
         from plan_mode import repausar_tras_generar
         repausar_tras_generar(actual_user_id)
+    # [P1-PLAN-LOTE-818 · 2026-09-29] La huella del 813 no sale al cliente (SSE, sync, done-callback). Va DESPUÉS de
+    # las dos persistencias: el pre-INSERT (sobre su copia) la necesita para `input_equals_chain_out`.
+    # tooltip-anchor: P1-PLAN-LOTE-818-HUELLA-FUERA
+    __import__("mutadores_de_contenido").retirar_claves_privadas(result)
     return result
 
 
@@ -10704,6 +10708,9 @@ def api_restore_plan_local(
     plan_data_to_write["_plan_modified_at"] = _now_iso
     plan_data_to_write["_restored_from_local_at"] = _now_iso
     _quitar_display_provisional(plan_data_to_write)
+    # [P1-PLAN-LOTE-818 · 2026-09-29] Ni la huella del 813 que una copia local vieja aún traiga. `plan_data_to_write`
+    # es una copia superficial: el dict del body no se toca.
+    __import__("mutadores_de_contenido").retirar_claves_privadas(plan_data_to_write)
 
     from db_core import connection_pool
     from db_plans import acquire_meal_plan_advisory_lock, set_meal_plan_for_update_timeouts

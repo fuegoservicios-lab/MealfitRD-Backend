@@ -124,9 +124,13 @@ def run_v2(alert_key: str, query: Callable, write: Callable, *, lookback_h: int,
         out["skip"] = f"insufficient_samples ({c['entregas']}<{min_samples} entregas)"
         # `verdict_counting` dice qué conteo emitió el veredicto que sigue abierto: el de antes de este lote no
         # llevaba `counting` (filas, no entregas) y un v2 sin muestra no puede confirmarlo NI desmentirlo.
+        # [P1-PLAN-LOTE-818 · 2026-09-29] `last_evaluable_at` también para la alerta que abrió v1 (no lo escribía): su
+        # `triggered_at` ES el último tick que pudo evaluar (v1 lo reescribía en cada tick bajo el piso). Se LEE, no se
+        # toca. tooltip-anchor: P1-PLAN-LOTE-818-LAST-EVALUABLE
         write(
             "UPDATE system_alerts SET metadata = COALESCE(metadata, '{}'::jsonb) "
-            "|| jsonb_build_object('verdict_counting', COALESCE(metadata->>'counting', 'v1_filas')) || %s::jsonb "
+            "|| jsonb_build_object('verdict_counting', COALESCE(metadata->>'counting', 'v1_filas'), "
+            "'last_evaluable_at', COALESCE(metadata->>'last_evaluable_at', triggered_at::text)) || %s::jsonb "
             "WHERE alert_key = %s AND resolved_at IS NULL",
             (json.dumps({"stale": True, "stale_reason": "insufficient_samples", "stale_checked_at": ahora,
                          "stale_n_deliveries": c["entregas"], "stale_min_samples": min_samples,

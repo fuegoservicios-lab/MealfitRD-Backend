@@ -296,7 +296,8 @@ def test_muestra_insuficiente_no_resuelve_y_marca_stale(monkeypatch):
     stale = [(s, p) for s, p in alertas if s.startswith("UPDATE system_alerts") and "metadata" in s]
     assert stale, f"la alerta abierta no quedó marcada stale: {alertas}"
     s, p = stale[0]
-    assert "resolved_at IS NULL" in s and "triggered_at" not in s
+    # [P1-PLAN-LOTE-818] lee `triggered_at` (el `last_evaluable_at` de la alerta que abrió v1), jamás lo escribe.
+    assert "resolved_at IS NULL" in s and "triggered_at =" not in s and "SET triggered_at" not in s
     assert "verdict_counting" in s and "'v1_filas'" in s, "el veredicto abierto no dice qué conteo lo emitió"
     meta = json.loads(p[0])
     assert meta["stale"] is True and "stale_checked_at" in meta and "last_evaluable_at" not in meta
