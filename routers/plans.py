@@ -2897,7 +2897,7 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                             "_pantry_degraded_summary": _p02_summary,
                         }
 
-                    logger.info(f"\ud83d\udd04 [API SHIFT] Shifting {days_since_creation} días. Plan total={total_planned_days}, restantes={days_remaining_in_plan}")
+                    logger.info(f"🔄 [API SHIFT] Shifting {days_since_creation} días. Plan total={total_planned_days}, restantes={days_remaining_in_plan}")
 
                     shifted_data = copy.deepcopy(plan_data)
                     shifted_days = shifted_data.get('days', [])
