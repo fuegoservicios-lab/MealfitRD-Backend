@@ -56,7 +56,8 @@ premium siguen al plan efectivo.
 [P1-PLAN-LOTE-777 · 2026-09-28] Los regalos aparecen en la exportación de datos del usuario
 (`GET /api/account/export`, tabla `account_grants`) sin los ids del personal que los otorgó o
 revocó (`granted_by`/`revoked_by` van en `_ACCOUNT_EXPORT_STRIPPED_KEYS`; el motivo, `reason`,
-SÍ se exporta). La Política de Privacidad §5 declara el acceso del equipo de soporte a la cuenta.
+SÍ se exporta). La Política de Privacidad declara los regalos (§2) y el acceso del equipo de soporte a la
+cuenta (§5); ese texto lo publica la integración legal del landing (rama `ia6d-integ-landing`, sesión 6d).
 
 ## Knob
 
