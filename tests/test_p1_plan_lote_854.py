@@ -23,6 +23,13 @@ if str(_BACKEND) not in sys.path:
 
 import descripcion_veraz as dv  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _sistema_de_paises_encendido(monkeypatch):
+    """Como en producción desde el flip del 18-ago: la puerta lee el país con `constants.country_for_plan`, que con
+    `MEALFIT_COUNTRY_SYSTEM` apagado devuelve DO para todo plan (lo prueba el test de la sección 7)."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+
 _META = re.compile(r"identidad propia|nombre propio|categor[ií]a|Avena/Cereales|tub[eé]rculo local|"
                    r"distint[ao]s? (?:a|al|de|del) |repetir|repetid|para variar|m[aá]s (?:ligera|suave) que|"
                    r"tema del d[ií]a|alternativa saciante al|transformad[ao](?! en)", re.IGNORECASE)
@@ -466,3 +473,69 @@ def test_la_clausula_de_repeticion_no_se_traga_la_ausencia_clinica():
     dv.aplicar_plan(p)
     assert m["desc"] == ("Merienda sin lácteos: tostada integral con aguacate machacado, láminas de lechosa y maní "
                          "triturado."), m["desc"]
+
+
+# ---------------------------------------------------------------- 7. ronda 3 del revisor (29-sep): frases rotas
+# El detector «0» de la ronda 2 no miraba la palabra que queda colgando antes del signo ni la «y» delante de una
+# aposición con artículo; con DO forzado dejaba 8 textos rotos. Estos son los del revisor (`edge_r2.py`), con sus
+# ingredientes, más el «Su y evita…» del corpus.
+@pytest.mark.parametrize("desc,ingredientes,despues", [
+    # (1) «…, con identidad propia y muy distinta al almuerzo» dejaba «con muy.»: «muy» no cierra una frase.
+    ("Casabe crujiente horneado con huevos al plato y ricotta: una cena ligera, con identidad propia y muy distinta "
+     "al almuerzo de pescado.",
+     ["1 pieza de casabe", "2 huevos", "1½ cdas de queso ricotta"],
+     "Casabe crujiente horneado con huevos al plato y ricotta: una cena ligera."),
+    # (1) «Su base es distinta a la…» dejaba «Su;» / «Su y evita…»: el posesivo sin su nombre es un muñón.
+    ("Un plato cálido de lentejas y batata con berenjena. Su base es distinta a la de batatas del almuerzo; "
+     "acompáñalo con agua.",
+     ["100 g de lentejas", "½ batata", "1 berenjena"],
+     "Un plato cálido de lentejas y batata con berenjena. Acompáñalo con agua."),
+    ("Cena caliente pero ligera, con tortillas tostadas a la parrilla y gandules guisados con vegetales. Su base es "
+     "distinta a la del almuerzo y evita repetir pescado; acompáñala con agua.",
+     ["2 tortillas de maíz", "½ taza de gandules", "1 taza de vegetales mixtos"],
+     "Cena caliente pero ligera, con tortillas tostadas a la parrilla y gandules guisados con vegetales. Evita "
+     "repetir pescado; acompáñala con agua."),
+    # (1) «…, en una cena distinta al bowl…» dejaba «en.».
+    ("Remolacha tierna con huevo bien cocido y casabe calentado al momento, en una cena distinta al bowl del "
+     "almuerzo.",
+     ["1 remolacha", "2 huevos", "1 casabe"],
+     "Remolacha tierna con huevo bien cocido y casabe calentado al momento."),
+    # (2)(3) una aposición que empieza por artículo no es un miembro de la enumeración: la coma se queda.
+    ("Quinoa suelta con alcachofa al vapor y queso blanco fresco, una cena ligera y distinta al almuerzo. "
+     "Acompáñala con agua.",
+     ["½ taza de quinoa", "1 alcachofa", "30 g de queso blanco"],
+     "Quinoa suelta con alcachofa al vapor y queso blanco fresco, una cena ligera. Acompáñala con agua."),
+    ("Tortilla de maíz rellena de pollo a la plancha y vegetales frescos, una cena sabrosa y más ligera que el "
+     "almuerzo.",
+     ["1 tortilla de maíz", "120 g de pechuga de pollo", "1 taza de lechuga"],
+     "Tortilla de maíz rellena de pollo a la plancha y vegetales frescos, una cena sabrosa."),
+    ("Manzana crujiente con mantequilla de maní y un toque de canela, una merienda sencilla y sin yogur.",
+     ["½ manzana", "1 cda de mantequilla de maní", "canela", "½ taza de yogurt griego"],
+     "Manzana crujiente con mantequilla de maní y un toque de canela, una merienda sencilla."),
+])
+def test_ronda_3_ni_palabra_colgante_ni_y_ante_la_aposicion(desc, ingredientes, despues):
+    m = _comida(desc, ingredientes)
+    p = {"_country": "MX", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"] == despues, m["desc"]
+    assert not re.search(r"\b(?:su|sus|en|muy|tan|por|con|de|y|e)\s*[.;:!?]", m["desc"], re.IGNORECASE)
+    assert not re.search(r"\b(?:y|e)\s+(?:una?|el|la|los|las)\s+(?:cena|merienda|desayuno|almuerzo|comida)\b",
+                         m["desc"], re.IGNORECASE)
+
+
+# (recomendado) la puerta lee el país del plan con `constants.country_for_plan`: con el sistema de países apagado
+# (rollback del flip) todo plan es DO y un sello «ES» que quedó en `plan_data` no la abre.
+def test_con_el_sistema_de_paises_apagado_un_sello_beta_no_abre_la_puerta(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "false")
+    p = _plan("ES")
+    antes = copy.deepcopy(p)
+    assert dv.aplicar_plan(p) == 0
+    assert p == antes
+    monkeypatch.setenv("MEALFIT_DESCRIPTION_TRUTH_DO", "true")
+    assert dv.aplicar_plan(p) == 1, "el opt-in de DO sigue valiendo para todo plan que la puerta lee como DO"
+
+
+def test_la_puerta_usa_country_for_plan():
+    src = (_BACKEND / "descripcion_veraz.py").read_text(encoding="utf-8")
+    cuerpo = src.split("def aplica_a(")[1].split("\ndef ")[0]
+    assert "country_for_plan(plan_data, None)" in cuerpo and "canonicalize_country(" not in cuerpo

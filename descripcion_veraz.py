@@ -41,11 +41,16 @@ queda («Sin lácteos y sin repetir la base del almuerzo.» → «Sin lácteos.�
 pesada»), salvo que los ingredientes la desmientan («Sin lácteos y sin aguacate, para variar…» con aguacate en la
 lista → «Sin lácteos.»).
 
-Replay sin IA (29-sep, ronda 2 del revisor): G24 21 de 60 fichas beta cambian y DO 0 de 12 (hash idéntico); las 9 755
-fichas guardadas: 54 beta con la configuración real, 1 815 con DO forzado (1 011 textos únicos). Detector de
-anomalías ampliado (signos desparejados, «(,», preposición ante negación «con sin», «y y»): 0; en la ronda 1 daba 13
-que el detector viejo no veía. Afirmaciones clínicas perdidas: de 127 a 115, y las 115 se leen: 112 «sin lácteos»
-con lácteo real en la lista (cottage, yogurt, mozzarella…), 3 son la propia cláusula de repetición.
+Replay sin IA (29-sep, ronda 3 del revisor): G24 21 de 60 fichas beta cambian y DO 0 de 12 (hash idéntico); las 9 755
+fichas guardadas: 54 beta con la configuración de producción (`MEALFIT_COUNTRY_SYSTEM=true`), 1 815 con DO forzado
+(1 011 textos únicos). La ronda 2 publicó «detector ampliado: 0» y era FALSO: ese detector (signos desparejados, «(,»,
+«con sin», «y y») no miraba la palabra que queda colgando antes del signo («una cena ligera, con muy.», «Su;», «al
+momento, en.») ni la «y» delante de una aposición con artículo («queso blanco fresco y una cena ligera»), y con DO
+forzado quedaban 8 textos rotos; uno («Su y evita repetir…») no lo marca ningún detector y salió de leer el replay.
+Ronda 3: cambian exactamente esos 8 respecto a la ronda 2, y el detector del revisor (palabra colgante, «y» ante
+artículo y comida, «con muy») sólo marca un falso positivo («Se recalienta bien.»). Un detector sólo ve lo que busca:
+el veredicto sale de leer los cambios. Afirmaciones clínicas perdidas: 115 (igual que en la ronda 2), y se leen: 112
+«sin lácteos» con lácteo real en la lista (cottage, yogurt, mozzarella…), 3 son la propia cláusula de repetición.
 
 ## Parte 2 — la ficha frente a los ingredientes: la maquinaria que ya existía, en la cola
 
@@ -71,10 +76,11 @@ sustantivo («cubos de melón bien fríos») no se toca. El requesón y la cuaja
 
 ## Alcance
 
-Sólo planes beta (`_country` ≠ DO por `constants.canonicalize_country`): DO es el control de la validación beta y no
-cambia NADA. `MEALFIT_DESCRIPTION_TRUTH_DO` (False) lo abre cuando el dueño lo decida; el defecto en DO existe (lo
-medido arriba es sobre todo DO). Knob maestro `MEALFIT_DESCRIPTION_TRUTH` (True). Sólo `desc`; nunca el nombre, los
-ingredientes ni los pasos: los nombres de alimentos del catálogo son identificadores del motor.
+Sólo planes beta (`constants.country_for_plan(plan_data, None)` ≠ DO: el sello del plan; con `MEALFIT_COUNTRY_SYSTEM`
+apagado todo plan es DO): DO es el control de la validación beta y no cambia NADA. `MEALFIT_DESCRIPTION_TRUTH_DO`
+(False) lo abre cuando el dueño lo decida; el defecto en DO existe (lo medido arriba es sobre todo DO). Knob maestro
+`MEALFIT_DESCRIPTION_TRUTH` (True). Sólo `desc`; nunca el nombre, los ingredientes ni los pasos: los nombres de
+alimentos del catálogo son identificadores del motor.
 
 tooltip-anchor: P1-PLAN-LOTE-854-FICHA-VERAZ
 """
@@ -172,9 +178,13 @@ _CLAUSULAS = [(f["id"], _RX[f["id"]]) for f in FAMILIAS_DEL_PROMPT if f["tipo"] 
 _MODIFICADORES = [(f["id"], _RX[f["id"]]) for f in FAMILIAS_DEL_PROMPT if f["tipo"] == "modificador"]
 _REF_COMIDA = re.compile(r"\b(?:del|al|de\s+la|de\s+las|de\s+los)\s+(?:resto\s+del?\s+|otros\s+|otras\s+)?"
                          r"(?:" + _COMIDA + r"|d[ií]as?|plan|semana)\b", re.IGNORECASE)
-_COLA_SUELTA = re.compile(r"(?:\s+|^)(?:y|e|o|con|de|del|a|al|para|que|una?|el|la|los|las|es|sin|ni|pero)$",
+#: [ronda 3 · revisor] …ni «su», «en», «muy», «tan», «por»: «una cena ligera, con muy.», «Su;», «al momento, en.».
+_COLA_SUELTA = re.compile(r"(?:\s+|^)(?:y|e|o|con|de|del|a|al|para|que|una?|el|la|los|las|es|sin|ni|pero|"
+                          r"su|sus|en|muy|tan|por)$",
                           re.IGNORECASE)
 _CABEZA_SUELTA = re.compile(r"^(?:y|e|pero)\s+", re.IGNORECASE)
+#: [ronda 3 · revisor] Una aposición («, una cena ligera», «, la merienda del día») no es un miembro de la enumeración.
+_ARTICULO = re.compile(r"(?:una?|el|la|los|las)\b", re.IGNORECASE)
 #: Verbos cuyo objeto era la comparación quitada («ofrece un perfil distinto al…», «aporta una alternativa al…»).
 _VERBO_COLGANTE = re.compile(r"(?:^|\s+)(?:ofrece|aporta|tiene|lleva|brinda|presenta|mantiene|usa|es|queda|resulta|"
                              r"cambia|var[ií]a|rompe|evita|sustituye|reemplaza|"
@@ -321,6 +331,10 @@ def _limpiar_parte(parte: str, ings: Optional[list] = None) -> tuple[str, bool]:
 def _cerrar_enumeracion(izq: str) -> str:
     """Quitado el último miembro («cálido, dulce y con nombre propio»), la coma de antes pasa a «y»: «cálido y dulce»."""
     m = re.search(r",\s+(" + _PAL + r"(?:\s+" + _PAL + r"){0,2})\s*$", izq)
+    # [ronda 3 · revisor] «…canela, una merienda sencilla [y sin yogur]»: lo que empieza por artículo es una
+    # aposición, no un miembro de la enumeración; la coma se queda («…canela y una merienda sencilla» era falso).
+    if m and _ARTICULO.match(m.group(1)):
+        return izq
     return (izq[:m.start()] + " y " + m.group(1)) if m else izq
 
 
@@ -432,7 +446,9 @@ def _limpiar_oracion(oracion: str, ings: Optional[list] = None) -> str:
                 else:
                     del salida[k]
                 k -= 1
-        if texto and quitada_tras_y and salida and sep.strip() == "," and len(texto.split()) <= 3:
+        # [ronda 3 · revisor] …pero «fresco, una cena ligera [y distinta al almuerzo]» es una aposición: la coma queda.
+        if texto and quitada_tras_y and salida and sep.strip() == "," and len(texto.split()) <= 3 \
+                and not _ARTICULO.match(texto):
             sep = " y "                     # «una cena vegetal, sabrosa y distinta al…» → «una cena vegetal y sabrosa»
         if texto and anterior_quitado and salida and sep.strip() == "," and re.match(r"^que\b", texto):
             sep = " "                       # «un plato de cuchara, distinto del almuerzo, que cierra» → «… cuchara que»
@@ -798,14 +814,16 @@ def alinear_con_ingredientes(meal: Any) -> int:
 
 # ============================================================ el plan
 def aplica_a(plan_data: Any) -> bool:
-    """Beta sí; DO (y el plan sin país, que es anterior al sistema de países) sólo con el knob propio."""
+    """Beta sí; DO (y el plan sin país, que es anterior al sistema de países) sólo con el knob propio.
+
+    [ronda 3 · revisor] El país sale de `constants.country_for_plan` (el sello del plan, con el knob maestro
+    `MEALFIT_COUNTRY_SYSTEM` leído por llamada), no de `canonicalize_country` sobre el sello: con el sistema de países
+    apagado (rollback del flip) todo plan es DO y un sello «ES» que quedó en `plan_data` ya no abre la puerta. Sin
+    sello, el resultado es el mismo que antes (DO ⇒ sólo con `MEALFIT_DESCRIPTION_TRUTH_DO`)."""
     if not activo() or not isinstance(plan_data, dict):
         return False
-    raw = plan_data.get("_country")
-    if not isinstance(raw, str) or not raw.strip():
-        return incluye_do()
-    from constants import canonicalize_country
-    return canonicalize_country(raw) != "DO" or incluye_do()
+    from constants import country_for_plan
+    return country_for_plan(plan_data, None) != "DO" or incluye_do()
 
 
 def aplicar_plan(plan_data: Any) -> int:
