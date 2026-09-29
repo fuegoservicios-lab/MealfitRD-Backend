@@ -13,6 +13,9 @@ from db_profiles import (get_user_profile, update_user_health_profile,
                          # [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] contexto clínico del shield
                          # pre-INSERT (SSOT de la hidratación que estaba copiada en 3 surfaces).
                          build_clinical_form_from_profile as _build_clinical_form)
+# [P1-PLAN-LOTE-858] al arranque, para que sus knobs (`MEALFIT_DESCRIPTION_TRUTH*`) estén en el registro antes del
+# primer plan; el módulo sólo importa `re`/`logging` arriba (lo demás, perezoso), así que no abre ciclo.
+import descripcion_veraz  # noqa: F401,E402
 
 # ============================================================
 # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Tracking de pipelines en curso

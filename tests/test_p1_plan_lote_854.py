@@ -200,8 +200,11 @@ def test_beta_se_limpia_y_marca_cuantas():
     assert p["_description_truth"]["fichas"] == 1
 
 
+# [P1-PLAN-LOTE-858] DO se abrió por defecto tras el replay; este test ancla ahora el ROLLBACK: con el knob de DO en
+# False, DO y los planes sin país vuelven a salir byte a byte.
 @pytest.mark.parametrize("pais", ["DO", None, "", "XX"])
-def test_do_y_planes_sin_pais_no_cambian_nada(pais):
+def test_do_y_planes_sin_pais_no_cambian_nada(monkeypatch, pais):
+    monkeypatch.setenv("MEALFIT_DESCRIPTION_TRUTH_DO", "false")
     p = _plan(pais) if pais is not None else {"days": _plan("DO")["days"]}
     antes = json.dumps(p, ensure_ascii=False, sort_keys=True)
     assert dv.aplicar_plan(p) == 0
@@ -527,6 +530,7 @@ def test_ronda_3_ni_palabra_colgante_ni_y_ante_la_aposicion(desc, ingredientes, 
 # (rollback del flip) todo plan es DO y un sello «ES» que quedó en `plan_data` no la abre.
 def test_con_el_sistema_de_paises_apagado_un_sello_beta_no_abre_la_puerta(monkeypatch):
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "false")
+    monkeypatch.setenv("MEALFIT_DESCRIPTION_TRUTH_DO", "false")   # [P1-PLAN-LOTE-858] DO abierto por defecto
     p = _plan("ES")
     antes = copy.deepcopy(p)
     assert dv.aplicar_plan(p) == 0
