@@ -91,7 +91,8 @@ def purge_orphan_chat_attachments(batch_size: Optional[int] = None, max_batches:
 
     Sin el throttle por proceso de `_cleanup_orphan_chat_attachments`. Borra por lotes de `batch_size` hasta que
     un lote borra 0 filas o hasta `max_batches` lotes por pasada (lo que quede lo recoge la siguiente pasada).
-    Best-effort: un fallo de la base se registra y corta la pasada, nunca revienta el scheduler. Devuelve cuántas
+    Un fallo de la base se registra, corta la pasada y se RELANZA (APScheduler lo captura y el listener lo escala a
+    `system_alerts`: la promesa de las 24 h es pública y no puede romperse en silencio). Devuelve cuántas
     filas borró.
 
     Knobs: `MEALFIT_CHAT_ATTACHMENT_PURGE_ENABLED` (True; apagarlo deja solo la limpieza oportunista y la promesa
@@ -129,7 +130,7 @@ def purge_orphan_chat_attachments(batch_size: Optional[int] = None, max_batches:
             logger.warning(
                 "[P1-PLAN-LOTE-798] La purga de fotos huérfanas del chat falló tras %s filas: %s", purged, exc
             )
-            return purged
+            raise   # la promesa de las 24 h es pública: que el listener del scheduler lo escale, no tragárselo
         batches += 1
         purged += deleted
         if deleted == 0:

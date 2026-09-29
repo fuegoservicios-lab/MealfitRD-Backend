@@ -166,11 +166,15 @@ def test_el_tope_por_pasada_corta_el_bucle_y_lo_avisa(db_chat, monkeypatch, capl
     assert any("P1-PLAN-LOTE-798" in r.getMessage() and "tope" in r.getMessage() for r in caplog.records)
 
 
-def test_un_fallo_de_la_base_no_revienta_el_cron(db_chat, monkeypatch, caplog):
+def test_un_fallo_de_la_base_corta_la_pasada_y_llega_al_listener(db_chat, monkeypatch, caplog):
+    """La promesa de las 24 h es pública: un fallo NO se traga. Se registra, corta la pasada y se relanza para que
+    APScheduler emita EVENT_JOB_ERROR y `_scheduler_alert_listener` lo escale a `system_alerts` (el scheduler sigue
+    vivo: APScheduler captura la excepción del job)."""
     fake = _FakeWrite(fail=RuntimeError("db caída"))
     monkeypatch.setattr(db_chat, "execute_sql_write", fake)
     with caplog.at_level(logging.WARNING, logger=db_chat.logger.name):
-        assert db_chat.purge_orphan_chat_attachments(batch_size=2, max_batches=3) == 0
+        with pytest.raises(RuntimeError, match="db caída"):
+            db_chat.purge_orphan_chat_attachments(batch_size=2, max_batches=3)
     assert len(fake.calls) == 1, "tras un fallo no insiste en la misma pasada"
     assert any("P1-PLAN-LOTE-798" in r.getMessage() for r in caplog.records)
 
