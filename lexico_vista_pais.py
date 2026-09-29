@@ -13,8 +13,9 @@ Lo que hace, con el léxico como DATA (`data/lexico_vista_pais.json`):
     los adjetivos de detrás, también coordinados («rojas cocidas»→«rojos cocidos», «cocidas y escurridas»→«cocidos y
     escurridos»); si el RESTO —hasta que el texto vuelve a nombrar la palabra, pasos siguientes incluidos— sigue
     hablando de ella en femenino («májalas», «hasta cubrirlas», «no las revuelvas», «estén blandas», «, previamente
-    remojadas») o un vecino no sabe concordar, no sustituye: GLOSA, como el 649. Es una HEURÍSTICA con límites
-    conocidos y medidos (docs/lexico_vista_pais.md → «Límites conocidos»);
+    remojadas») o un vecino no sabe concordar, no sustituye: GLOSA, como el 649; también si entre un determinante que
+    cambia y la palabra hay un número o un invariable («las 2 habichuelas», «las demás habichuelas»). Es una
+    HEURÍSTICA con límites conocidos y medidos (docs/lexico_vista_pais.md → «Límites conocidos»);
   - «funda» solo como envase de la lista, tras la cantidad: en un paso es el verbo («que el queso funda»);
   - en la frase, lo que el léxico no cubre lo sigue glosando el lote 649 en la MISMA pasada (así «guineo verde» →
     «plátano verde» no vuelve a casar con el «Plátano verde» dominicano y acaba glosado como plátano macho).
@@ -58,6 +59,9 @@ _ENLACE = re.compile(r"\s*(,|" + _LETRA + r"+)\s+(" + _LETRA + r"+)")
 _ENTRE_PASOS = "\n.\n"
 # La palabra como complemento de otro nombre («tortitas de habichuela», «la masa de la habichuela»).
 _COMPLEMENTO = re.compile(r"(?<![^\W_])de(?:\s+(?:la|una|esta|esa))?\s+$", re.IGNORECASE)
+# Lo último antes de una posición: un número (grupo 1, con las fracciones de la receta) o una palabra (grupo 2).
+_FINAL_NUM_O_PALABRA = re.compile(
+    r"(?:(\d+(?:[.,]\d+)?[" + _FRACCIONES + r"]?|[" + _FRACCIONES + r"])|([^\W\d_" + _FRACCIONES + r"]+))\s+$")
 
 
 def activo() -> bool:
@@ -272,6 +276,19 @@ def _resto_inseguro(resto: str, num: str, c: dict) -> bool:
     return False
 
 
+def _inicio_de_invariables(texto: str, hasta: int, c: dict):
+    """Dónde empieza la racha de números y de palabras de `previos_invariables` justo delante de `hasta` («las 2
+    habichuelas», «las demás habichuelas», «las otras dos»), o None si no hay ninguno. [ronda 2 del revisor]"""
+    inv = _lista(c, "previos_invariables")
+    inicio = None
+    for _ in range(4):
+        m = _FINAL_NUM_O_PALABRA.search(texto[:hasta])
+        if not m or (m.group(2) is not None and m.group(2).lower() not in inv):
+            break
+        hasta = inicio = m.start()
+    return inicio
+
+
 def _proxima_mencion(texto: str, desde: int, fila: dict):
     """Dónde vuelve a nombrarse la palabra de `fila` (cualquier número) a partir de `desde`, o None."""
     mejor = None
@@ -310,6 +327,13 @@ def _concordar(texto: str, ini: int, fin: int, num_idx: int, fila: dict, ocupado
     num = "pl" if num_idx else "sg"
     dets = (c.get("determinantes") or {}).get(num, {})
     ediciones = []
+    # Un número o un invariable entre el determinante y el nombre («las 2 habichuelas», «las demás habichuelas»): el
+    # determinante no es el vecino y no se concuerda; si es de los que cambian, no es seguro sustituir.
+    salto = _inicio_de_invariables(texto, ini, c)
+    if salto is not None:
+        antes_de_salto = _palabra_previa(texto, salto)
+        if antes_de_salto and antes_de_salto[0].lower() in dets:
+            return None
     # Delante: el determinante («las»→«los»), el de antes («todas las»→«todos los») y la contracción («de la»→«del»).
     prev = _palabra_previa(texto, ini)
     if prev:

@@ -219,7 +219,32 @@ def test_los_pasos_se_leen_con_los_siguientes():
 
 def test_la_doc_no_promete_lo_que_la_heuristica_no_cumple():
     """[ronda 1 del revisor] «Ante la duda glosa, el peor caso es la conducta del 649» era falso: la concordancia es
-    una heurística. La doc dice sus límites medidos en vez de prometer."""
+    una heurística. La doc dice sus límites medidos en vez de prometer.
+    [ronda 2] «Tras un copulativo sí se ve» solo vale para las formas de la lista `copulas`."""
     doc = (_BACKEND / "docs" / "lexico_vista_pais.md").read_text(encoding="utf-8")
     assert "peor caso es la conducta del 649" not in doc
     assert "Límites conocidos" in doc
+    assert "Tras un copulativo sí se ve" not in doc
+    assert "tras un copulativo de `copulas`" in doc
+
+
+def test_la_concordancia_de_delante_mira_detras_de_numeros_e_invariables():
+    """[ronda 2 del revisor] Solo se miraba la palabra de justo antes: «las demás habichuelas» → «las demás frijoles»,
+    «las 2 habichuelas» → «las 2 frijoles». Con un número o un invariable (`previos_invariables`) delante y un
+    determinante femenino antes, se glosa; sin determinante («Añade 2 habichuelas») se sigue sustituyendo."""
+    lx = _lx()
+    datos = json.loads(_DATOS.read_text(encoding="utf-8"))
+    assert "demás" in datos["concordancia"]["f>m"]["previos_invariables"]
+    assert lx.texto_para_leer("Hierve todas las demás habichuelas", "MX") == "Hierve todas las demás habichuelas (frijoles)"
+    assert lx.texto_para_leer("Añade las ½ habichuelas", "MX") == "Añade las ½ habichuelas (frijoles)"
+    assert lx.texto_para_leer("Ralla ½ habichuela mediana.", "MX") == "Ralla ½ frijol mediano."
+
+
+def test_eeuu_no_localiza_el_queso_blanco():
+    """[ronda 2 del revisor] En EE. UU. «Queso Blanco» se vende con esa etiqueta: leerlo «queso fresco» mandaría a
+    comprar otro producto. La fila no estaba en el encargo; queda fuera y la doc lo anota como decisión reversible."""
+    datos = json.loads(_DATOS.read_text(encoding="utf-8"))
+    assert not any(f["de"][0] == "queso blanco" for f in datos["paises"]["US"])
+    assert _lx().nombre_de_lista_para_leer("Queso blanco", "US") == "Queso blanco"
+    doc = (_BACKEND / "docs" / "lexico_vista_pais.md").read_text(encoding="utf-8")
+    assert "«Queso Blanco»" in doc

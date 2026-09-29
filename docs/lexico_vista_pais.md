@@ -31,8 +31,10 @@ Reglas (datos en `data/lexico_vista_pais.json`, espejo `frontend/src/data/lexico
   sustituye: se glosa** («habichuelas (frijoles)»). Cuenta como volver sobre ella:
   - pronombre pegado al verbo, con tilde o sin ella: «májalas», «hasta cubrirlas», «mezclándolas»;
   - pronombre delante del verbo tras «no/se/te/me/nos/os»: «no las revuelvas»;
-  - atributo tras un copulativo, también infinitivo y coordinado: «hasta que estén blandas», «quedar suaves y
-    cremosas»;
+  - atributo tras un copulativo de `copulas` (estar, quedar, ser, resultar, lucir, verse y ponerse, en presente,
+    subjuntivo, infinitivo, futuro, pasado y condicional), también coordinado: «hasta que estén blandas», «quedar
+    suaves y cremosas», «estarán listas», «quedaron blanditas»;
+  - el demostrativo con tilde que la retoma («cuando éstas ya estén ablandando», «ésta debe quedar suave»);
   - un adjetivo o participio femenino que no es de un nombre vecino: «, previamente remojadas», «(425 g),
     escurridas», «cocina tapadas», «, ya cocidas», «de trigo rellena». Es de un nombre si va justo detrás de él,
     saltando adverbios, y el nombre no acaba en -o/-os («zanahorias ralladas», «cebolla muy fina»), o coordinado con
@@ -41,6 +43,10 @@ Reglas (datos en `data/lexico_vista_pais.json`, espejo `frontend/src/data/lexico
     pica la cebolla y mézclalas»), salvo si es complemento de otro nombre («tortitas de habichuela apiladas»).
   Tras «adjetivo y», un femenino que no se sabe concordar y no es un alimento de la lista `sustantivos`
   («negras y blanditas») también se glosa; «negras y espinacas» se sustituye.
+- **Delante, el determinante tiene que ser el vecino.** Si entre un determinante que cambia («las», «unas»,
+  «otras»…) y la palabra hay un número o una palabra de `previos_invariables` («las 2 habichuelas», «las demás
+  habichuelas», «las otras dos»), se glosa. Sin determinante delante («Añade 2 habichuelas», «Ralla ½ habichuela
+  mediana») se sustituye.
 - **«funda» solo como envase de la lista**: en un paso es el verbo («para que el queso funda»).
 - **El plátano no se encadena**: en ES/MX «guineo»→«plátano» y el «plátano verde/maduro» dominicano →
   «plátano macho verde/maduro»; un «plátano» suelto no se toca (en España el modelo lo usa para la banana).
@@ -48,6 +54,9 @@ Reglas (datos en `data/lexico_vista_pais.json`, espejo `frontend/src/data/lexico
   género y el léxico no cubre (batata→boniato, chinola→maracuyá, tayota→chayote) se sigue glosando.
 - **RD no cambia nada.** Puerto Rico solo cambia lechosa, auyama y ají morrón (guineo, habichuelas, funda y
   queso blanco son palabras de allí).
+- **EE. UU. no localiza el queso blanco** (decisión reversible, ronda 2 del revisor): allí «Queso Blanco» se vende
+  con esa etiqueta, así que leerlo «queso fresco» mandaría a comprar otro producto. La fila no estaba en el encargo.
+  Si el dueño la quiere, es una fila en `paises.US` más su caso en `casos` (hoy el caso fija que no cambia).
 
 ## Límites conocidos
 
@@ -62,6 +71,14 @@ revisor, 29-sep):
   tibios rellenos»), 1 glosa cambia de sitio y 2 glosas sobran (el femenino era de otro nombre: «…acompáñala con
   agua», «ensalada de repollo, frijol y pepino aliñada»). Se leyeron también las 106 frases sustituidas que
   resultan: la única agramatical es la catáfora de abajo («ten listas 1 frijol integral, ¾ cda de aceite…»).
+- **Medido (ronda 2 del revisor)**, con «lista(s)», las cópulas en otros tiempos, el demostrativo con tilde y los
+  previos invariables. Sobre el corpus del revisor (G24 cruzado, pasos encadenados, biblioteca de recetas de RD,
+  812 textos de estrés, nombre y envase de la lista; 14 180 lecturas) cambian 54 lecturas frente a la ronda 2, todas
+  leídas: 38 son el queso blanco de EE. UU., que ya no se localiza. Las otras 16 salen de 7 textos. 6 eran
+  agramaticales y pasan a glosarse: «éstas» (biblioteca y un texto de estrés), «la ½ frijol» (3 de estrés) y «se
+  ponga translúcida». El séptimo es glosa de más: el «Mise en place» real de G24 («…escurre 1¼ tazas de habichuelas
+  rojas (frijoles rojos)…; ten listas 1 tortilla…») se glosa porque «listas» es de lo que viene detrás (catáfora) y
+  no se distingue de un atributo de la palabra. Así los 6 textos reales quedan en 3 sustituidos y 3 glosados.
 - **Se escapa**: la catáfora (lo que concuerda ANTES del nombre: «Cuando estén blandas, escurre las habichuelas»,
   «ten listas 1 habichuela…»).
 - **Se escapa**: el pronombre delante del verbo sin «no/se/te/me/nos/os» delante («Toma las habichuelas y las
@@ -69,8 +86,14 @@ revisor, 29-sep):
   diccionario de verbos. En la receta el modelo usa el imperativo con el pronombre pegado («machácalas»), que sí se
   ve.
 - **Se escapa**: un adjetivo femenino suelto que no está en `adjetivos` ni acaba en -ada(s)/-ida(s)/-osa(s)
-  («Sirve las habichuelas, tiernitas» → «Sirve los frijoles, tiernitas»). Tras un copulativo sí se ve («quedan
-  tiernitas»).
+  («Sirve las habichuelas, tiernitas» → «Sirve los frijoles, tiernitas»). Se ve solo tras un copulativo de
+  `copulas` («quedan tiernitas»); con otro verbo («se vuelven tiernitas») se escapa.
+- **Se escapa**: el demostrativo sin tilde que retoma la palabra («cuando estas ya se ablanden»): sin tilde no se
+  distingue del determinante («estas cebollas»). El modelo y la biblioteca de recetas lo escriben con tilde.
+- **Se escapa**: un invariable delante que no está en `previos_invariables` («las abundantes habichuelas») o un
+  femenino que no es determinante («las primeras 2 habichuelas»).
+- **Glosa de más por la cópula**: la lista `copulas` no sabe de quién es el atributo; si es de otro nombre en plural
+  femenino («Añade las habichuelas; las tortillas estarán listas…»), se glosa sin necesidad.
 - **Glosa de más** (no rompe la frase, solo no sustituye): un femenino que es de otro nombre y no se le puede
   atribuir: tras coma o «y» («tortillas calientes, dobladas»), tras un nombre en -o («ensalada de repollo, frijol y
   pepino aliñada») o un pronombre de otro referente («…una comida completa; acompáñala con agua»).
@@ -103,3 +126,5 @@ se localiza nada. La glosa del 649 en la lista (`gloss_es`) sigue tomando `formD
 - La Nevera sigue mostrando el identificador con la glosa del 649 («Guineo (plátano)»): es donde el usuario
   gestiona el alimento del catálogo. Las unidades del diario (`glossUnitWord`) también siguen con la glosa.
 - EE. UU. no traduce «guineo» (decisión del dueño: «banana», «plátano» o dejarlo).
+- El diario (`nombreDeRegistro`) en es-DO sigue mostrando el nombre dominicano: solo actúa con idioma distinto de
+  es-DO. No es una regresión; es cobertura que queda para otro lote.
