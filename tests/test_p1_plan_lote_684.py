@@ -128,6 +128,9 @@ def _turno(monkeypatch, *, is_call_mode, prompt):
     monkeypatch.setattr(db_plans, "get_latest_usable_meal_plan_with_id", lambda uid: None)
     monkeypatch.setattr(shopping_calculator, "aggregate_shopping_list", lambda items, **k: list(items))
     monkeypatch.setattr(agent, "build_memory_context", lambda *_a: {"recent_messages": [], "summary_context": ""})
+    # [P1-PLAN-LOTE-717] La memoria a largo plazo se lee fail-closed (sin base ⇒ pausada ⇒ sin RAG): el turno de este
+    # arnés es el de un usuario con la memoria ENCENDIDA, que es donde el router tiene algo que decidir.
+    monkeypatch.setattr(agent, "_memoria_activa_para_chat", lambda _uid: True)
     monkeypatch.setattr(agent, "classify_sentiment", _sentimiento)
     monkeypatch.setattr(agent, "rag_query_router", _router)
     monkeypatch.setattr(agent, "get_embedding", lambda _q: None)
