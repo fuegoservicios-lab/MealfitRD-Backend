@@ -8859,26 +8859,9 @@ _STAPLE_INGREDIENT_ALIASES = {
 def _count_staple_repetitions(days: list) -> dict:
     """Cuenta en cuántos días distintos aparece cada staple. Devuelve solo staples
     que aparecen en >=2 días (señal de mode-collapse a nivel de staples).
-    """
-    # P1-10: unicodedata a nivel módulo
-
-    def _norm(s: str) -> str:
-        s = unicodedata.normalize("NFD", s.lower()).encode("ascii", "ignore").decode("ascii")
-        return s
-
-    aliases_norm = {label: [_norm(a) for a in als] for label, als in _STAPLE_INGREDIENT_ALIASES.items()}
-    day_counts: dict = {}
-    for day in days:
-        text_blob = ""
-        for meal in day.get("meals", []):
-            text_blob += " " + meal.get("name", "")
-            for ing in meal.get("ingredients", []) or []:
-                text_blob += " " + str(ing)
-        text_norm = _norm(text_blob)
-        for label, alias_list in aliases_norm.items():
-            if any(a in text_norm for a in alias_list):
-                day_counts[label] = day_counts.get(label, 0) + 1
-    return {k: v for k, v in day_counts.items() if v >= 2}
+    [P1-PLAN-LOTE-857 · 2026-09-29] por frontera de palabra (`basicos_por_token`), no subcadena: «pina» ⊂
+    «espinaca» daba `pina: 2` en G24 DO sin una piña. tooltip-anchor: P1-PLAN-LOTE-857"""
+    return __import__("basicos_por_token").dias_por_basico(days, _STAPLE_INGREDIENT_ALIASES)
 
 
 # [P1-INGREDIENT-SPREAD · 2026-07-28] Generalización de `_count_staple_repetitions`: ese detector
@@ -14112,6 +14095,7 @@ _ALLERGEN_SYNONYMS = {
     "sesamo": ["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
                "semillas de sesamo", "gomasio", "halva", *__import__("vocabulario_alergenos").EXTRA["sesamo"]],  # [P1-PLAN-LOTE-252]
 }
+__import__("pescado_especies").extender_pescado(_MAIN_PROTEIN_ALIASES, _ALLERGEN_SYNONYMS["pescado"])  # [P1-PLAN-LOTE-857] trucha/sardina sí, «dorado» no
 
 
 # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La MITAD DECLARATIVA del vocabulario de alergias.

@@ -1577,16 +1577,15 @@ def _sin_acentos(s) -> str:
 
 
 def _basicos_de(comida) -> set:
-    """Los básicos que la autocrítica cuenta entre días (`_STAPLE_INGREDIENT_ALIASES`) con SU criterio: subcadena sin
-    acentos sobre nombre + ingredientes, como `_count_staple_repetitions`. Un test ancla la paridad."""
+    """Los básicos que la autocrítica cuenta entre días (`_STAPLE_INGREDIENT_ALIASES`) con SU criterio, sobre nombre +
+    ingredientes, como `_count_staple_repetitions`. Un test ancla la paridad. [P1-PLAN-LOTE-857 · 2026-09-29] con el
+    MISMO resolvedor (`basicos_por_token`, frontera de palabra): «espinaca» no es piña."""
     go = _go()
     if go is None or not isinstance(comida, dict):
         return set()
     try:
-        blob = _sin_acentos(" " + str(comida.get("name") or "") + " "
-                            + " ".join(str(i) for i in (comida.get("ingredients") or [])))
-        return {lbl for lbl, als in go._STAPLE_INGREDIENT_ALIASES.items()
-                if any(_sin_acentos(a) in blob for a in als)}
+        import basicos_por_token
+        return basicos_por_token.basicos_de_comida(comida, go._STAPLE_INGREDIENT_ALIASES)
     except Exception:                                                  # noqa: BLE001
         return set()
 
