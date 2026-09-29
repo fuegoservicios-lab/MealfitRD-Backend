@@ -127,245 +127,279 @@ def test_knob_de_basicos_apagado_vuelve_a_la_subcadena(monkeypatch):
     assert "pina" not in go._count_staple_repetitions(dias)
 
 
-# ── ronda 5 · la conserva se queda; se cambia el pez que se cuece ────────────────────────────────────────
+# ── ronda 6 · detectar sí, reescribir sólo lo de antes y nunca un pez listo, crudo o frío ─────────────────────────
+#
+# Cinco rondas intentando que el autofix REESCRIBIERA bien las especies nuevas seguían dejando pollo crudo en casos
+# límite (la lata que la línea no llama «en lata», el ceviche blanqueado 1-2 minutos). Regla nueva: (1) las especies
+# nuevas cuentan para DETECTAR la repetición, pero el autofix no toca una comida que las lleve (decide el gate, que
+# regenera el día) y reescribe con el conjunto de alias de antes del lote; (2) para cualquier pescado o marisco —
+# también el atún de la base—, el autofix nunca reescribe una comida cuyo pez es conserva o precocido, crudo o
+# servido frío.
+
+
+def _tilapia():
+    return {"meal": "Almuerzo", "name": "Tilapia al horno con arroz",
+            "ingredients": ["150 g de Filete de tilapia", "1 taza de Arroz"],
+            "recipe": ["Hornea la tilapia 20 minutos a 200 °C."]}
+
+
+def _comida(nombre, lineas, pasos, slot="Cena"):
+    return {"meal": slot, "name": nombre, "ingredients": list(lineas), "ingredients_raw": list(lineas),
+            "recipe": list(pasos)}
 
 
 def _dia_dos_pescados(nombre, linea, pasos):
-    return [{"day": 1, "meals": [
-        {"meal": "Almuerzo", "name": "Tilapia al horno con arroz",
-         "ingredients": ["150 g de Filete de tilapia", "1 taza de Arroz"],
-         "recipe": ["Hornea la tilapia 20 minutos a 200 °C."]},
-        {"meal": "Cena", "name": nombre, "ingredients": [linea, "1/2 Aguacate"],
-         "ingredients_raw": [linea, "1/2 Aguacate"], "recipe": list(pasos)},
-    ]}]
+    return [{"day": 1, "meals": [_tilapia(), _comida(nombre, [linea, "1/2 Aguacate"], pasos)]}]
 
 
 def _textos(meal):
-    return [meal["name"], *meal["ingredients"], *(meal.get("ingredients_raw") or []), *meal["recipe"]]
+    return [meal["name"], *meal["ingredients"], *(meal.get("ingredients_raw") or []), *(meal.get("recipe") or [])]
 
 
-_CONSERVAS = [
-    # la sonda del revisor r4: fría, «Escurre… sirve frío» — salía pechuga de pollo cruda
-    ("Ensalada de sardinas en lata con aguacate", "120 g de Sardinas en lata",
-     ["Mise en place: pica el tomate y el aguacate.",
-      "Escurre las sardinas en lata y mézclalas con el aguacate y el tomate.", "Montaje: sirve frío."]),
-    ("Ensalada de sardinas con aguacate", "1 lata de Sardinas en lata (120 g)",
-     ["Escurre las sardinas en lata y mézclalas con el aguacate.",
-      "Añade un pellizco del líquido de la lata de sardinas si quieres darle sabor, y sirve."]),
-    ("Arroz con sardinas", "2 latas de sardinas (250 g)", ["Abre las latas de sardinas y mézclalas con el arroz."]),
-    # con fuego: es un RECALENTADO — 2-3 min no cuecen una pechuga cruda, y «Abre pechuga de pollo»
-    ("Sardinas guisadas", "120 g de Sardinas en salsa de tomate",
-     ["Calienta las sardinas en salsa de tomate en la sartén 3 minutos."]),
-    ("Arroz con sardinas", "1 lata de sardinas (120 g)",
-     ["Abre la lata de sardinas y caliéntalas en la sartén 3 minutos."]),
-    ("Ensalada de sardinas", "110 g de sardinas en lata escurridas",
-     ["Desmenuza las sardinas y saltéalas 2 minutos en la sartén."]),
-    ("Sardinas en aceite con casabe", "120 g de Sardinas en aceite", ["Escurre las sardinas en aceite y sírvelas."]),
-    ("Sardinas en agua con casabe", "120 g de Sardinas en agua", ["Escurre las sardinas en agua."]),
-    ("Ensalada de bonito", "100 g de Bonito del norte en aceite", ["Desmenuza el bonito del norte en aceite."]),
-    ("Ensalada de caballa", "1 lata de caballa en aceite de oliva (110 g)", ["Desmenuza la caballa en aceite de oliva."]),
-    ("Caballa en escabeche", "120 g de Caballa en escabeche", ["Sirve la caballa en escabeche fría."]),
-    ("Tosta de boquerones en vinagre", "80 g de Boquerones en vinagre", ["Coloca los boquerones en vinagre sobre el pan."]),
-    ("Ensalada de trucha ahumada", "100 g de Trucha ahumada", ["Corta la trucha ahumada en tiras."]),
-    ("Tosta de salmón ahumado", "80 g de Salmón ahumado", ["Coloca el salmón ahumado sobre la tosta."]),
-    ("Coca con anchoas", "40 g de Anchoas", ["Reparte las anchoas sobre la coca."]),
-]
+_BLANQUEO = ("Blanquea {a} en agua hirviendo 1-2 minutos y escúrrelo bien antes de marinar (el cítrico solo marina, "
+             "no cuece). Marina {a} en jugo de limón 20 minutos.")
+
+# Las formas del revisor r5, con especie NUEVA: la comida no se reescribe nunca.
+_ESPECIES_NUEVAS = {
+    "sardinas-lata-en-el-paso": _comida("Arroz con sardinas", ["90 g de Sardinas", "1 taza de Arroz"],
+                                        ["Escurre las sardinas de la lata y mézclalas con el arroz caliente."]),
+    "sardinas-abre-la-lata": _comida("Casabe con sardinas", ["90 g de Sardinas", "1 Casabe"],
+                                     ["Abre la lata y escurre las sardinas.", "Colócalas sobre el casabe."]),
+    "sardinas-ya-viene-cocido": _comida("Arroz con vegetales y sardinas", ["1 taza de Arroz", "90 g de Sardinas"],
+                                        ["Cocina el arroz 18 minutos.",
+                                         "Escurre e incorpora sardinas (ya viene cocido) a la preparación."]),
+    "lata-pequena-de-sardinas": _comida("Ensalada de sardinas", ["1 lata pequeña de sardinas", "1 tomate"],
+                                        ["Desmenuza las sardinas y mézclalas con el tomate."]),
+    "caballa-de-su-lata": _comida("Casabe con caballa", ["90 g de Caballa", "1 Casabe"],
+                                  ["Escurre la caballa de su lata y colócala sobre el casabe."]),
+    "ceviche-de-trucha-blanqueado": _comida("Ceviche de trucha", ["150 g de Trucha", "1 limón"],
+                                            [_BLANQUEO.format(a="la trucha"), "Sirve frío."]),
+    "trucha-cocida": _comida("Trucha a la plancha con papas", ["150 g de Trucha", "200 g de Papa"],
+                             ["Cocina la trucha a la plancha 4 minutos por lado.", "Hierve las papas 15 minutos."]),
+    "bagre-guisado": _comida("Bagre guisado con arroz", ["150 g de Bagre", "1 taza de Arroz"],
+                             ["Guisa el bagre 20 minutos en salsa de tomate."]),
+}
 
 
-@pytest.mark.parametrize("nombre,linea,pasos", _CONSERVAS, ids=[c[1] for c in _CONSERVAS])
-def test_la_conserva_se_queda_y_se_cambia_el_pez_que_se_cuece(nombre, linea, pasos):
-    """Revisión r4 (bloquea, seguridad alimentaria): tilapia + «Ensalada de sardinas en lata» salía «Escurre pechuga de
-    pollo y mézclalas… sirve frío» — pollo crudo, y ni V7f ni el reparador del lote 68 lo veían. La receta de una conserva
-    está escrita para un producto listo para comer: su fuego, si lo hay, es un recalentado. La conserva se queda y el
-    autofix cambia el OTRO pez, el que la receta sí cuece; el plato reescrito no hereda ninguna lata."""
-    dias = _dia_dos_pescados(nombre, linea, pasos)
-    cena_antes = copy.deepcopy(dias[0]["meals"][1])
-    assert go._protein_repeat_autofix(dias, {"dietType": "balanced", "country": "DO"}, None) == 1
-    alm, cena = dias[0]["meals"]
-    assert cena == cena_antes, "la conserva no se toca"
-    assert alm.get("_protein_autofix_applied") == "pescado->pollo"
-    assert alm["name"] == "Pechuga de pollo al horno con arroz"
-    assert alm["recipe"] == ["Hornea pechuga de pollo 20 minutos a 200 °C."]
-    for texto in _textos(alm):
-        assert not re.search(r"\blatas?\b|enlatad|escurrid", texto, re.IGNORECASE), texto
-    assert go._days_with_same_day_protein_repeat({"days": dias}) == []
+@pytest.mark.parametrize("tilapia_primero", [True, False], ids=["tilapia-primero", "especie-nueva-primero"])
+@pytest.mark.parametrize("clave", list(_ESPECIES_NUEVAS))
+def test_la_especie_nueva_cuenta_pero_su_comida_no_se_reescribe(clave, tilapia_primero):
+    otra = copy.deepcopy(_ESPECIES_NUEVAS[clave])
+    antes = copy.deepcopy(otra)
+    dias = [{"day": 1, "meals": [_tilapia(), otra] if tilapia_primero else [otra, _tilapia()]}]
+    assert go._days_with_same_day_protein_repeat({"days": dias}) == [1], "la repetición se detecta"
+    go._protein_repeat_autofix(dias, {"dietType": "balanced", "country": "ES"}, None)
+    assert otra == antes, "la comida con la especie nueva no se toca"
 
 
-def _ceviche_de_sardinas_g24_co():
-    """G24 CO D1, almuerzo tal cual (la conserva con garbanzos de lata en el mismo paso)."""
-    return {"meal": "Almuerzo", "name": "Ensalada Fresca Estilo Ceviche con Sardinas, Garbanzos y Plátano Maduro Dorado",
-            "ingredients": ["110 g de sardinas en lata escurridas",
-                            "½ taza de garbanzos cocidos (de lata, enjuagados y escurridos)", "½ plátano maduro",
-                            "1½ limones"],
-            "recipe": [
-                "Mise en place: escurre bien los 110 g de sardinas en lata y desmenúzalas; enjuaga y escurre los ½ taza "
-                "de garbanzos cocidos (de lata, enjuagados y escurridos) (90 g). Corta los ½ plátano maduro (105 g) en "
-                "rodajas de 1 cm y exprime los 1½ limones.",
-                "El Toque de Fuego: en un sartén a fuego medio con 1 cdta de aceite de oliva, dora las rodajas de "
-                "plátano maduro 3 minutos por lado hasta que caramelicen y estén tiernas.",
-                "Montaje: marina las sardinas 5 minutos con el jugo de limón, sal, pimienta negra y el cilantro picado. "
-                "Sirve la lechuga con los garbanzos, corona con las sardinas al limón y acompaña con el plátano."]}
-
-
-def _arepas_con_trucha_g24_co():
-    return {"meal": "Cena", "name": "Arepas de Maíz Asadas Rellenas de Ricotta con Ensalada Fresca y Trucha",
-            "ingredients": ["35 g de harina de maíz precocida", "180 g de queso ricotta", "50 g de trucha cocida"],
-            "recipe": ["El Toque de Fuego: forma 2 arepas y ásalas a fuego medio 5-6 minutos por lado. Cocina trucha a "
-                       "la plancha o hervida y sírvela como proteína del plato.",
-                       "Montaje: sirve las arepas rellenas con la ensalada fresca."]}
-
-
-@pytest.mark.parametrize("trucha_primero", [True, False], ids=["trucha-primero", "orden-real"])
-def test_g24_co_el_ceviche_de_sardinas_nunca_es_ceviche_de_pollo(trucha_primero):
-    """Revisión r4: con la trucha delante, la guardiana era la trucha y salía «Ensalada Fresca Estilo Ceviche con Pechuga
-    de pollo» + «marina pechuga de pollo 5 minutos con el jugo de limón». El plato SÍ tiene fuego (el del plátano): no
-    basta con mirar si el plato tiene fuego. Y el paso de los garbanzos queda intacto (r4 dejaba «(de lata, enjuagados
-    y ) (90 g)»), igual que «110 g de sardinas en lata escurridas» (r4: «pechuga de pollo escurridas»)."""
-    sard, tru = _ceviche_de_sardinas_g24_co(), _arepas_con_trucha_g24_co()
-    sard_antes = copy.deepcopy(sard)
-    dias = [{"day": 1, "meals": [tru, sard] if trucha_primero else [sard, tru]}]
-    assert go._protein_repeat_autofix(dias, {"dietType": "balanced", "country": "CO"}, None) == 1
-    assert sard == sard_antes
-    assert "(de lata, enjuagados y escurridos) (90 g)" in sard["recipe"][0]
-    assert tru["_protein_autofix_applied"] == "pescado->pollo"
-    assert tru["name"].endswith("y Pechuga de pollo")
-    assert "50 g de pechuga de pollo cocida" in tru["ingredients"]
-    assert "Cocina pechuga de pollo a la plancha" in tru["recipe"][0]
-
-
-def test_dos_conservas_el_mismo_dia_no_se_reescriben(caplog):
-    """Sin un pez que la receta cueza, no hay a quién cambiar: decide el gate, y la impotencia queda en el log."""
-    dias = [{"day": 1, "meals": [
-        {"meal": "Almuerzo", "name": "Ensalada de sardinas", "ingredients": ["120 g de Sardinas en lata"],
-         "recipe": ["Escurre las sardinas y sírvelas."]},
-        {"meal": "Cena", "name": "Casabe con caballa", "ingredients": ["1 lata de caballa en aceite (110 g)"],
-         "recipe": ["Desmenuza la caballa sobre el casabe."]},
-    ]}]
+def test_la_especie_nueva_va_al_gate_con_su_motivo(caplog):
+    """Tilapia delante (la guardiana de la base): la comida de sardinas no se reescribe, la repetición sigue y decide el
+    gate; el log dice por qué."""
+    dias = [{"day": 1, "meals": [_tilapia(), copy.deepcopy(_ESPECIES_NUEVAS["sardinas-lata-en-el-paso"])]}]
     antes = copy.deepcopy(dias)
     with caplog.at_level(logging.INFO):
         assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 0
     assert dias == antes
-    assert "conserva_sin_fuego" in caplog.text
+    assert "reason=especie_nueva" in caplog.text
+    assert go._days_with_same_day_protein_repeat({"days": dias}) == [1]
 
 
-def test_el_pez_fresco_se_reescribe_sin_tocar_los_garbanzos_de_lata():
-    """El pez fresco se sigue reescribiendo como en la base, y la lata de OTRO alimento del mismo paso no se toca."""
-    dias = _dia_dos_pescados("Mero guisado con garbanzos", "150 g de Filete de mero",
-                             ["Guisa el mero 15 minutos con los garbanzos cocidos (de lata, enjuagados y escurridos) "
-                              "(90 g)."])
-    assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 1
-    cena = dias[0]["meals"][1]
-    assert cena["_protein_autofix_applied"] == "pescado->pollo"
-    assert cena["recipe"] == ["Guisa pechuga de pollo 15 minutos con los garbanzos cocidos (de lata, enjuagados y "
-                              "escurridos) (90 g)."]
+@pytest.mark.parametrize("sardinas_primero", [True, False], ids=["orden-real", "trucha-primero"])
+def test_g24_co_sardinas_y_trucha_van_al_gate(sardinas_primero):
+    """G24 CO D1: las dos son especies nuevas; la ronda 5 reescribía la trucha a pollo. Ahora ninguna se toca."""
+    sard = {"meal": "Almuerzo", "name": "Ensalada Fresca Estilo Ceviche con Sardinas, Garbanzos y Plátano Maduro Dorado",
+            "ingredients": ["110 g de sardinas en lata escurridas",
+                            "½ taza de garbanzos cocidos (de lata, enjuagados y escurridos)", "½ plátano maduro"],
+            "recipe": ["Mise en place: escurre bien los 110 g de sardinas en lata y desmenúzalas.",
+                       "Montaje: marina las sardinas 5 minutos con el jugo de limón y sirve."]}
+    tru = {"meal": "Cena", "name": "Arepas de Maíz Asadas Rellenas de Ricotta con Ensalada Fresca y Trucha",
+           "ingredients": ["35 g de harina de maíz precocida", "180 g de queso ricotta", "50 g de trucha cocida"],
+           "recipe": ["El Toque de Fuego: forma 2 arepas y ásalas a fuego medio 5-6 minutos por lado. Cocina trucha "
+                      "a la plancha o hervida y sírvela como proteína del plato."]}
+    dias = [{"day": 1, "meals": [sard, tru] if sardinas_primero else [tru, sard]}]
+    antes = copy.deepcopy(dias)
+    assert go._protein_repeat_autofix(dias, {"dietType": "balanced", "country": "CO"}, None) == 0
+    assert dias == antes
 
 
-def test_el_pez_fresco_en_salsa_sigue_como_antes():
-    """«en salsa de tomate» sólo es la lata en los peces que se venden así: una merluza en salsa es una preparación."""
-    dias = _dia_dos_pescados("Merluza en salsa de tomate", "150 g de Merluza",
-                             ["Cocina la merluza en salsa de tomate 10 minutos."])
-    assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 1
-    assert dias[0]["meals"][1]["name"] == "Pechuga de pollo en salsa de tomate"
-
-
-@pytest.mark.parametrize("texto,esperado", [
-    ("120 g de Sardinas en lata", True), ("1 lata de sardina (120 g)", True), ("2 latas de sardinas", True),
-    ("120 g de sardinas (de lata)", True), ("120 g de Sardinas enlatadas", True), ("120 g de Sardinas en agua", True),
-    ("100 g de Bonito del norte en aceite", True), ("80 g de Boquerones en vinagre", True),
-    ("100 g de Trucha ahumada", True), ("120 g de Caballa en escabeche", True), ("40 g de Anchoas", True),
-    ("30 g de Mojama", True),
-    ("150 g de Sardinas frescas", False), ("150 g de Merluza en salsa de tomate", False),
-    ("150 g de Tilapia con garbanzos de lata", False), ("150 g de Bacalao salado", False),
-    ("150 g de Tilapia con pimentón ahumado", False), ("150 g de Filete de tilapia", False),
-])
-def test_pez_en_conserva(texto, esperado):
-    import pescado_especies as pe
-    assert pe.pez_en_conserva({"name": "Plato", "ingredients": [texto]}, go._MAIN_PROTEIN_ALIASES["pescado"]) is esperado
-
-
-def test_pez_en_conserva_mira_los_pasos_y_no_depende_del_orden():
-    """El vinagre o la lata del PASO también cuentan («marina las sardinas en vinagre» es un boquerón crudo); el aceite o
-    el agua sólo en la lista (en un paso, «hierve las sardinas en agua» es una cocción). Pura: sin estado global
-    (r4 mutaba `_CONSERVAS` y el resultado dependía del orden de los tests)."""
-    import pescado_especies as pe
-    pez = go._MAIN_PROTEIN_ALIASES["pescado"]
-    assert pe.pez_en_conserva({"name": "X", "ingredients": ["150 g de Trucha"]}, ["trucha"]) is False
-    assert pe.pez_en_conserva({"name": "Sardinas", "ingredients": ["150 g de Sardinas"],
-                               "recipe": ["Marina las sardinas en vinagre 2 horas."]}, pez) is True
-    assert pe.pez_en_conserva({"name": "Sardinas", "ingredients": ["150 g de Sardinas"],
-                               "recipe": ["Hierve las sardinas en agua 10 minutos."]}, pez) is False
-    assert pe.pez_en_conserva({"name": "X", "ingredients": ["120 g de Sardinas en lata"]}, pez) is True
-
-
-def test_knob_apagado_no_mira_conservas(monkeypatch):
-    import pescado_especies as pe
-    monkeypatch.setattr(pe, "BETA_FISH_SPECIES_COUNT", False)
-    assert pe.pez_en_conserva({"name": "X", "ingredients": ["120 g de Sardinas en lata"]}, ["sardina"]) is False
-    assert pe.pez_crudo({"name": "Ceviche de trucha", "ingredients": ["150 g de Trucha"]}, ["trucha"]) is False
-    assert pe.guardiana_y_conservas("pescado", [{"name": "Tilapia"}, {"name": "Sardinas en lata"}], ["sardina"], 0) \
-        == (0, {})
-
-
-# ── ronda 5 · el pez CRUDO tampoco pasa a pollo crudo ────────────────────────────────────────────────────
-
-
-_CRUDOS = [
-    # la sonda del propio revisor r4 (probe.py): salía «Sirve pechuga de pollo marinadas al limón»
-    ("Sardinas marinadas", "120 g de Sardinas marinadas", ["Sirve las sardinas marinadas al limón."]),
-    ("Ceviche de trucha", "150 g de Trucha", ["Marina la trucha en jugo de limón 20 minutos.", "Sirve frío."]),
-    ("Tiradito de corvina", "120 g de Corvina", ["Corta la corvina en láminas finas y báñala con leche de tigre."]),
-    ("Ensalada con boquerones", "80 g de Boquerones crudos", ["Limpia los boquerones y alíñalos con limón."]),
-]
-
-
-@pytest.mark.parametrize("nombre,linea,pasos", _CRUDOS, ids=[c[0] for c in _CRUDOS])
-def test_el_pez_crudo_se_queda_y_se_cambia_el_pez_que_se_cuece(nombre, linea, pasos):
-    dias = _dia_dos_pescados(nombre, linea, pasos)
-    cena_antes = copy.deepcopy(dias[0]["meals"][1])
-    assert go._protein_repeat_autofix(dias, {"dietType": "balanced", "country": "DO"}, None) == 1
-    alm, cena = dias[0]["meals"]
-    assert cena == cena_antes, "el pez crudo no se toca"
-    assert alm.get("_protein_autofix_applied") == "pescado->pollo"
-
-
-def test_el_pez_marinado_que_luego_se_hornea_se_reescribe_como_antes():
-    """La señal cruda no basta: si una cláusula lo cuece (aunque sea con un enclítico: «…; luego hornéala»), o el nombre
-    declara la cocción, el pez se reescribe como en la base."""
-    import pescado_especies as pe
-    pez = go._MAIN_PROTEIN_ALIASES["pescado"]
-    marinada = {"name": "Tilapia con arroz", "ingredients": ["150 g de Filete de tilapia marinada"],
-                "recipe": ["Marina la tilapia con limón 10 minutos; luego hornéala 20 minutos a 200 °C."]}
-    assert pe.pez_crudo(marinada, pez) is False
-    assert pe.pez_crudo({"name": "Tilapia marinada al horno", "ingredients": ["150 g de tilapia marinada"],
-                         "recipe": ["Hornea 20 minutos a 200 °C."]}, pez) is False
-    # réplica 63eedc6b (locrio): el «crudo» es del arroz, no del pez — la señal tiene que ir PEGADA al pez
-    assert pe.pez_crudo({"name": "Locrio de mero", "ingredients": ["150 g de Filete de mero"], "recipe": [
-        "Incorpora el mero en trozos grandes, remueve con cuidado y agrega el arroz, que se pesa en crudo. Revuelve, "
-        "cubre con agua y cocina a fuego alto hasta que rompa hervor; tapa y cocina unos 15-18 minutos."]}, pez) is False
+def test_el_reescritor_usa_los_alias_de_antes_del_lote():
+    """Revisión r5 (no bloquea): «emplatado bonito» salía «emplatado pechuga de pollo». El reescritor ya no conoce las
+    especies nuevas: la tilapia pasa a pollo y el adjetivo se queda."""
     dias = [{"day": 1, "meals": [
         {"meal": "Almuerzo", "name": "Mero a la plancha", "ingredients": ["150 g de Filete de mero"],
          "recipe": ["Cocina el mero a la plancha 4 minutos por lado."]},
-        {"meal": "Cena", **copy.deepcopy(marinada)}]}]
+        {"meal": "Cena", "name": "Tilapia al horno con papas", "ingredients": ["150 g de Filete de tilapia"],
+         "recipe": ["Hornea la tilapia 20 minutos.", "Corta las papas para un emplatado bonito y sirve."]},
+    ]}]
+    assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 1
+    cena = dias[0]["meals"][1]
+    assert cena["_protein_autofix_applied"] == "pescado->pollo"
+    assert cena["recipe"] == ["Hornea pechuga de pollo 20 minutos.", "Corta las papas para un emplatado bonito y sirve."]
+    assert {"trucha", "sardina", "bonito", "caballa", "anchoa"} <= set(go._PEZ_NUEVO)
+    assert not {"tilapia", "mero", "corvina", "pescado", "bacalao"} & set(go._PEZ_NUEVO), "la base no es nueva"
+
+
+# (2) Guarda general: la base de antes del lote (atún, corvina, mero, camarones…) tampoco se reescribe cuando el pez es
+# conserva/precocido, crudo o servido frío. Formas del revisor y de la base.
+_PEZ_LISTO_CRUDO_FRIO = {
+    # la base: «Ensalada de atún… sirve frío» salía «Escurre pechuga de pollo y mézclala… Sirve frío»
+    "atun-ensalada-sirve-frio": ("atun", _comida("Ensalada de atún", ["120 g de Atún", "1 taza de Lechuga"],
+                                                 ["Escurre el atún y mézclalo con la lechuga.", "Sirve frío."])),
+    "atun-en-agua": ("atun", _comida("Wrap de atún", ["120 g de atún en agua", "1 tortilla"],
+                                     ["Rellena la tortilla con el atún."])),
+    "lata-de-atun": ("atun", _comida("Arroz con atún", ["1 lata de atún (120 g)", "1 taza de Arroz"],
+                                     ["Mezcla el atún con el arroz caliente."])),
+    "atun-en-conserva": ("atun", _comida("Pasta con atún", ["120 g de Atún en conserva", "1 taza de Pasta"],
+                                         ["Incorpora el atún a la pasta."])),
+    # el revisor: ceviche de corvina (especie de la base) blanqueado 1-2 min antes de marinar
+    "ceviche-de-corvina-blanqueado": ("pescado", _comida("Ceviche de corvina", ["150 g de Corvina", "1 limón"],
+                                                         [_BLANQUEO.format(a="la corvina"), "Sirve frío."])),
+    "tiradito-de-corvina": ("pescado", _comida("Tiradito de corvina", ["120 g de Corvina"],
+                                               ["Corta la corvina en láminas finas y báñala con leche de tigre."])),
+    "mero-marinado-sin-fuego": ("pescado", _comida("Mero marinado al limón", ["150 g de Filete de mero marinado"],
+                                                   ["Marina el mero en jugo de limón 30 minutos y sirve."])),
+    "salmon-ahumado": ("pescado", _comida("Tosta de salmón ahumado", ["80 g de Salmón ahumado", "1 pan"],
+                                          ["Coloca el salmón ahumado sobre la tosta."])),
+    "pescado-ya-viene-cocido": ("pescado", _comida("Arroz con pescado", ["120 g de Filete de pescado", "1 taza de Arroz"],
+                                                   ["Escurre e incorpora filete de pescado (ya viene cocido) al arroz."])),
+    "ensalada-fria-de-merluza": ("pescado", _comida("Ensalada fría de merluza", ["120 g de Merluza", "1 tomate"],
+                                                    ["Cocina la merluza al vapor 8 minutos.", "Mezcla con el tomate."])),
+    "coctel-de-camarones-frio": ("camarones", _comida("Cóctel de camarones", ["120 g de Camarones cocidos"],
+                                                      ["Mezcla los camarones con la salsa rosada y sirve frío."])),
+}
+_GUISOS = {"atun": _comida("Atún guisado con arroz", ["150 g de Atún fresco", "1 taza de Arroz"],
+                           ["Guisa el atún 15 minutos en salsa de tomate."], slot="Almuerzo"),
+           "pescado": {**_tilapia()},
+           "camarones": _comida("Camarones al ajillo", ["150 g de Camarones", "1 taza de Arroz"],
+                                ["Saltea los camarones con ajo 5 minutos."], slot="Almuerzo")}
+
+
+@pytest.mark.parametrize("otro_primero", [True, False], ids=["cocinado-primero", "listo-primero"])
+@pytest.mark.parametrize("clave", list(_PEZ_LISTO_CRUDO_FRIO))
+def test_nunca_se_reescribe_un_pez_listo_crudo_o_frio(clave, otro_primero):
+    etiqueta, comida = _PEZ_LISTO_CRUDO_FRIO[clave]
+    comida = copy.deepcopy(comida)
+    antes = copy.deepcopy(comida)
+    guiso = copy.deepcopy(_GUISOS[etiqueta])
+    dias = [{"day": 1, "meals": [guiso, comida] if otro_primero else [comida, guiso]}]
+    assert go._days_with_same_day_protein_repeat({"days": dias}) == [1]
+    go._protein_repeat_autofix(dias, {"dietType": "balanced", "country": "DO"}, None)
+    assert comida == antes, "el pez listo, crudo o frío no se reescribe"
+
+
+_FORMAS_PELIGROSAS = [c for c in _ESPECIES_NUEVAS.values()] + [c for _, c in _PEZ_LISTO_CRUDO_FRIO.values()]
+
+
+@pytest.mark.parametrize("i", range(len(_FORMAS_PELIGROSAS)))
+def test_nunca_sale_pollo_con_lata_frio_o_marinado_crudo(i):
+    """La propiedad que las cinco rondas perseguían: en ninguna combinación sale «pechuga de pollo» (o pavo) en una
+    comida que habla de lata, de servir frío o de marinar sin fuego."""
+    comida = _FORMAS_PELIGROSAS[i]
+    for otro in _GUISOS.values():
+        for orden in (0, 1):
+            m = [copy.deepcopy(otro), copy.deepcopy(comida)]
+            dias = [{"day": 1, "meals": m if orden == 0 else m[::-1]}]
+            go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None)
+            for meal in dias[0]["meals"]:
+                if not meal.get("_protein_autofix_applied"):
+                    continue
+                blob = " ".join(str(t) for t in _textos(meal)).lower()
+                assert not re.search(r"\blatas?\b|enlatad|ya viene cocid|\bfr[ií][oa]s?\b|\bmarin|ceviche|tiradito", blob), \
+                    (meal.get("_protein_autofix_applied"), blob[:300])
+
+
+@pytest.mark.parametrize("etiqueta,comida,motivo", [
+    ("pescado", _ESPECIES_NUEVAS["trucha-cocida"], "especie_nueva"),
+    ("pescado", _comida("Sardinas", ["90 g de Sardinas"], ["Sirve."]), "especie_nueva"),
+    ("atun", _PEZ_LISTO_CRUDO_FRIO["atun-en-agua"][1], "pez_en_conserva"),
+    ("atun", _PEZ_LISTO_CRUDO_FRIO["lata-de-atun"][1], "pez_en_conserva"),
+    ("pescado", _PEZ_LISTO_CRUDO_FRIO["salmon-ahumado"][1], "pez_en_conserva"),
+    ("pescado", _PEZ_LISTO_CRUDO_FRIO["pescado-ya-viene-cocido"][1], "pez_en_conserva"),
+    ("pescado", _PEZ_LISTO_CRUDO_FRIO["ceviche-de-corvina-blanqueado"][1], "pez_crudo"),
+    ("pescado", _PEZ_LISTO_CRUDO_FRIO["mero-marinado-sin-fuego"][1], "pez_crudo"),
+    ("atun", _PEZ_LISTO_CRUDO_FRIO["atun-ensalada-sirve-frio"][1], "pez_servido_frio"),
+    ("pescado", _PEZ_LISTO_CRUDO_FRIO["ensalada-fria-de-merluza"][1], "pez_servido_frio"),
+    ("camarones", _PEZ_LISTO_CRUDO_FRIO["coctel-de-camarones-frio"][1], "pez_servido_frio"),
+    # lo que se reescribe como en la base
+    ("pescado", _tilapia(), None),
+    ("pescado", _comida("Tilapia marinada al horno", ["150 g de tilapia marinada"], ["Hornea 20 minutos a 200 °C."]),
+     None),
+    ("pescado", _comida("Tilapia con arroz", ["150 g de Filete de tilapia marinada"],
+                        ["Marina la tilapia con limón 10 minutos; luego hornéala 20 minutos a 200 °C."]), None),
+    ("pescado", _comida("Merluza en salsa de tomate", ["150 g de Merluza"],
+                        ["Cocina la merluza en salsa de tomate 10 minutos."]), None),
+    # réplica 63eedc6b (locrio): el «crudo» es del arroz, no del pez
+    ("pescado", _comida("Locrio de mero", ["150 g de Filete de mero"], [
+        "Incorpora el mero en trozos grandes y agrega el arroz, que se pesa en crudo. Cubre con agua y cocina a fuego "
+        "alto hasta que rompa hervor; tapa y cocina unos 15-18 minutos."]), None),
+    ("atun", _GUISOS["atun"], None),
+    ("camarones", _GUISOS["camarones"], None),
+    # carne: la guarda es del mar
+    ("pollo", _comida("Ensalada fría de pollo", ["120 g de pollo en lata"], ["Sirve frío."]), None),
+])
+def test_motivo_para_no_reescribir(etiqueta, comida, motivo):
+    import pescado_especies as pe
+    assert pe.motivo_para_no_reescribir(etiqueta, comida, go._MAIN_PROTEIN_ALIASES.get(etiqueta, ()), go._PEZ_NUEVO,
+                                        go._PRECOOKED_PROTEIN_HINT, go._diet_pool_item_banned) == motivo
+
+
+def test_la_conserva_sale_de_la_lista_del_cerrador():
+    """SSOT: `_PRECOOKED_PROTEIN_HINT` (el cerrador escribe «ya viene cocido» con ella). «sardina» sin «fresca» es
+    conserva, como anchoa y mojama; «sardinas frescas» no (y además es especie nueva)."""
+    import pescado_especies as pe
+    pez = go._MAIN_PROTEIN_ALIASES["pescado"]
+    for linea in ("90 g de Sardinas", "40 g de Anchoas", "30 g de Mojama", "120 g de sardinas en aceite"):
+        assert pe.motivo_para_no_reescribir("pescado", _comida("X", [linea], ["Sirve."]), pez, (),
+                                            go._PRECOOKED_PROTEIN_HINT, go._diet_pool_item_banned) == "pez_en_conserva", linea
+    assert pe.motivo_para_no_reescribir("pescado", _comida("X", ["150 g de Sardinas frescas"],
+                                                           ["Cocina las sardinas a la plancha 3 minutos."]),
+                                        pez, (), go._PRECOOKED_PROTEIN_HINT, go._diet_pool_item_banned) is None
+    src = (_BACKEND / "pescado_especies.py").read_text(encoding="utf-8")
+    assert "_v7f_evidencia" in src, "la cocción se mide con el criterio de V7f"
+    for retirado in ("def pez_en_conserva", "def pez_crudo", "def guardiana_y_conservas", "PECES_DE_LATA"):
+        assert retirado not in src, retirado
+
+
+def test_el_autofix_llama_a_la_guarda_con_el_ssot():
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    cuerpo = src.split("def _protein_repeat_autofix", 1)[1].split("\ndef ", 1)[0]
+    assert "motivo_para_no_reescribir" in cuerpo and "_PRECOOKED_PROTEIN_HINT" in cuerpo and "_PEZ_NUEVO" in cuerpo
+    assert "guardiana_y_conservas" not in cuerpo
+    # la guardiana es la de la base: la primera comida con la proteína en el nombre
+    assert "_keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)" in cuerpo
+
+
+def test_la_guarda_general_tiene_knob(monkeypatch):
+    """`MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD=false` ⇒ la conducta de la base: el atún frío se reescribe."""
+    import pescado_especies as pe
+    ens = _PEZ_LISTO_CRUDO_FRIO["atun-ensalada-sirve-frio"][1]
+    monkeypatch.setattr(pe, "PEZ_LISTO_GUARD", False)
+    dias = [{"day": 1, "meals": [copy.deepcopy(_GUISOS["atun"]), copy.deepcopy(ens)]}]
+    assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 1
+    assert dias[0]["meals"][1]["_protein_autofix_applied"] == "atun->pollo"
+    monkeypatch.setattr(pe, "PEZ_LISTO_GUARD", True)
+    dias = [{"day": 1, "meals": [copy.deepcopy(_GUISOS["atun"]), copy.deepcopy(ens)]}]
+    assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 0
+
+
+def test_knob_de_especies_apagado_no_marca_especie_nueva(monkeypatch):
+    import pescado_especies as pe
+    monkeypatch.setattr(pe, "BETA_FISH_SPECIES_COUNT", False)
+    assert pe.motivo_para_no_reescribir("pescado", _ESPECIES_NUEVAS["trucha-cocida"], ["pescado", "trucha"],
+                                        ["trucha"], go._PRECOOKED_PROTEIN_HINT, go._diet_pool_item_banned) is None
+
+
+def test_el_pez_cocinado_de_la_base_se_reescribe_como_antes():
+    dias = [{"day": 1, "meals": [
+        {"meal": "Almuerzo", "name": "Mero a la plancha", "ingredients": ["150 g de Filete de mero"],
+         "recipe": ["Cocina el mero a la plancha 4 minutos por lado."]},
+        _comida("Tilapia con arroz", ["150 g de Filete de tilapia marinada"],
+                ["Marina la tilapia con limón 10 minutos; luego hornéala 20 minutos a 200 °C."])]}]
     assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 1
     assert dias[0]["meals"][1]["_protein_autofix_applied"] == "pescado->pollo"
-    assert "hornéala" in dias[0]["meals"][1]["recipe"][0]
-
-
-def test_la_impotencia_nombra_el_motivo(caplog):
-    dias = [{"day": 1, "meals": [
-        {"meal": "Almuerzo", "name": "Ceviche de corvina", "ingredients": ["150 g de Corvina"],
-         "recipe": ["Marina la corvina en limón 20 minutos."]},
-        {"meal": "Cena", "name": "Ensalada de sardinas", "ingredients": ["120 g de Sardinas en lata"],
-         "recipe": ["Escurre las sardinas y sírvelas."]},
-    ]}]
-    with caplog.at_level(logging.INFO):
-        assert go._protein_repeat_autofix(dias, {"dietType": "balanced"}, None) == 0
-    assert "reason=conserva_sin_fuego" in caplog.text
 
 
 def test_sin_compuestos_de_conserva_en_el_reescritor():
-    """r4 metía 2 078 frases en `_PROTEIN_SOURCE_COMPOUNDS['pescado']` para reescribir la lata entera; como la conserva
-    ya no se reescribe, sobran (y con ellas el filtro de coste y la limpieza de pasos que rompía los garbanzos)."""
     assert go._PROTEIN_SOURCE_COMPOUNDS["pescado"] == ("filete de pescado blanco", "pescado blanco", "filete de pescado")
 
 
@@ -378,7 +412,8 @@ _PESCETARIANOS = ("pescetariano", "Pescetariana", "pescatarian")
 @pytest.mark.parametrize("dieta", _PESCETARIANOS)
 @pytest.mark.parametrize("cena", [
     ("Mero a la plancha con ensalada", "150 g de Filete de mero", ["Cocina el mero a la plancha 4 minutos por lado."]),
-    _CONSERVAS[0],
+    ("Ensalada de sardinas en lata con aguacate", "120 g de Sardinas en lata",
+     ["Escurre las sardinas en lata y mézclalas con el aguacate.", "Montaje: sirve frío."]),
 ], ids=["mero", "sardinas-en-lata"])
 def test_pescetariano_nunca_recibe_carne(dieta, cena):
     """Base: tilapia + mero con dieta pescetariana → «Pechuga de pollo a la plancha». El pescado sólo se cambia por
@@ -460,7 +495,8 @@ def test_anchoas_son_pescado():
 
 def test_knobs_documentados():
     doc = (_BACKEND / "docs" / "knobs_reference.md").read_text(encoding="utf-8")
-    for knob in ("MEALFIT_BETA_FISH_SPECIES_COUNT", "MEALFIT_STAPLE_TOKEN_MATCH"):
+    for knob in ("MEALFIT_BETA_FISH_SPECIES_COUNT", "MEALFIT_STAPLE_TOKEN_MATCH",
+                 "MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD"):
         assert knob in doc, knob
     assert "P1-PLAN-LOTE-857" in doc
 
@@ -480,7 +516,8 @@ def test_knobs_en_el_inventario_del_arranque():
     assert out.returncode == 0, out.stderr[-2000:]
     inventario = [ln for ln in out.stdout.splitlines() if "[KNOBS/INVENTORY]" in ln]
     assert inventario, "el arranque no emitió el inventario de knobs"
-    for knob in ("MEALFIT_BETA_FISH_SPECIES_COUNT", "MEALFIT_STAPLE_TOKEN_MATCH"):
+    for knob in ("MEALFIT_BETA_FISH_SPECIES_COUNT", "MEALFIT_STAPLE_TOKEN_MATCH",
+                 "MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD"):
         assert knob + "=" in inventario[-1], knob
 
 

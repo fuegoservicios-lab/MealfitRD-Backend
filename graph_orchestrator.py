@@ -14095,7 +14095,7 @@ _ALLERGEN_SYNONYMS = {
     "sesamo": ["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
                "semillas de sesamo", "gomasio", "halva", *__import__("vocabulario_alergenos").EXTRA["sesamo"]],  # [P1-PLAN-LOTE-252]
 }
-__import__("pescado_especies").extender_pescado(_MAIN_PROTEIN_ALIASES, _ALLERGEN_SYNONYMS["pescado"])  # [P1-PLAN-LOTE-857] trucha/sardina sí, «dorado» no
+_PEZ_NUEVO = tuple(__import__("pescado_especies").extender_pescado(_MAIN_PROTEIN_ALIASES, _ALLERGEN_SYNONYMS["pescado"])[0])  # [P1-PLAN-LOTE-857] trucha/sardina detectan, «dorado» no; el autofix no las reescribe
 
 
 # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La MITAD DECLARATIVA del vocabulario de alergias.
@@ -29860,7 +29860,7 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
             _all_aliases = tuple(
                 _al for _al in (tuple(_MAIN_PROTEIN_ALIASES.get(src, ())) +
                                 _PROTEIN_SOURCE_COMPOUNDS.get(src, ()))
-                if _sa_pr(str(_al).lower()) not in _PROTEIN_ALIAS_REWRITE_HOMONYMS
+                if _sa_pr(str(_al).lower()) not in _PROTEIN_ALIAS_REWRITE_HOMONYMS and _al not in _PEZ_NUEVO  # [P1-PLAN-LOTE-857] los alias de antes del lote
             )
             for _al in sorted(_all_aliases, key=len, reverse=True):
                 repl = (forms["molido"] if "molid" in _sa_pr(_al)
@@ -30106,13 +30106,14 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     _eff_ladder = _eff_ladder + _fb
                 # conservar la PRIMERA comida con la proteína en el nombre (identidad); si ninguna
                 # la lleva en el nombre, conservar la primera aparición.
-                # [P1-PLAN-LOTE-857] el pez en conserva o CRUDO se queda (su receta no cuece carne cruda); se cambia el otro
-                _keep_idx, _intocables = __import__("pescado_especies").guardiana_y_conservas(_lbl, [m for m, _ in hits], _MAIN_PROTEIN_ALIASES.get(_lbl, ()), next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0))
+                _keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)
                 for i, (_meal, _) in enumerate(hits):
                     if i == _keep_idx or fixes_left <= 0:
                         continue
-                    if _receta_congelada(_meal) or i in _intocables:  # [P1-PLAN-LOTE-46] / [P1-PLAN-LOTE-857]
-                        _log_autofix_impotent(_d.get("day", "?"), _lbl, _intocables.get(i, "receta_congelada"), _meal.get("name"))
+                    # [P1-PLAN-LOTE-46] / [P1-PLAN-LOTE-857] especie nueva o pez listo/crudo/frío: no se toca, decide el gate
+                    _no = "receta_congelada" if _receta_congelada(_meal) else __import__("pescado_especies").motivo_para_no_reescribir(_lbl, _meal, _MAIN_PROTEIN_ALIASES.get(_lbl, ()), _PEZ_NUEVO, _PRECOOKED_PROTEIN_HINT, _diet_pool_item_banned)
+                    if _no:
+                        _log_autofix_impotent(_d.get("day", "?"), _lbl, _no, _meal.get("name"))
                         continue
                     # [P1-RECIPE-QUALITY-100 · 2026-07-10] contexto DULCE/LIGERO: el closer ya tenía
                     # sweet/light-guard pero este autofix NO — escribía pescado/camarones en meriendas

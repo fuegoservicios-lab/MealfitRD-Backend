@@ -62,8 +62,14 @@ def test_ladder_targets_have_forms():
 # 2. El caso vivo: atún ×2 same-day se corrige SIN 'lata de pollo en agua'
 # ---------------------------------------------------------------------------
 
-def test_atun_repeat_fixed_with_clean_compound_rewrite():
+def test_atun_repeat_fixed_with_clean_compound_rewrite(monkeypatch):
+    """[P1-PLAN-LOTE-857 · 2026-09-29] Con la guarda de pez listo/crudo/frío ENCENDIDA (default), el atún en agua ya no
+    se reescribe: «Mezcla el atún en agua con la lechuga» salía «Mezcla pechuga de pollo con la lechuga» — pollo crudo
+    en una ensalada. Decide el gate (abajo). La maquinaria de compuestos se sigue probando con la guarda apagada."""
+    import copy
+    import pescado_especies
     from graph_orchestrator import _protein_repeat_autofix
+    monkeypatch.setattr(pescado_especies, "PEZ_LISTO_GUARD", False)
     d = _day([
         _meal("Ensalada de Atún en Agua", "Almuerzo",
               ["120 g de atún en agua", "50 g de lechuga"],
@@ -82,6 +88,16 @@ def test_atun_repeat_fixed_with_clean_compound_rewrite():
     _atun_meals = sum(1 for m in d["meals"] if "atun" in (m["name"] + " " + " ".join(m["ingredients"])).lower()
                       or "atún" in (m["name"] + " " + " ".join(m["ingredients"])).lower())
     assert _atun_meals == 1
+    # [P1-PLAN-LOTE-857] guarda encendida: la conserva no se reescribe
+    monkeypatch.setattr(pescado_especies, "PEZ_LISTO_GUARD", True)
+    d2 = _day([
+        _meal("Ensalada de Atún en Agua", "Almuerzo", ["120 g de atún en agua", "50 g de lechuga"],
+              ["Mezcla el atún en agua con la lechuga."]),
+        _meal("Wrap de Atún", "Cena", ["100 g de atún en agua", "1 tortilla"], ["Rellena la tortilla con el atún."]),
+    ])
+    antes = copy.deepcopy(d2)
+    assert _protein_repeat_autofix([d2], {"mainGoal": "lose_fat"}) == 0
+    assert d2 == antes
 
 
 def test_camarones_repeat_fixed():

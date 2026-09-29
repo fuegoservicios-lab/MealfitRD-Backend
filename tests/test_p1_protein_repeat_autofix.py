@@ -183,14 +183,21 @@ def test_huevo_protagonists_and_atun_now_fixed(go):
     # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] atún YA NO está excluido: la exclusión v1
     # ("lata de pollo en agua") se resolvió con compuestos largos-primero; el caso vivo
     # corr=c0a950c6 (no_ladder_for_label → rechazo de plan completo) exigió la escalera.
+    # [P1-PLAN-LOTE-857 · 2026-09-29] …salvo que el atún sea de lata: la guarda de pez listo/crudo/frío no reescribe
+    # una conserva (su receta no cuece la carne que entraría); decide el gate. El atún fresco sí se corrige.
     days2 = [{"day": 1, "meals": [
         _meal("Almuerzo", "Ensalada de Atún", ["1 lata de atún en agua"]),
         _meal("Cena", "Wrap de Atún", ["1 lata de atún en agua"]),
     ]}]
-    fixed = go._protein_repeat_autofix(days2, {}, db=object())
+    assert go._protein_repeat_autofix(days2, {}, db=object()) == 0, "la conserva no se reescribe"
+    days3 = [{"day": 1, "meals": [
+        _meal("Almuerzo", "Atún a la plancha", ["150 g de atún fresco"]),
+        _meal("Cena", "Atún guisado con arroz", ["150 g de atún fresco", "1 taza de arroz"]),
+    ]}]
+    fixed = go._protein_repeat_autofix(days3, {}, db=object())
     assert fixed >= 1, "atún ×2 same-day debe corregirse (escalera + compounds)"
-    _blob = " ".join(str(x) for m in days2[0]["meals"] for x in (m["ingredients"] + [m["name"]]))
-    assert "lata de pollo" not in _blob.lower(), "el compound reescribe la frase enlatada ENTERA"
+    _blob = " ".join(str(x) for m in days3[0]["meals"] for x in (m["ingredients"] + [m["name"]]))
+    assert "pollo" in _blob.lower() and "lata de pollo" not in _blob.lower()
 
 
 def test_high_mealcount_relax_mirrors_gate(go):
