@@ -29,6 +29,15 @@ _PART_RE = re.compile(r"(?P<b>[a-záéíóúñü]+(?:ad|id))(?P<g>[oa])s\b", re.
 _COORD_RE = re.compile(r"(?:\by|,)\s*$", re.IGNORECASE)
 _NOTA_RE = re.compile(r"^\s*(?:⚠|🤰|⚕|🌱|🛡|💡(?!\s*cocci)|nota\b)", re.IGNORECASE)
 
+# ── [P1-PLAN-LOTE-886 · 2026-09-29] «suma pechuga de pollo desmenuzado» → «desmenuzada»: el participio concuerda con el
+# NÚCLEO. Corpus (426 planes): 33 pasos «pechuga de pollo guisado / desmenuzado / horneado», «pechuga de pavo cocido» — el
+# modelo escribió «el pollo desmenuzado» y el nombre de la lista («pechuga de pollo») entró delante: el participio siguió
+# concordando con «pollo». Sólo cortes femeninos de carne + su animal + un participio PEGADO; el número lo da el núcleo.
+# Nunca «lonja/rebanada de …» (ahí el participio sí es del complemento: «lonja de pavo ahumado»). Sólo pasos, no notas.
+# Knob `MEALFIT_PARTICIPLE_HEAD_AGREEMENT` (True). tooltip-anchor: P1-PLAN-LOTE-886
+_NUCLEO_886_RE = re.compile(r"\b(?:pechuga|pierna|chuleta|costilla|carne)(?P<np>s?)\s+de\s+(?:pollo|pavo|res|cerdo|cordero|"
+                            r"chivo|conejo)\s+(?P<b>[a-záéíóúñü]+?(?:ad|id)|frit)o(?P<s>s?)\b", re.IGNORECASE)
+
 
 def on() -> bool:
     try:
@@ -36,6 +45,21 @@ def on() -> bool:
         return _env_bool("MEALFIT_PARTICIPLE_AGREEMENT", True)
     except Exception:                                                          # noqa: BLE001
         return True
+
+
+def on_nucleo() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_PARTICIPLE_HEAD_AGREEMENT", True)
+    except Exception:                                                          # noqa: BLE001
+        return True
+
+
+def concordar_nucleo(texto: str) -> str:
+    """«pechuga de pollo guisado» → «pechuga de pollo guisada»; «pechugas de pavo cocidos» → «cocidas»."""
+    def _sub(m):
+        return m.group(0)[:m.end("b") - m.start()] + "a" + ("s" if m.group("np") else "")
+    return _NUCLEO_886_RE.sub(_sub, texto)
 
 
 def concordar(texto: str) -> str:
@@ -53,7 +77,8 @@ def concordar(texto: str) -> str:
 def concordar_pasos(meal) -> int:
     """Nº de pasos corregidos; 0 ante cualquier error."""
     try:
-        if not on() or not isinstance(meal, dict):
+        numero, nucleo = on(), on_nucleo()                  # [P1-PLAN-LOTE-886] cada arreglo con su knob
+        if not (numero or nucleo) or not isinstance(meal, dict):
             return 0
         rec = meal.get("recipe")
         if not isinstance(rec, list):
@@ -62,7 +87,9 @@ def concordar_pasos(meal) -> int:
         for i, p in enumerate(rec):
             if not isinstance(p, str) or _NOTA_RE.search(p):
                 continue
-            q = concordar(p)
+            q = concordar(p) if numero else p
+            if nucleo:
+                q = concordar_nucleo(q)
             if q != p:
                 rec[i] = q
                 n += 1
