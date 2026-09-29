@@ -488,6 +488,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `check_clinical_profile` SOLO cuando el usuario pregunte por sus laboratorios o valores clínicos ('¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis labs afectan el plan?'). Cita los valores tal cual, interpreta con prudencia de coach (NO diagnostiques) y recuérdale que no sustituye una consulta médica.
 {_plan_day_tool_bullet()}
 {_meal_proposal_bullet()}
+{_app_settings_bullet()}
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}
@@ -495,6 +496,17 @@ TIENES HERRAMIENTAS DISPONIBLES:
 3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.
 
 El user_id del usuario actual es: {user_id}"""
+
+
+# [P1-PLAN-LOTE-900 · 2026-09-29] «Activa la hidratación» acabó en un vaso anotado: el coach no sabía que puede tocar
+# los ajustes de la app. Un solo texto para los dos builders.
+def _app_settings_bullet() -> str:
+    return ("- Usa `cambiar_ajuste_de_la_app` cuando pida cambiar algo de la APP (encender u ocultar la tarjeta de "
+            "Hidratación, la Nevera, la memoria, pausar o encender los planes, recordatorios, tema, idioma): «activa la "
+            "hidratación» es ENCENDER LA TARJETA, no anotar un vaso. Usa `abrir_pantalla_de_la_app` cuando pida ir a una "
+            "pantalla («llévame a la Nevera»). Lo que no puedes hacer tú (borrar la cuenta, cancelar la suscripción, dar "
+            "consentimientos, el permiso de notificaciones del teléfono): ábrele la pantalla y dile dónde tocar. NUNCA "
+            "le digas que lo haga él en Configuración si una de estas dos herramientas lo hace.")
 
 
 def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
@@ -514,6 +526,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `check_clinical_profile` SOLO si pregunta por sus laboratorios/valores clínicos ('¿cómo está mi glucosa?'). Cita valores tal cual, prudencia de coach (NO diagnostiques), recuerda que no sustituye consulta médica.
 {_plan_day_tool_bullet()}
 {_meal_proposal_bullet()}
+{_app_settings_bullet()}
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}

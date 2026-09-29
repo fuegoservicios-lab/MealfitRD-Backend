@@ -4271,6 +4271,10 @@ class ChatState(MessagesState):
     # también alimenta la lista de compras para re-stock).
     # Default: None — sin items agotados en el turn.
     pantry_depleted_items: list | None
+    # [P1-PLAN-LOTE-900 · 2026-09-29] Ajustes de la app que el coach cambió en ESTE turno (`cambiar_ajuste_de_la_app`,
+    # `abrir_pantalla_de_la_app`): {hidratacion: bool, tema: 'dark', pantalla: 'nevera', …}. Viaja en el `done` como
+    # `ajustes_de_app` y la pantalla lo aplica (`utils/ajustesDelCoach.js`). Fuera del schema LangGraph lo descarta.
+    ajustes_de_app: dict | None
     # [P1-DIARY-CLAIM-VERIFY · 2026-07-31] Tope del reintento cuando el modelo
     # afirma haber registrado una comida sin llamar `log_consumed_meal`
     # (ver `route_tools` / `nudge_diary_tool`).
@@ -4688,6 +4692,7 @@ def execute_tools(state: ChatState):
     # [P3-AGENT-DEPLETE · 2026-05-22] Acumular items agotados de este turn
     # (LLM puede emitir múltiples tool_calls; concatenamos).
     pantry_depleted_items = list(state.get("pantry_depleted_items") or [])
+    ajustes_de_app = dict(state.get("ajustes_de_app") or {})   # [P1-PLAN-LOTE-900] se acumulan en el turno
 
     tool_messages = []
     
@@ -4985,6 +4990,12 @@ def execute_tools(state: ChatState):
                     for t in agent_tools:
                         if t.name == tool_name:
                             tool_result = t.invoke(tool_args)
+                            # [P1-PLAN-LOTE-900] El cambio para la pantalla sale del resultado: el modelo no ve el JSON.
+                            if isinstance(tool_result, str) and "<<AJUSTE_APP_JSON:" in tool_result:
+                                from ajustes_de_la_app import extraer_marcador
+                                tool_result, _ajuste = extraer_marcador(tool_result)
+                                if _ajuste:
+                                    ajustes_de_app.update(_ajuste)
                             # [P3-AGENT-DEPLETE · 2026-05-22] Si la tool inyectó
                             # marker `<<PANTRY_DEPLETED_JSON: [...]>>` en el
                             # tool_result, extraerlo + acumular al state +
@@ -5101,6 +5112,7 @@ def execute_tools(state: ChatState):
         # agotados en este turn (de `modify_pantry_inventory(items_to_deplete)`).
         # SSE `done` lo emite; AgentPage.jsx merge a localStorage.
         "pantry_depleted_items": pantry_depleted_items if pantry_depleted_items else None,
+        "ajustes_de_app": ajustes_de_app or None,
     }
 
 # ============================================================
@@ -7208,6 +7220,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "turn_plate_photos": [],
         "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
         "modo_voz": False,            # [P1-PLAN-LOTE-686] el chat sin stream nunca es modo voz
+        "ajustes_de_app": None,       # [P1-PLAN-LOTE-900] del turno
         "photo_log_retried": False,
         "plate_photo_retried": False,
     }
@@ -7843,6 +7856,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "coherence_warnings": [],
         "pantry_modified_at": None,
         "pantry_depleted_items": None,
+        "ajustes_de_app": None,
         "diary_claim_retried": False,
         # [P1-PLAN-LOTE-168] las fotos de plato de ESTE turno y el tope de su reintento
         "turn_plate_photos": _plate_photos_from_vision(vision),
@@ -8253,6 +8267,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # agotados (vía `modify_pantry_inventory(items_to_deplete)`).
     # Default None — sin items agotados, frontend no toca localStorage.
     pantry_depleted_items = None
+    ajustes_de_app = None   # [P1-PLAN-LOTE-900]
 
     if final_state_snapshot and final_state_snapshot.values:
         updated_fields = final_state_snapshot.values.get("updated_fields", {})
@@ -8260,6 +8275,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         coherence_warnings = final_state_snapshot.values.get("coherence_warnings") or []
         pantry_modified_at = final_state_snapshot.values.get("pantry_modified_at")
         pantry_depleted_items = final_state_snapshot.values.get("pantry_depleted_items")
+        ajustes_de_app = final_state_snapshot.values.get("ajustes_de_app")
         final_messages = final_state_snapshot.values.get("messages", [])
         if final_messages:
             # [P1-CHAT-NARRATION-KEPT · 2026-07-28] Antes solo
@@ -8276,4 +8292,4 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
-    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app})}\n\n"

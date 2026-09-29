@@ -5489,7 +5489,43 @@ def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: 
             "nutricional; no digas que buscaste.)")
 
 
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, guardar_suplemento, buscar_etiqueta_en_internet]
+# [P1-PLAN-LOTE-900 · 2026-09-29] El coach cambia los ajustes de la app y abre sus pantallas. «Activa la hidratación»
+# acababa en un vaso de agua anotado: no había herramienta para el interruptor. La regla de cada ajuste vive en
+# `ajustes_de_la_app.py` (las mismas funciones que Configuración).
+@tool
+def cambiar_ajuste_de_la_app(user_id: str, ajuste: str, valor: str) -> str:
+    """Cambia un ajuste de la app cuando el usuario lo pide («activa la hidratación», «apaga la Nevera», «ponla en
+    modo oscuro», «cámbiala a inglés», «pausa los planes»). NO es registrar nada: «activa la hidratación» enciende la
+    TARJETA de agua del panel, no anota un vaso (para un vaso, `log_water_glass`).
+
+    ajuste (uno de):
+      - "hidratacion": mostrar u ocultar la tarjeta de agua del panel. valor "true"/"false".
+      - "nevera": activar u ocultar la Nevera (inventario). valor "true"/"false".
+      - "memoria": memoria a largo plazo del coach. valor "true"/"false".
+      - "generador_de_planes": generar planes (true) o usar la app solo como contador (false).
+      - "recordatorios_de_comida" / "recordatorios_de_agua": avisos en el teléfono. valor "true"/"false".
+      - "tema": valor "claro", "oscuro" o "sistema".
+      - "idioma": valor "espanol", "ingles", "portugues", "frances" o "italiano".
+    Úsala SOLO si el usuario lo pide claramente. El resultado dice lo que quedó: confírmalo en una frase."""
+    import ajustes_de_la_app
+    return ajustes_de_la_app.cambiar_ajuste(user_id, ajuste, valor)
+
+
+@tool
+def abrir_pantalla_de_la_app(user_id: str, pantalla: str, seccion: str = None) -> str:
+    """Lleva al usuario a una pantalla de la app cuando lo pide («llévame a la Nevera», «abre mi historial»,
+    «enséñame el progreso», «abre la configuración de alergias»). En modo voz la conversación sigue mientras navega.
+
+    pantalla (una de): "inicio", "progreso", "agente", "nevera", "recetas", "historial", "configuracion".
+    seccion (solo con "configuracion"): "general", "alergias", "capacidades", "privacidad", "super_personalizacion",
+    "perfil_clinico", "objetivo", "suscripcion".
+    Para lo que tú no puedes hacer (borrar la cuenta, cancelar la suscripción, dar consentimientos, permitir las
+    notificaciones del teléfono) ábrele la pantalla donde lo hace él."""
+    import ajustes_de_la_app
+    return ajustes_de_la_app.abrir_pantalla(pantalla, seccion)
+
+
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).
