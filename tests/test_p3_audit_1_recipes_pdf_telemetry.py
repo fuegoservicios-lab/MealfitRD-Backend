@@ -13,10 +13,10 @@ Por qué este test:
     planes); cada PDF nuevo sobrescribía al anterior en Downloads.
 
 Fix esperado:
-    - `trackEvent('recipe_pdf_download_success', {plan_id, meal_name,
+    - `trackEvent('recipe_pdf_download_success', {plan_id,
        meal_type, recipe_steps, ingredients_count, is_expanded})` en el
        success branch.
-    - `trackEvent('recipe_pdf_download_failed', {plan_id, meal_name,
+    - `trackEvent('recipe_pdf_download_failed', {plan_id,
        meal_type, error_name, error_message})` en el catch branch.
     - Filename con discriminador `Receta_<slug>_<plan_id[:8]>_<YYYY-MM-DD>.pdf`.
     - Ambos trackEvent en try/catch best-effort (analytics SDK falla NO debe
@@ -141,7 +141,7 @@ def test_filename_pattern_includes_both_discriminators(handler_body: str):
 # 2. Telemetría success
 # ---------------------------------------------------------------------------
 def test_telemetry_success_event_emitted(handler_body: str):
-    """`trackEvent('recipe_pdf_download_success', { plan_id, meal_name, ... })`
+    """`trackEvent('recipe_pdf_download_success', { plan_id, meal_type, ... })`
     debe aparecer en el success branch (después del save() exitoso)."""
     assert "recipe_pdf_download_success" in handler_body, (
         "P3-AUDIT-1 regresión: `trackEvent('recipe_pdf_download_success', ...)` "
@@ -151,12 +151,15 @@ def test_telemetry_success_event_emitted(handler_body: str):
 
 
 def test_telemetry_success_includes_dimensions(handler_body: str):
-    """El payload de success debe incluir `plan_id`, `meal_name`,
-    `meal_type` como mínimo para correlación cross-canal + filtros básicos."""
+    """El payload de success debe incluir `plan_id` y `meal_type` como mínimo para correlación cross-canal +
+    filtros básicos. [P1-PLAN-LOTE-842 · 2026-09-29] Y NO `meal_name`: el nombre de un plato puede delatar una
+    dieta médica («pan sin gluten» → celiaquía), y PostHog no debe recibir datos de salud (lista cerrada en
+    frontend `lote842.eventos.test.js`)."""
     success_idx = handler_body.find("recipe_pdf_download_success")
     assert success_idx > -1
     window = handler_body[success_idx:success_idx + 800]
-    for required_key in ("plan_id", "meal_name", "meal_type"):
+    assert "meal_name:" not in window, "P1-PLAN-LOTE-842: el payload no puede llevar el nombre del plato."
+    for required_key in ("plan_id", "meal_type"):
         assert required_key in window, (
             f"P3-AUDIT-1 regresión: payload de `recipe_pdf_download_success` "
             f"no incluye `{required_key}`. Sin esa dimensión, el operador no "
