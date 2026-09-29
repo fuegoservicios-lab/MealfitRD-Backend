@@ -1511,9 +1511,18 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     # empujaba «tortilla… con guineo» y el aviso le vetaba el guineo los otros días) sino el desayuno típico de su
     # cocina, de `cultural_profiles.PROFILES`. El enum del esquema no se toca. [ronda 1] Sin lo que es base de otra
     # categoría, sin sopas y sin lo que la alergia o la dieta vetan: la A es el refugio de `desayuno_por_alergia`.
+    # [P1-PLAN-LOTE-748 · ronda 4] Memo por render: las 7 etiquetas (la de hoy + el brief) preguntan por los MISMOS
+    # nombres y cada pregunta es un escaneo (~150 por render, síncronos antes de la llamada al modelo). Los vetos son
+    # fijos en el render.
+    _vetado_memo = {}
+
     def _vetado_dia(_i):
-        return _vetado(_i, _vetos)
-    _breakfast_cat_label = _ap.etiqueta_desayuno(breakfast_cat, _pais_cocina, vetado=_vetado_dia, dieta=diet_type)
+        _k = str(_i)
+        if _k not in _vetado_memo:
+            _vetado_memo[_k] = _vetado(_i, _vetos)
+        return _vetado_memo[_k]
+    _breakfast_cat_label = _ap.etiqueta_desayuno(breakfast_cat, _pais_cocina, vetado=_vetado_dia, dieta=diet_type,
+                                                 declarados=_vetos)
     _breakfast_cat_aviso = (_ap.AVISO_DESAYUNO_BETA if _bdac_beta
                             else "NO uses mangú/tubérculos si la categoría asignada es otra")
     breakfast_block = (
@@ -1536,7 +1545,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             # [ronda 1] con la cocina de ESE día (`country` del brief, graph_orchestrator), no la de este
             _b = _ap.etiqueta_desayuno(str((_od or {}).get("breakfast") or "").strip(),
                                        (_od or {}).get("country") or _pais_cocina, detalle=False,
-                                       vetado=_vetado_dia, dieta=diet_type)
+                                       vetado=_vetado_dia, dieta=diet_type, declarados=_vetos)
             if _t or _b:
                 _others.append((_t or "libre") + (f" (desayuno: {_b})" if _b else ""))
         if _others:

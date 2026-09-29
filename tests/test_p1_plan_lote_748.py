@@ -794,3 +794,155 @@ def test_r3_reasignar_no_aparta_la_a_por_un_solo_tuberculo():
     dias = [{"day": 1, "breakfast_category": "Mangú/Tubérculos"}]
     assert dpa.reasignar(dias, {"allergies": ["papa"]}) == 0
     assert dias[0]["breakfast_category"] == "Mangú/Tubérculos"
+
+
+# ─────────────── I. ronda 4 de la revisión adversaria (P1-PLAN-LOTE-748) ───────────────
+# 1 BLOQUEANTE (seguridad clínica, regresión frente a main: main nunca imponía maíz ni frijoles en la A beta): la puerta
+#   sólo veía la alergia cuando lo DECLARADO cabía DENTRO de los nombres del ítem. Una declaración MÁS específica que el
+#   ítem (calificativo, plural, «y derivados») se escapaba: «maíz amarillo», «almidón de maíz», «maíz y derivados»
+#   ⇒ «⚠️ OBLIGATORIO … (arepa de maíz)» contra la línea de alergias del MISMO prompt; el rechazo «arepas» (la forma
+#   natural) ⇒ arepa y reintento; «tortilla» ⇒ la puerta la expandía al gluten; «frijoles negros» ⇒ frijoles. Ahora la
+#   puerta lee también las declaraciones CRUDAS: si una nombra la cabeza del ítem o una raíz de su familia, lo veta.
+# 2 MENOR (rendimiento): ~150 llamadas al escáner por render (7 etiquetas × ~12 nombres + el respaldo), síncronas antes
+#   de cada llamada al modelo. La puerta se memoriza dentro del render.
+# Estos tests NO sustituyen datos ni vocabulario.
+
+_MAIZ_MAS_ESPECIFICO = ("maíz amarillo", "maíz blanco", "almidón de maíz", "fécula de maíz", "masa de maíz",
+                        "sémola de maíz", "pan de maíz", "maíz y derivados", "derivados del maíz",
+                        "harina de maíz nixtamalizada", "Maíz Amarillo", "maiz blanco")
+
+
+@pytest.mark.parametrize("cc", ("CO", "MX"))
+@pytest.mark.parametrize("alergia", _MAIZ_MAS_ESPECIFICO)
+def test_r4_la_declaracion_mas_especifica_que_el_item_veta_el_maiz(vocab_real, cc, alergia):
+    linea = _linea_a_con(cc, [alergia])
+    for tok in ("arepa", "tortilla", "maiz"):
+        assert not _tiene(tok, linea), (cc, alergia, linea)
+    if cc == "MX":
+        assert "frijoles" in linea, ("los frijoles no llevan maíz", alergia, linea)
+
+
+@pytest.mark.parametrize("rechazo", (["arepas"], ["Arepas"], ["arepa"], ["masa de arepa"], ["harina para arepas"]))
+def test_r4_el_rechazo_arepas_no_impone_la_arepa(vocab_real, rechazo):
+    linea = _linea_a_con("CO", [], dislikes=rechazo)
+    assert not _tiene("arepa", linea), (rechazo, linea)
+
+
+def test_r4_el_rechazo_arepas_quemaba_un_intento():
+    """La razón del test de arriba: el guard de rechazos SÍ marca la arepa que la A pedía (el fallo del lote 227)."""
+    from rechazos import _scan_dislike_violations
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["2 arepas de harina de maíz precocida"]}]}]}
+    assert _scan_dislike_violations(plan, {"dislikes": ["arepas"]})
+
+
+@pytest.mark.parametrize("vetos", (dict(dislikes=["tortilla"]), dict(dislikes=["tortillas"]),
+                                   dict(dislikes=["Tortillas de maíz"]), dict(alergias=["tortilla"])))
+def test_r4_la_tortilla_declarada_no_impone_la_tortilla_de_maiz(vocab_real, vetos):
+    linea = _linea_a_con("MX", vetos.get("alergias", []), dislikes=vetos.get("dislikes"))
+    assert not _tiene("tortilla", linea), (vetos, linea)
+    assert "frijoles" in linea, (vetos, linea)
+
+
+@pytest.mark.parametrize("campo", ("allergies", "dislikes"))
+@pytest.mark.parametrize("decl", ("frijoles negros", "Frijoles refritos", "frijol negro", "frijol pinto",
+                                  "Habichuelas rojas", "porotos negros", "judías blancas", "beans"))
+def test_r4_los_frijoles_calificados_no_imponen_frijoles(vocab_real, campo, decl):
+    kw = {campo: [decl]}
+    linea = _linea_a(_bdac(_esqueleto(), 1, day_name="Lunes", country="MX", **kw))
+    assert not _tiene("frijol", linea), (campo, decl, linea)
+    assert "tortilla de maíz" in linea, ("la tortilla de maíz no es una legumbre", campo, decl, linea)
+
+
+@pytest.mark.parametrize("alergia", ("Maseca", "masarepa", "polenta", "nixtamal", "cornmeal", "corn starch",
+                                     "cornstarch", "maize"))
+def test_r4_el_maiz_con_otro_nombre_tambien_cierra_la_puerta(vocab_real, alergia):
+    """El vocabulario del escáner no los conoce (lote aparte); la puerta de la A, sí: es la que IMPONE el maíz."""
+    for cc in ("CO", "MX"):
+        linea = _linea_a_con(cc, [alergia])
+        for tok in ("arepa", "tortilla", "maiz"):
+            assert not _tiene(tok, linea), (cc, alergia, linea)
+
+
+@pytest.mark.parametrize("vetos", (dict(alergias=["huevo"]), dict(alergias=["Huevos"]), dict(alergias=["clara de huevo"]),
+                                   dict(alergias=["yema"]), dict(alergias=["egg"]), dict(alergias=["gluten"]),
+                                   dict(alergias=["trigo"]), dict(alergias=["celíaco"]),
+                                   dict(alergias=["harina de trigo"]), dict(alergias=["soya", "maní"]),
+                                   dict(alergias=["tortillas de harina"]), dict(dislikes=["tortillas de harina"]),
+                                   dict(dislikes=["tortilla de huevo"]), dict(dislikes=["arepa de huevo"]),
+                                   dict(dislikes=["arepas de queso"]), dict(alergias=["lácteos"], dislikes=["cebolla"])))
+def test_r4_sin_falsos_bloqueos(vocab_real, vetos):
+    """Una tortilla de HARINA o de HUEVO no es la de maíz, y una arepa de huevo o de queso sigue siendo de maíz pero el
+    rechazo nombra el PLATO, no la arepa: ni la puerta ni el escáner la ven en «2 arepas de harina de maíz precocida»."""
+    alg, dis = vetos.get("alergias", []), vetos.get("dislikes")
+    assert "frijoles, tortilla de maíz" in _linea_a_con("MX", alg, dislikes=dis), vetos
+    assert "arepa de maíz" in _linea_a_con("CO", alg, dislikes=dis), vetos
+
+
+@pytest.mark.parametrize("vetos", (dict(alergias=["tubérculos y derivados"]), dict(dislikes=["tubérculos"]),
+                                   dict(dislikes=["tubérculos y derivados"]), dict(alergias=["raíces y tubérculos"])))
+def test_r4_el_respaldo_con_la_declaracion_mas_especifica(vocab_real, vetos):
+    from prompts import asignacion_pais as ap
+    for cc in ("ES", "US", "PR"):
+        linea = _linea_a_con(cc, vetos.get("alergias", []), dislikes=vetos.get("dislikes"))
+        assert linea.endswith(f"ASIGNADA: {ap.ETIQUETA_A_BETA_NEUTRA}"), (cc, vetos, linea)
+
+
+def test_r4_la_puerta_lee_las_declaraciones_crudas():
+    """Contrato de la función: sin `declarados` se comporta como antes; con ellos, veta el ítem que la declaración
+    nombra por su cabeza o su familia. DO no cambia nunca."""
+    from prompts import asignacion_pais as ap
+    nunca = lambda i: False                                                    # noqa: E731
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=nunca) == \
+        "Desayuno típico local (frijoles, tortilla de maíz)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=nunca, declarados=["maíz amarillo"]) == \
+        "Desayuno típico local (frijoles)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "MX", vetado=nunca, declarados=["frijoles negros"]) == \
+        "Desayuno típico local (tortilla de maíz)"
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=nunca, declarados=["arepas"]) == \
+        ap.ETIQUETA_A_BETA_RESPALDO
+    assert ap.etiqueta_desayuno("Mangú/Tubérculos", "CO", vetado=nunca, declarados=["arepas", "patatas"]) == \
+        ap.ETIQUETA_A_BETA_NEUTRA
+    for decl in (["maíz amarillo"], ["arepas"], ["tortilla"], ["frijoles negros"], ["tubérculos"]):
+        assert ap.etiqueta_desayuno("Mangú/Tubérculos", "DO", vetado=nunca, declarados=decl) == "Mangú/Tubérculos"
+
+
+def test_r4_day_generator_pasa_las_declaraciones_a_la_puerta():
+    src = (_BACKEND / "prompts" / "day_generator.py").read_text(encoding="utf-8")
+    llamadas = _llamadas(src, "_ap.etiqueta_desayuno")
+    assert len(llamadas) == 2, llamadas
+    for c in llamadas:
+        assert "declarados=_vetos" in c, c
+
+
+def _brief_a(cc, n=6):
+    sk = _esqueleto()
+    sk["_other_days_brief"] = [{"technique": f"t{i}", "breakfast": "Mangú/Tubérculos", "country": cc} for i in range(n)]
+    return sk
+
+
+@pytest.mark.parametrize("cc", ("MX", "CO", "ES"))
+def test_r4_la_puerta_se_memoriza_dentro_del_render(vocab_real, monkeypatch, cc):
+    """Cada nombre de la puerta de la A pasa por el escáner UNA vez por render (antes: una vez por cada una de las 7
+    etiquetas). Sólo los nombres de la puerta: «leche/queso/yogur» los preguntan otras líneas del render (también en
+    DO), fuera de este lote."""
+    import graph_orchestrator as go
+    from prompts import asignacion_pais as ap
+    puerta = set(ap._nombres_del_respaldo())
+    for i in ap._desayuno_tipico(cc):
+        if not ap._contiene(i, ap._BASES_DE_OTRAS_CATEGORIAS + ap._NO_ES_DESAYUNO + ap._NO_ES_BASE_PROPIA):
+            puerta |= set(ap._nombres_para_la_puerta(i))
+    original = go._allergen_pool_item_banned
+    llamadas = []
+
+    def contar(item, alergias):
+        llamadas.append(str(item))
+        return original(item, alergias)
+    monkeypatch.setattr(go, "_allergen_pool_item_banned", contar)
+    t = _bdac(_brief_a(cc), 1, day_name="Lunes", country=cc, allergies=["gluten", "huevo"], dislikes=["cebolla"])
+    de_la_puerta = [n for n in llamadas if n in puerta]
+    assert de_la_puerta, "la puerta pregunta al escáner"
+    repetidas = sorted({n for n in de_la_puerta if de_la_puerta.count(n) > 1})
+    assert not repetidas, (cc, len(de_la_puerta), repetidas)
+    monkeypatch.setattr(go, "_allergen_pool_item_banned", original)
+    assert _bdac(_brief_a(cc), 1, day_name="Lunes", country=cc, allergies=["gluten", "huevo"],
+                 dislikes=["cebolla"]) == t, "memorizar no cambia el texto"

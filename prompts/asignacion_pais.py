@@ -108,6 +108,20 @@ _FAMILIAS_PUERTA = (
      ("frijoles", "frijol", "habichuelas", "habichuela", "porotos", "poroto", "judías", "judía", "alubias", "alubia")),
 )
 
+# [P1-PLAN-LOTE-748 · 2026-09-28 · ronda 4] La puerta preguntaba sólo en una dirección: ¿cabe lo DECLARADO dentro de
+# los nombres del ítem? Una declaración MÁS específica que el ítem se escapaba — «maíz amarillo», «almidón de maíz»,
+# «maíz y derivados» no caben
+# en «arepa de maíz»; el rechazo «arepas» (el plural, la forma natural) no cabe en «arepa de maíz»; «frijoles negros»
+# no cabe en «frijoles» — y la A imponía el maíz contra la línea de alergias del MISMO prompt, o el guard de rechazos
+# quemaba un intento (lote 227). La otra dirección lee la declaración CRUDA (`declarados`): la veta si nombra la CABEZA
+# del ítem (arepa, tortilla, frijoles) o una raíz de su FAMILIA. Del lado de la declaración, la familia suma nombres
+# que el vocabulario del escáner aún no conoce (lote aparte): el alérgico que escribe «Maseca» o «polenta» sí lo sabe.
+_RAICES_SOLO_DECLARADAS = {
+    "maiz": ("maseca", "masarepa", "polenta", "nixtamal", "nixtamalizado", "nixtamalizada", "cornmeal", "cornstarch",
+             "corn", "maize"),
+    "frijol": ("bean",),
+}
+
 # ─── (c) el respaldo y la neutra ─────────────────────────────────────────────────────────────────────────────────────
 # [ronda 3] El respaldo NOMBRA una clase: pasa por la misma puerta con lo que la palabra «tubérculo» afirma (SSOT:
 # `desc_sin_categoria_falsa._SI_ES_TUBERCULO`) y la clase. A una española alérgica a la patata «⚠️ OBLIGATORIO … Base de
@@ -254,6 +268,59 @@ def _nombres_del_respaldo() -> tuple:
     return _CLASE_TUBERCULO + miembros
 
 
+def _cabeza_y_calificativo(texto) -> tuple:
+    """«arepa de maíz» ⇒ («arepa», «maiz»); «derivados del maíz» ⇒ («derivados», «maiz»); «frijoles» ⇒ («frijoles», «»).
+    Normalizado (minúsculas, sin tildes)."""
+    partes = re.split(r"\s+del?\s+", _norm(texto).strip(), maxsplit=1)
+    return partes[0].strip(), (partes[1].strip() if len(partes) > 1 else "")
+
+
+def _raices_de_la_familia(item) -> tuple:
+    """Las raíces con que una DECLARACIÓN nombra la familia del ítem (`_FAMILIAS_PUERTA` + `_RAICES_SOLO_DECLARADAS`)."""
+    out = ()
+    for raices, _familia in _FAMILIAS_PUERTA:
+        if _contiene(item, raices):
+            out += raices + _RAICES_SOLO_DECLARADAS.get(raices[0], ())
+    return out
+
+
+def _lista_declarada(declarados) -> list:
+    if isinstance(declarados, str):
+        declarados = [declarados]
+    return [str(d) for d in (declarados or []) if str(d or "").strip()]
+
+
+def _declaracion_nombra(item, declarados) -> bool:
+    """[ronda 4] La otra dirección de la puerta: ¿alguna declaración CRUDA nombra el ítem? Palabra completa, con plural.
+      · una raíz de su familia en cualquier parte («maíz amarillo», «almidón de maíz», «Frijoles refritos», «Maseca»):
+        veta;
+      · su cabeza («arepas», «tortilla», «masa de arepa», «harina para arepas»): veta — salvo que la declaración
+        califique esa MISMA cabeza con otra cosa («tortillas de harina», «tortilla de huevo», «arepa de huevo»): nombra
+        otro plato, y ni la puerta ni los escáneres lo ven en «3 tortillas de maíz» (sin falsos bloqueos)."""
+    decl = _lista_declarada(declarados)
+    if not decl:
+        return False
+    cabeza, calif_item = _cabeza_y_calificativo(item)
+    raices = _raices_de_la_familia(item)
+    for d in decl:
+        if raices and _contiene(d, raices):
+            return True
+        if not cabeza:
+            continue
+        cab_d, calif_d = _cabeza_y_calificativo(d)
+        if _contiene(cab_d, (cabeza,)):
+            if not calif_d or (calif_item and _contiene(calif_d, (calif_item,))):
+                return True
+        elif calif_d and _contiene(calif_d, (cabeza,)):
+            return True
+    return False
+
+
+def _declaracion_nombra_respaldo(declarados) -> bool:
+    """[ronda 4] Lo mismo para el respaldo: «tubérculos y derivados», «raíces y tubérculos», «papas fritas»."""
+    return any(_contiene(d, _nombres_del_respaldo()) for d in _lista_declarada(declarados))
+
+
 def _vetados_por_dieta(dieta) -> tuple:
     """Lo que la dieta prohíbe, con el vocabulario del ESCÁNER de dieta (`graph_orchestrator._scan_diet_violations`),
     no con una lista nueva. «caldo» se suma para veg*: la línea dura vegana prohíbe «caldos de origen animal»."""
@@ -280,7 +347,7 @@ def _vetados_por_dieta(dieta) -> tuple:
     return carne + mar + huevo + lacteo + solo_vegano + ("caldo",)
 
 
-def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None, dieta=None) -> str:
+def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None, dieta=None, declarados=None) -> str:
     """Etiqueta que VE el modelo para la categoría de desayuno asignada.
 
     DO ⇒ la categoría tal cual. Beta ⇒ sólo la categoría A cambia: «Desayuno típico local (…)» con el desayuno típico del
@@ -296,15 +363,21 @@ def etiqueta_desayuno(categoria, pais_cocina, detalle: bool = True, vetado=None,
     Si no queda nada ⇒ `ETIQUETA_A_BETA_RESPALDO` (también en el brief) — [ronda 3] que pasa por la MISMA puerta
     (`_nombres_del_respaldo`: papa, patata, yuca, tubérculos…); vetado ⇒ `ETIQUETA_A_BETA_NEUTRA`. `detalle=False` (el
     brief de los OTROS días) da sólo el nombre, sin la lista. `pais_cocina` es un código YA canónico: el de la cocina de
-    ESE día."""
+    ESE día.
+
+    [ronda 4] `declarados` son las alergias y rechazos CRUDOS (los mismos que alimentan `vetado`): la puerta veta
+    también el ítem que una declaración MÁS específica nombra (`_declaracion_nombra`: «maíz amarillo», «arepas»,
+    «frijoles negros»). Va primero: es una regex, y ahorra el escáner."""
     if categoria != ENUM_DESAYUNO_A or es_do(pais_cocina):
         return categoria
     prohibidos = _BASES_DE_OTRAS_CATEGORIAS + _NO_ES_DESAYUNO + _NO_ES_BASE_PROPIA + _vetados_por_dieta(dieta)
     items = [i for i in _desayuno_tipico(pais_cocina) if not _contiene(i, prohibidos)]
+    items = [i for i in items if not _declaracion_nombra(i, declarados)]
     if vetado is not None:
         items = [i for i in items if not any(vetado(n) for n in _nombres_para_la_puerta(i))]
     if not items:
-        if vetado is not None and any(vetado(n) for n in _nombres_del_respaldo()):
+        if _declaracion_nombra_respaldo(declarados) or (
+                vetado is not None and any(vetado(n) for n in _nombres_del_respaldo())):
             return ETIQUETA_A_BETA_NEUTRA
         return ETIQUETA_A_BETA_RESPALDO
     return f"{_ETIQUETA_A_BETA_CORTA} ({', '.join(items)})" if detalle else _ETIQUETA_A_BETA_CORTA
