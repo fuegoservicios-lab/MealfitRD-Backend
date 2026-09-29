@@ -1594,6 +1594,23 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
         except Exception as e:
             _fallo(tbl, e)
 
+    # 3-bis-bis. [P1-PLAN-LOTE-841 · 2026-09-29] Al CERRAR la cuenta, el rastro del equipo (`admin_access_log`, sin FK a
+    #            propósito: sobrevive a la cuenta) deja de identificarla: fuera su id y el texto libre que escribe el
+    #            personal (`motivo`, `error`); queda qué hizo el personal y cuándo, hasta la purga por plazo
+    #            (`admin_acceso.purgar_rastro_antiguo`). La purga administrativa (`include_profile=False`) no lo toca.
+    if include_profile:
+        try:
+            r = execute_sql_write(
+                "UPDATE public.admin_access_log SET target = NULL, "
+                "detail = (COALESCE(detail, '{}'::jsonb) - 'motivo' - 'error') "
+                "|| jsonb_build_object('cuenta_eliminada', true) "
+                "WHERE target = %s RETURNING id",
+                (user_id,), returning=True,
+            )
+            result["anonymized"]["admin_access_log"] = len(r) if isinstance(r, list) else 0
+        except Exception as e:
+            _fallo("admin_access_log", e)
+
     # 3-ter. [P1-PLAN-LOTE-135] Estado por usuario en app_kv_store (avisos de agua, canal local, invitacion al plan).
     try:
         r = execute_sql_write(

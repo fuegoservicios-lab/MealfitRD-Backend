@@ -8641,6 +8641,23 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"⏰ [P1-PLAN-LOTE-798] Cron purge_orphan_chat_attachments registrado cada {_CHAT_ATT_PURGE_INT} min."
         )
 
+    # [P1-PLAN-LOTE-841 · 2026-09-29] Purga diaria del rastro del equipo (`admin_access_log`) que pasa del plazo
+    # (MEALFIT_ADMIN_LOG_RETENTION_DAYS, 730 por defecto; lo promete la Política de Privacidad §9). La purga y su SQL
+    # viven en admin_acceso; aquí solo se registra.
+    if not scheduler.get_job("purge_admin_access_log"):
+        from admin_acceso import purgar_rastro_antiguo as _purgar_rastro_antiguo
+        _add_job_jittered(scheduler,
+            _purgar_rastro_antiguo,
+            "interval",
+            hours=24,
+            id="purge_admin_access_log",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info("⏰ [P1-PLAN-LOTE-841] Cron purge_admin_access_log registrado cada 24 h.")
+
 
 def _pantry_refresh_horizon_hours_for_plan(total_days_requested: int | None) -> int:
     """Return the proactive pantry horizon based on plan length."""

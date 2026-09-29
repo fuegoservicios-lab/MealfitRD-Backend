@@ -73,7 +73,9 @@ def test_la_purga_anonimiza_el_gasto_de_ia_en_vez_de_borrarlo(db, include_profil
     q, p = upd[0]
     assert "user_id = NULL" in q and "plan_id = NULL" in q and "metadata - 'corr'" in q
     assert "WHERE user_id = %s" in q and p == (_UID,)
-    assert r["anonymized"] == {"llm_usage_events": 2} and "llm_usage_events" not in r["deleted"]
+    # [P1-PLAN-LOTE-841] Al cerrar la cuenta también se anonimiza el rastro del equipo (`admin_access_log`): aquí se
+    # mira solo la fila del gasto.
+    assert r["anonymized"].get("llm_usage_events") == 2 and "llm_usage_events" not in r["deleted"]
 
 
 def test_llm_usage_events_sale_de_la_lista_de_borrado():

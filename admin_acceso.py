@@ -8,13 +8,16 @@ vista de contenido de un usuario (capas 2-3) se anota ANTES de responder y, si n
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException
 
 from auth import get_verified_user_id
 from db import execute_sql_write
-from knobs import _env_bool, _env_str
+from knobs import _env_bool, _env_int, _env_str
+
+logger = logging.getLogger(__name__)
 
 
 def panel_encendido() -> bool:
@@ -45,3 +48,26 @@ def registrar_acceso(admin_user_id: str, accion: str, objetivo: Optional[str] = 
         "INSERT INTO public.admin_access_log (admin_user_id, action, target, detail) VALUES (%s, %s, %s, %s::jsonb)",
         (admin_user_id, str(accion)[:64], objetivo, json.dumps(detalle or {}, ensure_ascii=False)),
     )
+
+
+# [P1-PLAN-LOTE-841 · 2026-09-29] Plazo del rastro. Sin FK a propósito, el rastro sobrevive a la cuenta, pero no para
+# siempre (RGPD art. 5.1.e): se purga a los N días. Al CERRAR una cuenta, `db_profiles.delete_account_data` le quita
+# antes el id y el texto libre. La Política de Privacidad §9 da este plazo: si cambia el default, cambia el texto.
+def dias_de_rastro() -> int:
+    return _env_int("MEALFIT_ADMIN_LOG_RETENTION_DAYS", 730, validator=lambda v: 90 <= v <= 3650)
+
+
+def purgar_rastro_antiguo() -> int:
+    """Borra el rastro con más de `dias_de_rastro()` días. Cron diario; nunca lanza (un fallo se reintenta mañana)."""
+    try:
+        r = execute_sql_write(
+            "DELETE FROM public.admin_access_log WHERE at < now() - make_interval(days => %s) RETURNING id",
+            (dias_de_rastro(),), returning=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-841] no se pudo purgar el rastro del equipo: {e!r}")
+        return 0
+    n = len(r) if isinstance(r, list) else 0
+    if n:
+        logger.info(f"[P1-PLAN-LOTE-841] rastro del equipo: {n} filas con más de {dias_de_rastro()} días purgadas.")
+    return n
