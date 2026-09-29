@@ -118,6 +118,29 @@ def test_sin_un_equivalente_libre_se_repite_antes_que_poner_otra_cosa():
     assert "yogurt griego entero" in _nuevas(m, _merienda())[0], "los dos en el día: el orden de siempre"
 
 
+def _con_queso():
+    return {"meal": "Merienda", "name": "Casabe tostado con queso fresco y lechosa",
+            "protein": 8, "cals": 220, "carbs": 30, "fats": 6,
+            "ingredients": ["1 torta pequeña de casabe", "30 g de queso fresco", "100 g de lechosa"],
+            "recipe": ["Mise en place: corta la lechosa.", "Montaje: sirve el casabe con el queso y la lechosa."]}
+
+
+def test_en_un_plato_que_ya_tiene_queso_el_equivalente_no_es_otro_queso():
+    """Simulado sobre 566 planes: 73 de 154 cambios eran «…queso blanco, lechosa y HUEVO». El cottage que sustituía al
+    yogurt era un segundo queso, y la regla del segundo queso (P1-CLOSER-NO-DUP-CHEESE) lo cambiaba por huevo cocido; con
+    el huevo en el nombre, el detector de pareo le cambia después la fruta al plato."""
+    m = _con_queso()
+    assert _cerrar(m, [_YOGURT, _COTTAGE, _RICOTTA, _HUEVO], _CON_YOGURT) > 0
+    nuevas = _nuevas(m, _con_queso())
+    assert "yogurt griego entero" in nuevas[0] and not any("huevo" in x for x in nuevas), nuevas
+    assert rc.choca("yogurt griego entero", _con_queso(), [(_COTTAGE, "queso cottage"), (_RICOTTA, "queso ricotta")],
+                    _CON_YOGURT) == set()
+    # al revés sí: el cottage que el día ya lleva cede al yogurt, que no es un queso
+    m = _con_queso()
+    assert rc.choca("queso cottage", m, [(_COTTAGE, "queso cottage"), (_YOGURT, "yogurt griego entero")],
+                    {"alimento:cottage"}) == {"alimento:cottage"}
+
+
 def test_el_yogurt_del_propio_plato_no_es_una_repeticion():
     vasito = {"meal": "Merienda", "name": "Vasito de yogur con manzana y canela",
               "protein": 6, "cals": 160, "carbs": 25, "fats": 3,
