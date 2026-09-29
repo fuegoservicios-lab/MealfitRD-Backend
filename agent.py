@@ -4289,7 +4289,7 @@ class ChatState(MessagesState):
     # de su reintento (`nudge_photo_to_log`). Declaradas por lo mismo que las de arriba: fuera del schema se pierden.
     turn_photo_to_log: bool
     photo_log_retried: bool
-    # [P1-PLAN-LOTE-686 · 2026-09-28] Turno del MODO VOZ: `call_model` apaga el razonamiento del proveedor (DeepSeek
+    # [P1-PLAN-LOTE-686 · 2026-09-28] Turno del MODO VOZ: `call_model` apaga el razonamiento del proveedor (el alterno
     # razonaba ~1.000 tokens invisibles antes de anotar: 7,8 s en la prueba del dueño). Del TURNO: los dos `inputs` lo
     # fijan siempre (sin reducer, un valor viejo del checkpoint se heredaría en el turno siguiente).
     modo_voz: bool
@@ -4396,11 +4396,12 @@ def _is_client_request_error(exc: BaseException) -> bool:
 
 
 def _kwargs_de_razonamiento_modo_voz(state) -> dict:
-    """[P1-PLAN-LOTE-686 · 2026-09-28] En el MODO VOZ, sin razonamiento del proveedor: en DeepSeek (el coach hoy) el
-    razonamiento va encendido por defecto y, en la prueba del dueño, pensó ~1.000 tokens invisibles antes de anotar
-    «plátano con cuatro huevos» (7,8 s de 10,3). En voz manda la rapidez y las tareas son cortas (anotar, contestar).
-    `thinking.type=disabled` es seguro en los tres proveedores: DeepSeek lo apaga, GLM lo traduce a esfuerzo `low`
-    (no se puede apagar) y OpenAI lo quita. Knob `MEALFIT_COACH_VOZ_SIN_RAZONAMIENTO` (default True) para revertir."""
+    """[P1-PLAN-LOTE-686 · 2026-09-28] En el MODO VOZ, sin razonamiento del proveedor: con el proveedor alterno (el del
+    coach hoy, `MEALFIT_LLM_PROVIDER`) el razonamiento va encendido por defecto y, en la prueba del dueño, pensó ~1.000
+    tokens invisibles antes de anotar «plátano con cuatro huevos» (7,8 s de 10,3). En voz manda la rapidez y las
+    tareas son cortas (anotar, contestar). `thinking.type=disabled` es seguro con los tres: el alterno lo apaga, GLM lo
+    traduce a esfuerzo `low` (no se puede apagar) y OpenAI lo quita (ver `llm_provider`). Knob
+    `MEALFIT_COACH_VOZ_SIN_RAZONAMIENTO` (default True) para revertir."""
     if not (state or {}).get("modo_voz"):
         return {}
     if not _env_bool("MEALFIT_COACH_VOZ_SIN_RAZONAMIENTO", True):
