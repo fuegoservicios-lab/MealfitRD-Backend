@@ -13,6 +13,9 @@ from db_profiles import (get_user_profile, update_user_health_profile,
                          # [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] contexto clínico del shield
                          # pre-INSERT (SSOT de la hidratación que estaba copiada en 3 surfaces).
                          build_clinical_form_from_profile as _build_clinical_form)
+# [P1-PLAN-LOTE-858] al arranque, para que sus knobs (`MEALFIT_DESCRIPTION_TRUTH*`) estén en el registro antes del
+# primer plan; el módulo sólo importa `re`/`logging` arriba (lo demás, perezoso), así que no abre ciclo.
+import descripcion_veraz  # noqa: F401,E402
 
 # ============================================================
 # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Tracking de pipelines en curso
@@ -1529,7 +1532,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                 # [P1-PLAN-LOTE-854 · 2026-09-29] La ficha (`desc`) dice lo que el plato ES: sin el metalenguaje del prompt
                 # («con identidad propia», «de categoría Avena/Cereales», «distinta al almuerzo») y sin nombrar lo que esta
                 # cola ya cambió (G24: «pechuga de pollo» con pavo, «manzana» con lechosa, «cocida en leche» en agua). Tras
-                # el pulido, cuando ya no se mueve ningún ingrediente. Sólo beta (DO con su knob propio). Fail-open.
+                # el pulido, cuando ya no se mueve ningún ingrediente. Beta siempre; DO y los planes sin sello según
+                # `MEALFIT_DESCRIPTION_TRUTH_DO` ([P1-PLAN-LOTE-858]). Fail-open.
                 # tooltip-anchor: P1-PLAN-LOTE-854-FICHA-VERAZ
                 try:
                     __import__("descripcion_veraz").aplicar_plan(_pd)
