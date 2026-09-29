@@ -37,6 +37,41 @@ _AGENT_MESSAGE_COLS_SQL = (
 
 _last_chat_attachment_cleanup = 0.0
 
+# [P1-PLAN-LOTE-798 · 2026-09-29] La política de privacidad promete que una foto del chat subida y NO enviada
+# (`message_id IS NULL`) se borra a las 24 horas. Antes la ÚNICA purga era la limpieza oportunista de
+# `create_chat_attachment`: solo al subir OTRA foto, una vez por hora y proceso, 100 filas. Si nadie volvía a
+# subir, la foto huérfana se quedaba para siempre. Ahora el SQL vive aquí UNA vez y lo comparten dos caminos:
+#   · `purge_orphan_chat_attachments` — el cron horario (registrado en `register_plan_chunk_scheduler`), SIN
+#     throttle, por lotes hasta vaciar o hasta el tope por pasada;
+#   · `_cleanup_orphan_chat_attachments` — la limpieza oportunista de siempre, con su throttle y su lote de 100.
+# Las 24 h NO son knob: son la promesa publicada; moverlas es cambiar la política, no ajustar un parámetro.
+_CHAT_ATTACHMENT_OPPORTUNISTIC_BATCH = 100
+
+
+def _delete_orphan_chat_attachments_batch(limit: int) -> int:
+    """Borra hasta `limit` adjuntos huérfanos de más de 24 h (los más viejos primero) y dice cuántos borró.
+
+    SSOT del SQL de la purga. Usa el índice parcial `idx_chat_attachments_unclaimed (created_at) WHERE
+    message_id IS NULL`. Propaga la excepción: cada caller decide si la registra y sigue.
+    """
+    rows = execute_sql_write(
+        """
+        WITH stale AS (
+            SELECT id FROM public.chat_attachments
+            WHERE message_id IS NULL
+              AND created_at < now() - interval '24 hours'
+            ORDER BY created_at
+            LIMIT %s
+        )
+        DELETE FROM public.chat_attachments attachment
+        USING stale WHERE attachment.id = stale.id
+        RETURNING attachment.id::text AS id
+        """,
+        (int(limit),),
+        returning=True,
+    )
+    return len(rows or [])
+
 
 def _cleanup_orphan_chat_attachments() -> None:
     """Best-effort, acotado a 100 blobs y como máximo una vez por hora/proceso."""
@@ -46,22 +81,71 @@ def _cleanup_orphan_chat_attachments() -> None:
         return
     _last_chat_attachment_cleanup = now
     try:
-        execute_sql_write(
-            """
-            WITH stale AS (
-                SELECT id FROM public.chat_attachments
-                WHERE message_id IS NULL
-                  AND created_at < now() - interval '24 hours'
-                ORDER BY created_at
-                LIMIT 100
-            )
-            DELETE FROM public.chat_attachments attachment
-            USING stale WHERE attachment.id = stale.id
-            """,
-            (),
-        )
+        _delete_orphan_chat_attachments_batch(_CHAT_ATTACHMENT_OPPORTUNISTIC_BATCH)
     except Exception as exc:
         logger.warning("No se pudieron limpiar adjuntos huérfanos del chat: %s", exc)
+
+
+def purge_orphan_chat_attachments(batch_size: Optional[int] = None, max_batches: Optional[int] = None) -> int:
+    """[P1-PLAN-LOTE-798 · 2026-09-29] Cron: purga TODAS las fotos del chat subidas y no enviadas de más de 24 h.
+
+    Sin el throttle por proceso de `_cleanup_orphan_chat_attachments`. Borra por lotes de `batch_size` hasta que
+    un lote borra 0 filas o hasta `max_batches` lotes por pasada (lo que quede lo recoge la siguiente pasada).
+    Best-effort: un fallo de la base se registra y corta la pasada, nunca revienta el scheduler. Devuelve cuántas
+    filas borró.
+
+    Knobs: `MEALFIT_CHAT_ATTACHMENT_PURGE_ENABLED` (True; apagarlo deja solo la limpieza oportunista y la promesa
+    de las 24 h deja de cumplirse), `MEALFIT_CHAT_ATTACHMENT_PURGE_BATCH` (100, [1, 1000]) y
+    `MEALFIT_CHAT_ATTACHMENT_PURGE_MAX_BATCHES` (50, [1, 1000]).
+    """
+    from knobs import _env_bool, _env_int
+
+    if not _env_bool("MEALFIT_CHAT_ATTACHMENT_PURGE_ENABLED", True):
+        logger.warning(
+            "[P1-PLAN-LOTE-798] MEALFIT_CHAT_ATTACHMENT_PURGE_ENABLED=false: purga de fotos huérfanas del chat "
+            "apagada (solo queda la limpieza oportunista al subir otra foto)."
+        )
+        return 0
+    if batch_size is None:
+        batch_size = _env_int(
+            "MEALFIT_CHAT_ATTACHMENT_PURGE_BATCH",
+            _CHAT_ATTACHMENT_OPPORTUNISTIC_BATCH,
+            validator=lambda v: 1 <= v <= 1000,
+        )
+    if max_batches is None:
+        max_batches = _env_int(
+            "MEALFIT_CHAT_ATTACHMENT_PURGE_MAX_BATCHES", 50, validator=lambda v: 1 <= v <= 1000
+        )
+    batch_size = max(1, int(batch_size))
+    max_batches = max(1, int(max_batches))
+
+    purged = 0
+    batches = 0
+    deleted = 0
+    for _ in range(max_batches):
+        try:
+            deleted = _delete_orphan_chat_attachments_batch(batch_size)
+        except Exception as exc:
+            logger.warning(
+                "[P1-PLAN-LOTE-798] La purga de fotos huérfanas del chat falló tras %s filas: %s", purged, exc
+            )
+            return purged
+        batches += 1
+        purged += deleted
+        if deleted == 0:
+            break
+    if deleted > 0:
+        logger.warning(
+            "[P1-PLAN-LOTE-798] Purga de fotos huérfanas del chat: tope de %s lotes alcanzado (%s filas); "
+            "lo que quede lo recoge la siguiente pasada.",
+            max_batches,
+            purged,
+        )
+        return purged
+    logger.info(
+        "[P1-PLAN-LOTE-798] Purga de fotos huérfanas del chat: %s filas borradas en %s lote(s).", purged, batches
+    )
+    return purged
 
 
 def _chat_attachment_signing_secret() -> Optional[bytes]:

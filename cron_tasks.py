@@ -8601,6 +8601,29 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             "⏰ [P2-CHUNK-OVERDUE-SIGNAL] Cron _chunk_overdue_alert_job registrado cada 1h."
         )
 
+    # [P1-PLAN-LOTE-798 · 2026-09-29] Purga horaria de las fotos del chat subidas y NO enviadas de más de 24 h
+    # (la política de privacidad lo promete). Antes solo las borraba la limpieza oportunista al subir OTRA foto.
+    # La purga y su SQL viven en db_chat; aquí solo se registra. Tope 60 min: más espaciado, la foto viviría
+    # bastante más de las 24 h prometidas.
+    if not scheduler.get_job("purge_orphan_chat_attachments"):
+        from db import purge_orphan_chat_attachments as _purge_orphan_chat_attachments
+        _CHAT_ATT_PURGE_INT = _env_int(
+            "MEALFIT_CHAT_ATTACHMENT_PURGE_INTERVAL_MIN", 60, validator=lambda v: 5 <= v <= 60
+        )
+        _add_job_jittered(scheduler,
+            _purge_orphan_chat_attachments,
+            "interval",
+            minutes=_CHAT_ATT_PURGE_INT,
+            id="purge_orphan_chat_attachments",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-PLAN-LOTE-798] Cron purge_orphan_chat_attachments registrado cada {_CHAT_ATT_PURGE_INT} min."
+        )
+
 
 def _pantry_refresh_horizon_hours_for_plan(total_days_requested: int | None) -> int:
     """Return the proactive pantry horizon based on plan length."""
