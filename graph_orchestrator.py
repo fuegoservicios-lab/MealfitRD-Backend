@@ -29050,8 +29050,8 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                     return False  # conservador: duda → no usar el candidato
             return __import__("nevera_exigida").admite(cand)  # [P1-PLAN-LOTE-199] sin Nevera exigida ⇒ True
 
-        repl = next((c for c in ("Aguacate", "Tomate", "Batata") if _replacement_ok(c)), None)  # [P1-PLAN-LOTE-613] crudo antes que batata
-        if repl is None:
+        _admitidos = [c for c in ("Aguacate", "Tomate", "Batata") if _replacement_ok(c)]  # [P1-PLAN-LOTE-613] crudo antes que batata
+        if not _admitidos:
             return __import__("fruta_al_lado").separar(days)  # [P1-PLAN-LOTE-616] sin sustituto admitido, la fruta va al lado
 
         fixed = 0
@@ -29063,6 +29063,10 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                 name_low = _sa_fs(name.lower())
                 fruit = next((fr for fr in _SWEET_DOMINANT_FRUITS if _name_has_token(fr, name_low)), None)
                 if not fruit:
+                    continue
+                repl = __import__("sustituto_de_fruta").elegir(meal, _admitidos)  # [P1-PLAN-LOTE-861] no el aguacate que ya lleva
+                if repl is None:
+                    fixed += __import__("fruta_al_lado").separar([{"meals": [meal]}])  # [P1-PLAN-LOTE-861] los lleva todos: al lado
                     continue
                 _pat = _re.compile(r"\b" + _accent_flex_pattern(fruit) + r"\w*", _re.IGNORECASE)  # [P1-PLAN-LOTE-175] «piña» ⊂ «es-PIÑA-cas»
                 meal["name"] = __import__("dish_naming").sustituir_alimento(meal, _pat, repl)  # [P1-PLAN-LOTE-175] caja + descripción
