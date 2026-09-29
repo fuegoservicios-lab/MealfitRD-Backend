@@ -4393,6 +4393,8 @@ def _market_pool_with_extras(pool: dict, country: str, culture_country: str = No
                             out[key] = hit
             except Exception:
                 pass
+        if cc:  # [P1-PLAN-LOTE-850] los carbos ASIGNABLES, de la cocina del perfil (no del pool universal criollo)
+            out["carbs"] = __import__("cocina_del_perfil").carbos_de_la_cocina(out["carbs"], cc)
         return out
     except Exception:
         return pool

@@ -811,7 +811,8 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
                                           pregnant: bool = False,
                                           k_elevating_med: bool = False,
                                           goal: str | None = None,
-                                          diet: str | None = None, allergies=None) -> str:  # [P1-PLAN-LOTE-197]
+                                          diet: str | None = None, allergies=None,  # [P1-PLAN-LOTE-197]
+                                          cocina=None) -> str:  # [P1-PLAN-LOTE-850]
     """[P1-MICRONUTRIENT-STEER · 2026-06-24] Directiva CUANTITATIVA de micronutrientes para el
     prompt del day-generator. Convierte la guía HEURÍSTICA histórica ("usa legumbres para fibra/
     hierro") en PISOS NUMÉRICOS accionables para los micros ALCANZABLES con alimentos enteros
@@ -847,6 +848,9 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
             mg_floor = max(mg_floor, 500.0)
             if not k_elevating_med:
                 k_floor = max(k_floor, 4700.0)
+        # [P1-PLAN-LOTE-850] `cocina` (la principal del perfil): «comidas dominicanas», «legumbres (habichuelas)» y
+        # «guineo, plátano, batata» eran los ejemplos de los seis países. None/DO ⇒ los literales de siempre.
+        _mesa, _leg_mg, _k_ej = __import__("cocina_del_perfil").textos_micros(cocina)
         lines = ["--- OBJETIVOS DE MICRONUTRIENTES (densidad nutricional del día) ---"]
         if is_muscle:
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La línea PRIORIDAD ordenaba "fuente animal"
@@ -875,7 +879,7 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
         lines.append(
             "Además de las calorías y los macros, busca que el día APUNTE de forma NATURAL a estos "
             "pisos diarios. NO fuerces un solo alimento ni distorsiones las porciones: intégralos en "
-            "comidas dominicanas variadas y sabrosas."
+            f"{_mesa}."
         )
         # Magnesio y Hierro: en gain_muscle se reordenan para NO empujar la leguminosa como plato-base
         # (compite con el piso de proteína); en el resto de objetivos la leguminosa lidera (fuente barata
@@ -886,7 +890,7 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
             lines.append(f"• Hierro ≥{fe_floor:g} mg → carnes rojas magras y huevo (hierro hemo); acompaña con "
                          "vitamina C (naranja/limón) en la misma comida para absorber mejor.")
         else:
-            lines.append(f"• Magnesio ≥{int(round(mg_floor))} mg → vegetales de hoja verde, legumbres (habichuelas), "
+            lines.append(f"• Magnesio ≥{int(round(mg_floor))} mg → vegetales de hoja verde, {_leg_mg}, "
                          "nueces/semillas (linaza, maní, ajonjolí), avena y granos integrales.")
             lines.append(f"• Hierro ≥{fe_floor:g} mg → legumbres, carnes rojas magras, huevo; acompaña con vitamina C "
                          "(naranja/limón) en la misma comida para mejorar la absorción.")
@@ -910,8 +914,7 @@ def build_micronutrient_targets_directive(sex: str | None = "female", age: int |
             lines.append("• Potasio: mantén porciones MODERADAS y parejas (NO lo maximices) — el perfil "
                          "toma un fármaco que eleva el potasio sérico (riesgo de hiperkalemia).")
         else:
-            lines.append(f"• Potasio ≥{int(round(k_floor))} mg → guineo, plátano, batata, aguacate, "
-                         "espinaca, legumbres y naranja.")
+            lines.append(f"• Potasio ≥{int(round(k_floor))} mg → {_k_ej}.")
         lines.append("La vitamina D casi nunca se alcanza solo con alimentos: NO la fuerces (se cubre "
                      "con un consejo de suplemento aparte).")
         return __import__("micros_seguros").directiva_segura("\n".join(lines), allergies)  # [P1-PLAN-LOTE-197]

@@ -1055,14 +1055,19 @@ def override_egg_form_preference(prompt_text: str, prefers_whites) -> str:
         return prompt_text
 
 
-def build_day_generator_system_prompt(diet=None, country=None) -> str:
+def build_day_generator_system_prompt(diet=None, country=None, localizar=True) -> str:
     """Render del system prompt del day-gen por dieta canónica Y país (F1-T2), apilado SOBRE
     el render de dieta. `country` None/'DO' (o desconocido — `canonicalize_country` fail-safe)
     ⇒ camino EXACTO pre-T2 (`_render_day_generator_prompt_for_diet`, mismo objeto para
     balanced/pescatarian). País BETA (ES/US/MX/PR/CO) ⇒ arranca del render de dieta, aplica
     `_BETA_FRAGMENT_TABLE` (almuerzo/cena/§15) y antepone la cabecera de país. Cacheado por
     (dieta_beta, país) en `_COUNTRY_PROMPT_RENDER_CACHE` — ≤3×5 entradas (pescatarian colapsa
-    a la entrada 'balanced')."""
+    a la entrada 'balanced').
+
+    [P1-PLAN-LOTE-850 · 2026-09-29] Beta: los EJEMPLOS (mangú, habichuelas, gandules, guineo) con el léxico de la cocina
+    (`cocina_del_perfil.localizar_sistema`), aplicado DESPUÉS de la caché para que el knob se lea en cada llamada.
+    `localizar=False` lo deja al llamador (`graph_orchestrator._day_system_instruction_for_diet`, que añade la tabla de
+    macros y localiza el conjunto)."""
     from constants import (
         canonicalize_diet_type,
         canonicalize_country,
@@ -1078,7 +1083,7 @@ def build_day_generator_system_prompt(diet=None, country=None) -> str:
     cache_key = (beta_key, canon_country)
     cached = _COUNTRY_PROMPT_RENDER_CACHE.get(cache_key)
     if cached is not None:
-        return cached
+        return __import__("cocina_del_perfil").localizar_sistema(cached, canon_country) if localizar else cached
 
     rendered = _render_day_generator_prompt_for_diet(canon)
     for target_por_dieta, beta_repl_por_dieta in _BETA_FRAGMENT_TABLE:
@@ -1114,7 +1119,7 @@ def build_day_generator_system_prompt(diet=None, country=None) -> str:
         rendered = rendered.replace(sentinel, survivor)
 
     _COUNTRY_PROMPT_RENDER_CACHE[cache_key] = rendered
-    return rendered
+    return __import__("cocina_del_perfil").localizar_sistema(rendered, canon_country) if localizar else rendered
 
 
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.

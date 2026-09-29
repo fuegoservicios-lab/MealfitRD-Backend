@@ -104,6 +104,85 @@ PROFILES[NEUTRAL_PROFILE] = {
 _PROFILE_BY_MARKET = {p["market_default"]: pid for pid, p in PROFILES.items() if p.get("market_default")}
 DEFAULT_PROFILE = "dominican_criolla"
 
+# [P1-PLAN-LOTE-850 · 2026-09-29] Lo que la COCINA del perfil decide de la asignación previa y del prompt (motor en
+# `cocina_del_perfil.py`, knob `MEALFIT_BETA_CULTURAL_ASSIGNMENT`). Batería G24: España recibió «Harina de trigo +
+# Batata» los tres días y las técnicas «Estilo Fusión Criolla» y «Desmenuzado (Ropa Vieja)»; México, «Yuca + Harina de
+# maíz precocida» y «Relleno (Ej. Canoas…)»; y los prompts beta decían «comidas dominicanas» y «guineo, habichuelas».
+# El perfil dominicano NO tiene entrada a propósito: DO no cambia nada.
+#   · `carb_bases_excluded`: nombres del CATÁLOGO (identificadores del motor, no se traducen) que la biblioteca de
+#     platos del país usa pero que no son una BASE de su cocina. La lista de bases asignables sale de la biblioteca
+#     compilada (`dish_registry`, constituyentes de sus plantillas); esto es sólo la resta curada, con su criterio:
+#       - ES «Harina de trigo»: en la biblioteca es ingrediente de masas (empanada gallega, croquetas, coca), no un
+#         acompañante; asignada como base salió «tortitas / pan plano de trigo» en 3 de 12 comidas (G24).
+#       - MX «Harina de maíz precocida»: es la harina de AREPA; la masa mexicana es nixtamalizada y no tiene fila en el
+#         catálogo; la base de maíz del país es «Tortilla de maíz». Los tamales y sopes de la biblioteca la siguen
+#         teniendo en el catálogo: sólo deja de ASIGNARSE.
+#   · `technique_labels`: etiqueta que ve el modelo para cada técnica del catálogo (`constants.TECHNIQUE_FAMILIES`);
+#     `None` = esa técnica no es de esta cocina. La familia (diversidad del selector) es la de la técnica original.
+#     Puerto Rico conserva ropa vieja, canoas y lo criollo (también son suyos) y sólo pierde el gentilicio del wrap.
+#   · `vocab`: palabras de los EJEMPLOS del prompt (legumbre, banana, potasio). Son ejemplos, nunca nombres de catálogo.
+PROFILE_KITCHEN: dict[str, dict] = {
+    "spain_mediterranea": {
+        "carb_bases_excluded": ("Harina de trigo",),
+        "technique_labels": {
+            "Desmenuzado (Ropa Vieja)": "Desmenuzado (Ej. carne mechada)",
+            "Relleno (Ej. Canoas, Vegetales rellenos)": "Relleno (Ej. pimientos o berenjenas rellenos)",
+            "Estilo Fusión Criolla": None,
+            "Estilo Bowl/Poke Tropical": "Estilo Bowl/Poke",
+            "Wrap o Burrito Dominicano": "Bocadillo o Wrap",
+        },
+        "vocab": {"legumbres": "lentejas, garbanzos, alubias", "legumbre": "alubias", "legumbre_1": "alubia",
+                  "banana": "plátano", "banana_maduro": "plátano maduro",
+                  "potasio": "plátano, patata, aguacate, espinacas, legumbres y naranja"},
+    },
+    "mexico_casera": {
+        "carb_bases_excluded": ("Harina de maíz precocida",),
+        "technique_labels": {
+            "Desmenuzado (Ropa Vieja)": "Deshebrado (Ej. tinga, salpicón)",
+            "Relleno (Ej. Canoas, Vegetales rellenos)": "Relleno (Ej. chiles o calabacitas rellenos)",
+            "Estilo Fusión Criolla": None,
+            "Estilo Bowl/Poke Tropical": "Estilo Bowl/Poke",
+            "Wrap o Burrito Dominicano": "Taco o Burrito",
+        },
+        "vocab": {"legumbres": "frijoles, lentejas, garbanzos", "legumbre": "frijoles", "legumbre_1": "frijol",
+                  "banana": "plátano", "banana_maduro": "plátano maduro",
+                  "potasio": "plátano, papa, aguacate, espinaca, frijoles y naranja"},
+    },
+    "colombia_casera": {
+        "carb_bases_excluded": (),
+        "technique_labels": {
+            "Desmenuzado (Ropa Vieja)": "Desmechado (Ej. carne desmechada)",
+            "Relleno (Ej. Canoas, Vegetales rellenos)": "Relleno (Ej. arepas o papas rellenas)",
+            "Estilo Fusión Criolla": None,
+            "Estilo Bowl/Poke Tropical": "Estilo Bowl/Poke",
+            "Wrap o Burrito Dominicano": "Wrap o Burrito",
+        },
+        "vocab": {"legumbres": "fríjoles, lentejas, garbanzos", "legumbre": "fríjoles", "legumbre_1": "fríjol",
+                  "banana": "banano", "banana_maduro": "banano maduro",
+                  "potasio": "banano, plátano, papa, aguacate, espinaca, fríjoles y naranja"},
+    },
+    "us_everyday": {
+        "carb_bases_excluded": (),
+        "technique_labels": {
+            "Desmenuzado (Ropa Vieja)": "Desmenuzado (Ej. pollo o cerdo deshilachado)",
+            "Relleno (Ej. Canoas, Vegetales rellenos)": "Relleno (Ej. pimientos o papas rellenos)",
+            "Estilo Fusión Criolla": None,
+            "Estilo Bowl/Poke Tropical": "Estilo Bowl/Poke",
+            "Wrap o Burrito Dominicano": "Wrap o Burrito",
+        },
+        "vocab": {"legumbres": "frijoles, lentejas, garbanzos", "legumbre": "frijoles", "legumbre_1": "frijol",
+                  "banana": "banana", "banana_maduro": "banana madura",
+                  "potasio": "banana, papa, batata, aguacate, espinaca, frijoles y naranja"},
+    },
+    "puertorico_criolla": {
+        "carb_bases_excluded": (),
+        "technique_labels": {"Wrap o Burrito Dominicano": "Wrap o Burrito"},
+        "vocab": {"legumbres": "habichuelas, gandules, lentejas", "legumbre": "habichuelas", "legumbre_1": "habichuela",
+                  "banana": "guineo", "banana_maduro": "guineo maduro",
+                  "potasio": "guineo, plátano, batata, aguacate, espinaca, legumbres y naranja"},
+    },
+}
+
 
 def cultural_profiles_enabled() -> bool:
     return _env_bool("MEALFIT_CULTURAL_PROFILES", True)
@@ -360,7 +439,7 @@ def describe_weights_es(weights: Optional[Iterable[dict]]) -> str:
 
 
 __all__ = [
-    "PROFILES", "DEFAULT_PROFILE", "INTENSITY_WEIGHT", "MAX_SECONDARY", "MIN_MAIN_WEIGHT",
+    "PROFILES", "PROFILE_KITCHEN", "DEFAULT_PROFILE", "INTENSITY_WEIGHT", "MAX_SECONDARY", "MIN_MAIN_WEIGHT",
     "cultural_profiles_enabled", "profile_ids", "is_profile", "profile_for_market", "library_for_profile",
     "country_for_profile", "profile_name_es", "normalize_weights", "weights_from_form_field",
     "culture_weights_for_form", "main_profile_id", "profile_for_day", "cultural_country_for_form_data",

@@ -122,6 +122,9 @@ def build_deterministic_variety_prompt(days_count: int = 3, country=None) -> str
     _canon_vp = canonicalize_country(country)
     if _canon_vp != "DO":
         rendered = rendered.replace(_FIDELIDAD_CULTURAL_DO, _FIDELIDAD_CONTEXTO_BETA)
+        # [P1-PLAN-LOTE-850 · 2026-09-29] Las reglas que ACOMPAÑAN a la asignación de carbos («si la base es yuca/plátano/
+        # víver… mangú», «arroz/víver/pasta», «mangú solo»), sobre el literal crudo, antes de la neutralización léxica.
+        rendered = __import__("cocina_del_perfil").localizar_variedad(rendered, _canon_vp)
         # [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] F1 neutralizó el BULLET de fidelidad cultural; el
         # ENCABEZADO que lo enmarca («🍽️ REGLA DE VARIEDAD Y FIDELIDAD CULTURAL DOMINICANA») y el
         # resto del cuerpo seguían en criollo. Medido en el render ES: «casabe», «arepitas»,

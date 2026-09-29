@@ -3341,7 +3341,8 @@ def test_build_shared_context_country_context_reusa_la_misma_derivacion():
     """`country_context` (T3) y `prices_context` (T7) deben compartir `_shared_ctx_country`
     — country_for_form_data(form_data) se llama UNA sola vez en toda la función."""
     cuerpo = _cuerpo_build_shared_context()
-    n = cuerpo.count("country_for_form_data(form_data)")
+    # [P1-PLAN-LOTE-850] el MERCADO se deriva una vez; la COCINA (`cultural_country_for_form_data`, I16) es otra puerta
+    n = len(re.findall(r"(?<!cultural_)country_for_form_data\(form_data\)", cuerpo))
     assert n == 1, f"se esperaba exactamente 1 derivación de país, hallada(s) {n}"
     assert '"country_context": _country_context_block(_shared_ctx_country)' in cuerpo
 
@@ -3949,9 +3950,12 @@ def test_f1a_planner_beta_neutraliza_categoria_a_y_ejemplo():
         assert 'Categoría A "Tubérculos/Mangú"' not in out, cc
         assert "Ejemplo CORRECTO: Día 1=Mangú (A)" not in out, cc
         assert "Tubérculos/Plátano" in out, cc
-        # Categorías B-E y el ejemplo INCORRECTO (fuera del alcance citado por la review) sobreviven.
+        # Categorías B-E sobreviven. [P1-PLAN-LOTE-850 · 2026-09-29] El ejemplo INCORRECTO ya no: G24 midió que el
+        # planificador beta leía «Mangú de plátano / ñame / batata» como el desayuno de referencia; ahora enseña la
+        # misma regla (mismo concepto 3 días) con avena. DO lo conserva (`build("DO") is PLANNER_SYSTEM_PROMPT`).
         assert 'Categoría B "Cereales/Avena"' in out, cc
-        assert "Ejemplo INCORRECTO: Día 1=Mangú de plátano (A)" in out, cc
+        assert "Ejemplo INCORRECTO: Día 1=Mangú de plátano (A)" not in out, cc
+        assert "Ejemplo INCORRECTO: Día 1=Avena con fresas (B)" in out, cc
 
 
 def test_f1a_planner_cache_dimensionada():

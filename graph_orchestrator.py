@@ -3089,8 +3089,9 @@ def _run_sync_cb_safe(cb, payload):
             )
 
 
-def _select_techniques(user_id: str | None, successful_techniques: list = None, abandoned_techniques: list = None, cooking_time=None) -> list:
-    """Selecciona 3 técnicas de cocción diversificadas por familia con decaimiento temporal y cruzado de éxito."""
+def _select_techniques(user_id: str | None, successful_techniques: list = None, abandoned_techniques: list = None, cooking_time=None, cultura=None) -> list:
+    """Selecciona 3 técnicas de cocción diversificadas por familia con decaimiento temporal y cruzado de éxito.
+    [P1-PLAN-LOTE-850] `cultura` (cocina principal): etiquetas de su perfil (`cocina_del_perfil`); None/DO ⇒ lo de siempre."""
     technique_freq = {}
     if user_id:
         try:
@@ -3119,7 +3120,8 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
 
     selected_techniques = []
     used_families = set()
-    _pool_t = [(t, 1.0 / (technique_freq.get(t, 0) + 1)) for t in __import__("constants").techniques_for_cooking_time(cooking_time)]  # [P1-PLAN-LOTE-172]
+    _tecs, _fam = __import__("cocina_del_perfil").tecnicas_de_la_cocina(cooking_time, cultura)  # [P1-PLAN-LOTE-172 · 850]
+    _pool_t = [(t, 1.0 / (technique_freq.get(t, 0) + 1)) for t in _tecs]
     
     if successful_techniques or abandoned_techniques:
         successful_techniques = successful_techniques or []
@@ -3134,14 +3136,14 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
         _pool_t = new_pool
 
     while len(selected_techniques) < 3 and _pool_t:
-        cross_family_pool = [(t, w) for t, w in _pool_t if TECH_TO_FAMILY.get(t) not in used_families]
+        cross_family_pool = [(t, w) for t, w in _pool_t if _fam.get(t) not in used_families]
         active_pool = cross_family_pool if cross_family_pool else _pool_t
         pick = random.choices([x[0] for x in active_pool], weights=[x[1] for x in active_pool], k=1)[0]
         selected_techniques.append(pick)
-        used_families.add(TECH_TO_FAMILY.get(pick, ""))
+        used_families.add(_fam.get(pick, ""))
         _pool_t = [(t, w) for t, w in _pool_t if t != pick]
 
-    logger.info(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({TECH_TO_FAMILY.get(t)})' for t in selected_techniques]}")
+    logger.info(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({_fam.get(t)})' for t in selected_techniques]}")
     return selected_techniques
 
 
@@ -3343,7 +3345,8 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
                 conditions=_condition_strings(form_data), daily_kcal=_mn_kcal,
                 pregnant=_mn_preg, k_elevating_med=_mn_kelev,
                 goal=form_data.get("mainGoal"),  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
-                diet=form_data.get("dietType"), allergies=__import__("constants").alergias_y_rechazos(form_data))  # [P1-DIET-BLIND-DIRECTIVES] PRIORIDAD sin "fuente animal" en veg* · [P1-PLAN-LOTE-197]
+                diet=form_data.get("dietType"), allergies=__import__("constants").alergias_y_rechazos(form_data),  # [P1-DIET-BLIND-DIRECTIVES] PRIORIDAD sin "fuente animal" en veg* · [P1-PLAN-LOTE-197]
+                cocina=cultural_country_for_form_data(form_data))  # [P1-PLAN-LOTE-850] «comidas dominicanas», guineo…
         except Exception:
             micronutrient_targets_context = ""
 
@@ -3754,9 +3757,10 @@ def _day_system_instruction_for_diet(form_data) -> str:
     cache_key = (canon, country)
     cached = _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE.get(cache_key)
     if cached is None:
-        cached = _bdgsp(canon, country) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
+        cached = _bdgsp(canon, country, localizar=False) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
         _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE[cache_key] = cached
-    return _eggw_prompt_limit(cached, form_data)
+    # [P1-PLAN-LOTE-850] ejemplos con el léxico de la cocina, DESPUÉS de la caché: el knob se lee en cada llamada
+    return _eggw_prompt_limit(__import__("cocina_del_perfil").localizar_sistema(cached, country), form_data)
 
 
 # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Catálogo verificado inyectado al
@@ -6062,7 +6066,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             aban_techs = list(set(aban_techs + [t for t in blocked_techs if t]))
             logger.info(f"🚫 [BLOCKED-TECHNIQUES] Técnicas acumuladas bloqueadas: {blocked_techs}")
 
-    selected_techniques = _select_techniques(_uid, succ_techs, aban_techs, cooking_time=form_data.get("cookingTime"))
+    selected_techniques = _select_techniques(_uid, succ_techs, aban_techs, cooking_time=form_data.get("cookingTime"),
+                                             cultura=cultural_country_for_form_data(form_data))
 
     random_seed = __import__("horizon").run_seed(form_data, attempt=state.get("attempt")) or random.randint(10000, 99999)  # [P1-PLAN-LOTE-3 · B4] semilla del run: reproducible por intento
 
@@ -20071,7 +20076,8 @@ def build_update_micronutrient_directive(form_data: dict) -> str:
             conditions=_condition_strings(form_data), daily_kcal=_kcal,
             pregnant=_preg, k_elevating_med=_kelev,
             goal=form_data.get("mainGoal") or form_data.get("goal"),
-            diet=form_data.get("dietType"), allergies=__import__("constants").alergias_y_rechazos(form_data))  # [P1-DIET-BLIND-DIRECTIVES] · [P1-PLAN-LOTE-197]
+            diet=form_data.get("dietType"), allergies=__import__("constants").alergias_y_rechazos(form_data),  # [P1-DIET-BLIND-DIRECTIVES] · [P1-PLAN-LOTE-197]
+            cocina=cultural_country_for_form_data(form_data))  # [P1-PLAN-LOTE-850]
     except Exception as _ms_e:
         logger.debug(f"[P2-UPDATE-MICRO-STEER] directiva falló (no bloquea): {type(_ms_e).__name__}: {_ms_e}")
         return ""
