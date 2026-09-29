@@ -107,9 +107,11 @@ def build_planner_system_prompt(country=None) -> str:
     canon_country = canonicalize_country(country)
     if canon_country == "DO":
         return PLANNER_SYSTEM_PROMPT
+    # [P1-PLAN-LOTE-850 · 2026-09-29] El ejemplo INCORRECTO de la regla de desayunos («Mangú de plátano / ñame /
+    # batata») sale sin mangú (`cocina_del_perfil.localizar_planificador`), después de la caché: el knob se lee cada vez.
     cached = _PLANNER_PROMPT_COUNTRY_CACHE.get(canon_country)
     if cached is not None:
-        return cached
+        return __import__("cocina_del_perfil").localizar_planificador(cached, canon_country)
     rendered = PLANNER_SYSTEM_PROMPT.replace(_CATEGORIA_A_DO, _CATEGORIA_A_BETA)
     rendered = rendered.replace(_EJEMPLO_CORRECTO_DO, _EJEMPLO_CORRECTO_BETA)
     # [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] F1 neutralizó la Categoría A y su ejemplo; el resto
@@ -121,4 +123,4 @@ def build_planner_system_prompt(country=None) -> str:
     from constants import beta_prompt_country_header, neutralize_do_lexicon
     rendered = beta_prompt_country_header(canon_country) + neutralize_do_lexicon(rendered)
     _PLANNER_PROMPT_COUNTRY_CACHE[canon_country] = rendered
-    return rendered
+    return __import__("cocina_del_perfil").localizar_planificador(rendered, canon_country)

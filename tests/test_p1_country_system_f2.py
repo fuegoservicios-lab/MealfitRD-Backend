@@ -4672,7 +4672,8 @@ def test_j_ai_helpers_variety_country_derivado_una_vez():
         "country_for_form_data(form_data) debe derivarse UNA sola vez dentro de esta función"
     )
     assert "_get_fast_filtered_catalogs(\n            allergies, dislikes, diet, country=_variety_country, market_extras=True, culture_country=_variety_culture)" in cuerpo
-    assert "build_deterministic_variety_prompt(_dc, _variety_country)" in cuerpo
+    # [P1-PLAN-LOTE-850 · ronda 1] mismo `_variety_country` (mercado); la cocina viaja aparte (`cocina=`, I16)
+    assert "build_deterministic_variety_prompt(_dc, _variety_country, cocina=_variety_culture)" in cuerpo
 
 
 def test_j_agent_swap_reusa_swap_country_no_rederiva():

@@ -44,8 +44,9 @@ _BETA = ("ES", "MX", "CO", "PR", "US")
 # sitio del que salen. No es una lista de deseos: es lo MEDIDO, y por eso el test de abajo es una
 # caracterización — si aparece uno NUEVO, falla; si desaparece uno de éstos, también, para que
 # alguien actualice la nota en vez de dejarla obsoleta.
+# [P1-PLAN-LOTE-850 · 2026-09-29] «mangu» ya no: la regla 9 del generador de días y el ejemplo INCORRECTO del
+# planificador salen en beta sin mangú (`cocina_del_perfil`); el enum «Mangú/Tubérculos» sólo vive en el esquema JSON.
 _RESIDUOS_MEDIDOS = {
-    "mangu": "categoría de desayuno que asigna el Planificador («Mangú/…»)",
     "casabe": "regla de TÉCNICA P1-CASABE-NO-BOIL (no hervir una torta ya cocida)",
     "locrio": "lista de técnicas de plato fuerte prohibidas en merienda",
 }

@@ -220,3 +220,52 @@ En la misma pasada: `diet.exclusions` (los «no me gusta») llegan a `dish_regis
 sólo viajaban al prompt como texto; y cuando la cocina asignada a un día no tiene plato para una franja con los
 filtros del usuario, el blueprint cae a la biblioteca del mercado y lo **anota** (`registry.culture_fallbacks`),
 que la rebanada conserva y el informe de fidelidad publica como `culture_unavailable`.
+
+## 8f. La asignación previa y los ejemplos del prompt, de la cocina del perfil (`P1-PLAN-LOTE-850` · 2026-09-29)
+
+La batería G24 (6 planes reales) mostró que lo que más empujaba cocina dominicana a los países beta no era el prompt de
+sistema sino la **asignación determinista** que el planificador recibe como obligatoria: el sembrador sorteaba los
+carbohidratos del pool de mercado más los básicos universales (batata, yuca, plátano, habichuelas, harina de maíz
+precocida) —España recibió «Harina de trigo + Batata» los tres días, México «Yuca + Harina de maíz precocida»— y el
+selector de técnicas imponía «Estilo Fusión Criolla», «Desmenuzado (Ropa Vieja)» o «Relleno (Ej. Canoas…)».
+
+Motor `cocina_del_perfil.py`, datos `cultural_profiles.PROFILE_KITCHEN` (sin entrada para `dominican_criolla`: DO no
+cambia nada), knob `MEALFIT_BETA_CULTURAL_ASSIGNMENT` (True):
+
+- **Carbohidratos asignables** (`constants._market_pool_with_extras`, sólo cuando el llamador pasa la cocina: sembrador
+  y cambio de plato; el camino degradado del cron no la conoce y no cambia): los del pool de mercado que usa la
+  biblioteca compilada de esa cocina (`dish_registry`), menos `carb_bases_excluded` (ES «Harina de trigo», MX «Harina
+  de maíz precocida», con su criterio en el dato) y menos los cereales de desayuno (la avena no es base de almuerzo ni
+  de cena). Con menos de 4 supervivientes, el pool entero. El **catálogo no cambia**: el modelo puede usar todo lo que
+  su mercado vende; sólo cambia lo que se le impone.
+- **Técnicas** (`graph_orchestrator._select_techniques(..., cultura=)`): `technique_labels` reetiqueta o quita
+  (`None`) las técnicas con gentilicio o plato dominicano; la familia (diversidad del sorteo) es la de la técnica
+  original y el filtro por tiempo de cocina se aplica antes. Puerto Rico conserva ropa vieja, canoas y lo criollo.
+- **Ejemplos del prompt** (`vocab`): bloque de micronutrientes («comidas variadas y sabrosas de la cocina española»,
+  potasio y legumbre por país), prompt de sistema del generador de días (regla 9 sin «Mangú/tubérculos», legumbres,
+  banana y la tabla de macros), ejemplo INCORRECTO del planificador y reglas de bases del prompt de variedad. Se
+  aplican después de las cachés de render (el knob se lee en cada llamada; memo acotado para devolver el mismo objeto).
+  Los **nombres del catálogo no se tocan** (son identificadores del motor); el sobreviviente `P1-CASABE-NO-BOIL` y el
+  enum «Mangú/Tubérculos» del esquema tampoco.
+
+**Ronda 1 de revisión** (mismo lote):
+
+- **El vocabulario resuelve al alimento que quiere decir.** El modelo copia las palabras del prompt a `plan_data` y la
+  lista las resuelve por alias: «plátano» es alias de **Plátano verde** (G24 ES: «½ plátano mediano» ⇒ «Green
+  plantain»). La banana se dice «banana» (ES, MX, US), «banano» (CO) o «guineo» (PR), las tres ⇒ Guineo; las
+  legumbres, con una fila concreta: «judías blancas» (ES), «frijoles negros» (MX, US), «fríjoles rojos» (CO). Puerto
+  Rico hereda las palabras dominicanas («habichuelas» ⇒ Habichuelas rojas). Test: cada palabra, por
+  `normalize_ingredient_for_tracking`.
+- **Integrales**: `cultural_profiles.BASES_INTEGRALES` (arroz, pasta y pan integrales) pasa el filtro por biblioteca
+  aunque la biblioteca escriba la versión blanca; sin él México perdía «Arroz integral» y «Pasta integral», Colombia
+  «Arroz integral» y EE. UU. «Pan integral familiar». Se descartó filtrar sólo lo que añaden los básicos universales:
+  devolvía «Frijoles horneados» a EE. UU. (G24: el sembrador los asignó los 3 días) y no recuperaba los integrales de
+  MX y CO, que vienen justo de los básicos universales.
+- **Qué sigue a la cocina y qué al mercado.** Carbos, técnicas, sistema, micros y variedad, a la COCINA (la variedad
+  acompaña a los carbos que asigna: `build_deterministic_variety_prompt(..., cocina=)`); el planificador, al MERCADO,
+  como todo su render desde F1: su ejemplo INCORRECTO lo acompaña para no contradecir al CORRECTO.
+- **Lo que el filtro quita además de lo criollo** (declarado): ES «Judías pintas», PR «Habichuelas blancas» y «Harina
+  de yuca», CO «Habichuelas negras» y «Frijoles pintos», US «Frijoles horneados» (a propósito). Siguen en el catálogo:
+  el modelo puede usarlos; sólo dejan de imponerse. Lo heredan también el cambio de plato (`agent.py`) y la Nevera (una
+  base ajena a la cocina ya no se impone). Las etiquetas de técnica persistidas (`_selected_techniques`,
+  `last_technique`) cambian de nombre: la primera vez, la penalización de repetición no reconoce las viejas.

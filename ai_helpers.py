@@ -2973,7 +2973,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             blocked_text += _policy_prompt_block_f3(_bp_eff, _bp_slice, surface="planner_seeder", enforced=True)
         except Exception as _pb_e:
             logger.warning(f"[P1-ARQ25-F3-HORIZON] bloque de política omitido en el seeder: {_pb_e}")
-    prompt = build_deterministic_variety_prompt(_dc, _variety_country).format(
+    # [P1-PLAN-LOTE-850 · ronda 1] las reglas que acompañan a los carbos van por la COCINA (I16), como los carbos
+    prompt = build_deterministic_variety_prompt(_dc, _variety_country, cocina=_variety_culture).format(
         light_protein_block=_light_block,
         blocked_text=blocked_text,
         **{f"protein_{_i}": chosen_proteins[_i % len(chosen_proteins)] for _i in range(_dc)},

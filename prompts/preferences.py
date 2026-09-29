@@ -90,7 +90,7 @@ _FIDELIDAD_CONTEXTO_BETA = (
 )
 
 
-def build_deterministic_variety_prompt(days_count: int = 3, country=None) -> str:
+def build_deterministic_variety_prompt(days_count: int = 3, country=None, cocina=None) -> str:
     """Plantilla del prompt de variedad para un chunk de `days_count` días.
 
     Con `days_count=3` Y país DO/None (o desconocido — fail-safe de `canonicalize_country`)
@@ -102,6 +102,10 @@ def build_deterministic_variety_prompt(days_count: int = 3, country=None) -> str
     [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1b)] `country` (default None) selecciona el
     bullet "FIDELIDAD CULTURAL": DO ⇒ intacto; beta ⇒ `_FIDELIDAD_CONTEXTO_BETA` (sin mandato de
     ingredientes exclusivamente dominicanos).
+
+    [P1-PLAN-LOTE-850 · 2026-09-29 · ronda 1 de revisión] `cocina` (default None ⇒ el mercado, conducta previa) decide
+    las reglas que acompañan a los carbos asignados (`cocina_del_perfil.localizar_variedad`): los carbos salen de la
+    COCINA (I16), así que con mercado US y cocina DO la regla de yuca/plátano/mangú sigue siendo la dominicana.
 
     tooltip-anchor: P2-SEEDER-DAYS-COUNT / build_deterministic_variety_prompt
     (test_p1_country_system_f1.py)"""
@@ -122,6 +126,10 @@ def build_deterministic_variety_prompt(days_count: int = 3, country=None) -> str
     _canon_vp = canonicalize_country(country)
     if _canon_vp != "DO":
         rendered = rendered.replace(_FIDELIDAD_CULTURAL_DO, _FIDELIDAD_CONTEXTO_BETA)
+        # [P1-PLAN-LOTE-850 · 2026-09-29] Las reglas que ACOMPAÑAN a la asignación de carbos («si la base es yuca/plátano/
+        # víver… mangú», «arroz/víver/pasta», «mangú solo»), sobre el literal crudo, antes de la neutralización léxica.
+        rendered = __import__("cocina_del_perfil").localizar_variedad(
+            rendered, _canon_vp if cocina is None else canonicalize_country(cocina))
         # [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] F1 neutralizó el BULLET de fidelidad cultural; el
         # ENCABEZADO que lo enmarca («🍽️ REGLA DE VARIEDAD Y FIDELIDAD CULTURAL DOMINICANA») y el
         # resto del cuerpo seguían en criollo. Medido en el render ES: «casabe», «arepitas»,
