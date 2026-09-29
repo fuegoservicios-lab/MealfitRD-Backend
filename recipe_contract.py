@@ -994,6 +994,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("pasos_cantidades").fresco_no_se_escurre(meal)  # [P1-PLAN-LOTE-442] lo fresco se seca
         __import__("pasos_cerrador").notas_de_otro_plato(meal)  # [P1-PLAN-LOTE-443] notas de otro plato
         __import__("concordancia").concordar_masculinos(meal)  # [P1-PLAN-LOTE-447] «aguacate fresca» → «aguacate fresco»
+        __import__("huevo_concuerda").concordar_pasos(meal)  # [P1-PLAN-LOTE-809] «el huevo duros» → «el huevo duro»
         __import__("pasos_cerrador").ya_viene_concordado(meal)  # [P1-PLAN-LOTE-449] «(ya vienen cocidas)»
         __import__("pasos_cerrador").proteina_servida_una_vez(meal)  # [P1-PLAN-LOTE-449] lo que el cerrador sirve, una vez
         __import__("pasos_cerrador").acompanamientos_en_una_frase(meal)  # [P1-PLAN-LOTE-449] «Acompaña…» en una frase
