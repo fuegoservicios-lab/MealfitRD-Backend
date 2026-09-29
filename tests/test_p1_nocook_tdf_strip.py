@@ -33,7 +33,7 @@ def test_strip_runs_before_time_check():
     """El strip corre ANTES del check de tiempo — el placeholder con tiempo falso YA inyectado
     ("No requiere cocción (~10-12 min)") también se limpia en re-finalizaciones."""
     i = _GO.index("def _inject_recipe_time_temp_defaults")
-    body = _GO[i:i + 3500]
+    body = _GO[i:_GO.index("\ndef ", i + 10)]   # [P1-PLAN-LOTE-862] el cuerpo entero, no 3.500 caracteres fijos
     i_strip = body.index("_NOCOOK_TDF_PLACEHOLDER_RE.search")
     i_time = body.index("_CONTRACT_TIME_RE.search(step)")
     assert i_strip < i_time

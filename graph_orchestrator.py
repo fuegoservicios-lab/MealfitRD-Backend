@@ -23500,7 +23500,7 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                     _sa_tt(step.lower())):
                 _rest_steps = [s2 for j, s2 in enumerate(rec) if j != i]
                 if _meal_is_no_cook({"name": meal.get("name"), "recipe": _rest_steps}):
-                    rec.pop(i)
+                    rec[i:i + 1] = __import__("tdf_sin_relleno").lista(step)  # [P1-PLAN-LOTE-862] queda la instrucción
                     meal["_nocook_tdf_stripped"] = True
                     return True
                 return False
