@@ -20425,7 +20425,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             if not day_used_proteins:
                 return False
             try:
-                return bool(_protein_gate_labels_in_text(_nlow_c) & set(day_used_proteins))
+                return bool((_protein_gate_labels_in_text(_nlow_c) | __import__("rotacion_cerrador").choca(_nlow_c, meal, _pool, day_used_proteins)) & set(day_used_proteins))  # [P1-PLAN-LOTE-919]
             except Exception:
                 return False
         # [P1-MENU-COHERENCE-2 · 2026-07-29] Yogurt "al lado" de una ropa vieja/guiso criollo
@@ -37621,7 +37621,7 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
             if not _ms:
                 continue
             _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
-            _labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
+            _labels = [_protein_gate_labels_in_meal(_mm) | __import__("rotacion_cerrador").del_plato(_mm) for _mm in _ms]
             for _i, _m in enumerate(_ms):
                 # [P1-SLOT-PROTEIN-FLOOR-ALL · 2026-09-05] También las comidas FUERTES: el plan vivo a2b40e4e se
                 # entregó degradado con «Croquetas de papa y queso» de 19 g sobre un reparto de 47 (almuerzo) y
@@ -37651,7 +37651,7 @@ def _repair_light_slot_protein(days: list, nutrition: dict, form_data: dict, db=
                                                  goal=(form_data or {}).get("mainGoal") or (form_data or {}).get("goal"))
                 if _g > 0:
                     added += _g
-                    _labels[_i] = _protein_gate_labels_in_meal(_m)
+                    _labels[_i] = _protein_gate_labels_in_meal(_m) | __import__("rotacion_cerrador").del_plato(_m)
                     logger.info(f"🥛 [P1-LIGHT-SLOT-PROTEIN-FLOOR] +{_g}g en {'franja ligera' if _meal_slot_is_light(_m, _sa_lf) else 'comida fuerte'} ({_cur:.0f}→"
                                 f"{_meal_macro_num(_m.get('protein')):.0f} g de {_slot_target:.0f}) | meal={str(_m.get('name'))[:40]}")
                 else:
@@ -37742,7 +37742,7 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
             _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
             # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] labels del gate same-day por comida (SSOT del
             # detector del revisor) → el closer no INTRODUCE una proteína que otra comida del día ya usa.
-            _day_meal_labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
+            _day_meal_labels = [_protein_gate_labels_in_meal(_mm) | __import__("rotacion_cerrador").del_plato(_mm) for _mm in _ms]  # [P1-PLAN-LOTE-919]
             _touched = False
             for _i, _m in enumerate(_ms):
                 if _day_cur >= _day_floor:
@@ -37776,7 +37776,7 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                     _m["_final_protein_close"] = True
                     _touched = True
                     # el add recién hecho debe ser visible para las siguientes comidas del día
-                    _day_meal_labels[_i] = _protein_gate_labels_in_meal(_m)
+                    _day_meal_labels[_i] = _protein_gate_labels_in_meal(_m) | __import__("rotacion_cerrador").del_plato(_m)
                     _day_cur = sum(_meal_macro_num(_mm.get("protein")) for _mm in _ms)  # recomputar piso del día
             # Re-cuadrar C/F del día preservando la proteína recién cerrada (reusa el reconcile probado).
             if _touched:
@@ -37859,7 +37859,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                 _slot_fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
                 # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] labels del gate same-day por comida
                 # (SSOT del detector del revisor) — ver _repair_protein_floor_post_caps.
-                _day_meal_labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
+                _day_meal_labels = [_protein_gate_labels_in_meal(_mm) | __import__("rotacion_cerrador").del_plato(_mm) for _mm in _ms]  # [P1-PLAN-LOTE-919]
                 for _mi, _m in enumerate(_ms):
                     if _slot_fracs:
                         _share = _slot_fracs[_mi]
@@ -37902,7 +37902,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                             country=country_for_form_data(form_data))
                         if _g_mi > 0:
                             # el add recién hecho debe ser visible para las siguientes comidas del día
-                            _day_meal_labels[_mi] = _protein_gate_labels_in_meal(_m)
+                            _day_meal_labels[_mi] = _protein_gate_labels_in_meal(_m) | __import__("rotacion_cerrador").del_plato(_m)
                         _topup_g += _g_mi
                         if CLOSER_EGG_BUDGET_ENABLED and not _had_egg_pre and _meal_has_egg(_m, _sa_egg):
                             _egg_count += 1  # el closer añadió huevo a esta comida → consume presupuesto
