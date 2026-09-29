@@ -97,7 +97,22 @@ def test_una_subida_parcial_que_no_se_nota_no_se_hace():
     m = _plato("Yuca guisada con queso blanco", "85 g de yuca")
     assert _subir(m, _margen(kcal=10.0)) == [] and m["ingredients"][0] == "85 g de yuca", "6 g de 15 que faltan"
     m = _plato("Yuca guisada con queso blanco", "85 g de yuca")
-    assert _subir(m, _margen(kcal=30.0)) == ["↑85→100 g de Yuca"], "cabe entera"
+    assert _subir(m, _margen(kcal=30.0, grasa=5.0)) == ["↑85→100 g de Yuca"], "cabe entera y el día tiene sitio: como siempre"
+
+
+def test_lo_que_sube_por_lo_inapreciable_tiene_que_notarse():
+    """A/B del escudo (92 planes): la regla abría subidas de 1 a 5 g («25→30 g de cebolla», «19→20 g de queso ricotta»,
+    «55→60 g de guayaba») que no le cambian el plato a nadie y sí la línea: «25 g de cebolla morada» salía «30 g de
+    cebolla», «½ torta pequeña de casabe» salía «20 g de casabe». Lo que sube SÓLO por lo inapreciable sube si se nota:
+    al menos 10 g y un cuarto de su ración."""
+    m = _plato("Yuca guisada con queso blanco", "85 g de yuca")
+    assert _subir(m, _margen(kcal=30.0)) == [] and m["ingredients"][0] == "85 g de yuca", "15 g de 100"
+    m = _plato("Nabo crujiente al horno con queso blanco", "92 g de nabo")
+    assert _subir(m, _margen()) == [] and m["ingredients"][0] == "92 g de nabo"
+    m = _plato("Yuca guisada con queso blanco", "75 g de yuca")
+    assert _subir(m, _margen()) == ["↑75→100 g de Yuca"], "un cuarto de la ración: se nota"
+    m = _plato("Nabo crujiente al horno con queso blanco", "92 g de nabo")
+    assert _subir(m, _margen(grasa=5.0)) == ["↑92→100 g de Nabo"], "con sitio en el día, la subida de siempre"
 
 
 def test_la_yuca_tambien():
@@ -136,7 +151,9 @@ def test_con_grasa_de_sobra_todo_como_antes():
 
 def test_el_techo_renal_de_proteina_tampoco_bloquea_lo_inapreciable():
     m = _plato("Nabo crujiente al horno con queso blanco", "30 g de nabo")
-    assert _subir(m, _margen(proteina=0.2)) == ["↑30→52 g de Nabo"], "70 g traen 0,63 g de proteína: sube lo que cabe"
+    assert _subir(m, _margen(proteina=0.3)) == ["↑30→63 g de Nabo"], "70 g traen 0,63 g de proteína: sube lo que cabe"
+    m = _plato("Nabo crujiente al horno con queso blanco", "30 g de nabo")
+    assert _subir(m, _margen(proteina=0.2)) == [], "22 g más no se notan: menos de un cuarto de su ración"
     m = _plato("Nabo crujiente al horno con queso blanco", "60 g de nabo")
     assert _subir(m, _margen(proteina=0.2)) == ["↑60→100 g de Nabo"], "40 g traen 0,36 g"
 

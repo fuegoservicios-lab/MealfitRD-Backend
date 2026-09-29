@@ -412,6 +412,11 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
             dp = float(mac.get("protein") or 0)
         else:
             dk = -1.0
+    # [P1-PLAN-LOTE-915] lo que sube SÓLO por lo inapreciable sube si se nota (≥ 10 g y un cuarto de su ración): «25→30 g
+    # de cebolla» no le cambia el plato a nadie y sí la línea («25 g de cebolla morada» salía «30 g de cebolla»)
+    _solo_traza = _tz >= 0 and dk > 0 and (dg > margen["grasa"] + 0.05 or dp > m_p + 0.5)
+    if _solo_traza and objetivo - g_cur < max(0.25 * piso, _SUBIDA_QUE_SE_NOTA_G):
+        return None
     if dk <= 0 or dk > margen["kcal"] + 0.5 or _tz < dg > margen["grasa"] + 0.05 or _tz < dp > m_p + 0.5:
         logger.info(f"🧩 [P1-PLAN-LOTE-49] «{str(meal.get('name'))[:40]}»: {canon} en {g_cur:.0f} g (piso {piso}) y el día "
                     f"no tiene sitio (quedan {margen['kcal']:.0f} kcal y {margen['grasa']:.1f} g de grasa"
@@ -440,7 +445,7 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
         raw.append(linea)
     # [P1-PLAN-LOTE-915] Lo que sube sólo porque su grasa es inapreciable suma su DELTA y no re-mide el plato: el día
     # está en su techo porque el nivelado ajustó sus números, y re-medirlo desde las líneas lo movía (lote 178).
-    if _tz >= 0 and (dg > margen["grasa"] + 0.05 or dp > m_p + 0.5):
+    if _solo_traza:
         _delta(meal, vieja, linea, db)
         margen.setdefault("_por_delta", {})[id(meal)] = margen.get("_por_delta", {}).get(id(meal), 0) + 1
     margen["kcal"] -= dk
@@ -637,6 +642,7 @@ def faltantes_on() -> bool:
 
 
 _INAPRECIABLE_G = 0.5
+_SUBIDA_QUE_SE_NOTA_G = 10.0      # [P1-PLAN-LOTE-915] lo que sube sólo por lo inapreciable
 
 
 def _categoria(nombre, db) -> str:
