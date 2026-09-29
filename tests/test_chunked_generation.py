@@ -781,19 +781,46 @@ def test_shift_plan_skips_refill_when_target_week_chunk_already_exists(mock_pool
     # (not is_partial and needs_fill): #4 health_profile, #5 MAX(week_number) no-cancelado,
     # #6 chunk conflictivo para la semana objetivo → como existe, enqueue NO se llama.
     # (El stub legacy traía un {"cnt": 0} espurio de una estructura de query anterior.)
-    mock_cursor.fetchone.side_effect = [
-        {"plan_mode": "plan", "plan_mode_changed_at": None},
-        {"id": "plan_15d"},
-        {"plan_data": plan_data},
-        {"health_profile": {"budget": "mid"}},
-        {"max_week": 2},
-        {"id": "chunk-existing", "status": "stale", "chunk_kind": "initial_plan"},
-    ]
+    # [P1-PLAN-LOTE-811] La lista POSICIONAL de 6 filas ya estaba corrida (la consulta `en_vuelo` del reanclaje
+    # se comía la fila de health_profile) y el test pasaba porque el catch-up salía por «Sin health_profile»,
+    # sin llegar nunca al chequeo de la semana. Despachador por SQL, como sus vecinos. Además la decisión es ya
+    # la del cron también para 15/30 días (COUNT de bloques vivos): con 0 vivos llega al catch-up; el bloque de
+    # la semana objetivo está `failed` (lo mira el chequeo por semana, no el de vivos) → enqueue NO se llama.
+    _ultimo_sql = {"q": ""}
+
+    def _exec(sql, *a, **k):
+        _ultimo_sql["q"] = " ".join(str(sql).split())
+
+    def _fetchone():
+        q = _ultimo_sql["q"]
+        if "plan_mode" in q:
+            return {"plan_mode": "plan", "plan_mode_changed_at": None}
+        if "SELECT id FROM meal_plans" in q:
+            return {"id": "plan_15d"}
+        if "health_profile" in q:
+            return {"health_profile": {"budget": "mid"}}
+        if "plan_data" in q:
+            return {"plan_data": plan_data}
+        if "en_vuelo" in q:
+            return {"en_vuelo": 0}
+        if "COUNT(*) AS cnt" in q:
+            return {"cnt": 0}
+        if "max_week" in q:
+            return {"max_week": 2}
+        if "LIMIT 1 FOR UPDATE" in q:
+            return {"id": "chunk-existing", "status": "failed", "chunk_kind": "initial_plan"}
+        return None
+
+    mock_cursor.execute.side_effect = _exec
+    mock_cursor.fetchone.side_effect = _fetchone
+    mock_cursor.fetchall.return_value = []
 
     response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
     assert response["success"] is True
     mock_enqueue.assert_not_called()
+    assert any("LIMIT 1 FOR UPDATE" in str(c.args[0]) for c in mock_cursor.execute.call_args_list), \
+        "debe llegar al chequeo de la semana objetivo (no quedarse antes por falta de health_profile)"
 
 
 @patch('cron_tasks._enqueue_plan_chunk')

@@ -2948,33 +2948,28 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     is_partial = plan_data.get('generation_status') in ('partial', 'generating_next')
                     needs_fill = len(shifted_days) < window_needed and days_remaining_in_plan > 0
 
-                    # [P0-4 FIX] Antes: disable_rolling_refill_for_active_7d bloqueaba TODO refill
-                    # mientras el plan de 7d siguiera vivo. Eso dejaba huérfanos los planes donde
-                    # el encolado síncrono inicial (chunk 2 de 4d) falló: 3 días generados y 4 vacíos
-                    # sin recuperación automática. Ahora solo bloqueamos cuando hay chunks vivos
-                    # en queue (estado normal); si no hay chunks pendientes y existe gap real, se
-                    # permite refill para recuperar el hueco.
-                    disable_rolling_refill_for_active_7d = False
-                    if total_planned_days == 7 and days_remaining_in_plan > 0:
+                    # [P1-PLAN-LOTE-811] La MISMA decisión que el cron (`relleno_rolling.decidir`): con bloques vivos
+                    # no se rellena encima. Antes el «gap huérfano» de 7 días (P0-4) era un `elif` que sólo escribía
+                    # «Habilitando rolling refill de recuperación» y se quedaba con el caso: la rama que encola (abajo)
+                    # no corría nunca (commit 29889c97). Knob `MEALFIT_7D_ORPHAN_GAP_HTTP_REFILL` = False ⇒ lo de antes.
+                    import relleno_rolling as _rr_811
+                    _http_811 = _rr_811.gap_7d_http_activo()
+                    _vivos_811 = 0
+                    if needs_fill and not is_partial and (_http_811 or total_planned_days == 7):
                         cursor.execute(
                             "SELECT COUNT(*) AS cnt FROM plan_chunk_queue "
                             "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
                             (plan_id,)
                         )
-                        chunks_in_flight = int(((cursor.fetchone() or {}).get('cnt') or 0))
-                        has_orphan_gap = chunks_in_flight == 0 and len(shifted_days) < total_planned_days
-                        disable_rolling_refill_for_active_7d = not has_orphan_gap
+                        _vivos_811 = int(((cursor.fetchone() or {}).get('cnt') or 0))
+                    _encolar_811, _motivo_811 = _rr_811.decidir(
+                        total_planned_days, len(shifted_days), days_remaining_in_plan, window_needed, _vivos_811,
+                        plan_data.get('generation_status'), gap_7d=_http_811)
 
-                    if disable_rolling_refill_for_active_7d and needs_fill:
+                    if needs_fill and not is_partial and not _encolar_811:
                         logger.info(
-                            f"[P1-1] Plan de 7 días {plan_id}: rolling refill bloqueado durante vida útil "
-                            f"(restantes={days_remaining_in_plan}, visibles={len(shifted_days)})."
-                        )
-                    elif total_planned_days == 7 and days_remaining_in_plan > 0 and needs_fill and not is_partial:
-                        logger.warning(
-                            f"[P0-4] Plan de 7 días {plan_id}: detectado gap huérfano "
-                            f"(visibles={len(shifted_days)}/{total_planned_days}, sin chunks vivos). "
-                            f"Habilitando rolling refill de recuperación."
+                            f"[P1-PLAN-LOTE-811] Plan {plan_id}: relleno no encolado ({_motivo_811}; "
+                            f"visibles={len(shifted_days)}/{window_needed}, vivos={_vivos_811})."
                         )
                     elif total_planned_days in (7, 15, 30) and days_remaining_in_plan == 0 and not is_partial:
                         # [P0-1] Plan expirado: auto-renovar con señales de aprendizaje frescas.
@@ -3036,22 +3031,14 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                             logger.error(f"Error push renewal: {e_push}")
                                     else:
                                         for chunk_count in split_with_absorb(total_planned_days, PLAN_CHUNK_SIZE):
-                                            snapshot = {
-                                                "form_data": {
-                                                    **hp,
-                                                    "user_id": user_id,
-                                                    "totalDays": chunk_count,
-                                                    "_plan_start_date": renewal_plan_start_iso,
-                                                    "current_pantry_ingredients": live_inv or [],
-                                                    "_pantry_captured_at": today.isoformat(),
-                                                },
-                                                "taste_profile": "",
-                                                "memory_context": "",
-                                                "previous_meals": previous_meals,
-                                                "totalDays": chunk_count,
-                                                "_is_rolling_refill": True,
-                                                "_is_weekly_renewal": True,
-                                            }
+                                            # [P1-PLAN-LOTE-811] gemelo del cron: marcas de continuación + política del plan
+                                            snapshot = _rr_811.snapshot_relleno(
+                                                hp=hp, user_id=user_id, chunk_count=chunk_count,
+                                                ancla_iso=renewal_plan_start_iso, plan_data=plan_data,
+                                                previous_meals=previous_meals, semanal=True, continuacion=_http_811,
+                                                triggered_by="shift_plan_http" if _http_811 else None,
+                                                form_extra={"current_pantry_ingredients": live_inv or [],
+                                                            "_pantry_captured_at": today.isoformat()})
                                             
                                             if is_first_chunk:
                                                 _history = plan_data.get("_lifetime_lessons_history")
@@ -3163,7 +3150,7 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                 f"(visible={len(shifted_days)}/{window_needed}, mode=strict): "
                                 f"respetando que chunk previo aún tiene días vivos."
                             )
-                    elif not is_partial and needs_fill:
+                    elif _encolar_811:
                         try:
                             from cron_tasks import _enqueue_plan_chunk
                             cursor.execute("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,))
@@ -3247,19 +3234,12 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                             f"kind={conflicting_chunk.get('chunk_kind', 'unknown')})."
                                         )
                                     else:
-                                        snapshot = {
-                                            "form_data": {
-                                                **hp,
-                                                "user_id": user_id,
-                                                "totalDays": chunk_count,
-                                                "_plan_start_date": catchup_plan_start_iso,
-                                            },
-                                            "taste_profile": "",
-                                            "memory_context": "",
-                                            "previous_meals": previous_meals,
-                                            "totalDays": chunk_count,
-                                            "_is_rolling_refill": True,
-                                        }
+                                        # [P1-PLAN-LOTE-811] el snapshot del cron: marcas de continuación + política
+                                        snapshot = _rr_811.snapshot_relleno(
+                                            hp=hp, user_id=user_id, chunk_count=chunk_count,
+                                            ancla_iso=catchup_plan_start_iso, plan_data=plan_data,
+                                            previous_meals=previous_meals, continuacion=_http_811,
+                                            triggered_by="shift_plan_http" if _http_811 else None)
                                         if is_first_catchup and inherited:
                                             snapshot["_inherited_lifetime_lessons"] = inherited
                                             is_first_catchup = False

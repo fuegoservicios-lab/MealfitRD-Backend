@@ -22725,6 +22725,7 @@ def _alert_stranded_partial_plans() -> None:
                 mp.id::text AS plan_id,
                 mp.user_id::text AS user_id,
                 mp.plan_data->>'generation_status' AS gen_status,
+                mp.plan_data->>'_frozen_at' AS frozen_at,
                 EXTRACT(EPOCH FROM (NOW() - mp.created_at))/3600 AS age_hours
             FROM meal_plans mp
             WHERE mp.created_at < NOW() - make_interval(hours => %s)
@@ -22791,10 +22792,13 @@ def _alert_stranded_partial_plans() -> None:
             )
         else:
             _alert_title = "Plan stranded en partial sin días generados"
+            # [P1-PLAN-LOTE-811] La cifra es la EDAD del plan (desde `created_at`), no el tiempo con `days=[]`: dea00a2f
+            # «182,6 h» había pasado 131,6 h vacío. Un plan congelado NO se excluye (fue esta alerta la que vio el lote 653).
             _alert_msg = (
-                f"Plan {plan_id} (user {user_id}) lleva {age_hours:.1f}h "
-                f"en `generation_status='partial'` con `days=[]` (umbral "
-                f"{_age_h}h). Cierre del hueco simétrico de I8 (que solo "
+                f"Plan {plan_id} (user {user_id}) tiene {age_hours:.1f}h de edad del plan (desde created_at, no el "
+                f"tiempo en este estado) y está en `generation_status='partial'` con `days=[]` (umbral "
+                f"{_age_h}h){' — congelado desde ' + str(row.get('frozen_at')) if row.get('frozen_at') else ''}. "
+                f"Cierre del hueco simétrico de I8 (que solo "
                 f"cubre `complete+days=[]`). Acción típica: SOP P3-AUDIT-6 "
                 f"corruption_repair + mark failed + cancel future chunks "
                 f"(ver P0-2 cierre en audit 2026-05-25)."
@@ -22821,6 +22825,7 @@ def _alert_stranded_partial_plans() -> None:
                         "gen_status": gen_status,
                         "age_hours": round(age_hours, 2),
                         "age_threshold_h": _age_h,
+                        "_frozen_at": row.get("frozen_at"),   # [P1-PLAN-LOTE-811]
                     }, ensure_ascii=False),
                     json.dumps([str(user_id)] if user_id else []),
                 ),
@@ -27708,8 +27713,9 @@ __PLAN_MODE_GATE__
         form_data = copy.deepcopy(snap.get("form_data", {}))
         # [P1-ARQ25-F3-HORIZON · 2026-09-02] la rebanada viaja en el snapshot (inmutable); el
         # flag `enforce` se RECALCULA al ejecutar (el canary por usuario puede cambiar entre
-        # encolar y correr, y el knob se lee en cada llamada).
-        if isinstance(form_data.get("_blueprint_slice"), dict):
+        # encolar y correr, y el knob se lee en cada llamada). [P1-PLAN-LOTE-811] También sin rebanada: el relleno lleva
+        # sólo la política (tooltip-anchor: P1-PLAN-LOTE-811-ENFORCE).
+        if isinstance(form_data.get("_blueprint_slice"), dict) or isinstance(form_data.get("_plan_policy_effective"), dict):
             try:
                 from horizon import policy_enforced as _policy_enforced_f3
                 form_data["_policy_enforced"] = _policy_enforced_f3(user_id)
@@ -35196,15 +35202,7 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                     if days_remaining_in_plan == 0 and not is_expired_renewable:
                         return False
 
-                    # [P0-4 FIX] Antes bloqueaba TODO refill mientras un plan de 7d siguiera vivo,
-                    # incluso si su encolado síncrono inicial había fallado dejando huecos.
-                    # Ahora solo bloqueamos si NO existe gap huérfano (plan completo en su día actual).
-                    # La detección de gap se hace tras los guards de chunks-en-vuelo más abajo.
-                    disable_rolling_refill_for_active_7d = (
-                        total_planned_days == 7 and days_remaining_in_plan > 0
-                    )
-
-                    # Si ya hay chunks en camino, no duplicar
+                    # Si ya hay chunks en camino, no duplicar (ni shift: conducta de siempre del cron)
                     is_partial = plan_data.get("generation_status") in ("partial", "generating_next")
                     if is_partial:
                         return False
@@ -35214,22 +35212,9 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                         "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
                         (plan_id,),
                     )
-                    if ((cursor.fetchone() or {}).get("cnt") or 0) > 0:
+                    _vivos_811 = int((cursor.fetchone() or {}).get("cnt") or 0)
+                    if _vivos_811 > 0:
                         return False
-
-                    # [P0-4 FIX] Llegamos aquí con 0 chunks vivos. Si el plan de 7d aún tiene días
-                    # por delante pero len(days) < total_planned_days, hay gap huérfano real:
-                    # destrabar el refill para recuperarlo.
-                    if (
-                        disable_rolling_refill_for_active_7d
-                        and len(days) < total_planned_days
-                    ):
-                        logger.warning(
-                            f"[P0-4] Plan de 7 días {plan_id}: gap huérfano detectado "
-                            f"(visibles={len(days)}/{total_planned_days}, sin chunks vivos). "
-                            f"Habilitando rolling refill de recuperación."
-                        )
-                        disable_rolling_refill_for_active_7d = False
 
                     window_size = chunk_size_for_next_slot(
                         max(0, days_since_creation), total_planned_days, PLAN_CHUNK_SIZE
@@ -35291,11 +35276,14 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                     # `rebase_pending_chunk_offsets` es el SSOT de la aritmética.
                     _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(shifted_days))
 
-                    needs_fill_after_shift = (
-                        len(shifted_days) < window_needed
-                        and days_remaining_in_plan > 0
-                        and not disable_rolling_refill_for_active_7d
-                    )
+                    # [P1-PLAN-LOTE-811] La decisión es la MISMA que la de `/shift-plan` (`relleno_rolling.decidir`).
+                    # El gap huérfano de 7 días (P0-4) ya no se anuncia al evaluarlo: el WARNING sólo sale si encola.
+                    _rr_811 = __import__("relleno_rolling")
+                    needs_fill_after_shift, _motivo_811 = _rr_811.decidir(
+                        total_planned_days, len(shifted_days), days_remaining_in_plan, window_needed, _vivos_811,
+                        plan_data.get("generation_status"))
+                    logger.debug(f"[P1-PLAN-LOTE-811] relleno plan={plan_id} visibles={len(shifted_days)}/"
+                                 f"{window_needed} total={total_planned_days}: {needs_fill_after_shift} ({_motivo_811})")
 
                     chunks_enqueued = 0
                     if needs_fill_after_shift:
@@ -35370,26 +35358,12 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                                     current_offset += chunk_count
                                     continue
 
-                                snapshot = {
-                                    "form_data": {
-                                        **hp,
-                                        "user_id": user_id,
-                                        "totalDays": chunk_count,
-                                        "_plan_start_date": new_plan_start_iso,
-                                        # [P1-7] Marker para que el temporal gate sepa que
-                                        # este chunk continúa un plan previo. anchor_iso es
-                                        # la fecha del primer día del refill; el chunk previo
-                                        # del plan original terminó el día anterior.
-                                        "_is_continuation": True,
-                                        "_continuation_anchor_iso": new_plan_start_iso,
-                                    },
-                                    "taste_profile": "",
-                                    "memory_context": "",
-                                    "previous_meals": previous_meals,
-                                    "totalDays": chunk_count,
-                                    "_is_rolling_refill": True,
-                                    "_triggered_by": "background_cron_p0_2",
-                                }
+                                # [P1-7] marcas de continuación ("_is_continuation", "_continuation_anchor_iso")
+                                # + [P1-PLAN-LOTE-811] la política del plan: SSOT `relleno_rolling.snapshot_relleno`.
+                                snapshot = _rr_811.snapshot_relleno(
+                                    hp=hp, user_id=user_id, chunk_count=chunk_count, ancla_iso=new_plan_start_iso,
+                                    plan_data=plan_data, previous_meals=previous_meals,
+                                    triggered_by="background_cron_p0_2")
                                 if is_first_catchup and inherited:
                                     snapshot["_inherited_lifetime_lessons"] = inherited
                                     is_first_catchup = False
@@ -35418,6 +35392,11 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                             if chunks_enqueued > 0:
                                 shifted_data["generation_status"] = "generating_next"
                                 modified = True
+                                if _motivo_811 == "gap_huerfano_7d":
+                                    logger.warning(
+                                        f"[P0-4] Plan de 7 días {plan_id}: gap huérfano (visibles={len(shifted_days)}/"
+                                        f"{total_planned_days}, sin chunks vivos): relleno de recuperación encolado "
+                                        f"({chunks_enqueued} bloque(s)).")
 
                     # [P0-1] Plan renovable expirado (7d/15d/30d): auto-renovar con señales de aprendizaje frescas
                     elif is_expired_renewable:
@@ -35514,29 +35493,14 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                                 renewal_plan_start_iso = today.isoformat()
                                 is_first_chunk = True
                                 for chunk_count in split_with_absorb(total_planned_days, PLAN_CHUNK_SIZE):
-                                    snapshot = {
-                                        "form_data": {
-                                            **hp,
-                                            "user_id": user_id,
-                                            "totalDays": chunk_count,
-                                            "_plan_start_date": renewal_plan_start_iso,
-                                            "current_pantry_ingredients": live_inv or [],
-                                            "_pantry_captured_at": today.isoformat(),
-                                            # [P1-7] Continuation marker: la renovación
-                                            # semanal hereda contexto del plan previo. anchor_iso
-                                            # = fecha del primer día del nuevo periodo; el plan
-                                            # previo terminó el día anterior.
-                                            "_is_continuation": True,
-                                            "_continuation_anchor_iso": renewal_plan_start_iso,
-                                        },
-                                        "taste_profile": "",
-                                        "memory_context": "",
-                                        "previous_meals": previous_meals,
-                                        "totalDays": chunk_count,
-                                        "_is_rolling_refill": True,
-                                        "_is_weekly_renewal": True,
-                                        "_triggered_by": "background_cron_p0_1",
-                                    }
+                                    # [P1-7] la renovación semanal hereda contexto (marcas de continuación) y
+                                    # [P1-PLAN-LOTE-811] la política del plan: SSOT `relleno_rolling.snapshot_relleno`.
+                                    snapshot = _rr_811.snapshot_relleno(
+                                        hp=hp, user_id=user_id, chunk_count=chunk_count,
+                                        ancla_iso=renewal_plan_start_iso, plan_data=plan_data,
+                                        previous_meals=previous_meals, triggered_by="background_cron_p0_1",
+                                        semanal=True, form_extra={"current_pantry_ingredients": live_inv or [],
+                                                                  "_pantry_captured_at": today.isoformat()})
                                     # Propagar lecciones históricas al primer chunk de renovación
                                     if is_first_chunk:
                                         _history = plan_data.get("_lifetime_lessons_history")
