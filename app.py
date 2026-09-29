@@ -3829,6 +3829,9 @@ _ACCOUNT_EXPORT_TABLES = (
     # [P1-PLAN-LOTE-843 · 2026-09-29] El registro del permiso para la IA de terceros y la analítica: cada decisión
     # con su versión y fecha (la prueba del art. 7.1 es también un dato de la persona). Sin `guest_hash` (abajo).
     ("user_consents", "user_id", 500),
+    # [P1-PLAN-LOTE-830 · 2026-09-29] Las marcas de cuenta de prueba de la persona (cuándo, por qué, si salió ella): la
+    # Política de Privacidad §5 promete avisarle, y sus datos incluyen esa marca. Sin los ids del personal (abajo).
+    ("cuentas_de_prueba", "user_id", 100),
 )
 
 # Columnas internas sin valor para el usuario y costosas de serializar
@@ -3840,7 +3843,9 @@ _ACCOUNT_EXPORT_TABLES = (
 # cuenta (el user_id del admin), no al titular: tampoco salen.
 # [P1-PLAN-LOTE-843] `guest_hash` (sha256 del session_id del invitado) de `user_consents` tampoco: es un identificador
 # interno de una sesión anónima; las filas de la cuenta lo llevan NULL y las adoptadas se copian sin él.
-_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding", "granted_by", "revoked_by", "guest_hash")
+# [P1-PLAN-LOTE-830] `marcada_por`/`quitada_por` de `cuentas_de_prueba` identifican al PERSONAL que marcó o quitó la marca
+# (el user_id del admin), no al titular: tampoco salen. `motivo`, `motivo_quitar` y las fechas SÍ: son sobre la persona.
+_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding", "granted_by", "revoked_by", "guest_hash", "marcada_por", "quitada_por")
 
 # [P1-PLAN-LOTE-716] Columnas explícitas donde `*` arrastraría binarios: el contenido de las fotos del chat es
 # `bytea` (MBs por foto) y no viaja en un JSON; sí sus datos.
@@ -3859,6 +3864,9 @@ _ACCOUNT_EXPORT_ORDER = {
     "meal_rejections": "rejected_at DESC NULLS LAST",
     "water_intake_log": "log_date DESC",
     "summary_archive": "archived_at DESC NULLS LAST",
+    # [P1-PLAN-LOTE-830] `cuentas_de_prueba` NO tiene `created_at` (su fecha es `marcada_at`): con el orden por defecto la
+    # consulta revienta y CADA exportación saldría con `complete: false` y la tabla en `omitted`.
+    "cuentas_de_prueba": "marcada_at DESC",
 }
 
 
