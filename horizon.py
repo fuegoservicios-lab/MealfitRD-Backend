@@ -2057,7 +2057,7 @@ def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *
     n_checks += 2  # repetición exacta + ingrediente
     n_checks += len(checks_run)
     score = round(max(0.0, 1.0 - (len(issues) / float(max(1, n_checks)))), 3)
-    return {
+    rep = {
         "schema_version": BLUEPRINT_SCHEMA_VERSION, "surface": str(surface or "")[:40],
         "slice_hash": (sl or {}).get("slice_hash") if isinstance(sl, dict) else None,
         "policy_hash": (effective or {}).get("policy_hash") if isinstance(effective, dict) else None,
@@ -2074,6 +2074,13 @@ def fidelity_report(days: list, sl: Optional[dict], effective: Optional[dict], *
         "unmeasured": unmeasured,
         "computation": computation_stamp(effective, form_data, attempt),
     }
+    # [P1-PLAN-LOTE-815 · 2026-09-29] minutos de los PASOS de las comidas del modelo + `score_v2` por dimensión, FUERA
+    # de `score` e `issues` (knob MEALFIT_FIDELITY_PREP_TIME_MEASURED). tooltip-anchor: P1-PLAN-LOTE-815
+    try:
+        rep.update(__import__("fidelidad_tiempo").telemetria(days, form_data, rep, sl, effective))
+    except Exception as e:  # el instrumento nuevo nunca se lleva el informe de siempre
+        logger.debug(f"[P1-PLAN-LOTE-815] telemetría de tiempo no añadida: {e!r}")
+    return rep
 
 
 _VARIETY_REPEAT_FAMILIES = ("PLATO-BASE REPETIDO", "MISMO PLATO REPETIDO ENTRE DÍAS", "MISMA PROTEÍNA REPETIDA")
@@ -2212,6 +2219,10 @@ def emit_fidelity_metric(user_id: Optional[str], plan_id: Optional[str], report:
             "unmeasured": [u.get("check") for u in (report.get("unmeasured") or []) if isinstance(u, dict)],
             "computation_hash": (report.get("computation") or {}).get("computation_hash"),
         }
+        try:   # [P1-PLAN-LOTE-815] score_v2 + prep_time_*; si el instrumento no importa, la fila de siempre sale igual
+            meta.update(__import__("fidelidad_tiempo").metadata_plana(report))
+        except Exception as e:                                                 # noqa: BLE001
+            logger.debug(f"[P1-PLAN-LOTE-815] telemetría de tiempo fuera de la métrica (fail-open): {e!r}")
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
             "tokens_estimated, confidence, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
