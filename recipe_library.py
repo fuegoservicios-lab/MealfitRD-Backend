@@ -404,11 +404,138 @@ def _registry_name_index(country: str = "DO") -> dict:
     return idx
 
 
+# ---------------------------------------------------------------------------
+# [P1-PLAN-LOTE-814 · 2026-09-29] Medidor v2: la procedencia DECLARADA primero y un lector de líneas propio.
+#
+# Medido el 28-sep con SELECT: 55 platos montados desde el catálogo (llevan `_template_id`) puntuaban 24 por
+# nombre y **0 aplicables**. Dos causas del instrumento, no del producto:
+#
+#   1. Sólo se miraba el nombre, y el cerrador de proteína lo reescribe («… y Huevo»). El id que el plato
+#      DECLARA es la procedencia; el nombre exacto queda como segunda vía. **Sin heurística de deshacer
+#      renombrados**: adivinar el nombre original es la coincidencia aproximada que `recipe_for_dish_name`
+#      prohíbe, y de 31 renombrados 6 ni siquiera son del cerrador (cambian la proteína).
+#   2. «Aplicables» leía las líneas con el regex de la costura: «½ cebolla» → «12 cebolla», «3 huevos» ≠
+#      «Huevo». El lector tolerante vive AQUÍ, en una copia propia: `_foods_de_comida` la comparte
+#      `apply_library_recipe`, y hacerla tolerante cambiaría qué acepta la costura el día que se conecte.
+#
+# Consecuencia asumida: con v2, `aplicables` ⊇ lo que la costura sustituiría (nunca menos). Deja de ser su
+# predicción exacta; hoy la costura no tiene llamadores y el cron alerta sobre la procedencia, así que
+# `aplicables` queda como dato informativo. Knob `MEALFIT_REGISTRY_PROVENANCE_V2` (True); `0` = medidor v1.
+
+
+def provenance_v2_enabled() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_REGISTRY_PROVENANCE_V2", True)
+    except Exception:
+        return True
+
+
+_FRACCIONES_UNICODE = "½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞"
+_UNIDADES_MEDIDOR = frozenset((
+    "g gr grs gramo gramos kg mg ml l lt litro litros oz onza onzas lb libra libras taza tazas tz cucharada "
+    "cucharadas cda cdas cucharadita cucharaditas cdta cdtas cdita cditas unidad unidades ud uds lata latas "
+    "rebanada rebanadas rodaja rodajas pizca pizcas punado punados porcion porciones pieza piezas trozo trozos "
+    "pedazo pedazos diente dientes ramita ramitas hoja hojas filete filetes torta tortas lonja lonjas vaso vasos "
+    "chorrito chorro sobre sobres paquete paquetes").split())
+_MASA_MEDIDOR = frozenset("g gr grs gramo gramos kg mg ml oz lb".split())
+_TAMANOS_MEDIDOR = frozenset("pequeno pequena pequenos pequenas mediano mediana medianos medianas grande grandes".split())
+_NUMEROS_MEDIDOR = frozenset("un una uno medio media dos tres cuatro cinco seis".split())
+# Condimentos de cantidad trivial: que el plato los traiga o no, no cambia QUÉ plato es. Simétrico.
+_TRIVIALES_MEDIDOR = frozenset(("sal", "agua", "pimienta", "pimienta negra"))
+
+
+def _singular_medidor(w: str) -> str:
+    """Clave singular por palabra, determinista y SIMÉTRICA (se aplica igual a plantilla y plato): «tomates» y
+    «tomate» → «tomat»; «limones»/«limón» → «limon»; «nueces»/«nuez» → «nuez». No es español correcto: es
+    una clave de comparación."""
+    if len(w) <= 3:
+        return w
+    if w.endswith("ces") and len(w) >= 5:
+        return w[:-3] + "z"
+    if w.endswith("s"):
+        w = w[:-1]
+    if len(w) > 3 and w.endswith("e") and w[-2] not in "aeiou":
+        w = w[:-1]
+    return w
+
+
+def _alimento_medidor(linea) -> Optional[str]:
+    """«½ pedazo mediano de yuca (≈200 g)» → clave de «yuca». `None` si la línea es vacía o un condimento
+    trivial. SÓLO para el medidor: la costura sigue con `_foods_de_comida`."""
+    s = str(linea or "")
+    for ch in _FRACCIONES_UNICODE:
+        s = s.replace(ch, " 1 ")
+    s = re.sub(r"\([^)]*\)", " ", s.replace("≈", " "))
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"\b(?:al|a) gusto\b|\bopcional\b", " ", s)
+    toks = "".join(c if c.isalnum() else " " for c in s).split()
+    i = 0
+    while i < len(toks) and (toks[i].isdigit() or toks[i] in _NUMEROS_MEDIDOR or toks[i] in _UNIDADES_MEDIDOR
+                             or toks[i] in _TAMANOS_MEDIDOR or toks[i] == "de"):
+        i += 1
+    resto = []
+    for j in range(i, len(toks)):
+        t = toks[j]
+        if t.isdigit() or t in _TAMANOS_MEDIDOR or (t in _MASA_MEDIDOR and j > 0 and toks[j - 1].isdigit()):
+            continue
+        resto.append(_singular_medidor(t))
+    clave = " ".join(resto)
+    return clave if clave and clave not in _TRIVIALES_MEDIDOR else None
+
+
+def _foods_medidor_comida(meal: dict) -> frozenset:
+    return frozenset(x for x in (_alimento_medidor(i) for i in (meal.get("ingredients") or [])) if x)
+
+
+def _foods_medidor_plantilla(constituents) -> frozenset:
+    return frozenset(x for x in (_alimento_medidor(c.get("name") or c.get("canonical"))
+                                 for c in (constituents or []) if isinstance(c, dict)) if x)
+
+
+def _tid_del_plato(meal: dict, nombre: str, idx_reg: dict, por_id: dict) -> Optional[str]:
+    """Procedencia declarada (`_template_id`, `_recipe_template_id`) y, si no resuelve, nombre EXACTO."""
+    for k in ("_template_id", "_recipe_template_id"):
+        v = meal.get(k)
+        if v and str(v) in por_id:
+            return str(v)
+    return idx_reg.get(nombre)
+
+
+def _dish_provenance_v2(days, country: str, idx_reg: dict) -> dict:
+    import dish_registry as dr
+    por_id = dr.templates_by_id(country) or {}
+    lib = _library(country)
+    total = del_reg = con_rec = aplica = 0
+    for d in (days or []):
+        for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
+            if not isinstance(m, dict):
+                continue
+            nombre = _norm(m.get("name"))
+            if not nombre:
+                continue
+            total += 1
+            tid = _tid_del_plato(m, nombre, idx_reg, por_id)
+            if not tid:
+                continue
+            del_reg += 1
+            if tid not in lib:  # la plantilla existe pero no tiene pasos escritos
+                continue
+            con_rec += 1
+            esperados = _foods_medidor_plantilla((por_id.get(tid) or {}).get("constituents"))
+            if esperados and _foods_medidor_comida(m) == esperados:
+                aplica += 1
+    return {"total": total, "del_registry": del_reg, "con_receta": con_rec,
+            "aplicables": aplica, "tasa": (round(aplica / total, 3) if total else None)}
+
+
 def dish_provenance(days, country: str = "DO") -> dict:
     """Cuántos platos servidos vienen del catálogo. Fail-open: ante cualquier fallo, ceros y `None`.
 
     `tasa` es `aplicables / total` —el rendimiento real de la costura—, no `del_registry / total`:
     prometer el número optimista es cómo un informe acaba afirmando algo que no ocurrió.
+    [P1-PLAN-LOTE-814] Con `MEALFIT_REGISTRY_PROVENANCE_V2` resuelve por id declarado y lee con el lector
+    tolerante del medidor (`_dish_provenance_v2`); apagado, el camino de abajo, byte a byte.
     """
     vacio = {"total": 0, "del_registry": 0, "con_receta": 0, "aplicables": 0, "tasa": None}
     try:
@@ -416,6 +543,8 @@ def dish_provenance(days, country: str = "DO") -> dict:
         idx_rec = _name_index(country)
         if not idx_reg:
             return vacio
+        if provenance_v2_enabled():
+            return _dish_provenance_v2(days, country, idx_reg)
         total = del_reg = con_rec = aplica = 0
         for d in (days or []):
             for m in ((d.get("meals") or []) if isinstance(d, dict) else []):

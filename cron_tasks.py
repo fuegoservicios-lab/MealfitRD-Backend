@@ -6376,11 +6376,19 @@ def _registry_dish_rate_alert_job():
     prendió. Tick observable SIEMPRE (con `skip_reason`), que es cómo se distingue «no aplica» de
     «no corrió».
 
-    Knobs: MEALFIT_REGDISH_RATE_LOOKBACK_H (72, clamp [1,168]), MEALFIT_REGDISH_RATE_MIN_SAMPLES
-    (5, clamp [1,10000]), MEALFIT_REGDISH_RATE_FLOOR (0.50), MEALFIT_REGDISH_RATE_INTERVAL_H
+    Knobs: MEALFIT_REGDISH_RATE_LOOKBACK_H (72; 168 con v2, clamp [1,168]), MEALFIT_REGDISH_RATE_MIN_SAMPLES
+    (5 filas; con v2, 5 entregas), MEALFIT_REGDISH_RATE_FLOOR (0.50), MEALFIT_REGDISH_RATE_INTERVAL_H
     (6, clamp [1,48]). Tooltip-anchor: P1-FIDELIDAD-PLATO-DEL-REGISTRY."""
     alert_key = "registry_dishes_unused"
-    lookback_h = max(1, min(_env_int("MEALFIT_REGDISH_RATE_LOOKBACK_H", 72), 168))
+    # [P1-PLAN-LOTE-814 · 2026-09-29] v2 (knob MEALFIT_REGISTRY_PROVENANCE_V2): entregas por (plan_id, slice_hash),
+    # procedencia (no «aplicables»), sin cuentas admin, 168 h y sin muestra NO resuelve (stale). En registry_dish_alert.
+    try:
+        from recipe_library import provenance_v2_enabled
+        _v2 = bool(provenance_v2_enabled())
+    except Exception:
+        _v2 = False
+    _tick_v2: dict = {}
+    lookback_h = max(1, min(_env_int("MEALFIT_REGDISH_RATE_LOOKBACK_H", 168 if _v2 else 72), 168))
     min_samples = max(1, min(_env_int("MEALFIT_REGDISH_RATE_MIN_SAMPLES", 5), 10_000))
     floor = _env_float("MEALFIT_REGDISH_RATE_FLOOR", 0.50)
     _n = 0
@@ -6395,6 +6403,12 @@ def _registry_dish_rate_alert_job():
             _on = False
         if not _on:
             _skip = "library_select_off"
+        elif _v2:
+            import registry_dish_alert as _rda
+            _r = _rda.run_v2(alert_key, execute_sql_query, execute_sql_write, lookback_h=lookback_h,
+                             min_samples=min_samples, floor=floor)
+            _n, _rate, _alert_emitted, _skip, _tick_v2 = (_r["n"], _r["rate"], _r["alert_emitted"], _r["skip"],
+                                                          _r["tick"])
         else:
             rows = execute_sql_query(
                 """
@@ -6468,7 +6482,7 @@ def _registry_dish_rate_alert_job():
                 """,
                 (_rate if _rate is not None else -1.0,
                  json.dumps({"n_runs": _n, "registry_dish_rate": _rate, "alert_emitted": _alert_emitted,
-                             "skip_reason": _skip, "floor": floor, "lookback_h": lookback_h},
+                             "skip_reason": _skip, "floor": floor, "lookback_h": lookback_h, **_tick_v2},
                             ensure_ascii=False)),
             )
         except Exception:
