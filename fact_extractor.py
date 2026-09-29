@@ -1105,6 +1105,14 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         logger.info(f"⏭️ [P1-PLAN-LOTE-717] Extracción omitida: memoria a largo plazo pausada (o ilegible) de {user_id}.")
         return
 
+    # [P1-PLAN-LOTE-843 · 2026-09-29] Sin permiso para la IA de terceros, el mensaje no sale hacia el extractor
+    # (IA de texto) ni hacia los embeddings (Cohere) y tampoco se encola para después: aquí llegan el chat y los textos
+    # libres de los paneles de Configuración, que no son endpoints de IA. Mismo sitio que la guarda de la memoria.
+    from consentimientos import permite_ia
+    if not permite_ia(user_id, "extraccion_de_hechos"):
+        logger.info(f"⏭️ [P1-PLAN-LOTE-843] Extracción omitida: {str(user_id)[:8]} sin permiso para la IA.")
+        return
+
     # [P1-CHAT-FACTS-AUDIT · 2026-09-14] Token del lock: se libera SOLO si se adquirió,
     # y solo el lock propio. Antes el `finally` llamaba a `release_fact_lock` también en
     # los caminos «el router dice que no hay nada» y «no conseguí el lock, encolo»:
@@ -1193,6 +1201,12 @@ def process_pending_queue_sync(user_id: str):
         if not pending_items:
             logger.info("➡️ [WEBHOOK QUEUE] No hay hechos pendientes en cola.")
             return
+        # [P1-PLAN-LOTE-843] Sin permiso para la IA, la cola se trata como la memoria pausada: no se procesa nada (ni
+        # LLM ni embeddings), los pendientes se conservan y los caducados se descartan como siempre.
+        from consentimientos import permite_ia
+        _motivo_pausa = "memoria pausada"
+        if _memoria_on and not permite_ia(user_id, "cola_de_hechos"):
+            _memoria_on, _motivo_pausa = False, "sin permiso para la IA"
         if not _memoria_on:
             # Pausada: los pendientes se CONSERVAN sin procesar (se enviaron con la memoria encendida; si la reactiva
             # dentro del tope de antigüedad, se aprenden entonces) y los que ya lo superan se descartan, como siempre.
@@ -1200,7 +1214,7 @@ def process_pending_queue_sync(user_id: str):
             if _caducados:
                 delete_pending_facts(_caducados)
             logger.info(
-                f"⏸ [P1-PLAN-LOTE-717] cola de {user_id}: memoria pausada — "
+                f"⏸ [P1-PLAN-LOTE-717] cola de {user_id}: {_motivo_pausa} — "
                 f"{len(pending_items) - len(_caducados)} pendiente(s) conservado(s) sin procesar, "
                 f"{len(_caducados)} caducado(s) descartado(s)."
             )

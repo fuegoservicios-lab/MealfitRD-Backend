@@ -39,6 +39,9 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
+# [P1-PLAN-LOTE-843] Permiso para la IA de terceros (SSOT consentimientos.py): 428 donde la IA es el propósito,
+# `hay_permiso_ia` donde es un efecto lateral que se salta (traducir lo que se muestra).
+from consentimientos import estado_de_fila, hay_permiso_ia, permite_ia, requiere_consentimiento_ia
 # [P1-GUEST-CATALOG · 2026-08-11] El catálogo responde también sin sesión; el limitador
 # es su contrapeso. Mismo singleton de módulo que usan los de `routers/plans.py`, que
 # ya sabe agrupar por `ip:<host>` cuando no hay usuario (extensión P1-6).
@@ -572,6 +575,7 @@ async def api_inventory_photo_scan(
     body: Dict[str, Any] = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
     _rl: None = Depends(_PHOTO_SCAN_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843] la foto va a Google Gemini
 ):
     """Foto (base64) → items detectados con match al catálogo. READ-ONLY:
     no escribe user_inventory — el cliente confirma y agrega vía /inventory/items."""
@@ -721,9 +725,13 @@ _TEXTOS_I18N_MAX_CHARS = 400
 
 
 @router.post("/i18n/textos")
-def api_traducir_textos(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_TEXTOS_TRADUCIDOS_LIMITER)):
+def api_traducir_textos(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_TEXTOS_TRADUCIDOS_LIMITER),
+                        _ia: bool = Depends(hay_permiso_ia)):
     """`{locale, textos: [str]}` → `{textos: [str] | null}`, alineado por índice (null: no se pudo; el cliente pinta
-    el original). tooltip-anchor: P1-PLAN-LOTE-225"""
+    el original). tooltip-anchor: P1-PLAN-LOTE-225
+
+    [P1-PLAN-LOTE-843] Lo que se traduce es lo que el coach recuerda de la persona y sus suplementos: sin permiso
+    para la IA, `{textos: null}` (se ve el original) sin llamar al modelo."""
     textos = data.get("textos")
     if not isinstance(textos, list) or not textos or len(textos) > _TEXTOS_I18N_MAX:
         raise HTTPException(status_code=400, detail=f"textos: lista de 1 a {_TEXTOS_I18N_MAX} cadenas")
@@ -731,7 +739,7 @@ def api_traducir_textos(data: dict = Body(...), verified_user_id: Optional[str] 
         raise HTTPException(status_code=400, detail=f"textos: cadenas de hasta {_TEXTOS_I18N_MAX_CHARS} caracteres")
     from traduccion_para_mostrar import LOCALE_BASE, locale_soportado, traducir_para_mostrar_sync
     locale = locale_soportado(data.get("locale"))
-    if locale in (None, LOCALE_BASE):
+    if locale in (None, LOCALE_BASE) or _ia is False:
         return {"textos": None}
     out = traducir_para_mostrar_sync(
         textos, locale, user_id=verified_user_id, node="display_i18n_textos",
@@ -1093,7 +1101,9 @@ async def api_get_profile(
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
     # [P1-NEVERA-OPCIONAL · 2026-09-23] LA regla, calculada aquí para que el frontend no la reimplemente.
     from nevera_opcional import nevera_activa_de
-    return {"profile": {**profile, "nevera_activa": nevera_activa_de(profile)}}
+    # [P1-PLAN-LOTE-843] El permiso para la IA viaja con el perfil que la app ya carga al arrancar: la misma forma que
+    # `GET /api/consents`, calculada de la fila ya leída (cero consultas más).
+    return {"profile": {**profile, "nevera_activa": nevera_activa_de(profile), "ai_consent": estado_de_fila(profile)}}
 
 
 @router.patch("/profile")
@@ -1230,7 +1240,11 @@ async def api_patch_profile(
     # último son el mismo elemento (redundante pero inofensivo). Best-effort:
     # el PATCH de perfil JAMÁS puede fallar por esto.
     _p1_i18n_new_locale = fields.get("locale")
-    if _p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO":
+    # [P1-PLAN-LOTE-843] Traducir el plan es mandarlo a la IA: sin permiso, el perfil se guarda igual (este PATCH sigue
+    # exento de cuota) y la traducción se salta; la respuesta lo dice (`translation_skipped`).
+    _sin_permiso_ia = bool(_p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO"
+                           and not await asyncio.to_thread(permite_ia, uid, "patch_profile_idioma"))
+    if _p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO" and not _sin_permiso_ia:
         try:
             # [P3-I18N-DISPLAY-BLANKET-CIEGO-AL-SQL · 2026-08-23] La consulta que miraba
             # `_display` en los dos extremos vive ahora en el SSOT (`plan_display_i18n`):
@@ -1249,7 +1263,10 @@ async def api_patch_profile(
 
     # [P1-PLAN-LOTE-717] Las claves con dueño que NO se escribieron, para que el cliente no las dé por guardadas (ni las
     # fusione en su copia del perfil). Sin ninguna, la respuesta de siempre.
-    return {"success": True, "ignored_keys": ignoradas} if ignoradas else {"success": True}
+    salida = {"success": True, "ignored_keys": ignoradas} if ignoradas else {"success": True}
+    if _sin_permiso_ia:
+        salida["translation_skipped"] = "ai_consent_required"
+    return salida
 
 
 # ---------------------------------------------------------------------------

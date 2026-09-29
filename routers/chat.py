@@ -8,6 +8,8 @@ import traceback
 import json
 
 from auth import get_verified_user_id, verify_api_quota, verify_coach_quota, coach_quota_snapshot
+# [P1-PLAN-LOTE-843] Permiso para la IA de terceros: 428 `ai_consent_required` sin él (SSOT consentimientos.py).
+from consentimientos import requiere_consentimiento_ia
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import (
@@ -475,7 +477,8 @@ def api_delete_chat_session(session_id: str, verified_user_id: Optional[str] = D
 
 
 @router.post("/message")
-def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id),
+                          _ia: None = Depends(requiere_consentimiento_ia)):  # un mensaje «user» clasifica el aviso (IA)
     session_id = data.get("session_id")
     role = data.get("role")
     content = data.get("content")
@@ -625,7 +628,7 @@ def _semaforo_de_voz():
 @router.post("/voz")
 async def api_chat_voz(background_tasks: BackgroundTasks, data: dict = Body(...),
                        verified_user_id: Optional[str] = Depends(get_verified_user_id),
-                       _rl: None = Depends(_VOZ_LIMITER)):
+                       _rl: None = Depends(_VOZ_LIMITER), _ia: None = Depends(requiere_consentimiento_ia)):
     """[P1-PLAN-LOTE-685] Una frase del coach → WAV con su voz. `{texto, locale}`; 204 = «usa la voz del teléfono»."""
     import asyncio
     from coach_voz import hay_presupuesto, registrar_uso, sintetizar, voz_en_la_nube_activa
@@ -748,7 +751,8 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
 
 
 @router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
-def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota)):
+def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota),
+                    _ia: None = Depends(requiere_consentimiento_ia)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
@@ -1114,7 +1118,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
 
 @router.post("", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
-def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota)):
+def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota),
+             _ia: None = Depends(requiere_consentimiento_ia)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")

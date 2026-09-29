@@ -29,6 +29,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from rate_limiter import RateLimiter
 from knobs import _env_bool, _env_int, _env_float, _env_str
+# [P1-PLAN-LOTE-843] Lo que la persona escribe va a un proveedor de IA: 428 sin permiso (invitado: la cabecera).
+from consentimientos import requiere_consentimiento_ia
 from prompts.help_bot import (
     HELP_BOT_SYSTEM_PROMPT,
     help_bot_system_prompt,
@@ -88,6 +90,7 @@ def _help_chat_model_name() -> str:
 async def api_help_chat(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(_HELP_CHAT_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),
 ):
     """Responde una duda de producto. Body: `{"messages": [{role, content}...]}`
     (historial client-held; el último mensaje debe ser del usuario).

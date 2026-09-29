@@ -145,6 +145,7 @@ def display_i18n_dedup_key(plan_id: str, revision: Optional[int], locale: str, d
 _DONE_SKIPS = frozenset({"no_meals", "no_valid_meals", "no_days", "knob_off", "locale", "not_found",
                          "already_enriched"})
 _RETRY_SKIPS = frozenset({
+    "ai_consent",  # [P1-PLAN-LOTE-843] sin permiso para la IA: vuelve a la cola y el claim no lo toma hasta que lo dé
     "circuit_breaker_open", "dedupe_inprocess", "dedupe_locked", "exception", "partial_loss",
     "invocation_budget_exhausted", "json_parse_error", "llm_exception", "persist_stale_mismatch",
 })
@@ -394,6 +395,7 @@ WITH candidates AS (
     WHERE j.status IN ('pending', 'failed')
       AND j.execute_after <= NOW()
       AND j.job_type = ANY(%s)
+      __AI_CONSENT_GATE__
     ORDER BY j.execute_after ASC, j.created_at ASC
     LIMIT %s
     FOR UPDATE SKIP LOCKED
@@ -415,7 +417,13 @@ def claim_plan_jobs(limit: int, claimed_by: str, job_types: list[str]) -> list[d
     if not job_types:
         return []
     from db import execute_sql_write
-    rows = execute_sql_write(CLAIM_SQL, (list(job_types), int(limit), claimed_by), returning=True) or []
+    # [P1-PLAN-LOTE-843] La traducción manda el plan a la IA: el job de quien no dio permiso se queda en la cola (sin
+    # reintentos ni dead-letter) hasta que lo dé. La proyección de compras no usa IA: no se filtra.
+    from consentimientos import condicion_sql_permiso
+    _c = condicion_sql_permiso("j.user_id")
+    _gate = f"AND (j.job_type <> '{JOB_TYPE_DISPLAY_I18N}' OR {_c})" if _c else ""
+    rows = execute_sql_write(CLAIM_SQL.replace("__AI_CONSENT_GATE__", _gate),
+                             (list(job_types), int(limit), claimed_by), returning=True) or []
     return [dict(r) for r in rows]
 
 

@@ -159,7 +159,8 @@ def test_get_profile_sirve_nevera_activa(monkeypatch, perfil, esperado):
     monkeypatch.setattr(db, "get_user_profile", lambda uid: dict(perfil) if uid == "u1" else None)
     r = asyncio.run(user_data.api_get_profile(verified_user_id="u1"))
     assert r["profile"]["nevera_activa"] is esperado
-    assert {k: v for k, v in r["profile"].items() if k != "nevera_activa"} == perfil
+    # [P1-PLAN-LOTE-843] `ai_consent` es otro campo calculado (el permiso para la IA, `consentimientos.estado_de_fila`).
+    assert {k: v for k, v in r["profile"].items() if k not in ("nevera_activa", "ai_consent")} == perfil
 
 
 # ── 5. Diario y cron ─────────────────────────────────────────────────────────────────────────────────────────

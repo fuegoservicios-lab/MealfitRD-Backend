@@ -2725,6 +2725,12 @@ app.include_router(admin_router)
 # (flash), quota-exempt (RateLimiter, NO verify_api_quota/log_api_usage).
 from routers.help_chat import router as help_chat_router
 app.include_router(help_chat_router)
+# [P1-PLAN-LOTE-843 · 2026-09-29] Permiso para la IA de terceros (App Review 5.1.2(i), RGPD 9(2)(a)/49(1)(a)):
+# /api/consents y el manejador que da al 428 `ai_consent_required` su cuerpo plano. SSOT: consentimientos.py.
+from routers.consents import router as consents_router  # noqa: E402
+import consentimientos as _consentimientos  # noqa: E402
+app.include_router(consents_router)
+_consentimientos.instalar(app)
 
 @app.get("/")
 @app.get("/health")
@@ -3346,6 +3352,10 @@ app.add_middleware(
         # desarrollo el panel es de OTRO origen (:5173) y sin ella el preflight
         # los corta todos.
         "X-Admin-Accion",
+        # [P1-PLAN-LOTE-843] El permiso del INVITADO para la IA viaja en esta cabecera en cada llamada a la IA
+        # (consentimientos.py). En nativo toda llamada es cross-origin: sin esta línea el preflight la corta y el
+        # invitado de la app no podría usar la IA ni dando el permiso.
+        "X-Bioboros-AI-Consent",
     ],
     # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
     # browser JS lea `X-Correlation-ID` de la response — útil para que el
@@ -3799,6 +3809,9 @@ _ACCOUNT_EXPORT_TABLES = (
     # la exportación. `reason` (el motivo) SÍ se exporta — es información
     # sobre la persona, no del personal que lo otorgó.
     ("account_grants", "user_id", 500),
+    # [P1-PLAN-LOTE-843 · 2026-09-29] El registro del permiso para la IA de terceros y la analítica: cada decisión
+    # con su versión y fecha (la prueba del art. 7.1 es también un dato de la persona). Sin `guest_hash` (abajo).
+    ("user_consents", "user_id", 500),
 )
 
 # Columnas internas sin valor para el usuario y costosas de serializar
@@ -3808,7 +3821,9 @@ _ACCOUNT_EXPORT_TABLES = (
 # por fila hasta Python para tirarlos allí.
 # [P1-PLAN-LOTE-777] `granted_by`/`revoked_by` de `account_grants` identifican al PERSONAL que actuó sobre la
 # cuenta (el user_id del admin), no al titular: tampoco salen.
-_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding", "granted_by", "revoked_by")
+# [P1-PLAN-LOTE-843] `guest_hash` (sha256 del session_id del invitado) de `user_consents` tampoco: es un identificador
+# interno de una sesión anónima; las filas de la cuenta lo llevan NULL y las adoptadas se copian sin él.
+_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding", "granted_by", "revoked_by", "guest_hash")
 
 # [P1-PLAN-LOTE-716] Columnas explícitas donde `*` arrastraría binarios: el contenido de las fotos del chat es
 # `bytea` (MBs por foto) y no viaja en un JSON; sí sus datos.

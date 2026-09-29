@@ -27,6 +27,10 @@ _os_conftest.environ.setdefault("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "fal
 _os_conftest.environ.setdefault("MEALFIT_SODIUM_EXCESS_GATE", "false")
 _os_conftest.environ.setdefault("MEALFIT_RECIPE_CONTRACT_GATE", "false")
 _os_conftest.environ.setdefault("MEALFIT_MICRO_CLOSER_PERDAY", "false")
+# [P1-PLAN-LOTE-843 · 2026-09-29] El permiso para la IA de terceros nace en `block` en código: sin esto, cada test que
+# llama a un endpoint de IA o a un cron recibiría 428 o leería `user_profiles` de la base real. La suite histórica se
+# escribió sin el gate; los tests del lote 843 fijan el modo con monkeypatch y el default de código se ancla aparte.
+_os_conftest.environ.setdefault("MEALFIT_AI_CONSENT_GATE", "off")
 # [P1-PLAN-LOTE-37 · 2026-09-13] La suite NO habla con Sentry, y aquí no vale `setdefault`. Con el `.env` del
 # dueño, `import app` inicializaba Sentry con el DSN real: cada `logging.error` de un test —la suite los provoca
 # a propósito— salía como evento hacia ese proyecto, tras serializar las variables locales de cada marco

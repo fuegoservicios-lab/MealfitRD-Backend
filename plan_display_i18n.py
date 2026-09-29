@@ -1853,6 +1853,11 @@ def enrich_plan_display(
         if not isinstance(locale, str) or locale not in _COACH_LANGUAGE_NAMES:
             # Cubre es-DO (nunca en el dict) y cualquier locale inválido.
             return {"enriched_meals": 0, "skipped": "locale"}
+        # [P1-PLAN-LOTE-843 · 2026-09-29] Traducir es mandar el plan a la IA: sin permiso de la persona, no se traduce.
+        # Aquí llegan todos los disparadores (plan_jobs, el hilo legacy, PATCH /profile, swap persistido, chunks).
+        from consentimientos import permite_ia
+        if not permite_ia(user_id, "traduccion_del_plan"):
+            return {"enriched_meals": 0, "skipped": "ai_consent"}
 
         plan_data = _fetch_plan_data(plan_id, user_id)
         if plan_data is None:

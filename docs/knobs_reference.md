@@ -149,6 +149,12 @@ los 4 prerequisitos, decisión del dueño; el knob sigue `False`.
 | `MEALFIT_SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Subir a `1.0` SOLO para debug intensivo de un deploy específico; lineal con costo |
 | `MEALFIT_SENTRY_PROFILES_SAMPLE_RATE` | `0.1` | Igual que traces — profiling es aún más caro |
 
+### Permiso para la IA de terceros (`P1-PLAN-LOTE-843` · 2026-09-29)
+
+| Knob | Default | Cuándo cambiar |
+|---|---|---|
+| `MEALFIT_AI_CONSENT_GATE` | `block` | `log` mientras el frontend con la hoja del permiso no esté fuera (con `block`, sin permiso no sale nada hacia la IA: 428 en los endpoints, la recogida de bloques y los crons lo saltan); `off` solo como interruptor de emergencia. Una retirada explícita se respeta también en `log`. Doc: [`consentimiento_ia.md`](consentimiento_ia.md) |
+
 ### Circuit breaker LLM
 
 | Knob | Default | Cuándo cambiar |

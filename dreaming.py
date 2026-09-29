@@ -448,7 +448,7 @@ def _estimate_cost_usd(prompt: str, output_obj) -> float:
 
 def consolidate_user(user_id: str) -> dict:
     """Ciclo de Dreaming para UN usuario. Devuelve un dict de telemetría con
-    status ∈ {ok, skipped_few_facts, skipped_locked, skipped_memory_paused, budget_exhausted,
+    status ∈ {ok, skipped_few_facts, skipped_locked, skipped_memory_paused, skipped_ai_consent, budget_exhausted,
     breaker_open, error}. Best-effort: no propaga excepciones."""
     from fact_extractor import get_embedding
     from db_facts import acquire_fact_lock, release_fact_lock
@@ -462,6 +462,13 @@ def consolidate_user(user_id: str) -> dict:
     from memoria_largo_plazo import memoria_activa
     if not memoria_activa(user_id, donde="dreaming"):
         result["status"] = "skipped_memory_paused"
+        return result
+
+    # [P1-PLAN-LOTE-843 · 2026-09-29] Consolidar es mandar sus hechos a la IA (y el modelo sintetizado a Cohere): sin
+    # permiso para la IA de terceros no se toca. Como con la memoria pausada, nada se marca consolidado.
+    from consentimientos import permite_ia
+    if not permite_ia(user_id, "dreaming"):
+        result["status"] = "skipped_ai_consent"
         return result
 
     # Exclusión por-usuario contra el extractor online Y otros workers del dream.

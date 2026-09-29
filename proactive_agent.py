@@ -814,6 +814,10 @@ def handle_nudge_response(user_id: str, content: str):
             (user_id, _ventana_de_respuesta_min()), fetch_one=True
         )
         if pending:
+            # [P1-PLAN-LOTE-843] Clasificar la respuesta es mandarla a la IA: sin permiso, el aviso queda sin clasificar.
+            from consentimientos import permite_ia
+            if not permite_ia(user_id, "respuesta_a_aviso"):
+                return
             nudge_id = pending['id']
             nudge_type = pending.get('nudge_type', 'Desconocido')
             classification = classify_nudge_sentiment(content)
@@ -903,6 +907,10 @@ def run_proactive_checks():
             break
         session_id = str(s.get("id")) if s.get("id") else None   # [P1-PLAN-LOTE-133] None = suscriptor sin chat reciente
         user_id = str(s.get("user_id"))
+        # [P1-PLAN-LOTE-843 · 2026-09-29] Sin permiso para la IA de terceros, ni embedding (Cohere) ni aviso escrito por
+        # la IA: le llega el aviso FIJO de su idioma, el mismo del suscriptor sin chat (recordar no es IA).
+        from consentimientos import permite_ia
+        _ia_ok = permite_ia(user_id, "coach_proactivo")
         # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El reloj, DENTRO del bucle. `user_tz_offset_min` ya
         # estaba importado en este mismo archivo y se usaba 100 líneas más arriba: la maquinaria
         # existía y este call site no la llamaba. El knob global queda sólo de fallback.
@@ -1208,7 +1216,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 context_embedding = None
                 proven_strategies_text = ""
                 try:
-                    context_embedding = get_embedding(context_summary)
+                    context_embedding = get_embedding(context_summary) if _ia_ok else None  # [P1-PLAN-LOTE-843]
                     if context_embedding:
                         emb_str = f"[{','.join(map(str, context_embedding))}]"
                         query = "SELECT * FROM match_successful_nudges(query_embedding => %s, match_threshold => 0.85, match_count => 2)"
@@ -1258,15 +1266,17 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 prompt += bloque_del_dia(consumed, health)
                 prompt += build_language_directive(_nudge_locale)
                 
-            if not session_id:
+            if not session_id or not _ia_ok:
                 # [P1-PLAN-LOTE-133] Sin chat reciente: el aviso corto y fijo en su idioma, directo a la pantalla.
+                # [P1-PLAN-LOTE-843] Y sin permiso para la IA, también: el prompt de abajo nunca se envía.
                 from utils_push import send_push_notification
                 from meal_reminders import texto_del_aviso, etiqueta_del_aviso
                 _t_fijo, _b_fijo = texto_del_aviso(meal_to_check, _nudge_locale)
                 log_nudge_outcome(user_id, meal_to_check, nudge_content=_b_fijo, nudge_style="fijo")
                 send_push_notification(user_id=user_id, title=_t_fijo, body=_b_fijo, url="/dashboard/agent",
                                        tag=etiqueta_del_aviso(meal_to_check), nativa=False)   # [P1-PLAN-LOTE-280] local
-                logger.info(f"✅ [CRON] Aviso fijo de {meal_to_check} a {user_id} (suscriptor sin chat reciente)")
+                logger.info(f"✅ [CRON] Aviso fijo de {meal_to_check} a {user_id} "
+                            f"({'suscriptor sin chat reciente' if not session_id else 'sin permiso para la IA'})")
                 continue
 
             chat_llm = ChatGLM(
@@ -1351,6 +1361,9 @@ def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
 
     NO invocada en producción (micro-batching usa plan_chunk_queue). Conservada
     solo por la cobertura lost-update de `update_plan_data_atomic`."""
+    from consentimientos import permite_ia  # [P1-PLAN-LOTE-843] si alguien la revive, no genera sin permiso
+    if not permite_ia(user_id, "jit_semana_2"):
+        return
     from graph_orchestrator import run_plan_pipeline
     from db_profiles import get_user_profile
     from db_plans import update_plan_data_atomic

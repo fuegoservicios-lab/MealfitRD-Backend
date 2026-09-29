@@ -148,6 +148,15 @@ def _deterministic_plan_title_placeholder(plan_data: dict) -> str:
     return f"{short_name} — {calories} kcal"
 
 
+def _titulo_del_plan(user_id: str, plan_data: dict) -> str:
+    """[P1-PLAN-LOTE-843 · 2026-09-29] El título creativo es una llamada a la IA con el objetivo, las calorías y los
+    platos de la persona: sin permiso vigente para la IA, el título determinista (el mismo del camino diferido)."""
+    from consentimientos import permite_ia
+    if not permite_ia(user_id, "titulo_del_plan"):
+        return _deterministic_plan_title_placeholder(plan_data)
+    return generate_plan_title(plan_data)
+
+
 def _defer_creative_plan_title(plan_id: str, user_id: str, plan_data: dict, placeholder: str) -> None:
     """[P3-GENCHUNK-SPEED · 2026-06-01] Genera el título creativo (LLM Flash-Lite)
     en un thread daemon y lo escribe via UPDATE de UNA columna escalar (`name`),
@@ -159,7 +168,7 @@ def _defer_creative_plan_title(plan_id: str, user_id: str, plan_data: dict, plac
     placeholder (un nombre válido) — degradación cosmética aceptable."""
     def _bg():
         try:
-            creative = generate_plan_title(plan_data)
+            creative = _titulo_del_plan(user_id, plan_data)
             if creative and creative != placeholder:
                 from db_core import execute_sql_write
                 execute_sql_write(
@@ -295,7 +304,7 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         if _defer_title:
             plan_name = _deterministic_plan_title_placeholder(plan_data)
         else:
-            plan_name = generate_plan_title(plan_data)
+            plan_name = _titulo_del_plan(user_id, plan_data)
         profile_embedding = plan_data.pop("_profile_embedding", None)
 
         insert_data = {
@@ -708,8 +717,8 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             except Exception as _rc_e:
                 logger.warning(f"[P1-PERSIST-RESOLUTION-COVERAGE] error: {type(_rc_e).__name__}: {_rc_e}")
 
-        # Nombre creativo generado por IA
-        plan_name = generate_plan_title(plan_data)
+        # Nombre creativo generado por IA ([P1-PLAN-LOTE-843] solo con permiso para la IA)
+        plan_name = _titulo_del_plan(user_id, plan_data)
 
         # Extraer _profile_embedding si fue inyectado por la caché semántica
         profile_embedding = plan_data.pop("_profile_embedding", None)

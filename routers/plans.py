@@ -63,6 +63,7 @@ from db_inventory import restock_inventory, consume_inventory_items_completely
 from rate_limiter import RateLimiter
 from perfil_servidor import perfil_manda_al_generar, reescritura_tras_generar  # [P1-PLAN-LOTE-717] dueños del perfil
 from schemas import PUBLIC_SSE_EVENTS  # [P1-11] contrato público de eventos SSE
+from consentimientos import requiere_consentimiento_ia, hay_permiso_ia, adoptar_de_invitado  # [P1-PLAN-LOTE-843]
 
 logger = logging.getLogger(__name__)
 
@@ -3496,6 +3497,7 @@ def api_analyze(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(verify_api_quota),
     _rl: None = Depends(_PLAN_GEN_LIMITER),  # [P1-6] 429 si excede 3/60s per user|ip
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843] 428 sin permiso para la IA
 ):
     try:
         session_id = data.get("session_id")
@@ -3923,6 +3925,7 @@ async def api_analyze_stream(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(verify_api_quota),
     _rl: None = Depends(_PLAN_GEN_LIMITER),  # [P1-6] mismo cap que sync — 429 antes de abrir el stream
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843] 428 antes de abrir el stream
 ):
     """
     Streaming SSE endpoint para generación de planes con progreso en tiempo real.
@@ -5732,7 +5735,7 @@ async def api_pending_pipeline_ack(
 
 
 @router.post("/recipe/expand")
-def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_EXPAND_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
+def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_EXPAND_LIMITER), _ia: None = Depends(requiere_consentimiento_ia)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM · [P1-PLAN-LOTE-843] 428 sin permiso de IA
     """[P1-HIST-RECIPE-1 · 2026-05-10] Expande una receta con pasos de chef
     y persiste el resultado en el plan correcto.
 
@@ -7098,7 +7101,7 @@ def _persist_swap_server_side(ctx: dict, result: dict, verified_user_id) -> bool
 
 
 @router.post("/swap-meal")
-def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
+def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER), _ia: None = Depends(requiere_consentimiento_ia)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM · [P1-PLAN-LOTE-843] 428 sin permiso de IA
     try:
         session_id = data.get("session_id")
         user_id = data.get("user_id")
@@ -8375,6 +8378,7 @@ def api_fix_sodium_day(
     data: dict = Body(default={}),
     verified_user_id: Optional[str] = Depends(verify_api_quota),
     _rl: None = Depends(_FIX_SODIUM_DAY_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
 ):
     """[P1-FIX-SODIUM-DAY · 2026-08-02] "Arreglar este día": identifica el
     peor día (más sodio, sobre el techo) y su comida más salada, y la
@@ -8983,6 +8987,7 @@ def api_regenerate_day(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(verify_api_quota),
     _rl: None = Depends(_SWAP_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
 ):
     """[P3-PANTRY-SUFFICIENCY · 2026-06-23] Regenera TODOS los platos de UN día,
     pantry-constrained, con gate de suficiencia.
@@ -13647,7 +13652,7 @@ def _rechazar_si_generador_apagado(user_id) -> None:
 
 
 @router.post("/{plan_id}/retry-chunk/{chunk_id}")
-def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota), _ia: None = Depends(requiere_consentimiento_ia)):  # [P1-PLAN-LOTE-843]
     """[P0-HIST-IDOR-1 · 2026-05-10] Reenvía un chunk fallido a la cola.
 
     Bug original (audit 2026-05-10): los tres `UPDATE` filtraban solo por
@@ -13827,7 +13832,7 @@ def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
 
 
 @router.post("/guest-display")
-def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_GUEST_DISPLAY_LIMITER)):
+def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_GUEST_DISPLAY_LIMITER), _ia: bool = Depends(hay_permiso_ia)):
     """[P1-PLAN-LOTE-225 · 2026-09-24] El plan del INVITADO en su idioma.
 
     Los invitados no persisten el plan (vive en su navegador), así que ningún disparador de la capa `_display` los
@@ -13847,6 +13852,8 @@ def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = 
             raise HTTPException(status_code=413, detail="plan_data demasiado grande.")
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="plan_data no serializable.")
+    if _ia is False:  # [P1-PLAN-LOTE-843] sin permiso de IA (sin cabecera): el plan sigue en español, sin el modelo
+        return {"meals": [], "plan_name": None, "insights": None, "skipped": "ai_consent_required"}
     from plan_display_i18n import traducir_plan_en_memoria
     return traducir_plan_en_memoria(
         {k: plan.get(k) for k in ("days", "name", "insights", "_display")},
@@ -13888,6 +13895,8 @@ def api_adopt_guest_plan(
     existing = get_latest_meal_plan_with_id(verified_user_id)
     if existing:
         raise HTTPException(status_code=409, detail="account_already_has_plan")
+    # [P1-PLAN-LOTE-843] El permiso de IA del invitado pasa con su fecha original ANTES de guardar (el título es IA).
+    _permiso_ia = adoptar_de_invitado((data or {}).get("session_id"), verified_user_id)
 
     # I1: plan_id nace del INSERT. return_id=True corre SÍNCRONO + propaga la
     # excepción + retorna el UUID; su dedup interno retorna None si una doble
@@ -13931,7 +13940,7 @@ def api_adopt_guest_plan(
             f"⚠️ [P1-GUEST-COUNTRY-ADOPT] no se pudo adoptar el formulario del invitado "
             f"(el plan SÍ se guardó): {type(_gf_e).__name__}: {_gf_e}"
         )
-    return {"success": True, "adopted": True, "plan_id": plan_id}
+    return {"success": True, "adopted": True, "plan_id": plan_id, "ai_consent": _permiso_ia}
 
 
 @router.post("/restore")
@@ -17114,6 +17123,7 @@ def api_regenerate_dead_lettered_simplified(
     plan_id: str,
     chunk_id: str,
     verified_user_id: Optional[str] = Depends(verify_api_quota),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
 ):
     """[P1-ζ] Permite al usuario re-encolar un chunk dead-lettered forzando
     `flexible_mode + advisory_only` para que el siguiente intento NO falle por
@@ -17322,7 +17332,7 @@ def api_regenerate_dead_lettered_simplified(
 
 
 @router.post("/{plan_id}/regen-degraded")
-def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota), _ia: None = Depends(requiere_consentimiento_ia)):  # [P1-PLAN-LOTE-843]
     """[GAP C] Regenera chunks completados en modo degradado (shuffle/edge/emergency)
     creando nuevos chunks pendientes que sobrescribirán los días afectados.
 

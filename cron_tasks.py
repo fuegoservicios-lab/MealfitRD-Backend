@@ -17849,7 +17849,9 @@ def _persist_nightly_learning_signals(user_id: str, health_profile: dict, days: 
     liked_flavor_profiles = None
     recent_likes = None
     recent_rejections = None
-    if run_retro:
+    # [P1-PLAN-LOTE-843] La retrospectiva manda a la IA lo que comió y lo que le gustó: sin permiso, no corre (y como no
+    # deja fecha, se intenta la próxima vez). Aquí llega también el registro manual de comidas, que no es IA.
+    if run_retro and __import__("consentimientos").permite_ia(user_id, "retrospectiva_semanal"):
         try:
             from ai_helpers import generate_llm_retrospective, extract_liked_flavor_profiles
             from db import get_user_likes, get_active_rejections
@@ -22511,10 +22513,12 @@ def _alert_stuck_chunks() -> None:
               AND q.dead_lettered_at IS NULL
               AND q.execute_after < NOW() - make_interval(hours => %s)
               AND q.created_at < NOW() - make_interval(hours => %s)
+              -- [P1-PLAN-LOTE-843] Un bloque que espera el permiso para la IA no es un zombie: la recogida lo salta.
+              __AI_CONSENT_GATE__
             GROUP BY q.meal_plan_id, q.user_id
             ORDER BY MIN(q.execute_after) ASC
             LIMIT %s
-            """,
+            """.replace("__AI_CONSENT_GATE__", __import__("consentimientos").fragmento_sql_permiso("q.user_id")),
             (int(_overdue_h), int(_overdue_h), int(_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
@@ -24259,7 +24263,7 @@ def _normalize_meal_name(text: str) -> str:
     return strip_accents(str(text).lower()).strip()
 
 
-def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_records: list, consumption_mutations_count: int = 0, deviation_count: int = 0) -> dict:
+def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_records: list, consumption_mutations_count: int = 0, deviation_count: int = 0, usar_embeddings: bool = True) -> dict:
     """Calcula cuánto del chunk previo fue realmente consumido usando nombres de platos.
 
     [P0-3] Proxy implícito extendido a logging esparso:
@@ -24325,8 +24329,10 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
             continue
 
         # 3. Embedding Match Cosine >= 0.85 (Top 3 candidatos)
+        # [P1-PLAN-LOTE-843] Lo que la persona anotó va a Cohere: sin permiso para la IA (`usar_embeddings=False`), el
+        # paso se salta y cuentan solo los dos matches de texto de arriba.
         available_planned = [p for p, count in planned_pool.items() if count > 0]
-        if available_planned:
+        if available_planned and usar_embeddings:
             candidates = sorted(available_planned, key=lambda p: _word_overlap(c_name, p), reverse=True)[:3]
             try:
                 c_emb = get_embedding(c_name)
@@ -25533,7 +25539,10 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         _deviation_count = len(get_plan_meal_deviations_since(user_id, prev_start_iso) or [])
     except Exception as e:
         logger.debug(f"[P1-DIARY-FREETEXT-ESTIMATE] no se pudieron contar los desvíos para {user_id}: {e}")
-    ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, consumed_records, consumption_mutations_count, deviation_count=_deviation_count)
+    ratio_info = _calculate_chunk_consumption_ratio(
+        previous_chunk_days, consumed_records, consumption_mutations_count,
+        usar_embeddings=__import__("consentimientos").permite_ia(user_id, "aprendizaje_del_bloque"),  # [P1-PLAN-LOTE-843]
+        deviation_count=_deviation_count)
     ratio = ratio_info["ratio"]
 
     # [P0-1] zero_log_proxy=True significa que NO hubo logs reales del chunk previo.
@@ -26267,9 +26276,14 @@ def _detect_and_escalate_stuck_chunks():
                   SELECT 1 FROM user_profiles up
                   WHERE up.id = plan_chunk_queue.user_id AND up.plan_mode = 'tracking'
               )
+              -- [P1-PLAN-LOTE-843] Ni el que espera el permiso para la IA: la recogida lo salta a propósito, y el
+              -- «Optimizando tu plan… estará listo en breve» sería mentira hasta que la persona lo dé.
+              __AI_CONSENT_GATE__
             ORDER BY execute_after ASC
             LIMIT 50
-            """, fetch_all=True
+            """.replace("__AI_CONSENT_GATE__",
+                        __import__("consentimientos").fragmento_sql_permiso("plan_chunk_queue.user_id")),
+            fetch_all=True
         ) or []
 
         if stuck_rows:
@@ -27646,6 +27660,9 @@ __PLAN_MODE_GATE__
     # feature no hay flag legítimo que leer.
     _freeze_on = _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True)
     _gates_sql = (_pm_gate_sql.rstrip() if _pm_on else "") + (_FREEZE_GATE_SQL.rstrip() if _freeze_on else "")
+    # [P1-PLAN-LOTE-843 · 2026-09-29] Tercera capa, el permiso para la IA de terceros: sin él vigente (knob `block`; en
+    # `log`, solo la retirada explícita) no se recoge, encole quien encole. Mismo patrón que la pausa de P1-PLAN-MODE.
+    _gates_sql += __import__("consentimientos").fragmento_sql_permiso("q1.user_id")
     query = query.replace("__PLAN_MODE_GATE__", _gates_sql)
 
     try:

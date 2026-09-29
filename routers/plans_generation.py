@@ -26,6 +26,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from auth import get_verified_user_id, verify_api_quota
+from consentimientos import requiere_consentimiento_ia  # [P1-PLAN-LOTE-843]
 from plan_policy import form_choices as _form_choices_fs, form_choices_summary as _form_choices_summary_fs  # [P2-FORM-SNAPSHOT-LOG]
 from knobs import _env_int
 from rate_limiter import RateLimiter
@@ -54,6 +55,7 @@ async def api_create_generation_run(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(verify_api_quota),
     _rl: None = Depends(_PLAN_GEN_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843] 428 sin permiso para la IA
 ):
     from generation_lifecycle import (
         RunFingerprintConflict, create_or_replay_run, create_placeholder_plan_and_enqueue_initial,

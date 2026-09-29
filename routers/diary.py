@@ -14,6 +14,8 @@ from db_core import _storage_client
 # ningún provider de visión (hoy solo cloud, `openai_compatible`) escribe en
 # el libro de cuota de planes — ver el gate `log_llm_usage_event` más abajo.
 from auth import get_verified_user_id
+# [P1-PLAN-LOTE-843] Permiso para la IA de terceros: 428 `ai_consent_required` sin él (SSOT consentimientos.py).
+from consentimientos import requiere_consentimiento_ia
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 # [P3-DB-IMPORTS-FACADE · boy scout] `get_user_profile`/`log_llm_usage_event`
@@ -444,6 +446,8 @@ async def api_diary_upload(
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
     # [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] throttle por user_id/IP.
     _rl_vision: Optional[str] = Depends(_VISION_UPLOAD_LIMITER),
+    # [P1-PLAN-LOTE-843] La foto va a Google Gemini: sin permiso para la IA, 428 antes de leerla.
+    _ia: None = Depends(requiere_consentimiento_ia),
 ):
     try:
         # [P1-PROD-AUDIT-3 · 2026-05-30] Validación de seguridad IDOR.
@@ -1119,6 +1123,7 @@ def api_log_consumed_meal(
 async def api_estimate_macros(
     payload: EstimateMacrosRequest,
     verified_user_id: Optional[str] = Depends(_ESTIMATE_MACROS_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
 ):
     """[P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] «Escríbelo y estimamos las macros».
 
@@ -1202,7 +1207,8 @@ async def api_estimate_macros(
 
 
 @router.post("/scan/ajuste-duda")
-async def api_ajuste_de_duda(payload: ajuste_de_duda.PeticionAjuste, verified_user_id: Optional[str] = Depends(_AJUSTE_DUDA_LIMITER)):
+async def api_ajuste_de_duda(payload: ajuste_de_duda.PeticionAjuste, verified_user_id: Optional[str] = Depends(_AJUSTE_DUDA_LIMITER),
+                             _ia: None = Depends(requiere_consentimiento_ia)):  # [P1-PLAN-LOTE-843]
     """[P1-PLAN-LOTE-361 · 2026-09-26] «Otra…» se aplica como una opción más: el ajuste del plato por la respuesta
     escrita, sin volver a analizar la foto (`ajuste_de_duda.py`). Exento de la cuota de planes; soft-fail 200."""
     if not verified_user_id:
@@ -1225,7 +1231,8 @@ async def api_ajuste_de_duda(payload: ajuste_de_duda.PeticionAjuste, verified_us
 
 
 @router.post("/scan/ingrediente")
-async def api_ingrediente_corregido(payload: ingrediente_corregido.PeticionIngrediente, verified_user_id: Optional[str] = Depends(_INGREDIENTE_LIMITER)):
+async def api_ingrediente_corregido(payload: ingrediente_corregido.PeticionIngrediente, verified_user_id: Optional[str] = Depends(_INGREDIENTE_LIMITER),
+                                    _ia: None = Depends(requiere_consentimiento_ia)):  # [P1-PLAN-LOTE-843]
     """[P1-PLAN-LOTE-365 · 2026-09-26] «Cambiar» un ingrediente del escáner («Queso» → «Queso mozzarella»): las macros
     del nuevo y del anterior en la misma cantidad (`ingrediente_corregido.py`). Exento de la cuota; soft-fail 200."""
     if not verified_user_id:
@@ -1243,6 +1250,7 @@ async def api_ingrediente_corregido(payload: ingrediente_corregido.PeticionIngre
 async def api_estimate_plate(
     payload: EstimatePlateRequest,
     verified_user_id: Optional[str] = Depends(_ESTIMATE_PLATE_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
 ):
     """[P1-PLAN-LOTE-348 · 2026-09-26] «Descríbelo y lo calculo»: el texto libre separado en partes EDITABLES
     (`plato_descrito.py`). Como el estimador de macros: exento de la cuota de planes (el gasto va a
