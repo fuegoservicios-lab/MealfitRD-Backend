@@ -48,6 +48,28 @@ def test_si_un_paso_ya_lo_cocina_solo_la_nota():
     assert not any(p.startswith("💪 ") for p in rec), rec
 
 
+def test_los_falsos_positivos_del_corpus_no_reciben_paso():
+    """Las cinco formas en que el corpus SÍ cocina el huevo y el primer criterio no lo veía (8 de 27 inserciones)."""
+    cocidos = (
+        ["Mise en place: prepara 2 huevos bien cocidos (10 minutos en agua hirviendo) y pélalos.", "Montaje: sirve."],
+        ["Mise en place: corta 3 huevos bien cocidos en mitades.",
+         "💡 Cocción previa: hierve los huevos 10-12 min, pásalos a agua fría y pélalos.", "Montaje: sirve."],
+        ["Mise en place: bate 6 claras de huevo.",
+         "El Toque de Fuego: sazona las claras con ajo y sal; cocínalas en una sartén 3 minutos.", "Montaje: sirve."],
+        ["El Toque de Fuego: mezcla el pescado con el huevo y el pan rallado; forma tortitas y hornéalas 15 minutos.",
+         "Montaje: sirve."],
+        ["El Toque de Fuego: mezcla la quinoa y las vainitas con el huevo y las claras. Forma bocaditos y cocínalos en el "
+         "airfryer 10 minutos.", "Montaje: sirve."],
+    )
+    for rec in cocidos:
+        assert hs.cocido_en_pasos({"recipe": rec}), rec
+    # «pan integral» no es una mezcla: el huevo de las tostadas sigue sin cocer
+    assert not hs.cocido_en_pasos({"recipe": ["Mise en place: prepara 1 huevo y 1 rebanada de pan integral.",
+                                              "El Toque de Fuego: calienta el aceite; cocina el tomate 3 minutos. Añade "
+                                              "huevo al lado para acompañar.",
+                                              "Montaje: coloca el huevo sobre las tostadas integrales."]})
+
+
 def test_el_criterio_estricto():
     assert not hs.cocido_en_pasos(_TORTILLA)
     assert hs.cocido_en_pasos({"recipe": ["Añade los huevos batidos; remueve hasta que cuajen."]})

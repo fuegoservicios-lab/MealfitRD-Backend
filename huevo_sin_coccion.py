@@ -22,11 +22,17 @@ import re
 import unicodedata
 
 _HUEVO_RE = re.compile(r"\b(?:huevos?|claras?|yemas?|revoltillo|batidos?\s+de\s+huevo)\b")
-_COCCION_RE = re.compile(r"\b(?:cocin\w*|cuec\w*|coce\w*|hierv\w*|herv\w*|fri[eo]\w*|frei\w*|horne\w*|horno|plancha|sarten|"
-                         r"saltea\w*|sofri\w*|dora\w*|revuelv\w*|revolv\w*|escalfa\w*|pocha\w*|airfryer|vapor|microondas|"
-                         r"asa\b|asal\w*|guisa\w*|wok)")
+_COCCION_RE = re.compile(r"\b(?:cocin\w*|cuec\w*|coce\w*|cocid[oa]s?|hierv\w*|hirv\w*|herv\w*|dur[oa]s?|fri[eo]\w*|frei\w*|"
+                         r"horne\w*|horno|plancha|sarten|saltea\w*|sofri\w*|dora\w*|revuelv\w*|revolv\w*|escalfa\w*|"
+                         r"pocha\w*|airfryer|vapor|microondas|asa\b|asal\w*|guisa\w*|wok)")
 _CUAJA_RE = re.compile(r"\bcuaj\w*")
-_NOTA_RE = re.compile(r"^\s*(?:⚠|🤰|💡|⚕|🌱|🛡|nota\b)", re.IGNORECASE)
+#: «cocínalas», «fríelos», «hornéalas»: la cocción de lo que nombró la cláusula anterior
+_ENCLITICO_RE = re.compile(r"\b(?:cocin|cuec|hierv|fri|horne|salte|dor|sofri|asa|guis)\w*(?:lo|la|los|las)\b")
+#: el huevo entra en una preparación (masa, mezcla, tortitas…) que luego se cuece entera
+_MEZCLA_RE = re.compile(r"\b(?:mezcl\w*|integr(?!al)\w*|incorpor\w*|combin\w*|une\b|amas\w*|masa|tortitas?|bocaditos?|"
+                        r"croquetas?|arepitas?|panqueques?|bollitos?|albondigas?|hamburguesas?|empanad\w*)")
+#: notas que NO son pasos (seguridad, clínica); la «💡 Cocción previa» SÍ es un paso de cocción
+_NOTA_RE = re.compile(r"^\s*(?:⚠|🤰|⚕|🌱|🛡|nota\b|💡(?!\s*cocci[oó]n\s+previa))", re.IGNORECASE)
 
 
 def on() -> bool:
@@ -42,13 +48,23 @@ def _sa(s) -> str:
 
 
 def cocido_en_pasos(meal: dict) -> bool:
-    """¿Algún paso (no nota) cocina el huevo? Una cláusula que lo cuaja, o que nombra el huevo con un verbo de cocción."""
+    """¿Algún paso (no nota) cocina el huevo? Una cláusula que lo cuaja; o que nombra el huevo con un verbo o un estado de
+    cocción («2 huevos bien cocidos (10 minutos en agua hirviendo)»); o que lo retoma con un pronombre justo después de
+    nombrarlo («sazona las claras…; cocínalas en la sartén»); o el huevo entró en una mezcla/masa y un paso posterior
+    cuece («mezcla el pescado con el huevo…; forma tortitas y hornéalas»)."""
+    en_mezcla = previa_huevo = False
     for p in (meal.get("recipe") or []):
         if not isinstance(p, str) or _NOTA_RE.search(p):
             continue
         for cl in re.split(r"[.;]", _sa(p)):
-            if _CUAJA_RE.search(cl) or (_HUEVO_RE.search(cl) and _COCCION_RE.search(cl)):
+            huevo = bool(_HUEVO_RE.search(cl))
+            if _CUAJA_RE.search(cl) or (huevo and _COCCION_RE.search(cl)):
                 return True
+            if (previa_huevo and _ENCLITICO_RE.search(cl)) or (en_mezcla and _COCCION_RE.search(cl)):
+                return True
+            if huevo and _MEZCLA_RE.search(cl):
+                en_mezcla = True
+            previa_huevo = huevo
     return False
 
 
