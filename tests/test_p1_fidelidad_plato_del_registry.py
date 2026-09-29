@@ -43,6 +43,7 @@ acaba afirmando algo que no ocurrió — el defecto que `P1-REVIEW-KIND-HONEST` 
    dos funciones reales en vez de confiar en que sigan pareciéndose.
 """
 import json
+import os
 
 import pytest
 
@@ -140,16 +141,22 @@ def test_el_medidor_predice_a_la_costura():
     Si alguien cambia una de las dos normalizaciones, esta prueba cae antes de que producción
     empiece a publicar un número que no predice nada.
     """
+    # [P1-PLAN-LOTE-814] Contrato EXACTO del medidor v1. El v2 lee con su propio lector tolerante y cuenta
+    # ⊇ la costura (test_p1_plan_lote_814::test_v2_nunca_cuenta_menos_aplicables_que_la_costura).
+    os.environ["MEALFIT_REGISTRY_PROVENANCE_V2"] = "0"
     platos = _plantillas_reales(5)
     if not platos:
+        os.environ.pop("MEALFIT_REGISTRY_PROVENANCE_V2", None)
         pytest.skip("el registry no está en el árbol")
     impostor = {"name": platos[0]["name"], "ingredients": ["200 g de Piedras"]}
     ajeno = {"name": "Plato que no existe en ningún catálogo", "ingredients": []}
     comidas = [dict(m) for m in platos] + [impostor, ajeno]
 
-    medido = rl.dish_provenance([{"meals": comidas}])["aplicables"]
+    try:
+        medido = rl.dish_provenance([{"meals": comidas}])["aplicables"]
+    finally:
+        os.environ.pop("MEALFIT_REGISTRY_PROVENANCE_V2", None)
 
-    import os
     os.environ["MEALFIT_RECIPE_LIBRARY_SELECT"] = "1"
     try:
         sustituidas = sum(1 for m in comidas if rl.apply_library_recipe(dict(m)))
@@ -252,6 +259,7 @@ def test_el_cron_alerta_cuando_se_fuerza_el_catalogo_y_no_prende(monkeypatch):
     monkeypatch.setattr(cron_tasks, "execute_sql_write", _write, raising=False)
     monkeypatch.setattr(cron_tasks, "execute_sql_query",
                         lambda *a, **k: [{"n": 9, "platos": 108, "del_catalogo": 4}], raising=False)
+    monkeypatch.setenv("MEALFIT_REGISTRY_PROVENANCE_V2", "0")  # [P1-PLAN-LOTE-814] forma del SQL v1
     monkeypatch.setenv("MEALFIT_RECIPE_LIBRARY_SELECT", "1")
     rl._library.cache_clear()
 
@@ -271,6 +279,7 @@ def test_el_cron_resuelve_la_alerta_cuando_el_catalogo_prende(monkeypatch):
                         lambda sql, params=None: escrituras.append(str(sql)), raising=False)
     monkeypatch.setattr(cron_tasks, "execute_sql_query",
                         lambda *a, **k: [{"n": 9, "platos": 108, "del_catalogo": 100}], raising=False)
+    monkeypatch.setenv("MEALFIT_REGISTRY_PROVENANCE_V2", "0")  # [P1-PLAN-LOTE-814] forma del SQL v1
     monkeypatch.setenv("MEALFIT_RECIPE_LIBRARY_SELECT", "1")
 
     cron_tasks._registry_dish_rate_alert_job()
@@ -290,6 +299,7 @@ def test_muestra_insuficiente_no_alerta(monkeypatch):
                         lambda sql, params=None: escrituras.append((str(sql), params)), raising=False)
     monkeypatch.setattr(cron_tasks, "execute_sql_query",
                         lambda *a, **k: [{"n": 2, "platos": 24, "del_catalogo": 0}], raising=False)
+    monkeypatch.setenv("MEALFIT_REGISTRY_PROVENANCE_V2", "0")  # [P1-PLAN-LOTE-814] forma del SQL v1
     monkeypatch.setenv("MEALFIT_RECIPE_LIBRARY_SELECT", "1")
 
     cron_tasks._registry_dish_rate_alert_job()
