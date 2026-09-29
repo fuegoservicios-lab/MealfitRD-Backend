@@ -8359,7 +8359,7 @@ _PREP_CREMA_COCO_RE = re.compile(r"\bcremas?\s+de\s+coco\b")
 # lata convirtió esa agua en «190 g de… habichuelas cocidos», la fusión la sumó a las habichuelas y el día real quedó un
 # 25 % por debajo de lo declarado. Corpus: 6 líneas así, ~880 kcal fantasma. Cabeza «agua» (con su cantidad delante o
 # sin ella) ⇒ agua: sin fila, 0 kcal, no se compra. «agua de coco» (y cualquier «agua de X» salvo la de cocción) sigue
-# por los tiers normales. tooltip-anchor: P1-PLAN-LOTE-860
+# por los tiers normales. Knob `MEALFIT_WATER_IS_WATER` (True). tooltip-anchor: P1-PLAN-LOTE-860
 _PREP_WATER_RE = re.compile(r"^\s*(?:[\d.,/¼½¾⅓⅔⅛\s]+(?:[a-z]+\.?\s+)?de\s+)?(?:el\s+|la\s+|un\s+poco\s+de\s+)?agua\b"
                             r"(?!\s+de\s+(?!coccion\b|la\s+llave\b|grifo\b))")
 
@@ -8378,7 +8378,7 @@ def resolve_preparation_distinct(name) -> tuple:
         low = _sa_prep(str(name).lower())
     except Exception:
         low = str(name).lower()
-    if _PREP_WATER_RE.match(low):
+    if _PREP_WATER_RE.match(low) and _knob_env_bool("MEALFIT_WATER_IS_WATER", True):
         return (True, None)  # [P1-PLAN-LOTE-860] «agua para calentar las habichuelas» es agua, no habichuelas
     m = _PREP_FLOUR_RE.search(low)
     if m:
