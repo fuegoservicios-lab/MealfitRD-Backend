@@ -92,6 +92,12 @@ _BANNED_CODE_PATTERNS = (
 # marker — el pipeline de planes y el coach no vuelven a Gemini.
 _VISION_SEAM_EXEMPTABLE = {"GEMINI_API_KEY", '"gemini-', "'gemini-"}
 _VISION_SEAM_MARKER = "[P1-VISION-GEMINI-FLASH]"
+# [P1-PLAN-LOTE-685 · 2026-09-28] Segunda costura, decidida por el dueño: la VOZ del modo voz del coach
+# (`coach_voz.py`, Gemini 3.8 Flash-Lite TTS) por REST, sin SDK. Gemini solo lee en voz alta un texto que el
+# coach ya escribió — no razona, no aconseja, no ve historial ni perfil —, así que el veto al cerebro del coach
+# sigue intacto: `build_chat_llm` no conoce `gemini` y el test de abajo lo sigue exigiendo.
+_VOICE_SEAM_MARKER = "[P1-PLAN-LOTE-685-VOZ]"
+_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER)
 
 
 def test_a_blanket_no_gemini_in_prod_code():
@@ -105,8 +111,8 @@ def test_a_blanket_no_gemini_in_prod_code():
             for m in re.finditer(re.escape(pat), src):
                 line_no = src.count("\n", 0, m.start()) + 1
                 line = src.splitlines()[line_no - 1].strip()
-                if pat in _VISION_SEAM_EXEMPTABLE and _VISION_SEAM_MARKER in raw_lines[line_no - 1]:
-                    continue  # costura de visión marcada (P1-VISION-GEMINI-FLASH)
+                if pat in _VISION_SEAM_EXEMPTABLE and any(mk in raw_lines[line_no - 1] for mk in _SEAM_MARKERS):
+                    continue  # costura marcada: visión (P1-VISION-GEMINI-FLASH) o voz (P1-PLAN-LOTE-685)
                 violations.append(f"{p.name}:{line_no}: [{pat}] {line[:120]}")
     assert not violations, (
         "P0-LLM-PROVIDER-MIGRATION violado — referencias Gemini vivas en código "

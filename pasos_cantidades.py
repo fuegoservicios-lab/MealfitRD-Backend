@@ -473,6 +473,19 @@ _GRAMOS_EN_PASO_RE = re.compile(
     r"(?P<food>[a-záéíóúñü]+(?:\s+[a-záéíóúñü]+){0,3})", re.IGNORECASE)
 
 
+# [P1-PLAN-LOTE-787 · 2026-09-28] El emparejamiento del 328 era por la PRIMERA palabra: «½ pedazo mediano de yuca (≈172 g)»
+# empieza por «pedazo» y el paso dice «corta 205 g de yuca»; «1¼ filetes de pescado (≈199 g)» no casaba con «mide 215 g
+# de filete de pescado» (plural). Bloque 3 real de 6594aae1: tres pasos así. Se empareja por lo que IDENTIFICA al alimento:
+# sin la unidad vaga ni el tamaño (pedazo, trozo, porción, pieza, lonja, rebanada, mediano, grande, pequeño) y en singular.
+# Las guardas (reparto, cocido/crudo, forma del huevo, ambigüedad) no cambian. tooltip-anchor: P1-PLAN-LOTE-787
+_VAGAS_787 = frozenset(("pedazo", "trozo", "porcion", "porcione", "pieza", "lonja", "rebanada", "mediano", "mediana",
+                        "grande", "pequeno", "pequena"))
+
+
+def _id_787(toks) -> list:
+    return [r for r in (_raiz_356(t) for t in (toks or [])) if r not in _VAGAS_787]
+
+
 def gramos_de_la_pieza(meal) -> int:
     """Nº de pasos reescritos; 0 ante cualquier error."""
     try:
@@ -486,17 +499,18 @@ def gramos_de_la_pieza(meal) -> int:
             if m:
                 t = _toks(m.group("cuerpo"))
                 if t:
-                    piezas.append((t, float(m.group("g").replace(",", ".")), m.group("cuerpo")))
+                    piezas.append((_id_787(t) or t, float(m.group("g").replace(",", ".")), m.group("cuerpo")))  # [787]
                 continue
             md = _LINEA_EN_GRAMOS_RE.match(s)
             if md:
                 t = _toks(re.sub(r"\(.*?\)", " ", md.group("cuerpo")))
                 if t:
-                    en_gramos.append(t)
+                    en_gramos.append(_id_787(t) or t)  # [P1-PLAN-LOTE-787]
         if not piezas:
             return 0
 
         def _cual(ft):
+            ft = _id_787(ft) or ft  # [P1-PLAN-LOTE-787] «yuca en trozos» es yuca; «filete» y «filetes», lo mismo
             cp = [k for k, p in enumerate(piezas) if p[0][0] == ft[0]]
             cg = [t for t in en_gramos if t[0] == ft[0]]
             if len(cp) + len(cg) > 1:
@@ -3260,7 +3274,7 @@ def masa_con_su_agua(meal) -> int:
 # Nunca si la lista ya la compra cocida, en lata o ahumada, ni si algún paso la cocina. tooltip-anchor: P1-PLAN-LOTE-407
 _PROT_COCIDA_407_RE = re.compile(
     r"(?:ten\s+list[oa]s?|usa|desmenuza|mide|agrega|anade|incorpora|coloca|reparte|mezcla|pesa|prepara|corta|pica|trocea|"
-    r"sirve|calienta|recalienta)\b[^.;]{0,40}\b"  # [P1-PLAN-LOTE-445] prepara/corta/calienta
+    r"sirve|calienta|recalienta|marina|acompana)\b[^.;]{0,40}\b"  # [P1-PLAN-LOTE-445] prepara/corta/calienta; [P1-PLAN-LOTE-784] marina/acompaña
     r"(?P<k>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}?(?:ya\s+)?cocid[oa]s?|"
     r"\b(?P<k2>pollo|pechuga|pavo|carne|res|cerdo|tilapia|pescado|filete)\b[^.;]{0,25}\bya\s+cocid[oa]s?")
 #: la cocción de verdad rige a la proteína («sella la pechuga», «hierve el pollo») o dice su punto («… hasta 74 °C»);

@@ -1030,7 +1030,29 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-760 · 2026-09-28] (backend) El coach termina y guarda su respuesta aunque el usuario salga de la app: el
 # turno corre en su propio hilo (`turno_desacoplado.py`) y «Detener» es `POST /api/chat/stop` (dueño 28-sep 12:25 UTC:
 # «Cómo estás?» abortado a los 24 s → «No llegó la respuesta del coach»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-760 · 2026-09-28"
+# [P1-PLAN-LOTE-780 · 2026-09-28] (backend) «½ tortas pequeñas de casabe» → «½ torta pequeña…»: la fracción sola también
+# singulariza los contables que la tabla no conocía, y su adjetivo con ellos.
+# [P1-PLAN-LOTE-781 · 2026-09-28] (backend) El maní no se filetea: «maní fileteado/as» (resto de la sustitución por
+# presupuesto de «almendras fileteadas», 1,5 % de las comidas del corpus) pasa a «maní picado».
+# [P1-PLAN-LOTE-782 · 2026-09-28] (backend) El cerrador de proteína comparaba la congruencia por SUBCADENA: «agua» (de
+# «Atún en agua») estaba dentro de «aguacate», y 86 de 1.244 desayunos del corpus recibían 35-300 g de atún. Por palabra.
+# [P1-PLAN-LOTE-783 · 2026-09-28] (backend) Embarazo: el tope de pescado cambiaba el atún EN LATA por pechuga de pavo
+# y dejaba «mezcla pechuga de pavo en agua (ya viene cocido)… sirve frío»: carne cruda servida fría. Ahora se cocina.
+# [P1-PLAN-LOTE-784 · 2026-09-28] (backend) «Montaje: marina pechuga de pollo cocido con el limón» con 1½ pechugas CRUDAS
+# en la lista y ningún paso que las cocine (perfil sin tiempo): el 407 no conocía «marina» ni «acompaña». Cocción previa.
+# [P1-PLAN-LOTE-785 · 2026-09-28] (backend) Embarazo: el pescado fresco cambiado por pavo conservaba su punto —«…y
+# pechuga de pavo alcance 63 °C»—; el ave pide 74 °C y la carne 71 °C, en la frase que nombra al sustituto.
+# [P1-PLAN-LOTE-786 · 2026-09-28] (backend) «¼ pedazo mediano de yuca (≈173 g)» (bloque 3 real de 6594aae1): el motor lee
+# los 173 g, así que la fracción mentía. La cuenta de una pieza vaga sigue a su peso (27 líneas del corpus 744).
+# [P1-PLAN-LOTE-787 · 2026-09-28] (backend) Los gramos del paso siguen a la pieza de la lista también cuando la pieza
+# empieza por su unidad («½ pedazo mediano de yuca (≈172 g)» ↔ «corta 205 g de yuca») o va en plural («filetes»).
+# [P1-PLAN-LOTE-788 · 2026-09-28] (backend) El punto del sustituto del pescado (785) sólo se cambia DETRÁS de su mención
+# en la frase: «saltea la cebolla hasta que esté opaca y añade la pechuga» habla de la cebolla.
+# [P1-PLAN-LOTE-789 · 2026-09-28] (backend) El Montaje no re-sirve lo servido aunque la frase no sea la última («…
+# Acompaña con queso mozzarella… Espolvorea la linaza») ni use el mismo nombre («el pescado» / «filete de pescado blanco»).
+# [P1-PLAN-LOTE-800 · 2026-09-28] (backend) V7f no acredita a un víver la cocción de otro: «hierve el plátano…» o
+# «revuelve hasta que cuajen» no cocían la batata que el autocorrector de fruta dulce puso «fresca aparte» (cruda).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-801 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

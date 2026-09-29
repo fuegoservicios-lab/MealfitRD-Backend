@@ -41,7 +41,11 @@ def _front(rel: str) -> str:
 def test_el_microfono_solo_se_ofrece_donde_puede_funcionar():
     util = _front("src/utils/dictado.js")
     assert "export const DICTADO_UA_NATIVO = 'BioborosNative/mic';" in util
-    assert "if (esNativa) return String(userAgent || '').includes(DICTADO_UA_NATIVO);" in util
+    # [P1-PLAN-LOTE-683] En nativo: la marca del binario iOS (permisos en su plist) O el plugin de Android en ESTE
+    # binario (`vozNativaDisponible` → `isPluginAvailable`; RECORD_AUDIO lo declara el propio plugin).
+    assert ("if (esNativa) return String(userAgent || '').includes(DICTADO_UA_NATIVO) || vozNativaDisponible();"
+            in util)
+    assert "nativePluginAvailable('SpeechRecognition')" in _front("src/utils/vozNativa.js")
     assert "politica.allowsFeature('microphone') !== false" in util, "en la web manda la Permissions-Policy"
     # la marca del binario y sus permisos viajan juntos
     assert "appendUserAgent: 'BioborosNative/mic'," in _front("capacitor.config.ts")

@@ -2260,6 +2260,29 @@ def _v7f_cuece(clausula: str, clase: str, desde: int = 0, ctx: str = "") -> bool
     return True
 
 
+# [P1-PLAN-LOTE-800 · 2026-09-28] Una cláusula que no nombra al víver sólo cuece al víver si no habla de OTRO. Corpus de la
+# cola 744: «corta ¼ batata en cubos … hierve el plátano 15-18 min, hasta que un cuchillo entre sin fuerza … revuelve hasta
+# que estén completamente cuajados … sirve … y batata fresca aparte» — V7f daba la batata por cocida porque «el plátano» a
+# secas no resuelve a una fila del catálogo (la lista dice «Plátano verde») y «cuajados» (los huevos) tampoco nombra nada.
+# La batata cruda llegaba así al plato: la puso el autocorrector de fruta dulce + salado (lote 613) donde había piña o
+# mango, y el reparador del lote 68 no actuaba porque el escáner decía «cocido». Aquí, para un víver, la cláusula ajena es
+# la que nombra OTRO víver, habla del punto del huevo o sólo pone agua a hervir. tooltip-anchor: P1-PLAN-LOTE-800
+_VIVERES_800_RE = re.compile(r"\b(platano|yuca|yautia|batata|papa|name|mapuey|auyama|guineo|guineito|malanga|rulo)s?\b")
+_HUEVO_800_RE = re.compile(r"\bcuaj|\brevuelv|\bhuevos?\b|\bclaras?\b|\byemas?\b")
+#: «prepara agua para hervir», «pon agua a hervir»: calentar el agua no cuece ningún alimento todavía.
+_AGUA_800_RE = re.compile(r"\bagua\s+(?:para|a)\s+herv|\bprepara\s+(?:el\s+|la\s+|una\s+)?(?:olla\s+(?:con|de)\s+)?agua\b")
+
+
+def _ajena_800(clausula: str, food: str, clase: str) -> bool:
+    """¿La cláusula (sin nombrar a `food`) habla de OTRO víver o del huevo? Sólo para víveres."""
+    if clase != "viver":
+        return False
+    propios = set(_norm(food).split())
+    if any(m.group(1) not in propios for m in _VIVERES_800_RE.finditer(clausula)):
+        return True
+    return bool(_HUEVO_800_RE.search(clausula) or _AGUA_800_RE.search(clausula))
+
+
 def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict, food: str = "") -> str:
     """`cocido` · `usado_cocido` (un paso lo trata como cocido antes de cocerlo) · `sin_coccion` · `no_mencionado`.
 
@@ -2294,9 +2317,9 @@ def _v7f_estado(pasos_norm: list, rx, clase: str, index: dict, food: str = "") -
                 if clase == "proteina" and food and _v7f_punto(food, cl):
                     return "cocido"                  # [P1-PLAN-LOTE-445] «Cocínalo… hasta que el centro alcance 63 °C»
                 if _V7F_ENCLITICO_RE.search(cl):
-                    if previa_lo_nombra:
+                    if previa_lo_nombra and not _ajena_800(cl, food, clase):
                         return "cocido"              # «córtalos…; hornéalas 10-12 minutos»
-                elif not _v7f_otros_alimentos(cl, index):
+                elif not _v7f_otros_alimentos(cl, index) and not _ajena_800(cl, food, clase):  # [P1-PLAN-LOTE-800]
                     return "cocido"                  # «Hornea unos 20-25 minutos»: no hay otro a quien atribuirlo
             previa_lo_nombra = nombra
     return "sin_coccion" if mencionado else "no_mencionado"

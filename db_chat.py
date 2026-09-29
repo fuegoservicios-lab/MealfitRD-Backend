@@ -8,6 +8,7 @@ import logging
 import hashlib
 import hmac
 import time
+import threading
 logger = logging.getLogger(__name__)
 from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
 # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Tenacity para retry exponencial
@@ -231,8 +232,7 @@ def save_message_with_attachments(
     ])
 
     try:
-        from proactive_agent import handle_nudge_response
-        handle_nudge_response(user_id, content)
+        _procesar_respuesta_a_nudge(user_id, content)
     except Exception as exc:
         logger.error(f"Error procesando respuesta al nudge en save_message_with_attachments: {exc}")
 
@@ -840,6 +840,30 @@ def delete_chat_session(session_id: str, user_id: str) -> Tuple[bool, str]:
 # `agent_messages.user_id`. Caller resuelve el user_id antes (explícito
 # en routers/chat.py donde está disponible, o vía lookup defensivo en
 # `save_message` para callsites legacy que no lo pasan).
+# [P1-PLAN-LOTE-684 · 2026-09-28] La respuesta a un nudge se clasifica FUERA del turno. `handle_nudge_response` hace
+# una llamada al LLM (sentimiento, ¿comió?, causa) SOLO para analítica (`nudge_outcomes`, `abandoned_meal_reasons`):
+# nada del turno la lee. Corría en línea al guardar el mensaje, ANTES del primer byte del stream: 1,64 s medidos en
+# el turno de voz del dueño (28-sep, «Cómo estás», nudge 112 pendiente). Ahora en un hilo aparte (2 workers; el
+# handler ya atrapa sus errores). Sigue corriendo UNA vez y fuera del reintento del INSERT (P2-CHAT-SAVE-MSG-RETRY).
+# `MEALFIT_NUDGE_RESPONSE_ASYNC=0` lo devuelve a en línea sin redeploy.
+_NUDGE_POOL = None
+_NUDGE_POOL_LOCK = threading.Lock()
+
+
+def _procesar_respuesta_a_nudge(user_id: str, content: str):
+    from proactive_agent import handle_nudge_response
+    from knobs import _env_bool
+    if not _env_bool("MEALFIT_NUDGE_RESPONSE_ASYNC", True):
+        handle_nudge_response(user_id, content)
+        return None
+    global _NUDGE_POOL
+    with _NUDGE_POOL_LOCK:
+        if _NUDGE_POOL is None:
+            import concurrent.futures
+            _NUDGE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="nudge-respuesta")
+    return _NUDGE_POOL.submit(handle_nudge_response, user_id, content)
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4.0),
@@ -905,8 +929,7 @@ def save_message(
     if role == "user" and process_nudge:
         if user_id:
             try:
-                from proactive_agent import handle_nudge_response
-                handle_nudge_response(user_id, content)
+                _procesar_respuesta_a_nudge(user_id, content)
             except Exception as e:
                 logger.error(f"Error procesando respuesta al nudge en save_message: {e}")
 

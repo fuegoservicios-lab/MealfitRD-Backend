@@ -64,6 +64,14 @@ _SINGULAR = {
     "batatas": "batata", "yucas": "yuca", "zanahorias": "zanahoria", "cebollas": "cebolla", "tomates": "tomate",
     "limones": "limón", "pepinos": "pepino", "manzanas": "manzana", "peras": "pera", "ciruelas": "ciruela",
     "tallos": "tallo", "hojas": "hoja", "ramas": "rama", "dientes": "diente", "piezas": "pieza", "bolsitas": "bolsita",
+    # [P1-PLAN-LOTE-780 · 2026-09-28] + los contables que la tabla no conocía: batería real sobre el 665 (familia de 4),
+    # «½ tortas pequeñas de casabe»; plan vivo 125e45b1, «½ plátanos verde» (y el re-pulido de frontera lo volvía
+    # «½ plátanos verdes»); corpus: «½ rábanos», «½ ajíes». tooltip-anchor: P1-PLAN-LOTE-780
+    "tortas": "torta", "plátanos": "plátano", "platanos": "platano", "rábanos": "rábano", "rabanos": "rabano",
+    "ajíes": "ají", "ajies": "aji", "guineos": "guineo", "mangos": "mango", "aguacates": "aguacate",
+    "casabes": "casabe", "lechosas": "lechosa", "mandarinas": "mandarina", "naranjas": "naranja", "papas": "papa",
+    "berenjenas": "berenjena", "rebanadas": "rebanada", "toronjas": "toronja", "tayotas": "tayota",
+    "remolachas": "remolacha", "nabos": "nabo",
 }
 _UNO_PLURAL = re.compile(r"^(\s*(?:1|[½¼¾⅓⅔⅛]))\s+(" + "|".join(_SINGULAR) + r")\b", re.IGNORECASE)
 # [P1-PLAN-LOTE-541 · 2026-09-27] «½ unidad de tomate», «½ unidad de mandarina», «2 unidades de tomate» (batería real del
@@ -115,6 +123,7 @@ _ADJ_PLURALES = {"mediano": "medianos", "mediana": "medianas", "pequeño": "pequ
 _VARIOS_SINGULAR = re.compile(
     r"^(\s*(?:\d+\s*[½¼¾⅓⅔]|\d+(?:[.,]\d+)?))\s+(" + "|".join(sorted(_PLURALES, key=len, reverse=True))
     + r")\b(\s+([a-záéíóúñ]+))?", re.IGNORECASE)
+_ADJ_SING_780 = {v: k for k, v in _ADJ_PLURALES.items()}   # [P1-PLAN-LOTE-780] «pequeñas» → «pequeña»
 _PARTICIPIO_TRAS_PLURAL = re.compile(r"\b([a-záéíóúñ]+(?:as|os))\s+(picad|rallad|cocid|trocead|cortad|pelad|lavad)o\b",
                                      re.IGNORECASE)
 _FRAC_VAL = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3}
@@ -179,6 +188,15 @@ def pulir_linea(s: str) -> str:
     if m:
         sing = _SINGULAR[m.group(2).lower()]
         out = f"{m.group(1)} {sing}" + out[m.end(2):]
+        # [P1-PLAN-LOTE-780] y sus adjetivos (hasta dos: «½ plátanos verdes medianos» → «½ plátano verde mediano»)
+        _pre = f"{m.group(1)} {sing}"
+        for _ in range(2):
+            _adj = re.match(r"(\s+)([a-záéíóúñ]+)\b", out[len(_pre):])
+            if not (_adj and _adj.group(2).lower() in _ADJ_SING_780):
+                break
+            _nuevo = _pre + _adj.group(1) + _ADJ_SING_780[_adj.group(2).lower()]
+            out = _nuevo + out[len(_pre) + _adj.end():]
+            _pre = _nuevo
     out = _PARTICIPIO_TRAS_PLURAL.sub(_concuerda_participio, _plural_con_varios(out))  # [P1-PLAN-LOTE-341]
     return _mayuscula(out)
 
