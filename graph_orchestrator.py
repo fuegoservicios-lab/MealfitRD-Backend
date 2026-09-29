@@ -3816,21 +3816,10 @@ def _verified_catalog_name_allowed_for_country(name: str, country: str) -> bool:
 
 
 def _patron_termino_alergeno(termino: str) -> str:
-    """Regex con frontera y plural español para un término clínico normalizado.
-
-    [P0-ALLERGEN-EU14-CLASES-I18N · 2026-08-23] El plural regular histórico
-    ``(?:s|es)?`` no puede convertir ``-z`` en ``-ces``. Esta construcción es
-    compartida por el backstop y el catálogo cerrado para que una alergia libre
-    (también fuera de las clases conocidas) no tenga una capa más débil que otra.
-    """
-    t = str(termino or "")
-    if not t:
-        return r"(?!)"
-    if t.endswith("z"):
-        cuerpo = _re.escape(t[:-1]) + r"(?:z|ces)"
-    else:
-        cuerpo = _re.escape(t) + r"(?:s|es)?"
-    return r"\b" + cuerpo + r"\b"
+    """Regex con frontera y plural español para un término clínico normalizado ([P0-ALLERGEN-EU14-CLASES-I18N] `-z`→`-ces`),
+    compartido por backstop y catálogo cerrado. [P1-PLAN-LOTE-796 · 2026-09-28] Cuerpo en `patron_alergeno.patron`: el plural
+    también en las palabras internas («2 tortillas de harina»). tooltip-anchor: P1-PLAN-LOTE-796-PLURAL-COMPUESTO"""
+    return __import__("patron_alergeno").patron(termino)
 
 
 def _verified_catalog_excluded_tokens(form_data) -> frozenset:
@@ -13949,7 +13938,7 @@ _ALLERGEN_SYNONYMS = {
              # español que declaraba «cacahuete» obtenía 0 violaciones sobre un plato con
              # 'Mantequilla de maní'. Es el caso más grave del P-fix: el wizard no tiene chip de
              # maní, así que el texto libre es la ÚNICA vía y el desenlace es anafilaxia.
-             "cacahuete", "cacahuetes", "crema de cacahuete", "mantequilla de cacahuete"],
+             "cacahuete", "cacahuetes", "crema de cacahuete", "mantequilla de cacahuete", *__import__("vocabulario_alergenos").EXTRA["mani"]],
     "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
                      "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
                      "nutella", "praline", "turron", "pesto", "crema de avellana",
@@ -14037,7 +14026,7 @@ _ALLERGEN_SYNONYMS = {
                 "nata",
                 # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con 'lacteos' arriba (Arequipe/
                 # Suero costeño SÍ llevan lactosa — leche real, sin proceso que la remueva).
-                "arequipe", "suero costeno"],
+                "arequipe", "suero costeno", *__import__("vocabulario_alergenos").LACTOSA_EXTRA],  # [P1-PLAN-LOTE-796]
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
                "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
                "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
@@ -14185,7 +14174,7 @@ _ALLERGEN_DECLARATION_ALIASES = {
                      # fr / it / pt
                      "fruits a coque", "fruits secs", "noix",
                      "frutta a guscio", "frutta secca", "noci",
-                     "oleaginosas", "nozes", "castanhas"],
+                     "oleaginosas", "nozes", "castanhas", *__import__("vocabulario_alergenos").DECLARACIONES["frutos secos"]],
     "mariscos": ["shellfish", "shellfish allergy", "seafood", "seafood allergy", "crustacean", "crustaceans", "mollusc",  # [P1-PLAN-LOTE-210] «seafood» = pez Y marisco
                  "molluscs", "mollusk", "mollusks",
                  # Categorías del Reglamento UE 1169/2011 (nº 2 crustáceos, nº 14 moluscos):
@@ -14202,7 +14191,7 @@ _ALLERGEN_DECLARATION_ALIASES = {
                 # fr / it / pt
                 "produits laitiers", "produit laitier", "laitier", "laitiers", "lait",
                 "latticini", "latte",
-                "laticinios", "leite", "caseina"],
+                "laticinios", "leite", "caseina", *__import__("vocabulario_alergenos").DECLARACIONES["lacteos"]],
     "lactosa": ["lactose", "lactose intolerance", "lactose intolerant",
                 "intolerancia a la lactosa", "intolerante a la lactosa",
                 # fr / it / pt
@@ -14480,9 +14469,12 @@ _ALLERGEN_TERM_BASE_EXCUSES = {
     # una alérgica al gluten al fallback matemático (bench real): el casabe es yuca. Acotado al término, como la sémola:
     # «tostada integral» y «tostadas de trigo» siguen marcadas, y «tostada» desnuda también.
     "tostada": ("casabe", "yuca", "maiz", "arroz", "platano"),
+    "cuchuco": ("maiz",), "cracker": ("arroz", "maiz", "yuca", "casabe"),  # [P1-PLAN-LOTE-796] cuchuco de maíz · crackers de arroz
+    **__import__("vocabulario_alergenos").EXCUSAS_DE_BASE,  # [P1-PLAN-LOTE-796 · revisión] mole de olla · pastelito de yuca
 }
-_ALLERGEN_TERM_BASE_EXCUSE_RX = {
-    _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
+_ALLERGEN_TERM_BASE_EXCUSE_RX = {  # [P1-PLAN-LOTE-796 · ronda 3] con un adjetivo en medio: «tostada integral de maíz»
+    _t: _re_mod.compile(r"^\s*(?:(?:integral(?:es)?|fin[oa]s?|hornead[oa]s?|crujientes?|dorad[oa]s?|caser[oa]s?|inflad[oa]s?|"
+                        r"tostad[oa]s?)\s+)?de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
     for _t, _bases in _ALLERGEN_TERM_BASE_EXCUSES.items()
 }
 
@@ -14629,17 +14621,20 @@ def _scan_allergen_violations(plan: dict, allergies, terminos=None) -> list:
                 ing_low = strip_accents(str(ing).lower())
                 for f in forbidden:
                     # El patrón SSOT captura plural regular (fresa→fresas, pan→panes,
-                    # camaron→camarones) y -z→-ces, sin prefijos (leche≠lechosa).
-                    _m_al = _re.search(_patron_termino_alergeno(f), ing_low) if f else None
-                    if _m_al:
+                    # camaron→camarones) y -z→-ces, sin prefijos (leche≠lechosa). [P1-PLAN-LOTE-796 · ronda 3] CADA
+                    # aparición: excusar la primera («leche de almendras o leche descremada») no absuelve la segunda.
+                    for _m_al in (_re.finditer(_patron_termino_alergeno(f), ing_low) if f else ()):
                         # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] misma excusa plant-adj
                         # del scan de dieta: «leche de coco»/«mantequilla de maní»/«yogur de soya»
                         # no violan la alergia a LÁCTEOS (el alérgico a maní/coco matchea vía su
                         # propio término directo).
-                        if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
+                        if (_PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18])
+                                and f not in __import__("vocabulario_alergenos").PLATOS):  # [P1-PLAN-LOTE-796 · ronda 3]
                             continue
                         if __import__("excusas_vegetales").excusa_contextual(f, ing_low, _m_al.start(), _m_al.end()):
                             continue  # [P1-PLAN-LOTE-247/262] crema de maní molido · almendras TOSTADAS · wrap DE lechuga
+                        if __import__("termino_compartido").excusa_de_su_clase(f, ing_low, _m_al.start(), _m_al.end(), forbidden):
+                            continue  # [P1-PLAN-LOTE-796 · ronda 3] pancakes sin huevo · muffin inglés · pizza vegana
                         # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] excusa acotada AL TÉRMINO que
                         # casó: «sémola de maíz/yuca/arroz» no lleva gluten. 'pan' y 'harina' no
                         # tienen entrada, así que «Pan de maíz» sigue marcado.
@@ -14676,10 +14671,14 @@ def _scan_allergen_violations(plan: dict, allergies, terminos=None) -> list:
                         if (f in _ALLERGEN_GLUTEN_TERM_SET
                                 and f not in _GLUTEN_NO_GF_VARIANT_TERMS
                                 and _GLUTEN_FORWARD_EXCUSE_RX.match(
-                                    ing_low[_m_al.end(): _m_al.end() + 40])):
+                                    ing_low[_m_al.end(): _m_al.end() + 40])
+                                and not __import__("termino_compartido").otra_clase_lo_prohibe(f, forbidden)):  # [P1-PLAN-LOTE-796]
                             continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break
+                    else:
+                        continue
+                    break  # una violación por ingrediente, como antes
     return violations
 
 
@@ -14845,14 +14844,15 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
             for ing in meal.get("ingredients", []) or []:
                 ing_low = strip_accents(str(ing).lower())
                 for term, label in forbidden:
-                    m = _re.search(r"\b" + _re.escape(term) + r"(?:s|es)?\b", ing_low)
-                    if not m:
+                    for m in _re.finditer(r"\b" + _re.escape(term) + r"(?:s|es)?\b", ing_low):  # [P1-PLAN-LOTE-796 · ronda 3] cada aparición
+                        if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
+                            continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
+                        if __import__("excusas_vegetales").excusa_contextual(term, ing_low, m.start(), m.end(), dieta=True):  # [P1-PLAN-LOTE-269]
+                            continue  # [P1-PLAN-LOTE-247] «maní molido hasta obtener una crema»
+                        violations.append((meal.get("name", "?"), str(ing), label))
+                        break
+                    else:
                         continue
-                    if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
-                        continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
-                    if __import__("excusas_vegetales").excusa_contextual(term, ing_low, m.start(), m.end()):  # [P1-PLAN-LOTE-269]
-                        continue  # [P1-PLAN-LOTE-247] «maní molido hasta obtener una crema»
-                    violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
 

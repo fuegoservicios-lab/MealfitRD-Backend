@@ -1225,7 +1225,7 @@ _POOL_IMPLICATIONS = {
 }
 
 
-def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
+def build_slot_targets_block(daily_targets: dict, meal_types: list, vetos=None) -> str:
     """[P3-DAYGEN-SLOT-TARGETS · 2026-07-29] (audit solver+seeder v4) Una línea por slot con su cuota
     de kcal/P/C/F, derivada del SSOT `allocate_macros_per_slot` (el mismo que el swap ya consume).
 
@@ -1294,10 +1294,13 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
             return ""
         _fat_rule = ""
         if _needs_fat:
+            # [P1-PLAN-LOTE-796 · 2026-09-28] los portadores pasan por la misma puerta que las demás sugerencias
+            _portadores = _sin_vetados(["aceite", "aguacate", "frutos secos", "mantequilla de maní", "queso"],
+                                       list(vetos or [])) or ["aceite"]
             _fat_rule = (
                 f"\n  ⚠️ PORTADOR DE GRASA OBLIGATORIO en: {', '.join(_needs_fat)} — su cuota supera "
                 f"los 5 g y la grasa NO se puede fabricar re-escalando lo que no la tiene. Incluye una "
-                f"fuente real (aceite, aguacate, frutos secos, mantequilla de maní, queso). Un yogurt "
+                f"fuente real ({', '.join(_portadores)}). Un yogurt "
                 f"con fruta y avena NO llega ni escalándolo al máximo.")
         return ("\n• 🎯 CUOTA POR COMIDA (el motor mide cada plato contra ESTO, no solo el total del día):\n"
                 + "\n".join(_rows) + _fat_rule)
@@ -1315,11 +1318,43 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 # Sin alergias ni rechazos, el texto es byte-idéntico. tooltip-anchor: P1-PLAN-LOTE-182-ALERGIA-EN-LA-ASIGNACION
 _SENTINELAS_SIN_DECLARAR = ("ninguna", "ninguno", "ninguna alergia", "nada", "none")
 # [P1-PLAN-LOTE-183] Los alimentos que el generador usa a diario van primero en la línea dura; el resto, por longitud.
+# [P1-PLAN-LOTE-796 · ronda 3] Y los que usa mucho aunque sean largos (mayonesa, pistacho, helado…): los alias y platos
+# ocultos del lote, cortos, los desplazaban del corte. El panqueque (de avena, el desayuno que más escribe: 39 nombres en
+# la batería) lleva huevo y trigo.
 _TERMINOS_COMUNES = ("leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "ricotta", "cottage",
                      "camaron", "camarones", "langosta", "cangrejo", "pulpo", "calamar", "lambi", "mejillon",
                      "huevo", "huevos", "clara", "claras", "mani", "mantequilla de mani", "almendra", "almendras",
                      "nueces", "merey", "trigo", "pan", "harina de trigo", "pasta", "soya", "tofu",
-                     "pescado", "atun", "sardinas", "bacalao", "tilapia")
+                     "pescado", "atun", "sardinas", "bacalao", "tilapia",
+                     "mayonesa", "merengue", "omelette", "holandesa", "pistacho", "avellana", "anacardo", "macadamia",
+                     "helado", "cuajada", "natilla", "arequipe", "caseina", "panqueque")
+# [P1-PLAN-LOTE-796 · ronda 3 · 2026-09-28] El corte es POR ALERGIA declarada (antes, 20 para todas juntas: con tres
+# alergias la línea sólo nombraba lo común de cada una) y, dentro de cada una, los ALIAS y los platos OCULTOS
+# (`vocabulario_alergenos.ALIAS`/`OCULTOS`: brie, kipe, caju, croqueta, mole…) van detrás de los nombres de su clase.
+# Así cada alergia conserva lo que la línea nombraba antes del lote. tooltip-anchor: P1-PLAN-LOTE-796-LINEA-DURA
+_TOPE_POR_ALERGIA = 24
+
+
+def _terminos_de_la_linea(alg) -> list:
+    import graph_orchestrator as _go
+    import vocabulario_alergenos as _va
+    from constants import strip_accents as _sa
+
+    def _n(x) -> str:
+        return _sa(str(x)).lower().strip()
+
+    _alias = {_n(t) for ts in _va.ALIAS.values() for t in ts}
+    out, al_final = [], set()
+    for decl in alg:
+        exp = {t for t in _go._expand_allergy_declarations([decl]) if t}
+        clases = [c for c, syns in _go._ALLERGEN_SYNONYMS.items() if syns and {_n(s) for s in syns} <= exp]
+        base = {_n(s) for c in clases for s in _go._ALLERGEN_SYNONYMS[c]} - _alias
+        oculto = (exp - base) if base else set()
+        al_final |= oculto
+        for t in sorted(exp, key=lambda t: (t not in _TERMINOS_COMUNES, t in oculto, len(t), t))[:_TOPE_POR_ALERGIA]:
+            if t not in out:
+                out.append(t)
+    return sorted(out, key=lambda t: (t not in _TERMINOS_COMUNES, t in al_final, len(t), t))
 
 
 def _declarados(v) -> list:
@@ -1347,8 +1382,20 @@ def _vetado(item: str, vetos: list) -> bool:
         return True
 
 
+# [P1-PLAN-LOTE-796 · 2026-09-28] «frutos secos» es una MEZCLA y la mezcla lleva maní («Nueces mixtas» se dio de alta
+# como «mixed nuts, with peanuts»): al alérgico al maní se le veta, pero el fruto seco suelto no. El relevo sólo entra
+# cuando la sugerencia genérica cae y él mismo pasa la puerta, así que sin esas alergias el texto es byte-idéntico.
+_RELEVOS = {"frutos secos": "almendras", "frutos secos con fruta": "almendras con fruta"}
+
+
 def _sin_vetados(items, vetos) -> list:
-    return [i for i in items if not _vetado(i, vetos)]
+    out = []
+    for i in items:
+        if not _vetado(i, vetos):
+            out.append(i)
+        elif _RELEVOS.get(i) and _RELEVOS[i] not in out and not _vetado(_RELEVOS[i], vetos):
+            out.append(_RELEVOS[i])
+    return out
 
 
 def _lacteo_vetado(vetos) -> bool:
@@ -1361,12 +1408,10 @@ def allergy_hard_line(allergies) -> str:
     if not alg:
         return ""
     try:
-        import graph_orchestrator as _go
-        terms = sorted((t for t in _go._expand_allergy_declarations(alg) if t),
-                       key=lambda t: (t not in _TERMINOS_COMUNES, len(t), t))     # [P1-PLAN-LOTE-183]
+        terms = _terminos_de_la_linea(alg)                                     # [P1-PLAN-LOTE-183 · 796 ronda 3]
     except Exception:                                                          # noqa: BLE001
         terms = []
-    incl = f" (incluye: {', '.join(terms[:20])})" if terms else ""
+    incl = f" (incluye: {', '.join(terms)})" if terms else ""
     alternativas = ""
     if _lacteo_vetado(alg):                                            # [P1-PLAN-LOTE-183]
         _meriendas = _sin_vetados(["fruta con maní", "casabe con aguacate", "tostada integral con aguacate",
@@ -1735,7 +1780,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         if str(_os_dg.environ.get("MEALFIT_DAYGEN_SLOT_TARGETS_IN_PROMPT", "false")
                ).strip().lower() in ("1", "true", "yes", "on") and daily_targets:
             _slot_targets_block = build_slot_targets_block(
-                daily_targets, skeleton_day.get("meal_types") or [])
+                daily_targets, skeleton_day.get("meal_types") or [], vetos=_vetos)   # [P1-PLAN-LOTE-796]
     except Exception:
         _slot_targets_block = ""
 
