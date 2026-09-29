@@ -5,7 +5,8 @@ El 429 lo arregló en los PASOS y su comentario daba la lista por arreglada; no 
 pierde grasa), desayuno del día 1, lista «½ de pimiento morrón». Corpus del VPS (5.336 comidas): 21 listas («½ de chile
 poblano», «½ de puerro en rodajas finas», «½ de pimentón»…). «½» se lee «media»: «media de pimiento» no es español; «¼ de
 cebolla» («un cuarto de») sí, y se queda. Sólo el «½», el entero y el entero con «½» ante un alimento (no ante un
-artículo: «½ de la cebolla» es otra frase); el decimal de máquina no es de este lote. Sólo display: el crudo no se toca.
+artículo: «½ de la cebolla» es otra frase, ni ante lo que el pulido tomaría por una especia: «½ de pimentón» se queda);
+el decimal de máquina no es de este lote. Sólo display: el crudo no se toca.
 Knob `MEALFIT_LIST_HALF_WITHOUT_DE` (True). tooltip-anchor: P1-PLAN-LOTE-912
 """
 from __future__ import annotations
@@ -32,6 +33,11 @@ def quitar(linea):
         m = _RE.match(linea)
         if not m:
             return linea
-        return f"{m.group('n')} {m.group('resto')}"
+        nueva = f"{m.group('n')} {m.group('resto')}"
+        # «pimentón» es el ají morrón y también la especia: sin el «de», la regla de especias sin unidad del pulido
+        # leería «½ pimentón» como «Pimentón al gusto» en la pasada siguiente (replay del corpus: 10 apariciones)
+        if __import__("pulido_lineas")._ESPECIA_SIN_UNIDAD.match(nueva):
+            return linea
+        return nueva
     except Exception:                                                          # noqa: BLE001
         return linea

@@ -42,6 +42,22 @@ def test_el_pulido_de_la_lista_lo_aplica():
     assert pl.pulir_linea("½ de chile poblano") == "½ chile poblano"
 
 
+def test_lo_que_el_pulido_tomaria_por_especia_se_queda():
+    """Replay sobre las 78.830 líneas de lista del corpus: «½ de pimentón» (medio ají morrón) salía «½ pimentón» y, en la
+    SEGUNDA pasada del pulido, «Pimentón al gusto»: la regla de especias sin unidad lo tomaba por el polvo."""
+    assert lsd.quitar("½ de pimentón") == "½ de pimentón"
+    una = pl.pulir_linea("½ de pimentón")
+    assert "al gusto" not in una.lower()
+    assert pl.pulir_linea(una) == una
+
+
+def test_la_segunda_pasada_no_cambia_nada():
+    for linea in ("½ de cebollita morada", "1 de cebolla", "1 de cebolla picada", "½ de chile poblano", "½ de puerro",
+                  "½ de puerro en rodajas finas", "½ de pimiento morrón", "½ de pimentón"):
+        una = pl.pulir_linea(linea)
+        assert pl.pulir_linea(una) == una, linea
+
+
 def test_con_el_knob_apagado_nada(monkeypatch):
     monkeypatch.setenv("MEALFIT_LIST_HALF_WITHOUT_DE", "false")
     assert lsd.quitar("½ de pimiento morrón") == "½ de pimiento morrón"
