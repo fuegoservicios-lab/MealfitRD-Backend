@@ -175,7 +175,8 @@ BLOQUE_CONOCIMIENTO = (
     "carbohidrato; un ganador de peso trae 250-600 kcal por porción; un pre-entreno es cafeína (de noche aplica la "
     "regla T); el colágeno NO cuenta como proteína completa para su meta. Para registrar una toma de algo de su "
     "Alacena usa log_consumed_meal con suplemento=<nombre> y porciones=<n>: las macros salen de la etiqueta del pote. "
-    "Para guardar un pote nuevo (lo pide, o manda la foto de la etiqueta y dice que es suyo), guardar_suplemento.")
+    "Para guardar un pote nuevo, guardar_suplemento: cuando lo pide o cuando manda la foto del pote o de su "
+    "etiqueta, aunque no diga nada (la foto ES decir que lo tiene; P1-PLAN-LOTE-765).")
 
 
 def _potes(user_id):

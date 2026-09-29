@@ -5403,12 +5403,14 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
                        encender_nevera: bool = False) -> str:
     """
     Guarda un SUPLEMENTO (proteína en polvo, creatina, multivitamínico, omega 3…) en la Nevera → Alacena del usuario,
-    con su etiqueta por porción. Úsala cuando pida guardarlo, o cuando mande la foto de la etiqueta o del pote y diga
-    que es suyo. Funciona aunque su Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
+    con su etiqueta por porción. Úsala cuando pida guardarlo o cuando mande la foto del pote o de su etiqueta, aunque
+    no diga nada: la foto de un pote de varias porciones ES decir que lo tiene [P1-PLAN-LOTE-765]. Funciona aunque su
+    Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
     - etiqueta: {"gramos_porcion","kcal","protein_g","carbs_g","fats_g"} POR PORCIÓN, tal como la lee la foto o la dice él.
     - fuente: 'foto' | 'marca' | 'estimado'. Sin etiqueta, fuente='estimado' y `clave` del tipo: whey_protein,
       vegan_protein, creatine, collagen, multivitamin, omega3, magnesium, probiotics, electrolytes, bcaa,
-      pre_workout, fat_burner.
+      pre_workout, fat_burner. Un ganador de peso no está en la lista: sin `clave` (como whey le pondría ~120 kcal
+      a lo que trae varias veces más).
     - porciones: cuántas trae el pote (2 lb de whey ≈ 30 scoops); unidad: scoop | capsula | porcion | g.
     - encender_nevera: true SOLO si el usuario acaba de decir que sí a encender su Nevera.
     """

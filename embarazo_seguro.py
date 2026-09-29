@@ -230,7 +230,8 @@ def _nota_queso_que_humee(meal: dict) -> bool:
     pasos = meal.get("recipe")
     if not isinstance(pasos, list) or any("humee" in str(p) for p in pasos):
         return False
-    pasos.append(_NOTA_QUESO_QUE_HUMEE)
+    __import__("queso_que_humee").insertar_paso(meal)      # [P1-PLAN-LOTE-807] el queso que se dora, en un paso
+    meal["recipe"].append(_NOTA_QUESO_QUE_HUMEE)
     return True
 
 

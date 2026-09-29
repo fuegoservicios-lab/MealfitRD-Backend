@@ -3542,6 +3542,22 @@ def claras_del_cerrador(meal) -> int:
 
             def _sub(m):
                 obj = m.group("obj")
+                # [P1-PLAN-LOTE-808 · 2026-09-29] Bloque REAL de producción (92328ff7, semana 3): la fusión del cerrador
+                # («Cocina huevo y filete de pescado blanco y clara de huevo a la plancha o hervido…») llegaba aquí entera y
+                # el pescado salía «revuelto, hasta que cuaje», sin su punto de 63 °C. Con otros alimentos en el objeto,
+                # los huevos se cuajan y lo demás lleva su propia frase de cocción. tooltip-anchor: P1-PLAN-LOTE-808
+                partes = [x.strip() for x in re.split(r"\s+y\s+|,\s*", obj) if x.strip()]
+                huevos = [x for x in partes if re.search(r"\b(?:huevos?|claras?|yemas?)\b", _sa(x.lower()))]
+                otros = [x for x in partes if x not in huevos]
+                if huevos and otros:
+                    enteros = any(re.search(r"\bhuevos?\b", re.sub(r"(?:claras?|yemas?) de huevos?", " ", _sa(x.lower())))
+                                  for x in huevos)
+                    rev = "revueltos" if enteros or len(huevos) > 1 else "revueltas"
+                    frases = [f"Cocina {' y '.join(huevos)} en la sartén, {rev}, hasta que cuajen por completo."]
+                    for o in otros:
+                        frases.append(f"Sirve {o} (ya viene cocido) al lado." if _PRECOCIDO_377_RE.search(_sa(o.lower()))
+                                      else _frase_coccion_379(o))
+                    return " ".join(frases)
                 enteros = re.search(r"\bhuevos?\b", re.sub(r"(?:claras?|yemas?) de huevos?", " ", obj))
                 rev, lo = ("revueltos", "sírvelos") if enteros else ("revueltas", "sírvelas")
                 return f"Cocina {obj} en la sartén, {rev}, hasta que cuajen por completo, y {lo} como proteína del plato."

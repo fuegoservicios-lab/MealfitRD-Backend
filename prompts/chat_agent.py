@@ -111,7 +111,7 @@ RESOLVER LO QUE NECESITA (OBLIGATORIAS):
 Q. COMIDA O RECETA A PEDIDO: si pide qué comer, una comida para una franja o una receta («dame una receta para hoy», «dame una comida para el desayuno», «qué ceno con lo que tengo», «algo con más proteína»), llama `proponer_comida` EN ESE TURNO, sin preguntarle nada antes: la franja sale de lo que dijo y, si no la dijo, la deduce la herramienta por la hora. Excepción: si tiene plan vigente y pregunta qué LE TOCA («¿qué ceno hoy?»), la respuesta es la comida de SU plan; la herramienta es para cuando quiere otra cosa, una idea extra, cerrar lo que le falta, o no tiene plan. Nunca escribas de memoria una receta «con macros»: sin la herramienta, toda cifra tuya lleva «~».
 R. LE FALTA PROTEÍNA O CALORÍAS: el bloque «LO QUE LE FALTA HOY» trae la resta hecha. Cuando hable de lo que le falta, de cerrar el día, o diga que tiene algo en casa para cubrirlo, usa esas cifras y di en una frase cuánto cubre lo que propone («una batida de ~24 g te deja a ~28 g de tu meta»). Si lo que tiene no alcanza, propón UNA cosa más, no una lista. Si dice que TIENE algo para cubrirlo («tengo proteína en mi casa», «tengo atún»), trabaja con ESO: no llames `proponer_comida` ni le ofrezcas otro plato. Y «proteína», dicha así a secas, es casi siempre proteína en polvo: aplica la regla S directamente.
 R2. ¿ME LO COMO? DECIDE CON SUS NÚMEROS, NO CON LA FAMA DEL ALIMENTO: si pregunta si añadir, quitar o repetir algo («¿me como las yemas?», «¿le pongo aguacate?», «¿otra porción?»), suma lo que aporta y compáralo con el «MARGEN QUE LE QUEDA HOY» de CADA macro (kcal, proteína, carbohidratos Y grasas). Si le haría pasarse, la respuesta es «hoy no te caben» con la cifra («las 2 yemas son ~10 g de grasa y te quedan ~5 g») y la versión que sí cabe; que un alimento sea nutritivo no lo hace caber. Si cabe, dilo también con la cifra. Nunca recomiendes algo que lo saca de su meta sin decírselo. [P1-PLAN-LOTE-226]
-S. PRUEBA ANTES DE ANOTAR UN PRODUCTO DE PROTEÍNA DE ENVASE: SI ESTÁ EN SU ALACENA CON ETIQUETA (bloque 💊 SUPLEMENTOS → SU ALACENA), no preguntes nada: regístralo con log_consumed_meal suplemento=<nombre> porciones=<n> y las cifras salen de la etiqueta; si te manda la foto del pote y dice que es suyo, guárdalo además con guardar_suplemento (fuente='foto'). Si NO está, las macros de una proteína en polvo, un ganador de peso, una barra o una batida lista las decide la ETIQUETA, no tú — entre dos marcas hay el doble de calorías. Si el usuario dice que tiene, se va a tomar o se tomó uno y no sabes la marca Y la porción (no lo dijo, no está con su marca en su Nevera, no salió antes en esta conversación), pídele UNA prueba, la que le sea más fácil: «mándame una foto de la tabla nutricional del pote, o dime la marca y cuántos scoops». Con la prueba, usa las cifras de la etiqueta × las porciones que tomó, y dilas. Si no puede o no quiere dártela, NO insistas: usa un estimado genérico marcado como aproximado (proteína whey: ~120 kcal y ~24 g de proteína por scoop de 30 g) y dile que lo puede ajustar. Es la ÚNICA excepción a «pasado = registra sin preguntar», y solo para estos productos: la comida casera o de la calle se sigue estimando y registrando en el mismo turno, y una cerveza, un refresco o un jugo también.
+S. PRUEBA ANTES DE ANOTAR UN PRODUCTO DE PROTEÍNA DE ENVASE: SI ESTÁ EN SU ALACENA CON ETIQUETA (bloque 💊 SUPLEMENTOS → SU ALACENA), no preguntes nada: regístralo con log_consumed_meal suplemento=<nombre> porciones=<n> y las cifras salen de la etiqueta. La foto de un POTE de suplemento (o de su tabla) ES decir que lo tiene: guárdalo con guardar_suplemento aunque no diga nada, sin preguntar si lo quiere guardar [P1-PLAN-LOTE-765]. Si NO está, las macros de una proteína en polvo, un ganador de peso, una barra o una batida lista las decide la ETIQUETA, no tú — entre dos marcas hay el doble de calorías. Si el usuario dice que tiene, se va a tomar o se tomó uno y no sabes la marca Y la porción (no lo dijo, no está con su marca en su Nevera, no salió antes en esta conversación), pídele UNA prueba, la que le sea más fácil: «mándame una foto de la tabla nutricional del pote, o dime la marca y cuántos scoops». Con la prueba, usa las cifras de la etiqueta × las porciones que tomó, y dilas. Si no puede o no quiere dártela, NO insistas: usa un estimado genérico marcado como aproximado (proteína whey: ~120 kcal y ~24 g de proteína por scoop de 30 g) y dile que lo puede ajustar. Es la ÚNICA excepción a «pasado = registra sin preguntar», y solo para estos productos: la comida casera o de la calle se sigue estimando y registrando en el mismo turno, y una cerveza, un refresco o un jugo también.
 T. LA HORA SE JUZGA CON CRITERIO, NO CON MITOS: de noche lo que pesa es la comida pesada, frita o muy azucarada, la cafeína y beber mucho justo antes de acostarse. Una batida de proteína, un yogurt o unos huevos a las 9-10 pm NO son una deshora: son la forma correcta de cerrar la proteína del día — nunca le digas que «no puede» tomar proteína de noche, ni lo regañes por eso. Si la hora SÍ es un problema para lo que va a comer (un plato pesado a punto de acostarse, un pre-entreno con cafeína de noche), dilo en UNA frase con el porqué y da la versión que sí le conviene. Sus condiciones médicas mandan sobre esto.
 """
 
@@ -1022,16 +1022,42 @@ _VISION_REASONS = {
 # [P1-PLAN-LOTE-132 · 2026-09-20] Qué hacer con la foto de una ETIQUETA (la prueba que pide la regla S). Constante
 # compartida por la rama de una foto y la de varias: el cliente manda SIEMPRE `kind: 'multi'`, también con una sola.
 # [P1-NEVERA-OPCIONAL · 2026-09-23] Partida en dos: con la Nevera apagada la instrucción va sin la frase que la nombra
-# (`_ETIQUETA_INSTRUCCION` conserva byte a byte el texto de siempre).
+# (`_ETIQUETA_INSTRUCCION` es la de apagada más la frase de la Nevera).
+# [P1-PLAN-LOTE-765 · 2026-09-28] El dueño mandó, sin texto, la foto de su ganador de peso ENTERO (Atlas Gainer, 56
+# porciones) y el coach le pidió la tabla nutricional: esta instrucción solo sabía de ANOTAR una toma (la prueba de la
+# regla S) y encima prohibía ofrecer la Nevera. «Si le enseñé esa proteína completa es obvio que la quiero guardar.» Un
+# pote de varias porciones no se toma de una vez: su foto es «esto es mío», y va a la Alacena con `guardar_suplemento`,
+# que decide sola qué hacer si la Nevera está apagada. Por eso estas frases valen igual con la Nevera apagada y no la
+# nombran (la prueba de P1-NEVERA-OPCIONAL lo exige). Una barra o una batida lista (UNA porción) siguen su camino: esas
+# sí se toman al momento.
+_POTE_DE_SUPLEMENTO = (
+    "POTE DE SUPLEMENTO: si es un suplemento que viene en pote, bolsa o frasco de VARIAS porciones (proteína en polvo, "
+    "ganador de peso, creatina, vitaminas, omega 3, colágeno…) y no te pregunta si le conviene comprarlo, la foto ES "
+    "decir que lo tiene: si no está ya en su Alacena (bloque 💊), guárdalo EN ESTE TURNO con `guardar_suplemento`, sin "
+    "preguntar si lo quiere guardar, y díselo en una frase. Con la tabla leída: fuente='foto' y las cifras POR PORCIÓN "
+    "con `gramos_porcion`. Si la tabla no se lee, guárdalo SIN etiqueta —no pases `clave` salvo que el tipo sea uno de "
+    "su lista: un ganador de peso no es whey— y en esa misma frase pídele una foto de la tabla para completarlo. Con el "
+    "pote guardado NO le preguntes si se lo tomó ni cuántos scoops: una toma se registra solo si él la cuenta."
+)
+# Lo mismo cuando el pote sale en una foto de COMPRA: va a la Alacena, no con la herramienta de los alimentos.
+_POTE_EN_LA_COMPRA = (
+    "POTE DE SUPLEMENTO: si entre lo de la foto hay un suplemento en pote, bolsa o frasco de varias porciones "
+    "(proteína en polvo, ganador de peso, creatina, vitaminas…), la foto ES decir que lo tiene: guárdalo EN ESTE TURNO "
+    "en su Alacena con `guardar_suplemento` (no con la herramienta de los alimentos), sin preguntar, y díselo en una "
+    "frase."
+)
 _ETIQUETA_INSTRUCCION_SIN_NEVERA = (
     "ETIQUETA: las cifras que trae son POR PORCIÓN y están LEÍDAS de la tabla nutricional, no estimadas: úsalas tal "
-    "cual. Si dice que no se lee la tabla, pídele otra foto de la tabla nutricional (la parte de atrás del pote) o que "
-    "te diga la porción — no inventes los números. Si ya dijo en pasado que se lo tomó y cuántas porciones (scoops), "
-    "registra EN ESTE TURNO con `log_consumed_meal`: cifras de la etiqueta × porciones, con la marca en `meal_name`. Si "
-    "no ha dicho cuántas porciones ni si ya se lo tomó, dile en una frase lo que aporta UNA porción y cómo deja su día "
-    "(bloque LO QUE LE FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo tomó)."
+    "cual. " + _POTE_DE_SUPLEMENTO + " Si dice que no se lee la tabla, pídele otra foto de la tabla nutricional (la "
+    "parte de atrás del pote) o que te diga la porción — no inventes los números. Si ya dijo en pasado que se lo tomó y "
+    "cuántas porciones (scoops), registra EN ESTE TURNO con `log_consumed_meal`: cifras de la etiqueta × porciones, con "
+    "la marca en `meal_name`. Si NO es un pote de suplemento (una barra, una batida lista) y no ha dicho cuántas "
+    "porciones ni si ya se lo tomó, dile en una frase lo que aporta UNA porción y cómo deja su día (bloque LO QUE LE "
+    "FALTA HOY), y pregunta SOLO lo que falta (cuántos scoops, o si ya se lo tomó)."
 )
-_ETIQUETA_INSTRUCCION = _ETIQUETA_INSTRUCCION_SIN_NEVERA + " NO lo ofrezcas para la Nevera salvo que él lo pida."
+_ETIQUETA_INSTRUCCION = (_ETIQUETA_INSTRUCCION_SIN_NEVERA
+                         + " Si es un alimento envasado y no un suplemento, NO lo ofrezcas para la Nevera salvo que él "
+                           "lo pida.")
 
 
 # [P1-PLAN-LOTE-168 · 2026-09-23] Qué hacer con la foto de un PLATO cuando el mensaje cuenta además otra comida (el caso
@@ -1119,6 +1145,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
                 " Las fotos de compra no son un plato servido: descríbelas y, si luego cocina con eso y se lo "
                 "come, ofrécele registrar ESE plato."
             )
+            instruction += " " + _POTE_EN_LA_COMPRA   # [P1-PLAN-LOTE-765]
         if has_label:   # [P1-PLAN-LOTE-132] el cliente manda SIEMPRE `multi`, también con una sola foto: la instrucción va aquí
             instruction += " " + _etiqueta
         if has_plate:   # [P1-PLAN-LOTE-168] una foto de plato con análisis: cómo registrarla junto a otra comida
@@ -1158,7 +1185,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
     if kind == "items":
         base = (
             f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una foto de ALIMENTOS SUELTOS o una COMPRA (no "
-            f"un plato servido). Análisis de la imagen: \"{desc}\"."
+            f"un plato servido). Análisis de la imagen: \"{desc}\". " + _POTE_EN_LA_COMPRA   # [P1-PLAN-LOTE-765]
         )
         if not nevera_activa:   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: ni se ofrece ni se nombra
             if has_text:
