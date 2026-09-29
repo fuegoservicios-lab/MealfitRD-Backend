@@ -913,6 +913,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         sombra = _copy.deepcopy(meal)
         r = reconcile_meal(sombra, index)
     else:
+        __import__("linea_con_su_cifra").restaurar(meal)  # [P1-PLAN-LOTE-917] «g de nabo…»: la cifra vuelve antes de que nadie lea la lista
         __import__("pasos_cantidades").quitar_trazas(meal)  # [P1-PLAN-LOTE-319] «0.95 ml de leche»: antes de C2, cuyo V5 limpia los pasos
         r = reconcile_meal(meal, index)
         __import__("pasos_cantidades").sincronizar_exacto(meal)   # [P1-PLAN-LOTE-308] el contrato tolera ±25 %
