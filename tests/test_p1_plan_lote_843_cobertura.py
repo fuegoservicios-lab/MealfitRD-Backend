@@ -124,6 +124,8 @@ def test_consents_esta_montado_y_exento_de_cuota(rutas):
 # ═════════════════════════════════════════════ 3. el cerco: quién llama a un proveedor
 _PROVEEDOR_RE = re.compile(r"ChatGLM\(|build_chat_llm\(|ChatOpenAI\(|cohere\.ClientV2\(|OpenAIEmbeddings\(|"
                            r"generativelanguage\.googleapis\.com|"
+                           # [lote 905] la API de OpenAI a pelo (GPT-Live-1 no pasa por un cliente de LangChain).
+                           r"api\.openai\.com|"
                            # [ronda de arreglo 1] los embeddings también son un proveedor: quien pide el cliente o un
                            # vector con texto de alguien necesita su puerta o su fila justificada abajo.
                            r"get_embeddings_client\(|embed_query\(|get_embedding\(|get_text_embedding\(|"
@@ -135,6 +137,7 @@ _CERCO = {
     "agent.py": "turno del chat (/api/chat/*, 428); swap_meal por /swap-meal, /regenerate-day, /fix-sodium-day",
     "ai_helpers.py": "/recipe/expand (428); título (services._titulo_del_plan); retrospectiva (permite_ia)",
     "ajuste_de_duda.py": "/api/diary/scan/ajuste-duda (428)",
+    "coach_live.py": "/api/chat/live/sesion (428) + permite_ia en cada delegación; solo operador (lote 905)",
     "coach_voz.py": "/api/chat/voz (428)",
     "constants.py": "get_embedding (el helper cacheado): lo llaman sitios ya protegidos; su uso propio, "
                     "validate_ingredients_against_pantry, va dentro del pipeline, el swap, el worker y las tools "

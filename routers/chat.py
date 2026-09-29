@@ -727,7 +727,7 @@ async def api_chat_live_disponible(verified_user_id: Optional[str] = Depends(get
 
 @router.post("/live/sesion")
 async def api_chat_live_sesion(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id),
-                               _rl: None = Depends(_LIVE_LIMITER)):
+                               _rl: None = Depends(_LIVE_LIMITER), _ia: None = Depends(requiere_consentimiento_ia)):
     """El SDP del teléfono → sesión GPT-Live-1. 409 `{motivo}` = que use el modo voz de siempre."""
     import coach_live
     if not verified_user_id:

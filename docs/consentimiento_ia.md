@@ -153,6 +153,7 @@ direcciones, también contra las rutas reales de la app).
 | POST | /api/chat/message | routers/chat.py | api_save_chat_message | 428 |
 | POST | /api/chat/voz | routers/chat.py | api_chat_voz | 428 |
 | POST | /api/chat/voz/flujo | routers/chat.py | api_chat_voz_flujo | 428 |
+| POST | /api/chat/live/sesion | routers/chat.py | api_chat_live_sesion | 428 |
 | POST | /api/diary/upload | routers/diary.py | api_diary_upload | 428 |
 | POST | /api/diary/consumed/estimate-macros | routers/diary.py | api_estimate_macros | 428 |
 | POST | /api/diary/consumed/estimate-plate | routers/diary.py | api_estimate_plate | 428 |
@@ -169,6 +170,12 @@ pendiente (`handle_nudge_response` → IA); no tiene llamadores en el frontend. 
 `/regen-degraded` solo reencolan (la recogida ya los frenaría), pero así la persona ve la hoja en vez de un plan que no
 avanza. `/swap-meal/persist` y los paneles de Configuración no son endpoints de IA: su efecto de IA (traducir, extraer
 hechos) se frena dentro, en segundo plano, y los nombres de alimentos que normalizan llevan la marca de abajo.
+
+**GPT-Live-1 (lote 905) solo para el operador.** La sesión manda la VOZ a OpenAI y el texto `ia-2026-10` no lo dice
+(OpenAI: perfil, preferencias y parte de la conversación). Por eso `coach_live.disponible_para` exige, además de
+`MEALFIT_COACH_LIVE_USUARIOS`, estar en `MEALFIT_ADMIN_USER_IDS`. Abrirla a usuarios = versión nueva con la voz en el
+texto de OpenAI (5 idiomas y sus SHA-256) y después quitar esa condición; `test_p1_plan_lote_905.py` la ata a la
+versión.
 
 ## Embeddings desde caminos sin IA (la marca)
 
@@ -242,6 +249,7 @@ Con `block`, nada de esto llama a un proveedor para una cuenta sin permiso vigen
 | Retrospectiva semanal (`cron_tasks._persist_nightly_learning_signals`, también desde el registro manual de comidas) | lo comido y lo que gustó | `permite_ia` antes de la IA |
 | Aprendizaje del bloque (`cron_tasks._check_chunk_learning_ready`, también desde el cron de recuperación de la Nevera) | nombres de lo que anotó (Cohere) | `usar_embeddings=permite_ia(...)` |
 | Título del plan (`services._titulo_del_plan`: guardado, parcial y diferido) | objetivo, calorías y platos | `permite_ia` → el título determinista |
+| Delegación de GPT-Live-1 (`coach_live._delegar`, lote 905: el turno del coach corre en un hilo durante la sesión) | lo que dijo (IA de texto) | `permite_ia(s.user_id, "coach_live")` en cada turno: con el permiso retirado a mitad, se despide y cierra |
 | JIT de semana 2 (`proactive_agent._trigger_week2_background_generation`, código muerto) | el perfil | `permite_ia` por si alguien lo revive |
 | Nombres de alimentos desde la lista de compras, la Nevera, el diario y sus crons (`normalize_name`, intento 6) | el nombre (Cohere) | la marca de la sección anterior |
 

@@ -17,6 +17,7 @@ import coach_live
 @pytest.fixture
 def habilitado(monkeypatch):
     monkeypatch.setenv("MEALFIT_COACH_LIVE_USUARIOS", "u-duenio, u-otro")
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", "u-duenio,u-otro")
     monkeypatch.delenv("MEALFIT_COACH_LIVE_TOPE_USD", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-prueba")
     monkeypatch.setattr(coach_live, "gastado_usd", lambda: 0.0)
@@ -29,6 +30,27 @@ def test_solo_las_cuentas_habilitadas(habilitado, monkeypatch):
     assert not coach_live.disponible_para("u-cualquiera") and not coach_live.disponible_para(None)
     monkeypatch.setenv("MEALFIT_COACH_LIVE_USUARIOS", "")
     assert not coach_live.disponible_para("u-duenio"), "vacío = apagado para todos"
+
+
+def test_mientras_el_texto_del_permiso_no_nombre_la_voz_solo_el_operador(habilitado, monkeypatch):
+    """[lote 843/844] `ia-2026-10` no dice que la voz vaya a OpenAI: habilitada pero no operadora ⇒ no."""
+    import consentimientos
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", "u-duenio")
+    assert coach_live.disponible_para("u-duenio")
+    assert not coach_live.disponible_para("u-otro"), "habilitada sin ser operadora"
+    texto = open(consentimientos.__file__.replace("consentimientos.py", "docs/consentimientos/ia/"
+                                                  f"{consentimientos.AI_CONSENT_VERSION}/es-DO.md"), encoding="utf-8").read()
+    bloque_openai = texto.split("OpenAI", 1)[1].split("Google Gemini", 1)[0]
+    assert "voz" not in bloque_openai.lower(), (
+        "el texto vigente ya nombra la voz para OpenAI: quita la condición de operador de disponible_para y este test")
+
+
+def test_la_sesion_pide_el_permiso_de_ia():
+    import ast
+    from pathlib import Path
+    src = (Path(coach_live.__file__).parent / "routers" / "chat.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.AsyncFunctionDef) and n.name == "api_chat_live_sesion")
+    assert "Depends(requiere_consentimiento_ia)" in ast.get_source_segment(src, fn)
 
 
 def test_sin_presupuesto_no_abre_ni_llama_a_openai(habilitado, monkeypatch):
@@ -174,6 +196,20 @@ def test_si_el_coach_falla_no_se_queda_mudo(habilitado, monkeypatch):
     ], turno=_boom)
     c = [e for e in ws.enviados if e["type"] == "session.commentary.append"][0]
     assert "no pude" in c["content"]
+
+
+def test_con_el_permiso_retirado_a_mitad_se_despide_y_cierra(habilitado, monkeypatch):
+    import consentimientos
+    monkeypatch.setattr(consentimientos, "permite_ia", lambda uid, donde="": False)
+    monkeypatch.setattr(coach_live, "_PAUSA_DESPEDIDA_S", 0)
+    s, ws, _ = _correr(monkeypatch, [
+        {"type": "session.input_transcript.delta", "delta": "anota un café"},
+        {"type": "session.delegation.created", "delegation": {"id": "d1", "target": "client"}},
+        {"type": "session.closed", "usage": {"seconds": 5}},
+    ], turno=lambda s, dicho: pytest.fail("sin permiso no corre el coach"))
+    tipos = [e["type"] for e in ws.enviados]
+    assert tipos[:2] == ["session.commentary.append", "session.close"]
+    assert "permiso" in ws.enviados[0]["content"]
 
 
 def test_el_gasto_va_a_llm_usage_events_con_su_precio_por_minuto(monkeypatch):

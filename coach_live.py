@@ -39,6 +39,7 @@ NODO_USO = "coach_live_voice"
 USD_POR_MINUTO = 0.05          # developers.openai.com/api/docs/models/gpt-live-1 (29-sep-2026)
 _URL_SESIONES = "https://api.openai.com/v1/live/sessions"
 _URL_ATTACH = "wss://api.openai.com/v1/live/sessions/{id}/attach"
+_PAUSA_DESPEDIDA_S = 6.0
 
 
 # ── knobs ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -49,7 +50,14 @@ def usuarios_permitidos() -> set:
 
 
 def disponible_para(user_id: Optional[str]) -> bool:
-    return bool(user_id) and str(user_id) in usuarios_permitidos()
+    """Habilitada Y operadora. El texto del permiso `ia-2026-10` (lote 844) no dice que la VOZ vaya a OpenAI: hasta que
+    una versión nueva lo diga, GPT-Live-1 solo se abre a las cuentas del operador (`MEALFIT_ADMIN_USER_IDS`), que
+    prueban su propio producto. Para abrirla a usuarios: primero `AI_CONSENT_VERSION` nueva con ese texto, luego quitar
+    esta condición (un test lo ata a la versión)."""
+    if not user_id or str(user_id) not in usuarios_permitidos():
+        return False
+    from admin_acceso import admin_ids
+    return str(user_id).strip().lower() in admin_ids()
 
 
 def tope_usd() -> float:
@@ -284,9 +292,14 @@ def _cerrar(ws, s: SesionLive, motivo: str) -> None:
 def _delegar(ws, s: SesionLive, delegation_id: str, dicho: str) -> None:
     """Un turno del coach de siempre con lo que dijo; su respuesta vuelve para que GPT-Live-1 la diga."""
     t0 = time.time()
+    from consentimientos import permite_ia
     if not dicho:
         respuesta = "No alcancé a entender lo que dijo. Pídele que lo repita."
         cambios = {}
+    elif not permite_ia(s.user_id, "coach_live"):
+        # Retiró el permiso con la sesión abierta: ni el coach ni una sesión más larga.
+        respuesta = "Retiró su permiso para la IA; no puedo seguir. Díselo y despídete."
+        cambios = {"sin_permiso": True}
     else:
         try:
             respuesta, cambios = correr_turno_del_coach(s, dicho)
@@ -302,6 +315,9 @@ def _delegar(ws, s: SesionLive, delegation_id: str, dicho: str) -> None:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-905] no se pudo devolver la respuesta a {s.live_id}: {e}")
     with s._lock:
         s.novedades.append({"n": len(s.novedades) + 1, "oido": dicho, "respuesta": texto, **cambios})
+    if cambios.get("sin_permiso") and not s.cerrada:
+        time.sleep(_PAUSA_DESPEDIDA_S)   # que alcance a despedirse
+        _cerrar(ws, s, "sin_permiso")
     logger.info(f"🎙️ [P1-PLAN-LOTE-905] {s.live_id[:12]} delegación en {time.time() - t0:.1f} s: "
                 f"«{dicho[:80]}» → «{texto[:80]}»")
 
