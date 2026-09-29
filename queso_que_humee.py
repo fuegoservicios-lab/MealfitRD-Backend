@@ -69,15 +69,13 @@ def insertar_paso(meal: dict) -> bool:
         if not m or _calentado(pasos):
             return False
         if "mozzarella" in m.group(0):
-            paso = ("💪 Calienta la mozzarella pasteurizada sobre el pan caliente o en la sartén hasta que se derrita y humee "
-                    "(74 °C por dentro).")
+            frase = ("Calienta la mozzarella pasteurizada sobre el pan caliente o en la sartén hasta que se derrita y humee "
+                     "(74 °C por dentro).")
         else:
             nombre = "el queso de hoja pasteurizado" if "de hoja" in m.group(0) else "el queso blanco pasteurizado"
-            paso = (f"💪 Dora {nombre} en la sartén caliente, 1-2 minutos por lado, hasta que humee y esté bien caliente "
-                    f"por dentro (74 °C).")
-        i = next((k for k, p in enumerate(pasos) if isinstance(p, str) and p.strip().lower().startswith("montaje")),
-                 len(pasos))
-        meal["recipe"] = pasos[:i] + [paso] + pasos[i:]
+            frase = (f"Dora {nombre} en la sartén caliente, 1-2 minutos por lado, hasta que humee y esté bien caliente "
+                     f"por dentro (74 °C).")
+        meal["recipe"] = __import__("paso_de_seguridad").poner(pasos, frase)   # [P1-PLAN-LOTE-863] dentro del Toque de Fuego
         return True
     except Exception:                                                          # noqa: BLE001
         return False

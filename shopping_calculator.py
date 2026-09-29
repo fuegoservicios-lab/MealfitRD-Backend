@@ -8354,6 +8354,15 @@ _PREP_TORTILLA_MAIZ_RE = re.compile(r"\btortillas?\s+de\s+maiz\b")
 # [P1-BROTH-NOT-MEAT · 2026-07-28] caldo de <lo que sea>: producto distinto de su ingrediente.
 _PREP_BROTH_RE = re.compile(r"\bcaldos?\s+de\s+[a-z]")
 _PREP_CREMA_COCO_RE = re.compile(r"\bcremas?\s+de\s+coco\b")
+# [P1-PLAN-LOTE-860 · 2026-09-29] El AGUA con propósito («70 g de Agua para calentar las habichuelas», «1 taza de agua para
+# cocinar el arroz», «½ L de agua para hervir la yautía») resolvía por el Tier-2 al alimento que nombra DESPUÉS: 70 g de
+# habichuelas SECAS (241 kcal), 185 g de arroz crudo (663 kcal). Batería real DO de 6d (29-sep): el pase de legumbre a
+# lata convirtió esa agua en «190 g de… habichuelas cocidos», la fusión la sumó a las habichuelas y el día real quedó un
+# 25 % por debajo de lo declarado. Corpus: 6 líneas así, ~880 kcal fantasma. Cabeza «agua» (con su cantidad delante o
+# sin ella) ⇒ agua: sin fila, 0 kcal, no se compra. «agua de coco» (y cualquier «agua de X» salvo la de cocción) sigue
+# por los tiers normales. Knob `MEALFIT_WATER_IS_WATER` (True). tooltip-anchor: P1-PLAN-LOTE-860
+_PREP_WATER_RE = re.compile(r"^\s*(?:[\d.,/¼½¾⅓⅔⅛\s]+(?:[a-z]+\.?\s+)?de\s+)?(?:el\s+|la\s+|un\s+poco\s+de\s+)?agua\b"
+                            r"(?!\s+de\s+(?!coccion\b|la\s+llave\b|grifo\b))")
 
 
 def resolve_preparation_distinct(name) -> tuple:
@@ -8370,6 +8379,8 @@ def resolve_preparation_distinct(name) -> tuple:
         low = _sa_prep(str(name).lower())
     except Exception:
         low = str(name).lower()
+    if _PREP_WATER_RE.match(low) and _knob_env_bool("MEALFIT_WATER_IS_WATER", True):
+        return (True, None)  # [P1-PLAN-LOTE-860] «agua para calentar las habichuelas» es agua, no habichuelas
     m = _PREP_FLOUR_RE.search(low)
     if m:
         # [P1-PREP-HEAD-GUARD · 2026-07-27] "TORTILLA de harina de trigo (wrap, 60g)" resolvía a

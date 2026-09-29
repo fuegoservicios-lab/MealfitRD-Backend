@@ -228,9 +228,14 @@ def _nota_queso_que_humee(meal: dict) -> bool:
     if not any(isinstance(x, str) and _QUESO_BLANDO.search(x) for x in (meal.get("ingredients") or [])):
         return False
     pasos = meal.get("recipe")
-    if not isinstance(pasos, list) or any("humee" in str(p) for p in pasos):
+    if not isinstance(pasos, list):
         return False
-    __import__("queso_que_humee").insertar_paso(meal)      # [P1-PLAN-LOTE-807] el queso que se dora, en un paso
+    # [P1-PLAN-LOTE-807/863] el queso que se dora, en la receta — CADA vez (idempotente): si algo reescribió la comida
+    # después de la primera pasada, la nota sigue y el paso no; el escudo lo repone
+    ya = any("humee" in str(p) for p in pasos)                  # la nota (o un paso) ya lo dice: no se repite
+    paso = __import__("queso_que_humee").insertar_paso(meal)
+    if ya:
+        return paso
     meal["recipe"].append(_NOTA_QUESO_QUE_HUMEE)
     return True
 

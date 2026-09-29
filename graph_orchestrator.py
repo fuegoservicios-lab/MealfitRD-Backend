@@ -18161,7 +18161,7 @@ def _apply_food_safety_fixes(plan: dict, form_data=None, allergies=None) -> int:
                     logger.info(f"[P1-PLAN-LOTE-6] _apply_food_safety_fixes: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
             meal["_food_safety_fixed"] = kind
             if kind == "no_cook" and note is _FOOD_SAFETY_NOTE_NOCOOK and __import__("huevo_sin_coccion").necesita_paso(meal):
-                rec = _insert_step_before_montaje(rec, __import__("huevo_sin_coccion").paso(meal))   # [P1-PLAN-LOTE-806]
+                rec = __import__("paso_de_seguridad").poner(rec, __import__("huevo_sin_coccion").paso(meal))   # [P1-PLAN-LOTE-806/863]
         meal["recipe"] = rec + [note]
         fixed += 1
     # [P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Pescado/carne crudos → nota de seguridad
@@ -23506,7 +23506,7 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                     _sa_tt(step.lower())):
                 _rest_steps = [s2 for j, s2 in enumerate(rec) if j != i]
                 if _meal_is_no_cook({"name": meal.get("name"), "recipe": _rest_steps}):
-                    rec.pop(i)
+                    rec[i:i + 1] = __import__("tdf_sin_relleno").lista(step)  # [P1-PLAN-LOTE-862] queda la instrucción
                     meal["_nocook_tdf_stripped"] = True
                     return True
                 return False
@@ -29056,8 +29056,8 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                     return False  # conservador: duda → no usar el candidato
             return __import__("nevera_exigida").admite(cand)  # [P1-PLAN-LOTE-199] sin Nevera exigida ⇒ True
 
-        repl = next((c for c in ("Aguacate", "Tomate", "Batata") if _replacement_ok(c)), None)  # [P1-PLAN-LOTE-613] crudo antes que batata
-        if repl is None:
+        _admitidos = [c for c in ("Aguacate", "Tomate", "Batata") if _replacement_ok(c)]  # [P1-PLAN-LOTE-613] crudo antes que batata
+        if not _admitidos:
             return __import__("fruta_al_lado").separar(days)  # [P1-PLAN-LOTE-616] sin sustituto admitido, la fruta va al lado
 
         fixed = 0
@@ -29069,6 +29069,10 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
                 name_low = _sa_fs(name.lower())
                 fruit = next((fr for fr in _SWEET_DOMINANT_FRUITS if _name_has_token(fr, name_low)), None)
                 if not fruit:
+                    continue
+                repl = __import__("sustituto_de_fruta").elegir(meal, _admitidos)  # [P1-PLAN-LOTE-861] no el aguacate que ya lleva
+                if repl is None:
+                    fixed += __import__("fruta_al_lado").separar([{"meals": [meal]}])  # [P1-PLAN-LOTE-861] los lleva todos: al lado
                     continue
                 _pat = _re.compile(r"\b" + _accent_flex_pattern(fruit) + r"\w*", _re.IGNORECASE)  # [P1-PLAN-LOTE-175] «piña» ⊂ «es-PIÑA-cas»
                 meal["name"] = __import__("dish_naming").sustituir_alimento(meal, _pat, repl)  # [P1-PLAN-LOTE-175] caja + descripción
@@ -31976,7 +31980,7 @@ def _merge_duplicate_food_lines(days: list) -> list:
                         total = sum(grams)
                         # Unidad de la línea con MAYOR aporte: la que mejor describe el total.
                         dom = members[max(range(len(members)), key=lambda i: grams[i])]
-                        merged = _dup_merge_format(total, dom[2], dom[3])
+                        merged = __import__("formas_de_base").con_forma(_dup_merge_format(total, dom[2], dom[3]), _k[1])  # [P1-PLAN-LOTE-860] el total cocido sigue «cocido»
                         if not merged:
                             continue
                         keep = members[0][0]

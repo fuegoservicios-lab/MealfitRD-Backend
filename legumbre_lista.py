@@ -25,6 +25,8 @@ _SECO = re.compile(r"\b(sec[oa]s?|crud[oa]s?)\b", re.IGNORECASE)
 _YA_LISTA = re.compile(r"\b(cocid[oa]s?|de lata|enlatad[oa]s?|en lata|precocid[oa]s?|list[oa]s?|tostad[oa]s?|para comer|"
                        r"harina|crema|hummus|humus|pasta|snack|germinad[oa]s?|brotes?|sopa|pure)\b", re.IGNORECASE)
 _COLOR = r"(?:rojas?|rojos?|negras?|negros?|blancas?|blancos?|pintas?|pintos?|rosadas?|rosados?|verdes?)"
+#: [P1-PLAN-LOTE-860] la legumbre es la CABEZA de la línea: «70 g de Agua para calentar las habichuelas» no es habichuela
+_CABEZA = re.compile(r"^(?:(?:el|la|los|las|unos|unas)\s+)?(?:" + _LENTAS + "|" + _LENTEJA + r")\b")
 _FEM = ("habichuela", "haba", "lenteja")
 
 
@@ -176,6 +178,8 @@ def a_lata(days, form_data, db=None) -> int:
                     if not pat.search(low) or _YA_LISTA.search(low):
                         continue
                     _q, _u, nombre = _split_qty_unit_name(linea)
+                    if not _CABEZA.match(_sa(nombre).strip()):
+                        continue                                   # [P1-PLAN-LOTE-860] el agua «para calentar las habichuelas»
                     info = db.lookup(nombre)
                     fam = _cc.familia(getattr(info, "name", "")) if info else None
                     kcal = float(getattr(info, "kcal", 0) or 0)

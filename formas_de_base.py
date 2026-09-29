@@ -50,4 +50,28 @@ def clave(linea) -> str:
     return ""
 
 
-__all__ = ["clave"]
+def con_forma(texto, forma):
+    """[P1-PLAN-LOTE-860 · 2026-09-29] El total fundido de un grupo «cocido» conserva la forma.
+
+    `_dup_merge_format` escribe el total con el nombre del CATÁLOGO, y el de granos y legumbres está en SECO: «125 g de
+    habichuelas rojas cocidas» + «190 g de … habichuelas cocidos» salía «315 g de Habichuelas rojas» — 315 g contados en
+    seco (batería real DO de 6d, 29-sep: ≈1.000 kcal de habichuelas en un wrap). Aquí vuelve «cocidas»/«cocido» con el
+    género y número de la cabeza. Knob `MEALFIT_MERGE_KEEPS_COOKED_FORM` (True). tooltip-anchor: P1-PLAN-LOTE-860"""
+    try:
+        if not texto or forma != "cocido" or _COCIDO.search(_sa(texto)):
+            return texto
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_MERGE_KEEPS_COOKED_FORM", True):
+            return texto
+        m = _GRANO.search(_sa(texto))
+        if not m:
+            return texto
+        cab = m.group(0)
+        fem = cab.endswith(("a", "as"))
+        plural = cab.endswith("s") and cab not in ("cuscus", "couscous")
+        return f"{texto} {'cocida' if fem else 'cocido'}{'s' if plural else ''}"
+    except Exception:
+        return texto
+
+
+__all__ = ["clave", "con_forma"]
