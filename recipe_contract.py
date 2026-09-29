@@ -979,6 +979,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("mise_sin_desmenuzar").ordenar(meal)  # [P1-PLAN-LOTE-884] la mise en place no desmenuza la carne cruda
         __import__("pasos_cantidades").viver_cocido_de_la_lista(meal)  # [P1-PLAN-LOTE-408] el víver hervido que la lista compra crudo
         __import__("pasos_cantidades").huevo_duro_de_la_lista(meal)  # [P1-PLAN-LOTE-409] el huevo duro, con su hervor
+        __import__("mise_sin_desmenuzar").huevo(meal)  # [P1-PLAN-LOTE-887] la mise en place no pela el huevo que hierve la cocción previa
         __import__("pasos_cantidades").claras_del_cerrador(meal)  # [P1-PLAN-LOTE-421] las claras no se hierven
         __import__("pasos_cantidades").migaja_sin_alimento(meal)  # [P1-PLAN-LOTE-422] «corta 5 g,» sin alimento
         __import__("pasos_cantidades").tortas_de_casabe(meal)  # [P1-PLAN-LOTE-423] las tortas de la lista

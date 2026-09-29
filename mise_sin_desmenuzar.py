@@ -51,6 +51,77 @@ def _tener(m) -> str:
     return f"ten a mano {m.group('art') or ''}{cant}{m.group('prot')}{m.group('peso') or ''}"
 
 
+# ── [P1-PLAN-LOTE-887 · 2026-09-29] La mise en place no pela ni corta el huevo que hierve la «💡 Cocción previa» ────────
+# Corpus + replays (5.281 comidas únicas): 6 así, casi todas mangú con huevo — «Mise en place: … pela y rebana 3 huevos y
+# 1 clara de huevo duros ya cocidos…» y DESPUÉS «💡 Cocción previa: hierve los huevos 10-12 min, pásalos a agua fría y
+# pélalos». Un huevo crudo no se pela ni se rebana. La mise en place sólo los tiene a mano y el corte pasa al final de la
+# cocción previa («Luego córtalos por la mitad.»). Knob `MEALFIT_MISE_HUEVO_SIN_CORTAR` (True).
+# tooltip-anchor: P1-PLAN-LOTE-887
+_HUEVO_MISE_887_RE = re.compile(
+    r"(?P<verbo>(?:(?:pela|lava)\s+y\s+)?(?:corta|rebana|pica|parte|pela|trocea|lamina)"
+    r"(?:\s+y\s+(?:corta|rebana|pica|parte|trocea|lamina))?)\s+"
+    r"(?P<obj>(?:(?:el|los)\s+)?(?:\d+|[½¼¾])\s+huevos?(?:\s+y\s+(?:\d+|[½¼¾])\s+claras?\s+de\s+huevo)?)"
+    r"(?P<estado>(?:\s+(?:dur[oa]s?|bien\s+cocid[oa]s?|ya\s+cocid[oa]s?|cocid[oa]s?))*)"
+    r"(?P<forma>\s+(?:en\s+(?:mitades|rodajas|cuartos|cubos|trozos)|por\s+la\s+mitad))?", re.IGNORECASE)
+_CORTE_887 = (("rebana", "rebána"), ("lamina", "lamína"), ("trocea", "trocéa"), ("pica", "píca"), ("corta", "córta"),
+              ("parte", "párte"))
+
+
+def on_huevo() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_MISE_HUEVO_SIN_CORTAR", True)
+    except Exception:                                                          # noqa: BLE001
+        return True
+
+
+def _huevo_887(rec: list) -> int:
+    if not on_huevo():
+        return 0
+    mise = [i for i, p in enumerate(rec) if isinstance(p, str) and _sa(p).lstrip().startswith("mise en place")]
+    if not mise:
+        return 0
+    previas = [i for i, p in enumerate(rec) if i > mise[0] and isinstance(p, str)
+               and _sa(p).lstrip().startswith("💡 coccion previa") and re.search(r"\bhierve\s+(?:los|el)\s+huevos?\b", _sa(p))]
+    if not previas:
+        return 0
+    cortes = []
+
+    def _tener(m):
+        verbo = _sa(m.group("verbo"))
+        plural = bool(re.search(r"huevos|claras", _sa(m.group("obj"))))
+        for raiz, imperativo in _CORTE_887:
+            if re.search(r"\b" + raiz + r"\b", verbo):
+                cortes.append(imperativo + ("los" if plural else "lo") + (m.group("forma") or ""))
+                break
+        return "ten a mano " + m.group("obj")
+    q = _HUEVO_MISE_887_RE.sub(_tener, rec[mise[0]])
+    if q == rec[mise[0]]:
+        return 0
+    rec[mise[0]] = q
+    j = previas[0]
+    t = rec[j].rstrip()
+    if cortes and not re.search(r"\b(?:cortalos|cortalo|rebanalos|rebanalo|picalos|picalo|laminalos|trocealos)\b", _sa(t)):
+        rec[j] = t + ("" if t.endswith(".") else ".") + f" Luego {cortes[0]}."
+    return 1
+
+
+def huevo(meal) -> int:
+    """[P1-PLAN-LOTE-887] Va DESPUÉS de `huevo_duro_de_la_lista` (409), que es quien pone la cocción previa del huevo.
+    Nº de cambios (0 o 1); 0 ante cualquier error."""
+    try:
+        rec = meal.get("recipe") if isinstance(meal, dict) else None
+        if not isinstance(rec, list):
+            return 0
+        n = _huevo_887(rec)
+        if n:
+            meal["recipe"] = rec
+            meal.pop("_display", None)
+        return n
+    except Exception:                                                          # noqa: BLE001
+        return 0
+
+
 def ordenar(meal) -> int:
     """Nº de cambios; 0 ante cualquier error."""
     try:
