@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from error_utils import safe_error_detail
 from typing import Optional
 import hashlib
@@ -706,6 +706,68 @@ async def api_chat_voz_flujo(data: dict = Body(...),
             "X-Voz-Primer-Audio-Ms": str(flujo.primer_audio_ms),
         },
     )
+
+
+# [P1-PLAN-LOTE-905 · 2026-09-29] Modo voz con GPT-Live-1 (OpenAI) y NUESTRO coach como cerebro: `coach_live.py`.
+# Solo para las cuentas de `MEALFIT_COACH_LIVE_USUARIOS`, con tope duro de gasto. Cero créditos del plan: la voz va
+# a `llm_usage_events` (node `coach_live_voice`); el turno del coach cobra como cualquier mensaje del chat.
+_LIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+_LIVE_NOVEDADES_LIMITER = RateLimiter(max_calls=90, period_seconds=60)
+
+
+@router.get("/live/disponible")
+async def api_chat_live_disponible(verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    import coach_live
+    if not coach_live.disponible_para(verified_user_id):
+        return {"disponible": False}
+    gastado = await asyncio.to_thread(coach_live.gastado_usd)
+    return {"disponible": gastado < coach_live.tope_usd(), "gastado_usd": round(gastado, 3),
+            "tope_usd": coach_live.tope_usd()}
+
+
+@router.post("/live/sesion")
+async def api_chat_live_sesion(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id),
+                               _rl: None = Depends(_LIVE_LIMITER)):
+    """El SDP del teléfono → sesión GPT-Live-1. 409 `{motivo}` = que use el modo voz de siempre."""
+    import coach_live
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Inicia sesión.")
+    sdp = str((data or {}).get("sdp") or "")
+    chat_session_id = str((data or {}).get("session_id") or "")
+    if not sdp or not chat_session_id:
+        raise HTTPException(status_code=400, detail="Faltan sdp o session_id.")
+    assert_valid_uuid(chat_session_id)
+    from db_chat import get_session_owner
+    dueno = await asyncio.to_thread(get_session_owner, chat_session_id)
+    if dueno and dueno != verified_user_id:
+        raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
+    tz = (data or {}).get("tz_offset")
+    try:
+        live_id, respuesta = await asyncio.to_thread(
+            coach_live.crear_sesion, verified_user_id, sdp, chat_session_id,
+            str((data or {}).get("locale") or "es-DO")[:10], (data or {}).get("local_date"),
+            int(tz) if isinstance(tz, (int, float)) else None,
+        )
+    except coach_live.LiveNoDisponible as e:
+        return JSONResponse(status_code=409, content={"motivo": e.motivo})
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-905] no se pudo abrir la sesión Live: {type(e).__name__}: {str(e)[:200]}")
+        return JSONResponse(status_code=409, content={"motivo": "error"})
+    return {"live_id": live_id, "sdp": respuesta}
+
+
+@router.get("/live/{live_id}/novedades")
+async def api_chat_live_novedades(live_id: str, desde: int = 0,
+                                  verified_user_id: Optional[str] = Depends(get_verified_user_id),
+                                  _rl: None = Depends(_LIVE_NOVEDADES_LIMITER)):
+    """Lo que el coach hizo en la sesión (ajustes de la app, Nevera) para que el teléfono lo aplique."""
+    import coach_live
+    s = coach_live.sesion_de(live_id, verified_user_id) if verified_user_id else None
+    if not s:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+    with s._lock:
+        nuevas = [n for n in s.novedades if n["n"] > int(desde or 0)]
+    return {"novedades": nuevas, "cerrada": s.cerrada, "segundos": round(s.segundos, 1)}
 
 
 # [P1-PLAN-LOTE-682 · 2026-09-28] Aquí vivía `POST /tts`: el proxy a ElevenLabs del viejo Modo Llamada.
