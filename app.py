@@ -1052,7 +1052,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # Acompaña con queso mozzarella… Espolvorea la linaza») ni use el mismo nombre («el pescado» / «filete de pescado blanco»).
 # [P1-PLAN-LOTE-800 · 2026-09-28] (backend) V7f no acredita a un víver la cocción de otro: «hierve el plátano…» o
 # «revuelve hasta que cuajen» no cocían la batata que el autocorrector de fruta dulce puso «fresca aparte» (cruda).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-884 · 2026-09-29"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-885 · 2026-09-29"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
