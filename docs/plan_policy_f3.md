@@ -24,6 +24,7 @@
 | Chunk 0 (legacy sync/SSE) | `routers/plans._horizon_inject` (2 call sites) | ídem |
 | Chunks 2..N | `_enqueue_remaining_chunks`: `blueprint_for_plan` (run o reconstruido) → rebanada por chunk en el snapshot + `input_hash`; el worker recalcula `enforce` | ídem |
 | Renovación | mismo seeder (`ai_helpers.get_deterministic_variety_prompt`): con `enforce`, proteína del día = familia programada (`apply_slice_to_seeder_pools`), anclas del día como DATO (`out_assignment["anchors_by_day"]`) y bloque 📐 en el prompt; motivo `renewal.v1` ⇒ texto neutral, no «MAYOR VARIEDAD» | banda + anclas |
+| Relleno rolling y renovación de la cola (`rolling_refill`, cron y `/shift-plan`) | `relleno_rolling.snapshot_relleno` (P1-PLAN-LOTE-811): `plan_data._plan_policy.effective` → `_plan_policy_effective` + `_policy_enforced` (el worker lo recalcula al ejecutar). Hasta el 29-sep el snapshot era `{**health_profile}` y la política se perdía en silencio. **Sin rebanada**: la cola del relleno cuenta días desde el ancla MÓVIL (el shift la reescribe a hoy), no desde el día 0 del ciclo del blueprint; sin mapeo fiable no se inventa uno. Misma forma que el swap. El presupuesto no puede dejarla en `waiting_user`: no se recompila y en el backend nada convierte esa relajación en pausa. En `shadow` no es sólo medición: `nevera_virtual`, `candidatos_del_dia` y `_single_trip_durable_filter` leen la política sin mirar `_policy_enforced` (como en la creación). **Aproximación conocida**: en el relleno por gap de un plan de 15/30 días con compra única, `_days_offset` cuenta desde el ancla móvil y no desde el día del ciclo, así que `nevera_virtual` y los filtros de durabilidad evalúan un día temprano (p. ej. 3 en vez de 20) y pueden ofrecer frescos del día 1; en la renovación semanal el índice es exacto | banda + anclas + compra única, sin reparto por día |
 | Swap individual | `api_swap_meal` → `attach_policy_to_swap_form` (lee `plan_data->'_plan_policy'`) → `agent.swap_meal` añade el bloque 📐 con el ancla de la franja | banda + ancla de la franja |
 | Regen de día | `api_regenerate_day` → `attach_policy_to_swap_form(plan_data=…, day_index=…)` por comida | ídem |
 | Smart shuffle / shift (degradado) | `cron_tasks`: `rank_days_by_policy` ordena los candidatos por cobertura de anclas | anclas |
@@ -40,6 +41,8 @@
 | `MEALFIT_PLAN_POLICY_MODE` | `shadow` en prod (`off` en código) | `enforce` = el blueprint MANDA en todas las superficies. `shadow` = se construye, se persiste y se mide, sin influir |
 | `MEALFIT_PLAN_POLICY_ENFORCE_USERS` | `""` | Canary «dueño → test → flip»: con el modo global en `shadow`, estos uuids (coma) corren en `enforce` |
 | `MEALFIT_FIDELITY_GATE` | `warn` | `block` = los issues high/medium rechazan el intento (retry con directiva) — NUNCA en el intento final ni fuera de `enforce` |
+| `MEALFIT_REFILL_CARRIES_POLICY` | `True` | El snapshot de la renovación (`rolling_refill`) lleva la política efectiva del plan. `False` = el snapshot de antes (P1-PLAN-LOTE-811) |
+| `MEALFIT_7D_ORPHAN_GAP_HTTP_REFILL` | `True` | `/shift-plan` rellena el gap huérfano de 7 días con la decisión del cron y pone las marcas de continuación. `False` = el HTTP de antes |
 | `MEALFIT_SHOPPING_PROJECTION_JOBS` | `True` | Kill switch del outbox `shopping_projection` |
 
 Todos se leen en cada llamada (rollback sin redeploy).
