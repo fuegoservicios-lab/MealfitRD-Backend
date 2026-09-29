@@ -393,6 +393,12 @@ _ETIQUETA = re.compile(_UNA_ETIQUETA + r"(?:\s*(?:,|y|e)\s+" + _UNA_ETIQUETA + r
 # con su propio determinante («el queso»), lo que va antes queda pendiente. Solo con «,;:—–» (una lista «queso y la
 # crema» no se parte) y nunca tras un contraste («…, pero los ingredientes son vegetarianos, por lo que…»: la n.º 20).
 _FRONTERA_CLAUSULA = re.compile(r"\s*[,;:—–]\s*")
+# [revisión 5] Un segmento (entre «,;:—–») que es SOLO un conector de contraste/concesión, solo o seguido del
+# preámbulo cerrado: «…, pero sin alergia al gluten declarada, no es violación» dejaba vacía la cláusula propia y el
+# contraste se perdía. Con él delante, el veredicto no absuelve nada.
+_CONECTOR_SUELTO = re.compile(
+    r"(?:pero|aunque|si\s+bien|sin\s+embargo|no\s+obstante|con\s+todo|aun\s+as[ií]|empero|mas|"
+    r"pese\s+a\s+ello|a\s+pesar\s+de\s+ello|mientras\s+que)\b\s*(?P<resto>.*)", _I | re.S)
 _SUJETO_NUEVO = re.compile(r"(?:el|la|los|las|un|una|este|esta|estos|estas|ese|esa|su|sus)\s", _I)
 _PREAMBULO_VEREDICTO = re.compile(
     r"(?:sin\s+(?:ninguna\s+)?alergias?(?:\s+(?:a|al)\s+[^\s,;]+(?:\s+[^\s,;]+)?)?(?:\s+declarad[oa]s?)?"
@@ -521,6 +527,10 @@ def _antes_del_veredicto(prefijo: str, juzgados=None):
     propia = (prefijo[fronteras[-1].end():] if fronteras else prefijo).strip()
     if _CONTRASTE.search(propia) or _CONCESION.search(propia):
         return None
+    for seg in _FRONTERA_CLAUSULA.split(prefijo):          # [revisión 5] el conector suelto delante
+        m = _CONECTOR_SUELTO.fullmatch(seg.strip())
+        if m and (not m.group("resto").strip() or _PREAMBULO_VEREDICTO.fullmatch(m.group("resto").strip())):
+            return None
     if (fronteras and propia and not _PREAMBULO_VEREDICTO.fullmatch(propia)
             and not _ANAFORA.fullmatch(propia)):
         if juzgados is not None:

@@ -1183,3 +1183,28 @@ def test_los_ficheros_con_tope_no_crecen():
     for f, tope in topes.items():
         n = (_BACKEND / f).read_text(encoding="utf-8").count("\n")
         assert n <= tope, (f, n, tope)
+
+
+# [ronda 5] BLOQUEANTE de la ronda 4: el contraste solo se buscaba en la cláusula PROPIA; con una coma delante del
+# veredicto («…, pero sin alergia al gluten declarada, no es violación») la propia queda vacía y el contraste se
+# pierde — la oración entera se absolvía. Un segmento que es SOLO un conector de contraste/concesión (solo, o seguido
+# del preámbulo cerrado) deja el veredicto en pie.
+R5_CONECTOR_Y_PREAMBULO = [
+    "El Día 2 incluye pan de trigo, prohibido temporalmente en el perfil, pero sin alergia al gluten declarada, "
+    "no es violación.",
+    "El Día 2 incluye pan de trigo, prohibido temporalmente en el perfil, si bien, sin alergia al gluten declarada, "
+    "no es violación.",
+    "El Día 2 incluye pan de trigo, prohibido temporalmente en el perfil, aunque, sin alergia al gluten declarada, "
+    "no es violación.",
+    "El Día 2 incluye pan de trigo, prohibido temporalmente en el perfil, aun así, sin alergia al gluten declarada, "
+    "no es violación.",
+    "Día 3 | Cena: camarones, marcados como evitar en el perfil, pero, no es violación.",
+    "El almuerzo del Día 1 lleva maní, excluido por el usuario, con todo, sin alergia al maní declarada, no es "
+    "violación.",
+]
+
+
+def test_r5_el_conector_suelto_delante_del_veredicto_rechaza():
+    malos = [t for t in R5_CONECTOR_Y_PREAMBULO if _cadena_completa(t) != (False, [t], "critical", [])]
+    assert not malos, malos
+    assert not [t for t in R5_CONECTOR_Y_PREAMBULO if rc.oraciones_sin_hallazgo(t) or rc.motivo(t)]
