@@ -39,7 +39,9 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-s
     MIN_TARGET_KCAL_MALE = 1500
 
 # [P1-MINOR-SAFETY-GATE · 2026-06-18] (audit fresco P1-A) Gate de SEGURIDAD para menores de edad (<18).
-# El formulario acepta edades 12-17 (router `_BIO_RANGES["age"]=(12,100)`) pero el pipeline los trataba como
+# [P1-PLAN-LOTE-846 · 2026-09-29] Desde este lote el formulario y el router rechazan a los menores (422 `underage`,
+# `edad_minima.py`; `_BIO_RANGES["age"]=(18,100)`): este gate queda como capa EXTRA para un camino que nadie cubra.
+# Cuando nació, el formulario aceptaba edades 12-17 (router `_BIO_RANGES["age"]=(12,100)`) y el pipeline los trataba como
 # adultos: BMR Mifflin (no validada en adolescentes), déficit -20% permitido sobre un cuerpo en crecimiento,
 # piso de kcal de adulto, y CERO gate de revisión profesional por edad. Es la simétrica del gate de embarazo
 # (P1-PREGNANCY-DEFICIT-GATE). Por seguridad: un menor NUNCA recibe déficit calórico (se fuerza al menos

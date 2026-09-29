@@ -64,6 +64,7 @@ from rate_limiter import RateLimiter
 from perfil_servidor import perfil_manda_al_generar, reescritura_tras_generar  # [P1-PLAN-LOTE-717] dueños del perfil
 from schemas import PUBLIC_SSE_EVENTS  # [P1-11] contrato público de eventos SSE
 from consentimientos import requiere_consentimiento_ia, hay_permiso_ia, adoptar_de_invitado, embeddings_de_la_peticion  # [P1-PLAN-LOTE-843]
+from edad_minima import rechazar_si_menor, rechazar_si_menor_en_perfil  # [P1-PLAN-LOTE-846] 422 underage
 
 logger = logging.getLogger(__name__)
 
@@ -1133,10 +1134,12 @@ def _close_medical_freetext_scope(data: dict) -> None:
 #
 # Filosofía de los rangos: PERMISIVOS en sentido médico (no rechazamos BMI<18.5
 # o usuarios atléticos con %BF<5), solo blindamos contra TYPOS y BOGUS payloads.
-# Cubrimos extremos humanos reales (3'3" — 8'2", 30-300 kg, 12-100 años).
+# Cubrimos extremos humanos reales (3'3" — 8'2", 30-300 kg, 18-100 años).
+# [P1-PLAN-LOTE-846 · 2026-09-29] La edad NO es un rango permisivo: 18 es la edad mínima de los Términos. Un menor
+# recibe antes el 422 `underage` de `edad_minima.rechazar_si_menor` (SSOT `edad_minima.EDAD_MINIMA`).
 # ============================================================
 _BIO_RANGES = {
-    "age":       (12, 100),       # años; debajo = pediatría fuera de scope
+    "age":       (18, 100),       # años; solo mayores de edad (Términos §2) — [P1-PLAN-LOTE-846]
     "weight_kg": (30.0, 300.0),   # kg post-conversión; el parser hace lb→kg
     "height_cm": (100, 250),      # cm; ~3'3" a 8'2", cubre extremos humanos
     "bodyFat":   (1.0, 60.0),     # %; cap para no romper Katch-McArdle (LBM>0)
@@ -3507,6 +3510,9 @@ def api_analyze(
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
+        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: el 422 `underage` va ANTES de tocar nada más.
+        rechazar_si_menor(data.get("age"), origen="/analyze")
+
         # [P1-16/CANCEL-RACE-FIX 2026-05-06] Mismo fix que en /analyze/stream:
         # limpiar registry de cancels para este session_id antes de iniciar.
         # Evita que un cancel obsoleto en vuelo aborte esta nueva pipeline.
@@ -3943,6 +3949,10 @@ async def api_analyze_stream(
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+
+        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: el 422 `underage` va ANTES de abrir el stream y de
+        # tocar nada más (mismo sitio que en el endpoint síncrono).
+        rechazar_si_menor(data.get("age"), origen="/analyze/stream")
 
         # [P1-16/CANCEL-RACE-FIX 2026-05-06] Limpiar cualquier cancel pendiente
         # del registry para este session_id ANTES de iniciar la pipeline.
@@ -7110,6 +7120,10 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
+        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: la edad que trae el plato y la del perfil.
+        rechazar_si_menor_en_perfil(verified_user_id if (user_id and user_id != "guest") else None,
+                                    data.get("age"), origen="/swap-meal")
+
         # [P1-PLAN-LOTE-15 · 2026-09-12] Atribución del coste LLM del swap (medido el 09-12: 117 de 117 filas
         # `swap_meal` sin user_id ni plan_id). El plan se atribuye sólo si es SUYO. El contexto es por request
         # (Starlette copia el contexto al thread del handler), así que no hay que deshacerlo.
@@ -8447,6 +8461,8 @@ def api_fix_sodium_day(
         raise HTTPException(status_code=401, detail="Crea tu cuenta para usar Arreglar este día.")
     if not plan_id or not isinstance(plan_id, str):
         raise HTTPException(status_code=400, detail="plan_id required")
+    # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18 (la edad del perfil: este botón no la trae).
+    rechazar_si_menor_en_perfil(verified_user_id, origen="/fix-sodium-day")
 
     from db_core import execute_sql_query
     from nutrition_db import IngredientNutritionDB
@@ -9011,6 +9027,8 @@ def api_regenerate_day(
             raise HTTPException(status_code=401, detail="Crea tu cuenta para actualizar platos con IA.")
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: la edad que trae el día y la del perfil.
+        rechazar_si_menor_en_perfil(verified_user_id, data.get("age"), origen="/regenerate-day")
 
         # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
         # perfil → el loop de swaps (meal_form lee data["allergies"]/data["diet_type"]) hereda el
@@ -13706,6 +13724,7 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
         #    verlo «activo»— y cobra un crédito por bloques que el pickup NO va a recoger. Solo se llega con una
         #    pestaña vieja del plan; se rechaza con un mensaje que dice la puerta real.
         _rechazar_si_generador_apagado(verified_user_id)
+        rechazar_si_menor_en_perfil(verified_user_id, origen="/retry-chunk")   # [P1-PLAN-LOTE-846] solo mayores de 18
 
         # 2) Resetear el chunk fallido a 'pending'. Filtro por
         #    meal_plan_id + (subquery user_id) defense-in-depth: si
@@ -17169,6 +17188,7 @@ def api_regenerate_dead_lettered_simplified(
         if verified_user_id and str(plan_row["user_id"]) != str(verified_user_id):
             raise HTTPException(status_code=403, detail="No autorizado")
         _rechazar_si_generador_apagado(verified_user_id)   # [P1-PLAN-LOTE-137]
+        rechazar_si_menor_en_perfil(verified_user_id, origen="/regenerate-simplified")   # [P1-PLAN-LOTE-846]
 
         chunk_row = execute_sql_query(
             """
@@ -17362,6 +17382,7 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
         if verified_user_id and str(plan_row["user_id"]) != str(verified_user_id):
             raise HTTPException(status_code=403, detail="No autorizado")
         _rechazar_si_generador_apagado(verified_user_id)   # [P1-PLAN-LOTE-137]
+        rechazar_si_menor_en_perfil(verified_user_id, origen="/regen-degraded")   # [P1-PLAN-LOTE-846]
 
         # 2. Buscar chunks degradados completados que tengan snapshot recuperable
         degraded_chunks = execute_sql_query("""

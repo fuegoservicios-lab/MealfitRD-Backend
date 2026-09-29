@@ -349,7 +349,8 @@ _FORM_SELECT_SYNONYMS = {
                     "mucho": "plenty", "me gusta cocinar": "plenty"},
 }
 # Espejo de `routers/plans.py::_BIO_RANGES` (paridad en test_p1_chat_tools_audit.py).
-_CHAT_BIO_RANGES = {"age": (12, 100), "weight_kg": (30.0, 300.0), "height_cm": (100, 250)}
+# [P1-PLAN-LOTE-846 · 2026-09-29] La edad empieza en 18: el coach tampoco guarda la de un menor.
+_CHAT_BIO_RANGES = {"age": (18, 100), "weight_kg": (30.0, 300.0), "height_cm": (100, 250)}
 _LB_POR_KG = 2.20462
 
 
@@ -436,6 +437,12 @@ def _valor_canonico_del_formulario(field: str, new_value):
             return _rechazo(f"«{raw}» no trae un número.")
         if field == "age":
             lo, hi = _CHAT_BIO_RANGES["age"]
+            # [P1-PLAN-LOTE-846] Un menor no es una errata que se corrige preguntando otra vez: no se guarda y el
+            # coach lo dice sin pedir otra edad (pedirla invitaría a mentir).
+            from edad_minima import MENSAJE_MENOR, es_menor_de_edad
+            if es_menor_de_edad(n):
+                return (False, f"No actualicé 'age': {MENSAJE_MENOR} Díselo al usuario con amabilidad; no le pidas "
+                               f"otra edad y NO digas que se cambió.", None)
             if not lo <= n <= hi:
                 return _rechazo(f"una edad de {n:g} años está fuera del rango del formulario ({lo}-{hi}).")
             return True, str(int(n)), None

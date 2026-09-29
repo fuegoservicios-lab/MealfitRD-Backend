@@ -1191,6 +1191,12 @@ async def api_patch_profile(
         if _error_avisos:
             raise HTTPException(status_code=400, detail=_error_avisos)
 
+    # [P1-PLAN-LOTE-846 · 2026-09-29] Un perfil nunca guarda la edad de un menor (Términos §2): 422 `underage`, el
+    # mismo de la generación. Por aquí escriben la edad Configuración y el cierre del modo contador.
+    if hp_patch and "age" in hp_patch:
+        from edad_minima import rechazar_si_menor
+        rechazar_si_menor(hp_patch.get("age"), origen="PATCH /api/profile")
+
     if not hp_patch and not fields:
         # [P1-PLAN-LOTE-717] Si todo lo que traía eran claves con dueño, se dice cuáles: un 200 aquí haría creer al
         # cliente que las escribió.

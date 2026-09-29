@@ -22,6 +22,8 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
+from edad_minima import rechazar_si_menor  # [P1-PLAN-LOTE-846] 422 underage
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +38,8 @@ def validate_generation_request(data: dict, verified_user_id: Optional[str]) -> 
     mismos códigos de error. Muta `data` igual que el SSE (cierre de texto libre médico,
     país desde el perfil, saneo de básicos)."""
     rp = _rp()
+    # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18, antes que nada (mismo sitio que en el SSE).
+    rechazar_si_menor(data.get("age"), origen="/generation-runs")
     rp._close_medical_freetext_scope(data)
     rp._hydrate_country_from_profile_for_submit(data, verified_user_id)
     if "country" in data:
