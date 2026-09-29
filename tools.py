@@ -678,6 +678,14 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
     if instructions:
         logger.info(f"📝 [TOOL] Instrucciones específicas del usuario: {instructions}")
     
+    # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: un menor no recibe plan tampoco desde el chat (la edad del
+    # formulario aquí; la del perfil, tras consolidar abajo). La herramienta responde con texto, no con un 422.
+    from edad_minima import MENSAJE_MENOR, es_menor_de_edad
+    _menor_msg = (f"ERROR: {MENSAJE_MENOR} No se genera el plan. Díselo al usuario con amabilidad; no le pidas otra "
+                  f"edad.")
+    if es_menor_de_edad((form_data or {}).get("age") if isinstance(form_data, dict) else None):
+        return _menor_msg
+
     # 1. Validar y consolidar form_data (Priorizar el del frontend)
     actual_form_data = form_data.copy() if form_data else {}
     
@@ -700,6 +708,8 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
             
     if not actual_form_data or not actual_form_data.get("age"):
         return "ERROR: No se encontraron datos de salud. Completa el formulario de evaluación primero."
+    if es_menor_de_edad(actual_form_data.get("age")):   # [P1-PLAN-LOTE-846] la del perfil consolidado
+        return _menor_msg
     
     actual_form_data["user_id"] = user_id
     

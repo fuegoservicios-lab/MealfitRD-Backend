@@ -124,7 +124,7 @@ _PUERTAS = [
     ("routers/plans.py", "api_retry_chunk", "rechazar_si_menor_en_perfil(verified_user_id"),
     ("routers/plans.py", "api_regenerate_dead_lettered_simplified", "rechazar_si_menor_en_perfil(verified_user_id"),
     ("routers/plans.py", "api_regen_degraded_chunks", "rechazar_si_menor_en_perfil(verified_user_id"),
-    ("routers/user_data.py", "api_patch_profile", "rechazar_si_menor(hp_patch.get(\"age\")"),
+    ("routers/user_data.py", "api_patch_profile", "validar_edad_del_perfil(hp_patch.get(\"age\")"),   # ronda 1
 ]
 
 
@@ -148,7 +148,7 @@ def test_en_el_formulario_el_rechazo_va_antes_que_cualquier_otra_validacion(fich
 
 def test_el_perfil_rechaza_antes_de_escribir():
     src = _fuente_de("routers/user_data.py", "api_patch_profile")
-    assert src.index("rechazar_si_menor(") < src.index("update_user_health_profile_atomic(")
+    assert src.index("validar_edad_del_perfil(") < src.index("update_user_health_profile_atomic(")
 
 
 # ═════════════════════════════════════════════ 4. conducta
@@ -236,3 +236,123 @@ def test_el_gate_de_menores_sigue_encendido_por_defecto():
     res = nc.get_nutrition_targets({"weight": 60, "weightUnit": "kg", "height": 165, "age": 15,
                                     "gender": "male", "activityLevel": "sedentary", "mainGoal": "lose_fat"})
     assert (res.get("minor_safety") or {}).get("applied") is True
+
+
+# ═════════════════════════════════════════════ ronda 1
+@pytest.mark.parametrize("valor", ["15 años", "1e1", "1_5", "15abc", "inf", "nan", "", "  "])
+def test_r1_solo_un_numero_limpio_es_una_edad(valor):
+    # `float("1_5")` era 15 y `float("1e1")` 10: el formulario (`EDAD_LIMPIA`) no los lee y el backend tampoco.
+    assert em.edad_declarada(valor) is None and em.es_menor_de_edad(valor) is False
+
+
+def test_r1_la_expresion_limpia_es_la_misma_en_python_y_en_js():
+    py = (_BACKEND / "edad_minima.py").read_text(encoding="utf-8")
+    js = _FRONT_FV.read_text(encoding="utf-8")
+    m_py = re.search(r'_EDAD_LIMPIA = re\.compile\(r"([^"]+)"\)', py)
+    m_js = re.search(r"const EDAD_LIMPIA = /(.+)/;", js)
+    assert m_py and m_js and m_py.group(1) == m_js.group(1), (m_py and m_py.group(1), m_js and m_js.group(1))
+    assert "Math.trunc" in js[js.index("export const edadDeclarada"):][:400]
+
+
+def test_r1_el_mensaje_sale_de_la_constante():
+    src = (_BACKEND / "edad_minima.py").read_text(encoding="utf-8")
+    assert 'MENSAJE_MENOR = f"Bioboros es solo para mayores de {EDAD_MINIMA} años."' in src
+    assert em.MENSAJE_MENOR == f"Bioboros es solo para mayores de {em.EDAD_MINIMA} años."
+    from routers import plans as rp
+    assert em.EDAD_MAXIMA == rp._BIO_RANGES["age"][1]
+
+
+@pytest.mark.parametrize("valor", ["abc", 0, "0", -3, "250", "15 años"])
+def test_r1_patch_perfil_rechaza_la_edad_ilegible_con_el_rango_de_siempre(monkeypatch, valor):
+    import db
+    from routers import user_data as ud
+    monkeypatch.setattr(db, "update_user_health_profile_atomic", lambda *a, **k: pytest.fail("no debe escribir"))
+    body = ud.ProfilePatchBody(health_profile={"age": valor})
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ud.api_patch_profile(body=body, verified_user_id=UID, _rl=None))
+    assert e.value.status_code == 422 and e.value.detail["code"] == "invalid_biometric_range"
+    assert e.value.detail["errors"][0]["field"] == "age"
+    assert e.value.detail["errors"][0]["accepted_range"] == [18, 100]
+
+
+def test_r1_patch_perfil_deja_guardar_un_adulto(monkeypatch):
+    import db
+    from routers import user_data as ud
+    escrito = {}
+
+    def _atomico(uid, fusionar):
+        hp = {}
+        fusionar(hp)
+        escrito.update(hp)
+        return hp
+
+    monkeypatch.setattr(db, "update_user_health_profile_atomic", _atomico)
+    body = ud.ProfilePatchBody(health_profile={"age": "30"})
+    assert asyncio.run(ud.api_patch_profile(body=body, verified_user_id=UID, _rl=None)) == {"success": True}
+    assert escrito == {"age": "30"}
+
+
+# ─── el chat del coach
+@pytest.mark.parametrize("funcion", ["api_chat_stream", "api_chat"])
+def test_r1_el_chat_rechaza_al_menor_antes_de_guardar_y_tras_fundir_el_perfil(funcion):
+    src = _fuente_de("routers/chat.py", funcion)
+    pre = src.index('rechazar_si_menor((form_data or {}).get("age") if isinstance(form_data, dict) else None')
+    primera_escritura = re.search(r"\n\s+save_message(?:_with_attachments)?\(", src).start()
+    assert pre < primera_escritura and pre < src.index("merge_form_data_with_profile(")
+    fundido = src.index("merge_form_data_with_profile(")
+    post = src.index('rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")')
+    assert fundido < post
+
+
+def test_r1_el_merge_del_chat_no_escribe_la_edad_de_un_menor(monkeypatch):
+    import services
+    escrito = {}
+
+    def _atomico(uid, mutador):
+        hp = {}
+        if mutador(hp) is not False:
+            escrito.update(hp)
+
+    monkeypatch.setattr(services, "get_user_profile", lambda uid: {"health_profile": {}})
+    monkeypatch.setattr(services, "update_user_health_profile_atomic", _atomico)
+    services.merge_form_data_with_profile(UID, {"age": "15", "weight": "60"})
+    assert escrito == {"weight": "60"}
+
+    creado = {}
+    monkeypatch.setattr(services, "get_user_profile", lambda uid: None)
+    monkeypatch.setattr(services, "upsert_user_profile", lambda uid, hp: creado.update(hp))
+    services.merge_form_data_with_profile(UID, {"age": "16", "gender": "female"})
+    assert creado == {"gender": "female"}
+
+    escrito.clear()
+    monkeypatch.setattr(services, "get_user_profile", lambda uid: {"health_profile": {}})
+    services.merge_form_data_with_profile(UID, {"age": "40"})
+    assert escrito == {"age": "40"}
+
+
+def test_r1_el_chat_responde_422_si_el_formulario_trae_un_menor(monkeypatch):
+    # Conducta real de /api/chat: el 422 sale antes de guardar el mensaje ni fundir el perfil.
+    from routers import chat as ch
+    monkeypatch.setattr(ch, "save_message", lambda *a, **k: pytest.fail("no debe guardar el mensaje"))
+    monkeypatch.setattr(ch, "merge_form_data_with_profile", lambda *a, **k: pytest.fail("no debe fundir"))
+    monkeypatch.setattr(ch, "_resolve_chat_local_time", lambda d, t, u: (d, t))
+    import db_chat
+    monkeypatch.setattr(db_chat, "get_session_owner", lambda sid: None)
+    with pytest.raises(HTTPException) as e:
+        ch.api_chat(BackgroundTasks(), data={"session_id": "s1", "prompt": "hola", "form_data": {"age": "14"}},
+                    verified_user_id=UID, _ia=None)
+    assert e.value.status_code == 422 and e.value.detail["code"] == "underage"
+
+
+# ─── la herramienta del coach que genera un plan
+def test_r1_el_coach_no_genera_un_plan_a_un_menor(monkeypatch):
+    import tools
+    monkeypatch.setattr(tools, "run_plan_pipeline", lambda *a, **k: pytest.fail("no debe generar"))
+    out = tools.execute_generate_new_plan(UID, {"age": "15", "weight": "60"})
+    assert out.startswith("ERROR:") and em.MENSAJE_MENOR in out
+
+    # sin edad en el formulario, la del perfil consolidado
+    monkeypatch.setattr(tools, "get_user_profile", lambda uid: {"health_profile": {"age": 13, "weight": 50}})
+    monkeypatch.setattr(tools, "nevera_activa", lambda uid: False)
+    out = tools.execute_generate_new_plan(UID, {})
+    assert out.startswith("ERROR:") and em.MENSAJE_MENOR in out

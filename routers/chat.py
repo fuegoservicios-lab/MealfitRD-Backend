@@ -23,6 +23,7 @@ from db import (
 from memory_manager import build_memory_context, summarize_and_prune
 from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist, is_turn_active
 from services import merge_form_data_with_profile
+from edad_minima import rechazar_si_menor  # [P1-PLAN-LOTE-846] 422 underage
 from db_profiles import get_user_profile
 from db_plans import get_latest_meal_plan
 from fact_extractor import async_extract_and_save_facts
@@ -797,6 +798,9 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # económico vía prompts gigantes (quema tokens del owner +
         # cuelga endpoint hasta timeout total-graph 60s). Ver helper.
         _enforce_chat_prompt_cap(prompt, field_name="prompt")
+        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: la edad del formulario, ANTES de guardar el mensaje y
+        # del merge que la vuelca al perfil (y la del perfil ya fundido, abajo).
+        rechazar_si_menor((form_data or {}).get("age") if isinstance(form_data, dict) else None, origen="/api/chat/stream")
 
         # [P1-CHAT-LOG-CTX · 2026-05-19] LoggerAdapter con session_id +
         # user_id_hash. Reemplaza logs crudos del módulo en este endpoint
@@ -843,6 +847,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             user_id if user_id != "guest" and user_id != session_id else "",
             form_data
         )
+        rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
         
         plan_tier = "gratis"
         if user_id and user_id != "guest":
@@ -1156,6 +1161,8 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # streaming — un blob gigante cuelga el endpoint hasta el timeout
         # total-graph y quema tokens del owner. Ver helper.
         _enforce_chat_prompt_cap(prompt, field_name="prompt")
+        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18 (ver /stream).
+        rechazar_si_menor((form_data or {}).get("age") if isinstance(form_data, dict) else None, origen="/api/chat")
 
         # [P1-CHAT-LOG-CTX · 2026-05-19] Logger correlacionable.
         clog = _chat_logger(session_id, user_id)
@@ -1172,6 +1179,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             user_id if user_id != "guest" and user_id != session_id else "",
             form_data
         )
+        rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
 
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)

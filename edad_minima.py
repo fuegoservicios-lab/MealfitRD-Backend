@@ -17,17 +17,19 @@ QUÉ HACE CUMPLIR
       que nadie cubre, el plan sigue sin déficit y con revisión profesional.
 
 QUÉ ES «MENOR»
-    Una edad LEGIBLE (número, admite coma decimal) cuya parte entera está entre 1 y 17: la misma cuenta que
-    `_coerce_numeric(kind="int")` del router y que el `0 < age < 18` del gate de `nutrition_calculator`. Una edad
-    ausente o ilegible (0, negativa, texto) no es «menor»: eso lo rechaza el rango (`invalid_biometric_range`). El
-    espejo del formulario es `esMenorDeEdad` (`frontend/src/config/formValidation.js`).
+    Una edad LEGIBLE (un número limpio: coma o punto decimal, nada más; «15 años» no lo es) cuya parte entera está
+    entre 1 y 17: la cuenta `int(float(...))` del router y el `0 < age < 18` del gate de `nutrition_calculator`. Una
+    edad ausente o ilegible (0, negativa, texto) no es «menor»: eso lo rechaza el rango (`invalid_biometric_range`). El
+    espejo del formulario es `esMenorDeEdad` (`frontend/src/config/formValidation.js`), con la MISMA expresión.
 
-tooltip-anchor: EDAD_MINIMA, es_menor_de_edad, rechazar_si_menor, rechazar_si_menor_en_perfil
+tooltip-anchor: EDAD_MINIMA, _EDAD_LIMPIA, es_menor_de_edad, rechazar_si_menor, rechazar_si_menor_en_perfil,
+validar_edad_del_perfil, sin_edad_de_menor
 (tests/test_p1_plan_lote_846_edad.py)
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -36,23 +38,32 @@ logger = logging.getLogger(__name__)
 
 #: Edad mínima para usar Bioboros. Espejo: `_BIO_RANGES["age"][0]` (router) y `BIO_RANGES.age.min` (formulario).
 EDAD_MINIMA = 18
+#: Techo del rango (erratas), espejo de `_BIO_RANGES["age"][1]` y `BIO_RANGES.age.max`.
+EDAD_MAXIMA = 100
 
 #: El código de error del 422, para el cliente (`errorCopy.js` lo traduce).
 CODIGO_MENOR = "underage"
 
 #: La frase del formulario (base es-DO); el cliente pinta la suya traducida a partir del código.
-MENSAJE_MENOR = "Bioboros es solo para mayores de 18 años."
+MENSAJE_MENOR = f"Bioboros es solo para mayores de {EDAD_MINIMA} años."
+
+# [ronda 1] Una edad «limpia»: un número y nada más (coma o punto decimal, espacios alrededor). La MISMA expresión
+# que `EDAD_LIMPIA` de `esMenorDeEdad` (formValidation.js): «15 años», «1e1», «1_5» o «inf» no son edades en ninguno de
+# los dos lados (antes JS leía «15 años» como 15 con `parseFloat` y Python como ilegible).
+_EDAD_LIMPIA = re.compile(r"^\s*[+-]?\d+(?:[.,]\d+)?\s*$")
 
 
 def edad_declarada(valor: Any) -> Optional[int]:
-    """La parte entera de una edad legible, o None. Acepta int/float y cadenas con coma o punto decimal."""
+    """La parte entera de una edad legible, o None. Acepta int/float finitos y cadenas LIMPIAS (`_EDAD_LIMPIA`)."""
     if valor is None or isinstance(valor, bool):
         return None
     try:
         if isinstance(valor, str):
-            valor = valor.strip().replace(",", ".")
-            if not valor:
+            if not _EDAD_LIMPIA.match(valor):
                 return None
+            valor = valor.strip().replace(",", ".")
+        elif not isinstance(valor, (int, float)):
+            return None
         return int(float(valor))
     except (TypeError, ValueError, OverflowError):
         return None
@@ -86,9 +97,12 @@ def rechazar_si_menor(*edades: Any, origen: str) -> None:
 def edad_del_perfil(user_id: Optional[str]) -> Optional[Any]:
     """`health_profile.age` de la cuenta, o None (invitado, sin perfil o la lectura falló).
 
-    Fail-open a propósito: la puerta principal es la edad de la PETICIÓN y un perfil ya no puede guardar una edad
-    menor (`PATCH /api/profile`, la generación y el coach la rechazan); esto cubre cuentas antiguas. Un fallo de la
-    base no debe tumbar un cambio de plato de un adulto."""
+    Fail-open a propósito: la puerta principal es la edad de la PETICIÓN. Los escritores de `health_profile.age` la
+    rechazan o la descartan: `PATCH /api/profile` (422), la generación (422 antes del merge que la vuelca al perfil),
+    la herramienta del coach que edita el formulario (no la guarda) y el merge del chat
+    (`services.merge_form_data_with_profile`, que la quita antes de escribir). Quedan las cuentas ANTERIORES a este
+    lote (0 en producción el 2026-09-29) y cualquier escritor futuro que no pase por aquí: para eso existe esta
+    lectura. Un fallo de la base no debe tumbar un cambio de plato de un adulto."""
     if not user_id or user_id == "guest":
         return None
     try:
@@ -109,3 +123,29 @@ def rechazar_si_menor_en_perfil(user_id: Optional[str], *edades: Any, origen: st
     La de la petición se mira primero: si ya es de un menor, no hace falta leer la base."""
     rechazar_si_menor(*edades, origen=origen)
     rechazar_si_menor(edad_del_perfil(user_id), origen=f"{origen} (perfil)")
+
+
+def validar_edad_del_perfil(valor: Any, *, origen: str) -> None:
+    """[ronda 1] La edad que va a GUARDARSE en el perfil: vacía/ausente pasa (no tocarla o borrarla es válido); de un
+    menor, 422 `underage`; ilegible, 0, negativa o sobre el techo, el 422 `invalid_biometric_range` de siempre (la
+    misma forma que `routers/plans.py::_validate_form_data_ranges`)."""
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return
+    rechazar_si_menor(valor, origen=origen)
+    edad = edad_declarada(valor)
+    if edad is None or not (EDAD_MINIMA <= edad <= EDAD_MAXIMA):
+        logger.warning(f"[P1-PLAN-LOTE-846] {origen}: edad fuera de rango -> 422 invalid_biometric_range")
+        raise HTTPException(status_code=422, detail={
+            "code": "invalid_biometric_range",
+            "errors": [{"field": "age", "value": valor, "accepted_range": [EDAD_MINIMA, EDAD_MAXIMA], "unit": "años"}],
+            "message": "Algunos datos biométricos están fuera del rango aceptado: age. Revísalos en el formulario.",
+        })
+
+
+def sin_edad_de_menor(datos: Any, *, origen: str) -> Any:
+    """[ronda 1] Copia de `datos` SIN la clave `age` si es la de un menor (y lo anota); si no, `datos` tal cual. Para
+    los escritores del perfil que no responden con un error propio (el merge del chat)."""
+    if isinstance(datos, dict) and es_menor_de_edad(datos.get("age")):
+        logger.warning(f"[P1-PLAN-LOTE-846] {origen}: edad de menor descartada, no se guarda en el perfil")
+        return {k: v for k, v in datos.items() if k != "age"}
+    return datos

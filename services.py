@@ -35,6 +35,7 @@ from db_inventory import release_meal_reservation
 # ⚠️ RESTRICCIÓN ARQUITECTÓNICA: services.py importa agent.py → agent.py NUNCA debe importar services.py.
 # Si agent.py necesita lógica de services.py en el futuro, usar lazy import dentro de la función.
 from ai_helpers import generate_plan_title
+from edad_minima import sin_edad_de_menor  # [P1-PLAN-LOTE-846] el perfil nunca guarda la edad de un menor
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,8 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
                 # del estado fresco bajo FOR UPDATE: si está vacío, equivale a
                 # un set; si no, mergea form fields preservando los demás.
                 _form_only = {k: v for k, v in (form_data or {}).items() if v not in [None, "", [], {}]}
+                # [P1-PLAN-LOTE-846] El perfil nunca guarda la edad de un menor (el chat ya respondió 422 antes).
+                _form_only = sin_edad_de_menor(_form_only, origen="merge_form_data_with_profile")
 
                 def _init_mutator(_hp):
                     if not _form_only:
@@ -119,7 +122,7 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
             if form_data:
                 logger.warning(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
                 try:
-                    upsert_user_profile(user_id, merged)
+                    upsert_user_profile(user_id, sin_edad_de_menor(merged, origen="merge_form_data_with_profile"))
                     logger.info(f"✅ [SYNC] Perfil creado con health_profile")
                 except Exception as e:
                     logger.error(f"❌ [SYNC] Error creando perfil: {e}")
