@@ -1064,6 +1064,31 @@ def _v4_grams_by_food(text_norm: str, index: dict) -> dict:
     return out
 
 
+def _v4_formas_by_food(text_norm: str, index: dict) -> dict:
+    """[P1-PLAN-LOTE-883 · 2026-09-29] {food: forma} de la PRIMERA mención con gramaje de cada alimento (la misma que
+    elige `_v4_grams_by_food`): «cocido» si la cláusula lo dice de un grano o legumbre (`formas_de_base.clave`), «» si no.
+    Batería real RD (mujer que pierde grasa, código 868): «45 g de arroz integral crudo» en la lista y «mide 125 g de
+    arroz integral cocido» en el paso daban V4 — la MISMA cantidad en dos bases (el crudo rinde ~2,8×). La regla (a) del
+    V4 es no inventar conversiones: sólo compara gramos de la misma forma. tooltip-anchor: P1-PLAN-LOTE-883"""
+    out = {}
+    try:
+        clave = __import__("formas_de_base").clave
+        for c_start, c_end in clause_bounds(text_norm):
+            clause = text_norm[c_start:c_end]
+            foods = _catalog_food_spans(clause, index)
+            if not foods:
+                continue
+            for m in _V4_GRAMS_RE.finditer(clause):
+                if _V4_APPROX_LEAD_RE.search(clause[:m.start()]):
+                    continue
+                f = grams_owner(clause, m.start(), m.end(), foods)
+                if f is not None and f not in out:
+                    out[f] = clave(clause)
+    except Exception:
+        return {}
+    return out
+
+
 _GRAMS_SIGUE_RE = re.compile(r"^\s*(?:de\s+|del\s+|de\s+l[ao]s?\s+)?$")
 _GRAMS_PRECEDE_RE = re.compile(r"^\s*[:(]?\s*$")
 
@@ -1102,7 +1127,7 @@ def _v4_cantidad_inconsistente(day, meal, index) -> list:
     # renglón ("CADA CONDIMENTO EN SU PROPIO RENGLÓN") — se resuelve el
     # primer alimento del renglón (mismo criterio que V3, `foods[0]`) y se
     # busca SU gramaje dentro de ESE MISMO renglón.
-    ing_grams = {}
+    ing_grams, ing_forma = {}, {}
     for ing in ingredientes:
         n = _norm(str(ing))
         foods = find_catalog_foods(n, index)
@@ -1114,27 +1139,34 @@ def _v4_cantidad_inconsistente(day, meal, index) -> list:
         pares = _v4_grams_by_food(n, index)
         if food in pares:
             ing_grams[food] = pares[food]
+            ing_forma[food] = _v4_formas_by_food(n, index).get(food, "")   # [P1-PLAN-LOTE-883]
 
     if not ing_grams:
         return out             # ningún ingrediente declara gramaje explícito ⇒ nada que comparar
 
     # Lado pasos: prioriza Mise en place (regla c); si un alimento no
     # declara gramaje ahí, cae al primer paso (en orden) que sí lo declare.
-    mise_grams, primer_grams = {}, {}
+    mise_grams, primer_grams, mise_forma, primer_forma = {}, {}, {}, {}
     for paso in pasos:
         n = _norm(_texto_de_consumo(paso))   # [P1-PLAN-LOTE-26] el almacenaje no es consumo
         pares = _v4_grams_by_food(n, index)
+        formas = _v4_formas_by_food(n, index) if pares else {}
         es_mise = bool(_RE_MISE_STEP.match(n))
         for food, val in pares.items():
             if food not in primer_grams:
                 primer_grams[food] = val
+                primer_forma[food] = formas.get(food, "")
             if es_mise and food not in mise_grams:
                 mise_grams[food] = val
+                mise_forma[food] = formas.get(food, "")
 
     for food, ing_val in ing_grams.items():
         paso_val = mise_grams.get(food, primer_grams.get(food))
         if paso_val is None:
             continue           # ningún paso declara gramaje explícito para este alimento ⇒ skip
+        paso_forma = mise_forma.get(food, primer_forma.get(food, "")) if food in mise_grams else primer_forma.get(food, "")
+        if ing_forma.get(food, "") != paso_forma:
+            continue           # [P1-PLAN-LOTE-883] crudo en la lista y cocido en el paso: dos bases, no se comparan
         denom = max(ing_val, paso_val)
         if denom <= 0:
             continue
