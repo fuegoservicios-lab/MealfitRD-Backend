@@ -196,15 +196,23 @@ def test_resolucion_no_usa_modificadores():
 def test_corre_antes_de_construir_la_lista_de_compras():
     """Si corriera después, la línea insertada no llegaría a la lista y el plan seguiría
     siendo incomprable — que es exactamente el defecto que cierra."""
-    from pathlib import Path
-    src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
-    i_repair = src.index("_repair_declared_but_unlisted_ingredients(result.get(\"days\")")
-    i_list = src.index("# Calcular shopping lists")
-    assert i_repair < i_list, "el repair DEBE preceder a la construcción de la lista de compras"
+    # [P1-PLAN-LOTE-813 · 2026-09-29] los 5 mutadores de contenido viven en `mutadores_de_contenido.aplicar` y assemble
+    # los llama en DOS sitios (antes de la cadena con el knob encendido; el sitio viejo con él apagado): los dos sitios
+    # preceden a la lista de compras.
+    import inspect
+    import mutadores_de_contenido as _mdc
+    mut = inspect.getsource(_mdc.aplicar)
+    asm = inspect.getsource(go.assemble_plan_node)
+    i_list = asm.index("# Calcular shopping lists")
+    assert asm.index('_mdc.en_posicion(result, "antes"') < i_list
+    assert asm.index('_mdc.en_posicion(result, "despues"') < i_list
+    assert "_repair_declared_but_unlisted_ingredients(result.get(\"days\")" in mut,         "el repair DEBE preceder a la construcción de la lista de compras"
 
 
 def test_knob_de_rollback():
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     assert 'PHANTOM_INGREDIENT_REPAIR = _env_bool("MEALFIT_PHANTOM_INGREDIENT_REPAIR", True)' in src
-    assert "if PHANTOM_INGREDIENT_REPAIR:" in src
+    import inspect
+    import mutadores_de_contenido as _mdc   # [P1-PLAN-LOTE-813] la llamada vive allí
+    assert "if go.PHANTOM_INGREDIENT_REPAIR:" in inspect.getsource(_mdc.aplicar)

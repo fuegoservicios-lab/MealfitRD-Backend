@@ -1117,6 +1117,9 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
         try:
             _pd = data["plan_data"]
             if isinstance(_pd, dict) and isinstance(_pd.get("days"), list):
+                # [P1-PLAN-LOTE-813 · 2026-09-29] huella de ENTRADA: ¿recibe este escudo la salida de la última cadena de
+                # generación? La lee la fila `clinical_band_final` (`input_equals_chain_out`); el pre-INSERT la retira.
+                __import__("mutadores_de_contenido").entrada_cadena(_pd, data, surface)
                 from graph_orchestrator import finalize_plan_data_coherence as _fpc
                 # [P1-CHUNK-FINALIZE-PARITY · 2026-07-07] deriva target de grasa del plan → el shield
                 # pre-INSERT corre relevel + cheese-final en planes que saltan assemble (partial/
@@ -1643,6 +1646,11 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                     logger.debug(f"[P1-PLAN-LOTE-233] última palabra no-op: {type(_rfin_e).__name__}: {_rfin_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] {surface} no-op: {type(_fce).__name__}: {_fce}")
+        # [P1-PLAN-LOTE-813] huella de SALIDA (sólo superficies de generación) y fuera el contexto, también si falló.
+        try:
+            __import__("mutadores_de_contenido").salida_cadena(data["plan_data"], surface)
+        except Exception as _s813_e:                                            # nunca bloquea el INSERT
+            logger.debug(f"[P1-PLAN-LOTE-813] salida de la cadena no-op: {type(_s813_e).__name__}: {_s813_e}")
 
 
 def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "quality-chain",
@@ -1923,8 +1931,10 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
 
     safe = copy.deepcopy(insert_data)
     safe["user_id"] = user_id   # P1-PLAN-LOTE-171
+    safe["plan_id"] = plan_id   # [P1-PLAN-LOTE-813] la fila `clinical_band_final` nombra su plan
     _finalize_plan_data_for_insert(safe)
     safe.pop("user_id", None)
+    safe.pop("plan_id", None)
     pd_new = safe.get("plan_data") if isinstance(safe.get("plan_data"), dict) else None
     if pd_new is None:
         _out("invalid_plan_data")
