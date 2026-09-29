@@ -49867,6 +49867,7 @@ def _compute_pipeline_holistic_score_and_emit(
                         "per_day": _band.get("per_day"),
                         "delivered_was_fallback": delivered_was_fallback,
                         "review_passed": final_state.get("review_passed"),
+                        "entrega": __import__("entregas_revisadas").clave_de_entrega(actual_form_data),  # [P1-PLAN-LOTE-746] una fila por CORRIDA; la alerta agrupa por entrega
                         # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] cohorte del canario (ausente = 'on').
                         # Única dimensión que permite sliceear OFF vs ON en pipeline_metrics.
                         "self_critique_cohort": final_state.get("_self_critique_cohort") or "on",
