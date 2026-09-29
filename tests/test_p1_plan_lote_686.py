@@ -21,7 +21,7 @@ def test_las_reglas_de_voz_quitan_las_cifras_y_mandan_anotar_ya():
     assert "la 5 de brevedad" in _CHAT_CALL_MODE_RULES, "manda sobre «Brevedad NUNCA significa recortar números»"
     assert "cuánto suma" not in _CHAT_CALL_MODE_RULES, "la confirmación ya no dice cuánto suma"
     assert "DE INMEDIATO, sin escribir ni razonar nada antes" in _CHAT_CALL_MODE_RULES
-    assert "la cantidad que no dijo NO se pregunta" in _CHAT_CALL_MODE_RULES
+    # la cantidad: ver test_p1_plan_lote_689 (se pregunta solo cuando varía mucho: pan, arroz)
     assert "V8. SIN CONSEJOS QUE NO PIDIÓ" in _CHAT_CALL_MODE_RULES
     assert "unas 25 palabras" in _CHAT_CALL_MODE_RULES
     assert CHAT_VOICE_MODE_PROMPT.endswith(_CHAT_CALL_MODE_RULES)
@@ -31,7 +31,7 @@ def test_el_recordatorio_repite_el_mandato_en_corto():
     r = CHAT_VOICE_MODE_RECORDATORIO
     assert r.startswith("\n\nRECORDATORIO FINAL — MODO VOZ")
     for trozo in ("SIN CIFRAS", "llama a la herramienta de registro de inmediato", "sin razonar por escrito",
-                  "una pregunta corta al final", "Nada de consejos que no pidió"):
+                  "una pregunta corta", "Nada de consejos que no pidió"):
         assert trozo in r, trozo
     assert len(r) < 700, "un recordatorio, no otro bloque de reglas"
 
