@@ -95,11 +95,12 @@ def paso(meal: dict) -> str:
     suf = ("as" if fem else "os") if plural else ("a" if fem else "o")
     pron = ("las" if fem else "los") if plural else ("la" if fem else "lo")
     mise = " ".join(_sa(p) for p in (meal.get("recipe") or []) if isinstance(p, str))
+    cuaje = "cuajen" if plural else "cuaje"          # [P1-PLAN-LOTE-881] «Bate el huevo… hasta que cuaje», no «cuajen»
     if re.search(r"\bbat[eiao]\w*", mise):
         return (f"Vierte {objeto} batid{suf} en la sartén caliente con un poco de aceite y cocína{pron}, removiendo, "
-                f"3-4 minutos, hasta que cuajen por completo (sin partes líquidas).")
+                f"3-4 minutos, hasta que {cuaje} por completo (sin partes líquidas).")
     return (f"Bate {objeto}, viérte{pron} en la sartén caliente con un poco de aceite y cocína{pron}, removiendo, "
-            f"3-4 minutos, hasta que cuajen por completo (sin partes líquidas).")
+            f"3-4 minutos, hasta que {cuaje} por completo (sin partes líquidas).")
 
 
 def necesita_paso(meal: dict) -> bool:

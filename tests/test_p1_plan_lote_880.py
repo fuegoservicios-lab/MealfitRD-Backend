@@ -41,3 +41,4 @@ def test_notas_no_y_ancla():
     assert pc.concordar_pasos(m) == 0
     src = (_BACKEND / "recipe_contract.py").read_text(encoding="utf-8")
     assert '__import__("participio_concuerda").concordar_pasos(meal)  # [P1-PLAN-LOTE-880]' in src
+
