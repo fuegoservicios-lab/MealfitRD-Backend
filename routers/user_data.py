@@ -1073,6 +1073,10 @@ _LOCALE_VALUES = frozenset({"es-DO", "en-US", "pt-BR", "fr-FR", "it-IT"})
 class ProfilePatchBody(BaseModel):
     health_profile: Optional[Dict[str, Any]] = None
     fields: Optional[Dict[str, Any]] = None
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Contrato opcional: las claves de `health_profile` que el cliente QUIERE escribir.
+    # Presente ⇒ solo esas se aplican (un formulario entero con copias viejas ya no pisa lo que otro dispositivo o su
+    # panel cambió). Ausente ⇒ conducta de siempre. Ver `perfil_servidor`.
+    health_profile_keys: Optional[List[str]] = Field(default=None, max_length=200)
 
 
 @router.get("/profile")
@@ -1100,8 +1104,27 @@ async def api_patch_profile(
 ):
     """Reemplaza la RPC `update_health_profile_merge` (merge jsonb ||) y el
     UPDATE escalar de updateUserProfile. El merge ocurre server-side en un
-    solo UPDATE — misma garantía anti-race que la RPC (P1-FORM-9)."""
+    solo UPDATE — misma garantía anti-race que la RPC (P1-FORM-9).
+
+    [P1-PLAN-LOTE-717 · 2026-09-28] `health_profile` ya no se fusiona con un `||` crudo:
+      1. Las claves con DUEÑO se descartan (con warning): las del servidor (historial de peso, lo aprendido por el
+         motor), las de los paneles de Configuración (perfil clínico, súper personalización, básicos y anclas) y las
+         internas `_*`. Los clientes mandan el formulario ENTERO, hidratado una vez y nunca refrescado: esas copias
+         pisaban lo que su dueño había escrito después. Lista y porqué: `perfil_servidor`.
+      2. `health_profile_keys` (opcional) limita el parche a las claves que el cliente declara.
+      3. La fusión va por `update_user_health_profile_atomic` (FOR UPDATE + los efectos post-commit): cambiar las
+         alergias (o el objetivo, el presupuesto, el peso ±5) invalida los chunks pendientes, que se generarían con el
+         perfil viejo, y un huso nuevo se sincroniza con la cola — como ya hacía el camino del coach. El `||` crudo se
+         los saltaba. La fusión sigue siendo superficial (clave a clave), igual que el `||`."""
     uid = _require_user(verified_user_id)
+
+    from perfil_servidor import filtrar_parche_health_profile
+    hp_patch, ignoradas = filtrar_parche_health_profile(body.health_profile, body.health_profile_keys)
+    if ignoradas:
+        logger.warning(
+            f"[P1-PLAN-LOTE-717] PATCH /profile user={uid}: {len(ignoradas)} clave(s) con dueño ignoradas "
+            f"(las escribe el servidor o su panel): {ignoradas}"
+        )
 
     fields = dict(body.fields or {})
     rejected = sorted(set(fields) - _PROFILE_SCALAR_WHITELIST)
@@ -1139,10 +1162,10 @@ async def api_patch_profile(
     # `p3_country_db_check_2026_08_22.sql` es la red de abajo, no el sustituto: sin este 400, el
     # CHECK haría el trabajo devolviendo un 500 crudo de psycopg.
     # Tooltip-anchor: P3-COUNTRY-DB-CHECK-VALUE.
-    if body.health_profile and body.health_profile.get("country") is not None:
+    if hp_patch and hp_patch.get("country") is not None:
         from constants import UnsupportedCountryError, assert_supported_country
         try:
-            assert_supported_country(body.health_profile["country"])
+            assert_supported_country(hp_patch["country"])
         except UnsupportedCountryError as exc:
             raise HTTPException(
                 status_code=400,
@@ -1152,30 +1175,29 @@ async def api_patch_profile(
     # [P1-PLAN-LOTE-223 · 2026-09-24] La otra clave del JSONB con forma fija: la hora y el interruptor de cada
     # recordatorio de comida. Mismo criterio que el país: se RECHAZA con un 400 que explica, no se corrige; guardada
     # tal cual, una hora ilegible haría que el cron la ignorase en silencio y el aviso sonaría a otra hora sin motivo.
-    if body.health_profile and "avisos_por_comida" in body.health_profile:
+    if hp_patch and "avisos_por_comida" in hp_patch:
         from proactive_agent import error_en_avisos_por_comida
-        _error_avisos = error_en_avisos_por_comida(body.health_profile["avisos_por_comida"])
+        _error_avisos = error_en_avisos_por_comida(hp_patch["avisos_por_comida"])
         if _error_avisos:
             raise HTTPException(status_code=400, detail=_error_avisos)
 
-    if not body.health_profile and not fields:
-        raise HTTPException(status_code=400, detail="Nada que actualizar.")
+    if not hp_patch and not fields:
+        # [P1-PLAN-LOTE-717] Si todo lo que traía eran claves con dueño, se dice cuáles: un 200 aquí haría creer al
+        # cliente que las escribió.
+        raise HTTPException(status_code=400, detail="Nada que actualizar." + (
+            f" Claves ignoradas (las escribe el servidor o su panel de Configuración): {ignoradas}." if ignoradas else ""))
 
     def _patch():
-        from db import execute_sql_write
-        from psycopg.types.json import Jsonb
+        from db import execute_sql_write, update_user_health_profile_atomic
         updated = False
-        if body.health_profile:
-            rows = execute_sql_write(
-                """
-                UPDATE user_profiles
-                SET health_profile = COALESCE(health_profile, '{}'::jsonb) || %s::jsonb
-                WHERE id = %s RETURNING id
-                """,
-                (Jsonb(body.health_profile), uid),
-                returning=True,
-            )
-            updated = updated or bool(rows)
+        if hp_patch:
+            # [P1-PLAN-LOTE-717] Fusión clave a clave (la misma semántica que el `||`) bajo FOR UPDATE, con los efectos
+            # post-commit del helper (invalidar chunks si cambian alergias/objetivo/presupuesto/peso; huso de la cola).
+            def _fusionar(hp):
+                hp.update(hp_patch)
+                return None
+
+            updated = update_user_health_profile_atomic(uid, _fusionar) is not None
         if fields:
             # Whitelist ya validada — SET dinámico seguro (keys controladas).
             set_clause = ", ".join(f"{k} = %s" for k in fields)
@@ -1225,7 +1247,9 @@ async def api_patch_profile(
                 f"user={uid} locale={_p1_i18n_new_locale!r}: {_p1_i18n_e!r}"
             )
 
-    return {"success": True}
+    # [P1-PLAN-LOTE-717] Las claves con dueño que NO se escribieron, para que el cliente no las dé por guardadas (ni las
+    # fusione en su copia del perfil). Sin ninguna, la respuesta de siempre.
+    return {"success": True, "ignored_keys": ignoradas} if ignoradas else {"success": True}
 
 
 # ---------------------------------------------------------------------------
@@ -1319,6 +1343,13 @@ _SUPERPERS_EXTRACT_FACTS = os.getenv(
     "MEALFIT_SUPERPERS_EXTRACT_FACTS", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# [P1-PLAN-LOTE-717 · 2026-09-28] Cupo de los tres PUT de los paneles de Configuración (clínico, súper
+# personalización, básicos). Dos de ellos disparan una extracción LLM del texto libre en segundo plano; el paywall no
+# es la herramienta (cero crédito de planes: el gasto va a `llm_usage_events`). Un cupo COMPARTIDO por los tres (el
+# autoguardado de los chips manda un PUT por toque) y un par (max, periodo) ÚNICO en el repo: la ventana de Redis es
+# `rl:<max>:<periodo>:<uid>`, así que con 20/60 compartiría ventana con otros 16 endpoints (restock, consumo, diario…).
+_PANEL_PREFERENCES_LIMITER = RateLimiter(max_calls=24, period_seconds=60)
+
 
 def _clean_super_personalization(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Valida + normaliza el payload (defensivo: listas acotadas, enums
@@ -1399,6 +1430,7 @@ async def api_put_super_personalization(
     background_tasks: BackgroundTasks,
     body: SuperPersonalizationBody = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PANEL_PREFERENCES_LIMITER),  # [P1-PLAN-LOTE-717]
 ):
     """Persiste el payload validado en health_profile.super_personalization vía
     update_user_health_profile_atomic (SELECT…FOR UPDATE + callback, I7 — sin
@@ -1438,6 +1470,8 @@ async def api_put_super_personalization(
     # embed + dedup); BackgroundTasks la corre en el threadpool TRAS enviar la
     # respuesta → no bloquea el PUT. Reusa el MISMO pipeline que el chat, así
     # que los facts heredan dedup/contradicción/embedding asimétrico.
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Con la «Memoria a Largo Plazo» pausada NO se extrae: la guarda vive en el destino
+    # (`async_extract_and_save_facts`, fail-closed), que es donde la miran también el chat y la cola.
     if _SUPERPERS_EXTRACT_FACTS and _state["freetext_changed"]:
         try:
             from fact_extractor import async_extract_and_save_facts
@@ -1620,6 +1654,7 @@ async def api_put_clinical_profile(
     background_tasks: BackgroundTasks,
     body: ClinicalProfileBody = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PANEL_PREFERENCES_LIMITER),  # [P1-PLAN-LOTE-717]
 ):
     """Persiste el payload validado en health_profile.clinical_profile vía
     update_user_health_profile_atomic (FOR UPDATE + callback, I7). Filtra por
@@ -1649,6 +1684,7 @@ async def api_put_clinical_profile(
     if new_hp is None:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
 
+    # [P1-PLAN-LOTE-717] Memoria pausada ⇒ no se extrae (guarda en `async_extract_and_save_facts`, fail-closed).
     if _SUPERPERS_EXTRACT_FACTS and _state["freetext_changed"]:
         try:
             from fact_extractor import async_extract_and_save_facts
@@ -1748,19 +1784,26 @@ class StapleFoodsBody(BaseModel):
 async def api_put_staple_foods(
     body: StapleFoodsBody = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PANEL_PREFERENCES_LIMITER),  # [P1-PLAN-LOTE-717]
 ):
     """Persiste `health_profile.staple_foods` vía update_user_health_profile_atomic (SELECT…FOR
     UPDATE + callback, I7 — sin lost-update bajo concurrencia). Filtra por user_id autenticado
-    (I2). Valida máx 8 + catálogo real (422 si no) — es un widget de CHIPS, no texto libre."""
+    (I2). Valida máx 8 + catálogo real (422 si no) — es un widget de CHIPS, no texto libre.
+
+    [P1-PLAN-LOTE-717 · 2026-09-28] Escribe la canónica (`staple_foods`) Y su espejo (`stapleFoods`, la clave del
+    formulario) con la MISMA lista, y quita las anclas (`stapleAnchors`) de básicos que ya no están: los lectores del
+    motor no coinciden en cuál leen (unos la canónica, otros el espejo, otros los nombres de las anclas) y el espejo lo
+    escribía solo el PATCH con copias viejas del formulario — quitar un básico aquí no lo quitaba de la generación."""
     uid = _require_user(verified_user_id)
     cleaned = await asyncio.to_thread(_validate_staple_foods, body.staple_foods)
 
     from db import update_user_health_profile_atomic
+    from perfil_servidor import sincronizar_basicos
 
     def _mutator(hp):
         if not isinstance(hp, dict):
             hp = {}
-        hp["staple_foods"] = cleaned
+        sincronizar_basicos(hp, cleaned)
         return hp
 
     new_hp = await asyncio.to_thread(update_user_health_profile_atomic, uid, _mutator)

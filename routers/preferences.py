@@ -6,6 +6,8 @@ Básico+ activen/desactiven la memoria a largo plazo desde Settings.
 Contrato del flag (ver migración add_long_term_memory_enabled_2026_05_13.sql):
 - TRUE  = chat.py extrae nuevos hechos + consulta user_facts en cada turn.
 - FALSE = no extrae ni consulta (datos previos en BD intactos, reversible).
+  [P1-PLAN-LOTE-717 · 2026-09-28] Cumplido de verdad en los dos caminos del coach (`agent.py`), la cola de pendientes y
+  los textos libres de los paneles; ilegible ⇒ pausada. Lectura SSOT: `memoria_largo_plazo`.
 
 Gate de tier: el endpoint NO bloquea por tier server-side intencionalmente
 — un usuario gratis que toque el endpoint via DevTools puede setear el flag
@@ -22,7 +24,6 @@ import logging
 
 from auth import get_verified_user_id
 from db_profiles import (
-    get_user_profile,
     update_long_term_memory_enabled,
     update_water_tracker_enabled,
     get_water_tracker_enabled,
@@ -44,6 +45,17 @@ router = APIRouter(
     prefix="/api/user/preferences",
     tags=["user-preferences"],
 )
+
+# [P1-PLAN-LOTE-717 · 2026-09-28] Código ESTABLE del 503 de las lecturas de Configuración. Cuando la base no responde,
+# los GET inventaban un valor y contestaban 200 (memoria → activada, entrenamiento → sin consentimiento, Nevera →
+# activa): la pantalla pintaba un interruptor que no reflejaba nada y un toque «corregía» un valor que nunca se leyó.
+# Ahora 503 con este `detail`, y la UI dice «no pudimos cargar — Reintentar». Sin sesión sigue siendo 401.
+PREFERENCIA_NO_DISPONIBLE = "preference_unavailable"
+
+
+def _no_disponible(que: str, user_id: str, error: Exception) -> HTTPException:
+    logger.warning(f"[P1-PLAN-LOTE-717] preferencia '{que}' de {user_id} ilegible → 503: {error}")
+    return HTTPException(status_code=503, detail=PREFERENCIA_NO_DISPONIBLE)
 
 
 class MemoryPreferenceBody(BaseModel):
@@ -89,14 +101,19 @@ async def api_get_long_term_memory(
     El frontend lo lee al cargar Settings para reflejar el estado del toggle.
     Default TRUE si el perfil no existe o el campo es NULL (defensa contra
     perfiles legacy creados antes de la migración).
+
+    [P1-PLAN-LOTE-717 · 2026-09-28] Si la base no responde: 503 `preference_unavailable`, nunca un «activada»
+    inventado (`get_user_profile` devolvía None tanto sin fila como con la base caída). Lectura SSOT:
+    `memoria_largo_plazo.leer_memoria`.
     """
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
 
-    profile = await asyncio.to_thread(get_user_profile, verified_user_id)
-    enabled = True
-    if profile and "long_term_memory_enabled" in profile:
-        enabled = bool(profile.get("long_term_memory_enabled", True))
+    from memoria_largo_plazo import MemoriaIlegible, leer_memoria
+    try:
+        enabled = await asyncio.to_thread(leer_memoria, verified_user_id)
+    except MemoriaIlegible as e:
+        raise _no_disponible("memoria", verified_user_id, e)
 
     return {"long_term_memory_enabled": enabled}
 
@@ -168,7 +185,10 @@ async def api_get_nevera(verified_user_id: str = Depends(get_verified_user_id)):
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
     import nevera_opcional
-    return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
+    try:
+        return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
+    except nevera_opcional.NeveraIlegible as e:   # [P1-PLAN-LOTE-717] 503, no una Nevera «activa» inventada
+        raise _no_disponible("nevera", verified_user_id, e)
 
 
 @router.patch("/nevera")
@@ -192,7 +212,12 @@ async def api_set_nevera(
             await asyncio.to_thread(try_unfreeze_plan_for_user, verified_user_id)
         except Exception as _uf_e:
             logger.debug(f"[P1-PLAN-LOTE-217] descongelar tras apagar la Nevera: no-op ({_uf_e})")
-    return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
+    # [P1-PLAN-LOTE-717] La respuesta es el estado RELEÍDO (la UI avisa con él de lo que el servidor aplicó). Si la
+    # relectura falla, 503: la elección ya se guardó y reintentar es idempotente; inventar `activa` haría mentir al aviso.
+    try:
+        return await asyncio.to_thread(nevera_opcional.estado_nevera, verified_user_id)
+    except nevera_opcional.NeveraIlegible as e:
+        raise _no_disponible("nevera", verified_user_id, e)
 
 
 # [P2-AI-TRAINING-CONSENT · 2026-07-04] Consentimiento OPT-IN para uso futuro
@@ -238,13 +263,31 @@ async def api_get_ai_training_consent(
     verified_user_id: str = Depends(get_verified_user_id),
 ):
     """Devuelve el consentimiento actual. Default FALSE (opt-in fail-secure)
-    si el perfil no existe o el campo es NULL (perfiles pre-migración)."""
+    si el perfil no existe o el campo es NULL (perfiles pre-migración).
+
+    [P1-PLAN-LOTE-717 · 2026-09-28] FALSE es el valor por defecto de una fila sin decidir, no la respuesta a una base
+    caída: si la lectura falla, 503 `preference_unavailable` (antes, 200 «no consientes» y la pantalla ofrecía
+    «activar» sobre un valor que nunca se leyó). El corpus de entrenamiento sigue filtrando por
+    `get_ai_training_consented_user_ids` (fail-secure), que esto no toca."""
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
 
-    profile = await asyncio.to_thread(get_user_profile, verified_user_id)
-    consent = bool(profile.get("ai_training_consent")) if profile else False
+    try:
+        consent = await asyncio.to_thread(_leer_consentimiento_ia, verified_user_id)
+    except Exception as e:
+        raise _no_disponible("ai-training", verified_user_id, e)
     return {"ai_training_consent": consent}
+
+
+def _leer_consentimiento_ia(user_id: str) -> bool:
+    """[P1-PLAN-LOTE-717] Una columna, sin los efectos laterales de `get_user_profile` (que además devuelve None tanto
+    sin fila como con la base caída). Lanza si la base falla; sin fila o NULL ⇒ False."""
+    from db import execute_sql_query
+    fila = execute_sql_query(
+        "SELECT ai_training_consent FROM user_profiles WHERE id = %s",
+        (user_id,), fetch_one=True,
+    )
+    return bool((fila or {}).get("ai_training_consent"))
 
 
 # [P1-PLAN-LOTE-135 · 2026-09-20] La invitación «¿Quieres que la IA te arme el plan?» del contador: una vez por SEMANA

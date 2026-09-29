@@ -2388,6 +2388,8 @@ _PELA_390_RE = re.compile(r"\bp[eé]l(?:al[oa]s?|arl[oa]s?)\b|\bpela(?=\s*(?:y\b
                           re.IGNORECASE)
 _OTRO_VERBO_390_RE = re.compile(r"\b(?:bate|batir|batid[oa]s?|mezcla|revuelve|agrega|añade|incorpora|vierte|licúa|licua|"
                                 r"cuaja|cuájal\w*|separa|separar)\b", re.IGNORECASE)
+#: [P1-PLAN-LOTE-804] huevos ENTEROS nombrados antes de las claras en la misma frase («cocina 3 huevos y 2 claras…»)
+_ENTEROS_ANTES_804_RE = re.compile(r"\bhuevos?\b", re.IGNORECASE)
 
 
 def claras_en_su_huevo(meal) -> int:
@@ -2430,6 +2432,12 @@ def claras_en_su_huevo(meal) -> int:
                 # sin «el/los huevo(s)»: con sólo claras en la lista, la regla 2 los reescribiría a «la(s) clara(s)»
                 cola = ("quita la yema del huevo pelado: usa solo la clara" if uno
                         else "quita la yema de cada huevo pelado: usa solo la clara")
+                # [P1-PLAN-LOTE-804 · 2026-09-28] «cocina 3 huevos y 2 claras…; quita la yema de cada huevo pelado» (batería
+                # real de embarazo): con ENTEROS en la misma frase, «cada huevo» también son los 3 enteros. La cola cuenta
+                # las claras y sigue sin «huevo». tooltip-anchor: P1-PLAN-LOTE-804
+                if _ENTEROS_ANTES_804_RE.search(frase[:mm.start()]):
+                    _n804 = re.match(r"\s*(\S+)", mm.group("cl")).group(1)
+                    cola = f"quita la yema a {_n804} de ellos: usa solo su clara"
                 partes[k] = f"{nueva}; {cola}."
                 rec[i] = " ".join(partes)
                 meal["recipe"] = rec

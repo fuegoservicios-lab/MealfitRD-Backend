@@ -27656,6 +27656,16 @@ __PLAN_MODE_GATE__
         # del pool se reutiliza. tooltip-anchor: chunk_worker_llm_attribution
         from llm_attribution import set_llm_attribution as _set_llm_attr, reset_llm_attribution as _reset_llm_attr
         _llm_attr_toks = _set_llm_attr(user_id, meal_plan_id)
+
+        def _soltar_contexto_del_hilo():
+            # [P1-PLAN-LOTE-719 · 2026-09-28] Las cuatro salidas TEMPRANAS de abajo (hermano pausado, usuario ya
+            # lockeado, heartbeat que no arrancó, error de lock) viven FUERA del try cuyo finally deshace la atribución
+            # LLM y el pickup_attempts: se quedaban puestos en el hilo (y, en la suite, en el test siguiente).
+            try:
+                _reset_llm_attr(_llm_attr_toks)
+            except Exception:
+                pass
+            _CHUNK_WORKER_CTX.pickup_attempts = None
         # [C3-LOCK-OWNERSHIP · 2026-05-29] locked_at de NUESTRA fila de lock (capturado del
         # INSERT RETURNING) para que el DELETE del finally no borre el lock de un worker
         # que nos desplazó. None hasta que adquirimos el lock.
@@ -27701,6 +27711,7 @@ __PLAN_MODE_GATE__
                     _pause_chunk_for_pantry_refresh(
                         task_id, user_id, week_number, [], reason="empty_pantry", notify=False
                     )
+                    _soltar_contexto_del_hilo()
                     return
             except Exception as _spg_e:
                 logger.debug(f"[P1-REFILL-SIBLING-PAUSE-GATE] no-op: {_spg_e}")
@@ -27751,6 +27762,7 @@ __PLAN_MODE_GATE__
                 # [P1-4] CAS guard: si zombie rescue + nuevo pickup ya ocurrió, NO clobbear
                 # el processing del worker B. Si CAS falla, el chunk ya está en otro estado.
                 _cas_update_chunk_status(task_id, _pickup_attempts, "pending")
+                _soltar_contexto_del_hilo()
                 return
 
             # [C3-LOCK-OWNERSHIP · 2026-05-29] Capturar NUESTRO locked_at para el DELETE guardado.
@@ -28020,6 +28032,7 @@ __PLAN_MODE_GATE__
             # recoja con menos presión de threads.
             if not _heartbeat_thread.is_alive():
                 _handle_heartbeat_start_failure(task_id, user_id)
+                _soltar_contexto_del_hilo()
                 return
         except Exception as lock_err:
             # [C2-LOCK-FALLTHROUGH · 2026-05-29] Antes esto solo logueaba WARNING y CAÍA al
@@ -28041,6 +28054,7 @@ __PLAN_MODE_GATE__
                 logger.error(
                     f"[C2-LOCK-FALLTHROUGH] Falló el defer tras error de lock para {task_id}: {_defer_err}"
                 )
+            _soltar_contexto_del_hilo()
             return
 
         try:

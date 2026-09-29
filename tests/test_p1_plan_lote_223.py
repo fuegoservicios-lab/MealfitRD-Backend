@@ -143,9 +143,11 @@ def test_solo_se_eligen_horas_en_las_que_suenan_el_telefono_y_el_chat(monkeypatc
 
 def test_el_patch_del_perfil_rechaza_con_400():
     src = _src("routers/user_data.py")
-    i = src.index('if body.health_profile and "avisos_por_comida" in body.health_profile:')
+    # [P1-PLAN-LOTE-715 · 2026-09-28] Se valida el parche que de verdad se escribe (`hp_patch`: el del cliente sin
+    # las claves que tienen dueño en el servidor), no el cuerpo crudo.
+    i = src.index('if hp_patch and "avisos_por_comida" in hp_patch:')
     tramo = src[i:i + 500]
-    assert "error_en_avisos_por_comida(body.health_profile[\"avisos_por_comida\"])" in tramo
+    assert "error_en_avisos_por_comida(hp_patch[\"avisos_por_comida\"])" in tramo
     assert "status_code=400" in tramo
 
 

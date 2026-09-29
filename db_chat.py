@@ -371,6 +371,28 @@ def delete_checkpoints_for_threads(cursor, thread_ids, *, only_without_session: 
     return counts
 
 
+# [P1-PLAN-LOTE-716 · 2026-09-28] El archivo frío de resúmenes del coach (`summary_archive`) es el OTRO estado del chat
+# sin user_id ni FK: solo `session_id` TEXT. `memory_manager.summarize_and_prune` mueve ahí los resúmenes viejos de
+# `conversation_summaries` —resúmenes de charlas de SALUD— y ninguna vía de borrado lo tocaba: ni «borrar este chat»,
+# ni «borrar todos», ni el TTL de 90 días, ni «Eliminar cuenta». Sobrevivían a todo. Mismo remedio que los
+# checkpoints: se borra con los ids de las sesiones que se borran, con el cursor (y la transacción) del caller.
+def delete_summary_archive_for_threads(cursor, thread_ids) -> int:
+    """[P1-PLAN-LOTE-716 · 2026-09-28] SSOT del borrado de `summary_archive` por hilo (= `agent_sessions.id::text`).
+
+    Corre con el `cursor` del caller, o sea DENTRO de su transacción, y devuelve las filas borradas. No lleva la guarda
+    `NOT EXISTS agent_sessions` de los checkpoints a propósito: el archivo de una sesión borrada es de ESA conversación
+    aunque después alguien recree una sesión con el mismo id, y el que lo lee (`search_deep_memory`) lo buscaría por él.
+    """
+    ids = sorted({str(t).strip() for t in (thread_ids or []) if t and str(t).strip()})
+    if not ids:
+        return 0
+    cursor.execute(
+        "DELETE FROM public.summary_archive WHERE session_id = ANY(%s::text[])",
+        (ids,),
+    )
+    return max(int(getattr(cursor, "rowcount", 0) or 0), 0)
+
+
 def _guard_chat_tx_write(query: str) -> None:
     """La guarda de tests contra Neon producción vive en `execute_sql_write`; aquí vamos al
     pool directo (hace falta el cursor para la transacción), así que la invocamos a mano.
@@ -388,6 +410,10 @@ def delete_agent_sessions_with_checkpoints(delete_sessions_sql: str, params: tup
     devuelve alimentan `delete_checkpoints_for_threads` con el MISMO cursor. Los mensajes, los
     resúmenes y los adjuntos caen solos (FK ON DELETE CASCADE). Devuelve los ids borrados y
     levanta la excepción: cada caller decide si es best-effort o un 500.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] El archivo frío de resúmenes (`summary_archive`, sin FK) cae
+    también aquí, con los mismos ids y en la misma transacción (`delete_summary_archive_for_threads`).
+    Todas las vías de borrado de sesión pasan por esta función: un chat, todos, el TTL.
     """
     if "RETURNING" not in delete_sessions_sql.upper():
         raise ValueError("delete_agent_sessions_with_checkpoints exige `RETURNING id`.")
@@ -403,10 +429,11 @@ def delete_agent_sessions_with_checkpoints(delete_sessions_sql: str, params: tup
                 rows = cursor.fetchall() or []
                 ids = [str(r["id"]) for r in rows if r and r.get("id")]
                 counts = delete_checkpoints_for_threads(cursor, ids)
+                archived = delete_summary_archive_for_threads(cursor, ids)
     if ids:
         logger.info(
             f"🗑️ [P1-CHAT-ORPHAN-SESSIONS] {len(ids)} sesión(es) borradas junto a sus "
-            f"checkpoints (filas: {counts})."
+            f"checkpoints (filas: {counts}) y su archivo de resúmenes ({archived} fila(s))."
         )
     return ids
 
@@ -437,7 +464,11 @@ ORPHAN_CHECKPOINT_THREADS_SQL = """
 def sweep_orphan_chat_checkpoints(min_age_days: int, batch: int) -> Dict[str, Any]:
     """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] Borra hasta `batch` hilos de checkpoint sin sesión
     cuyo último checkpoint tenga más de `min_age_days` días. Selección y borrado en UNA
-    transacción; el borrado re-verifica que el hilo siga sin sesión. Levanta la excepción."""
+    transacción; el borrado re-verifica que el hilo siga sin sesión. Levanta la excepción.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] Después, en su PROPIA transacción y best-effort, barre el
+    `summary_archive` huérfano (`sweep_orphan_summary_archive`); su cuenta va en
+    `deleted["summary_archive"]`. Un fallo ahí no deshace ni tumba el barrido de checkpoints."""
     _guard_chat_tx_write("DELETE FROM public.checkpoints")
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")
@@ -450,7 +481,51 @@ def sweep_orphan_chat_checkpoints(min_age_days: int, batch: int) -> Dict[str, An
                 rows = cursor.fetchall() or []
                 ids = [str(r["thread_id"]) for r in rows if r and r.get("thread_id")]
                 counts = delete_checkpoints_for_threads(cursor, ids)
-    return {"threads": ids, "deleted": counts}
+    deleted: Dict[str, int] = dict(counts)
+    try:
+        deleted["summary_archive"] = sweep_orphan_summary_archive(batch)
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-716] Barrido de summary_archive huérfano falló: {e!r}")
+    return {"threads": ids, "deleted": deleted}
+
+
+# [P1-PLAN-LOTE-716 · 2026-09-28] Red para `summary_archive`: filas cuya sesión ya no existe. Las vías de borrado de
+# sesión ya arrastran su archivo (`delete_agent_sessions_with_checkpoints`, `delete_account_data`); esto barre lo que
+# se escape: la carrera de `summarize_and_prune`, que archiva en segundo plano y puede escribir DESPUÉS de que el
+# usuario borrara el chat o la cuenta, y cualquier sesión borrada a mano. Sin umbral de edad, a diferencia de los
+# checkpoints: una fila de archivo solo nace de los resúmenes de una sesión que YA existía, así que sin sesión es
+# huérfana en el acto (y nadie la lee: `search_deep_memory` busca por las sesiones vivas). `s.id::text =
+# sa.session_id` y no al revés: un `session_id` que no sea uuid no revienta el cast. Medido el 28-sep: 0 filas.
+ORPHAN_SUMMARY_ARCHIVE_SQL = """
+    DELETE FROM public.summary_archive
+    WHERE id IN (
+        SELECT sa.id FROM public.summary_archive sa
+        WHERE NOT EXISTS (
+            SELECT 1 FROM public.agent_sessions s WHERE s.id::text = sa.session_id
+        )
+        ORDER BY sa.archived_at ASC NULLS FIRST
+        LIMIT %s
+    )
+    RETURNING id
+"""
+
+
+def sweep_orphan_summary_archive(batch: int) -> int:
+    """[P1-PLAN-LOTE-716 · 2026-09-28] Borra hasta `batch` filas de `summary_archive` sin sesión. Levanta la
+    excepción (el caller decide); devuelve cuántas borró."""
+    _guard_chat_tx_write("DELETE FROM public.summary_archive")
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    from psycopg.rows import dict_row
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(ORPHAN_SUMMARY_ARCHIVE_SQL, (int(batch),))
+                rows = cursor.fetchall() or []
+    if rows:
+        logger.info(f"🧹 [P1-PLAN-LOTE-716] {len(rows)} fila(s) de summary_archive sin sesión borradas.")
+    return len(rows)
 
 
 def delete_user_agent_sessions(user_id: str) -> bool:

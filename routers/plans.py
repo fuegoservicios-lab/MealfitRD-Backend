@@ -61,6 +61,7 @@ from ai_helpers import expand_recipe_agent
 from services import _save_plan_and_track_background, _process_swap_rejection_background, save_partial_plan_get_id, _persist_plan_persist_failed_alert
 from db_inventory import restock_inventory, consume_inventory_items_completely
 from rate_limiter import RateLimiter
+from perfil_servidor import perfil_manda_al_generar, reescritura_tras_generar  # [P1-PLAN-LOTE-717] dueños del perfil
 from schemas import PUBLIC_SSE_EVENTS  # [P1-11] contrato público de eventos SSE
 
 logger = logging.getLogger(__name__)
@@ -2197,6 +2198,7 @@ def _postprocess_pipeline_result(
     tz_offset_mins: int,
     transport_label: str = "sync",
     existing_plan_id: Optional[str] = None,
+    request_started_at=None,  # [P1-PLAN-LOTE-717] hora de la petición: una pausa POSTERIOR no se deshace
 ) -> dict:
     """[P1-1] Post-procesa el resultado del pipeline tras la validación pantry:
     persiste perfil/mensajes/audit, expurga campos internos del payload,
@@ -2241,10 +2243,12 @@ def _postprocess_pipeline_result(
     # por SSE, y las semanas 2..N quedan bloqueadas por nuestro propio gate del
     # pickup — en silencio, sin error, con chunk_overdue alertando cada hora sobre un
     # plan pagado que no puede completarse.
+    # [P1-PLAN-LOTE-717] ensure_plan_generation_enabled vía `reencender_al_generar`: la pausa POSTERIOR a la petición manda.
+    _repausar = False
     if actual_user_id and actual_user_id != "guest":
         try:
-            from plan_mode import ensure_plan_generation_enabled
-            ensure_plan_generation_enabled(actual_user_id)
+            from plan_mode import reencender_al_generar
+            _repausar = reencender_al_generar(actual_user_id, transporte=transport_label, solicitado_en=request_started_at)
         except Exception as _pm_err:
             logger.warning(f"[P1-PLAN-MODE] re-encendido automatico fallo (best-effort): {_pm_err}")
 
@@ -2261,6 +2265,8 @@ def _postprocess_pipeline_result(
         # colarse al jsonb creaba una segunda verdad que la rama tracking declara
         # explícitamente querer evitar.
         hp_data = {k: v for k, v in data.items() if k not in ('session_id', 'user_id', 'appMode')}
+        # [P1-PLAN-LOTE-717] Sin las claves con dueño (servidor, paneles; básicos en la renovación): ver perfil_servidor.
+        hp_data, _ = reescritura_tras_generar(hp_data, renovacion=bool(data.get("update_reason")))
         hp_data["tz_offset_minutes"] = tz_offset_mins
         if hp_data:
             # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] Defensa en
@@ -2523,6 +2529,9 @@ def _postprocess_pipeline_result(
             actual_user_id, result.get("days", []),
         )
 
+    if _repausar and actual_user_id:  # [P1-PLAN-LOTE-717] pausó mientras se generaba: el plan nuevo queda pausado
+        from plan_mode import repausar_tras_generar
+        repausar_tras_generar(actual_user_id)
     return result
 
 
@@ -3485,6 +3494,8 @@ def _hydrate_country_from_profile_for_submit(data: dict, user_id: Optional[str])
     except Exception as _cty_err:
         logger.warning(f"⚠️ [P1-COUNTRY-RENEWAL-PROFILE-WINS] hidratación de país falló (fail-open): {_cty_err}")
         return
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Misma jerarquía para las claves de los paneles de Configuración (ver perfil_servidor).
+    perfil_manda_al_generar(data, hp)
     if prof_country is None:
         return
     # [P2-ANALYZE-COUNTRY-SIN-VALIDAR · 2026-08-23] Fuera del try de
@@ -3879,6 +3890,7 @@ def api_analyze(
             plan_start_date=start_date_iso,  # [P1-12] explícito (antes vía data mutation)
             tz_offset_mins=tz_offset_mins,
             transport_label="sync",  # [P0-FIX-SEED] → context_label="seed_chunk1_sync"
+            request_started_at=now_utc,  # [P1-PLAN-LOTE-717]
         )
 
         # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Si la persistencia chunking falló
@@ -4703,6 +4715,7 @@ async def api_analyze_stream(
                                 # via el log "🔧 [P2-PIPELINE-TASK-DONE-COMPLETE]
                                 # Ejecutando fallback..." que es único al fallback path.
                                 transport_label="sse",
+                                request_started_at=now_utc,  # [P1-PLAN-LOTE-717]
                             )
                             # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Mismo guard que los
                             # otros 2 consumidores: si la persistencia chunking falló, marcar
@@ -5157,6 +5170,7 @@ async def api_analyze_stream(
                                 plan_start_date=start_date_iso,  # [P1-12] explícito
                                 tz_offset_mins=tz_offset_mins,
                                 transport_label="sse",  # [P0-FIX-SEED] → context_label="seed_chunk1_sse"
+                                request_started_at=now_utc,  # [P1-PLAN-LOTE-717]
                             )
 
                             # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Si la persistencia

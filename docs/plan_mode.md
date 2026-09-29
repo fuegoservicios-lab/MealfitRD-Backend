@@ -18,3 +18,17 @@ y el detalle íntegro se archiva en `docs/`). Texto verbatim, nada perdido:
 
 La Nevera en modo contador (encenderla/apagarla, apagado automático a las 48 h vacía) es un feature aparte de
 este modo, no parte de él: ver [`nevera_opcional.md`](nevera_opcional.md).
+
+## Reanudar y pausar con generaciones en curso (P1-PLAN-LOTE-717 · 2026-09-28)
+
+- **Reanudar sin estar en pausa** (`PUT /api/profile/plan-mode` con `plan` cuando ya está en `plan`): no toca el flag ni
+  calcula días en pausa; responde `already_active: true` (y `plan_expired: false`). Antes, un segundo dispositivo o una
+  pantalla vieja podía recibir «tu plan venció la ventana» sin haber pausado nunca. Configuración lo dice como
+  «La generación de planes ya estaba encendida».
+- **Pausar mientras se genera un plan**: `ensure_plan_generation_enabled` (el re-encendido tras persistir un plan por el
+  camino SSE) solo re-enciende si la pausa es ANTERIOR al inicio de esa petición — la comparación va dentro del
+  `UPDATE`, así que una pausa que llega a mitad no se deshace. Si la pausa llegó durante la generación, el plan recién
+  guardado queda también en pausa. El camino de la cola nunca re-enciende (`plans_generation` ya lo enciende antes de
+  encolar).
+- **Interruptor operativo apagado** (`MEALFIT_PLAN_MODE_SWITCH=false`): las respuestas llevan `skipped: "switch_off"` y
+  Configuración ya no lo presenta como «Planes reanudados».

@@ -74,18 +74,20 @@ def test_settings_notifications_lazy_init_uses_safe_localstorage():
     lazy init → todo el componente Settings crasheaba al mount.
     """
     text = _read(_SETTINGS_JSX)
-    # Localizar el bloque del state notifications.
-    # Permitimos espacios variables pero matcheamos contrato exacto.
-    pattern = re.compile(
-        r"useState\(\(\)\s*=>\s*\{\s*\n[^}]*"
-        r"safeLocalStorageGet\(\s*['\"]mealfit_notifications['\"]\s*\)",
-        re.MULTILINE,
-    )
-    assert pattern.search(text), (
-        "Settings.jsx lazy initializer de `notifications` no usa "
-        "safeLocalStorageGet. Si refactoreaste, asegúrate de mantener "
-        "el wrapper defensivo (iOS Private Mode lanza SecurityError)."
-    )
+    # [P1-PLAN-LOTE-719 · 2026-09-28] El estado `notifications` era código muerto (su setter `_setNotifications` no
+    # lo llamaba nadie: leía la clave y la volvía a escribir igual) y se retiró. El contrato que queda: si Settings
+    # vuelve a leer la clave, lo hace con el wrapper defensivo.
+    if "mealfit_notifications" in text:
+        pattern = re.compile(
+            r"useState\(\(\)\s*=>\s*\{\s*\n[^}]*"
+            r"safeLocalStorageGet\(\s*['\"]mealfit_notifications['\"]\s*\)",
+            re.MULTILINE,
+        )
+        assert pattern.search(text), (
+            "Settings.jsx lazy initializer de `notifications` no usa "
+            "safeLocalStorageGet. Si refactoreaste, asegúrate de mantener "
+            "el wrapper defensivo (iOS Private Mode lanza SecurityError)."
+        )
     # Y NO debe quedar la versión raw legacy.
     assert "localStorage.getItem('mealfit_notifications')" not in text, (
         "Settings.jsx tiene un `localStorage.getItem('mealfit_notifications')` "

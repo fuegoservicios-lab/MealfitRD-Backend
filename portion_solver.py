@@ -1018,6 +1018,27 @@ REFINE_RAW_BY_FOOD = _envb("MEALFIT_REFINE_RAW_BY_FOOD", True)
 # tooltip-anchor: P2-REFINE-COVERAGE-GATE
 REFINE_MIN_COVERAGE = _envf("MEALFIT_REFINE_MIN_COVERAGE", 0.6, lambda v: 0.0 <= v <= 1.0)
 
+# [P1-PLAN-LOTE-805 · 2026-09-28] El refinador no baja lo que da nombre al plato por debajo de su piso de identidad.
+# Batería real (embarazo, 28-sep): «Tostadas integrales con queso fresco, mango y yogurt griego entero» — el rebalanceo
+# del día bajó el mango 95→60 g y se paró en su piso (lote 177, `identidad_plato.no_bajo_del_piso`), y este refinador lo
+# llevó a 30 g: su suelo era la mitad del original, sin saber del piso. Ahora el suelo de una línea NOMBRADA en el plato
+# es también su piso de identidad (nunca por encima de lo que ya tenía). Rollback: knob en False.
+# tooltip-anchor: P1-PLAN-LOTE-805
+REFINE_RESPECTS_IDENTITY_FLOOR = _envb("MEALFIT_REFINE_RESPECTS_IDENTITY_FLOOR", True)
+
+
+def _piso_identidad_805(meal, linea, db) -> float:
+    """Gramos por debajo de los cuales el refinador no baja `linea` (0 si el plato no la nombra o sin piso)."""
+    if not REFINE_RESPECTS_IDENTITY_FLOOR:
+        return 0.0
+    try:
+        import identidad_plato as _idp
+        if not _idp.nombrada_en_el_nombre(meal, linea):
+            return 0.0
+        return float(_idp.piso_de_linea(linea, db) or 0.0)
+    except Exception:
+        return 0.0
+
 # [P3-REFINE-WEIGHTS-KNOBS · 2026-07-29] (audit solver+seeder v4) Eran los ÚNICOS pesos del motor de
 # precisión hardcodeados: sus gemelos `SOLVER_W_*` son knobs con validador desde
 # P2-SOLVER-KNOBS-REGISTRY, precisamente porque tunearlos movió el all-4-en-banda. El refinador es el
@@ -1212,6 +1233,7 @@ def refine_day_portions_integer(
                 if all(abs(v) < 1e-9 for v in per_g.values()):
                     continue
                 lines.append({"meal": meal, "idx": idx, "grams": grams,
+                              "piso": min(grams, _piso_identidad_805(meal, s, db)),   # [P1-PLAN-LOTE-805]
                               "orig": grams, "per_g": per_g, "gram_led": _gram_led})
         if not lines:
             return 0
@@ -1238,7 +1260,7 @@ def refine_day_portions_integer(
         for _ in range(int(max_iters)):
             best = None  # (new_err, line, direction)
             for ln in lines:
-                lo = max(float(floor_g), 0.5 * ln["orig"])
+                lo = max(float(floor_g), 0.5 * ln["orig"], ln.get("piso") or 0.0)   # [P1-PLAN-LOTE-805]
                 hi = min(float(cap_g), 2.0 * ln["orig"])
                 # [P3-REFINE-OUTOFBOUNDS-INWARD · 2026-07-30] (audit solver+seeder v5) `lo`/`hi`
                 # se computan desde `orig` y el test evaluaba SOLO el punto DESTINO, así que una

@@ -357,25 +357,35 @@ def resume_plan_generation(user_id: str) -> dict:
     #    no mide nada, sólo confirma que lo acabas de poner a cero.
     _reloj = execute_sql_query(
         """
-        SELECT GREATEST(0, EXTRACT(EPOCH FROM (NOW() - plan_mode_changed_at)) / 86400.0)::int
+        SELECT plan_mode,
+               GREATEST(0, EXTRACT(EPOCH FROM (NOW() - plan_mode_changed_at)) / 86400.0)::int
                    AS paused_days
         FROM user_profiles WHERE id = %s
         """,
         (user_id,), fetch_one=True,
     ) or {}
-    paused_days = int(_reloj.get("paused_days") or 0)
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Reanudar SIN estar en pausa (doble toque, dos pestañas, el botón de un dashboard
+    # viejo) medía los días desde el último ENCENDIDO: con el plan corriendo hacía 40 días contestaba `plan_expired:
+    # true` y la UI le decía «tu plan venció» a quien nunca pausó. Ya encendida: ni días de pausa ni vencimiento, la
+    # bandera no se reescribe y la respuesta lo dice (`already_active`). Los pasos 2 y 3 corren igual: curan los restos
+    # que el reencendido automático delega en «se cura al reanudar» (un sello de pausa y la cola firmada del plan
+    # VIGENTE, que quedan si el plan que reencendió no llegó a persistirse); sin restos, ambos son no-op. Sin
+    # `plan_mode` en la fila (sin perfil): el camino de siempre.
+    ya_encendida = _reloj.get("plan_mode") == "plan"
+    paused_days = 0 if ya_encendida else int(_reloj.get("paused_days") or 0)
 
     # 1. Bandera primero: encolar con el gate puesto deja chunks que el pickup ignora.
-    execute_sql_write(
-        """
-        UPDATE user_profiles
-        SET plan_mode = 'plan',
-            plan_mode_changed_at = CASE WHEN plan_mode <> 'plan' THEN NOW()
-                                        ELSE plan_mode_changed_at END
-        WHERE id = %s
-        """,
-        (user_id,),
-    )
+    if not ya_encendida:
+        execute_sql_write(
+            """
+            UPDATE user_profiles
+            SET plan_mode = 'plan',
+                plan_mode_changed_at = CASE WHEN plan_mode <> 'plan' THEN NOW()
+                                            ELSE plan_mode_changed_at END
+            WHERE id = %s
+            """,
+            (user_id,),
+        )
 
     # 2. Restaurar el estado del plan desde el SNAPSHOT — con guard del CHECK I8:
     #    jamás devolver a 'complete' un plan cuyos days quedaron vacíos.
@@ -395,14 +405,18 @@ def resume_plan_generation(user_id: str) -> dict:
     logger.info(
         f"▶ [P1-PLAN-MODE] user {user_id}: reanuda — plan restaurado a "
         f"{restored or 'sin plan pausado'}, {paused_days} día(s) de pausa, vencido={expired}"
+        f"{' (ya estaba encendida)' if ya_encendida else ''}"
     )
-    return {
+    salida = {
         "plan_mode": "plan",
         "plan_status": restored,
         "paused_days": paused_days,
         "plan_expired": expired,
         "chunks_revived": _revive["revived"],
     }
+    if ya_encendida:
+        salida["already_active"] = True   # [P1-PLAN-LOTE-717] la UI dice «ya estaba encendida» en vez de «reanudados»
+    return salida
 
 
 def _restore_paused_plan_status(user_id: str) -> list:
@@ -436,7 +450,7 @@ def _restore_paused_plan_status(user_id: str) -> list:
     ) or []
 
 
-def ensure_plan_generation_enabled(user_id: str) -> bool:
+def ensure_plan_generation_enabled(user_id: str, solicitado_en=None) -> bool:
     """[P1-PLAN-MODE] El re-encendido automático de `_postprocess_pipeline_result`.
 
     Generar un plan ES el consentimiento de generar. Sin esto, un usuario en pausa que
@@ -444,7 +458,12 @@ def ensure_plan_generation_enabled(user_id: str) -> bool:
     2..N quedan bloqueadas por nuestro propio gate — en silencio, con `chunk_overdue`
     alertando cada hora sobre un plan pagado que no puede completarse.
 
-    No-op (False) si ya estaba en 'plan'. True si encendió."""
+    No-op (False) si ya estaba en 'plan'. True si encendió.
+
+    [P1-PLAN-LOTE-717 · 2026-09-28] `solicitado_en` (la hora en que empezó la petición que generó): solo se enciende si
+    la pausa es ANTERIOR a ella — la petición es el consentimiento de generar, pero una pausa hecha MIENTRAS generaba
+    es una decisión posterior y manda. La comparación va DENTRO del UPDATE (atómica: una pausa que llegue entre una
+    lectura y la escritura no se deshace). Sin sello de cambio ⇒ cuenta como anterior. None ⇒ conducta de siempre."""
     if not PLAN_MODE_SWITCH_ENABLED:
         return False
     filas = execute_sql_write(
@@ -452,9 +471,11 @@ def ensure_plan_generation_enabled(user_id: str) -> bool:
         UPDATE user_profiles
         SET plan_mode = 'plan', plan_mode_changed_at = NOW()
         WHERE id = %s AND plan_mode = 'tracking'
+          AND (%s::timestamptz IS NULL OR plan_mode_changed_at IS NULL
+               OR plan_mode_changed_at < %s::timestamptz)
         RETURNING id
         """,
-        (user_id,), returning=True,
+        (user_id, solicitado_en, solicitado_en), returning=True,
     ) or []
     if filas:
         logger.info(f"▶ [P1-PLAN-MODE] user {user_id}: re-encendido automático al generar plan")
@@ -465,3 +486,38 @@ def ensure_plan_generation_enabled(user_id: str) -> bool:
         except Exception as e:
             logger.warning(f"[P1-PLAN-LOTE-137] sello de pausa no retirado al reencender (se cura al reanudar): {e}")
     return bool(filas)
+
+
+def reencender_al_generar(user_id: str, *, transporte: str = "", solicitado_en=None) -> bool:
+    """[P1-PLAN-LOTE-717 · 2026-09-28] El re-encendido de `_postprocess_pipeline_result`, consciente de la pausa.
+
+    Antes era incondicional: una pausa hecha MIENTRAS se generaba (Configuración, otra pestaña) se deshacía en silencio
+    al terminar — el usuario pausó y la app volvía a generar. Ahora:
+      · transporte "queue": no hace nada. Esa vía ya encendió ANTES de encolar (`routers/plans_generation.py`,
+        P1-PLAN-LOTE-137); aquí, dentro del worker, solo podía deshacer una pausa posterior.
+      · sync/SSE: `ensure_plan_generation_enabled(user_id, solicitado_en=…)` enciende solo si la pausa es anterior a la
+        petición. Si no encendió y el usuario SIGUE en pausa, la pausa es posterior ⇒ devuelve True: el llamador debe
+        pausar también el plan recién persistido (`repausar_tras_generar`) para que sus chunks no queden vivos detrás
+        del gate del pickup, alertando cada hora.
+    Devuelve True solo en ese caso. `solicitado_en=None` ⇒ conducta de siempre (enciende)."""
+    if not PLAN_MODE_SWITCH_ENABLED or transporte == "queue":
+        return False
+    if ensure_plan_generation_enabled(user_id, solicitado_en=solicitado_en) or solicitado_en is None:
+        return False
+    fila = execute_sql_query("SELECT plan_mode FROM user_profiles WHERE id = %s", (user_id,), fetch_one=True) or {}
+    if fila.get("plan_mode") != "tracking":
+        return False
+    logger.info(f"⏸ [P1-PLAN-LOTE-717] user {user_id}: pausó MIENTRAS se generaba — la pausa manda (no se reenciende)")
+    return True
+
+
+def repausar_tras_generar(user_id: str) -> dict:
+    """[P1-PLAN-LOTE-717] La pausa posterior a la petición alcanza también al plan que esa petición acaba de persistir:
+    `pause_plan_generation` (idempotente con la bandera ya puesta) cancela con firma los chunks recién encolados —
+    reanudar los revive— y sella el plan. Best-effort: si falla, el gate del pickup ya impide que gasten."""
+    try:
+        return pause_plan_generation(user_id)
+    except Exception as e:
+        logger.error(f"❌ [P1-PLAN-LOTE-717] no se pudo pausar el plan recién generado de {user_id} "
+                     f"(el gate del pickup lo frena igual): {e}")
+        return {}

@@ -1052,7 +1052,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # Acompaña con queso mozzarella… Espolvorea la linaza») ni use el mismo nombre («el pescado» / «filete de pescado blanco»).
 # [P1-PLAN-LOTE-800 · 2026-09-28] (backend) V7f no acredita a un víver la cocción de otro: «hierve el plátano…» o
 # «revuelve hasta que cuajen» no cocían la batata que el autocorrector de fruta dulce puso «fresca aparte» (cruda).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-801 · 2026-09-28"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-805 · 2026-09-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -3342,6 +3342,10 @@ app.add_middleware(
         # lista no — inerte en la web (mismo origen, sin preflight), muro en
         # nativo.
         "X-MF-Session",
+        # [P1-PLAN-LOTE-774] Los POST del panel /admin → Cuentas la exigen; en
+        # desarrollo el panel es de OTRO origen (:5173) y sin ella el preflight
+        # los corta todos.
+        "X-Admin-Accion",
     ],
     # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
     # browser JS lea `X-Correlation-ID` de la response — útil para que el
@@ -3485,7 +3489,10 @@ def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends
         if not user_id or user_id == "guest":
             return {"credits": 0}
         credits_used = get_monthly_api_usage(user_id)
-        return {"credits": credits_used}
+        # [P1-PLAN-LOTE-772] el tope REAL (plan efectivo + regalos) y los regalos recientes: el medidor lo adivinaba con
+        # una tabla del frontend que a Ultra le decía «Ilimitado» con un tope de 500.
+        from regalos_cuenta import resumen_creditos
+        return {"credits": credits_used, **resumen_creditos(get_user_profile(user_id))}
     except HTTPException as he:
         # Re-lanzar excepciones HTTP explícitas (ej. 401/403 de Auth)
         raise he
@@ -3513,42 +3520,121 @@ def api_get_user_facts(user_id: str, verified_user_id: Optional[str] = Depends(g
 
 @app.delete("/api/user-facts/{fact_id}")
 def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    """«Olvidar» un recuerdo desde Ajustes → Memoria.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] Antes: `check_fact_ownership` devolvía False TANTO si el hecho era
+    de otro como si la base fallaba (403 por un apagón), y el resultado de `delete_user_fact` se ignoraba
+    — «Hecho eliminado de la IA» aunque el UPDATE no tocara nada o reventara. Y era un soft delete que
+    nadie purgaba: el export seguía devolviendo el recuerdo «olvidado». Ahora `forget_user_fact` lo BORRA
+    (con la síntesis del Dreaming que lo cite) en una transacción con la pertenencia, y cada desenlace
+    tiene su código: 200 borrado · 404 no existe · 403 no es tuyo · 503 la base no respondió.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
+    from db import forget_user_fact
     try:
-        if not verified_user_id:
-            raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
-        
-        # Validación IDOR: verificar que el fact pertenece al usuario autenticado
-        if not check_fact_ownership(fact_id, verified_user_id):
-            raise HTTPException(status_code=403, detail="No tienes permiso para borrar este hecho.")
-        
-        # [P1-CHAT-FACTS-AUDIT · 2026-09-14] I2: el DELETE filtra también por user_id.
-        result = delete_user_fact(fact_id, verified_user_id)
-        return {"success": True, "message": "Hecho eliminado de la IA."}
-    except HTTPException:
-        raise
+        desenlace = forget_user_fact(fact_id, verified_user_id)
     except Exception as e:
-        logger.error(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
-        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+        logger.error(
+            f"❌ [P1-PLAN-LOTE-716] /api/user-facts DELETE: la base falló al olvidar {str(fact_id)[:8]} "
+            f"de {str(verified_user_id)[:8]}: {type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "fact_delete_unavailable",
+                    "message": "No se pudo olvidar ahora mismo. Inténtalo de nuevo en un momento."},
+        )
+    if desenlace == "deleted":
+        return {"success": True, "message": "Hecho eliminado de la IA."}
+    if desenlace == "not_found":
+        raise HTTPException(status_code=404, detail={"code": "fact_not_found", "message": "Ese recuerdo ya no existe."})
+    if desenlace == "forbidden":
+        logger.warning(
+            f"🚫 [P1-PLAN-LOTE-716] /api/user-facts DELETE rechazado: el hecho {str(fact_id)[:8]} no es de "
+            f"{str(verified_user_id)[:8]}."
+        )
+        raise HTTPException(status_code=403, detail="No tienes permiso para borrar este hecho.")
+    logger.error(f"❌ [P1-PLAN-LOTE-716] forget_user_fact devolvió un desenlace desconocido: {desenlace!r}")
+    raise HTTPException(status_code=500, detail={"code": "fact_delete_failed", "message": "No se pudo olvidar."})
 
 @app.post("/api/account/reset-preferences")
 def api_reset_user_preferences(verified_user_id: str = Depends(get_verified_user_id)):
-    """Borra preferencias (likes, dislikes), inventario y vacía el health_profile."""
+    """«Empezar desde cero»: borra planes, Nevera, preferencias, memoria del coach y vacía el perfil de salud.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] Qué borra y qué conserva, al detalle: docstring de
+    `db_profiles.reset_user_account_preferences` (el historial del chat se CONSERVA). Es UNA transacción:
+    si hace ROLLBACK no se borró nada y la respuesta es 500 con `code: reset_failed` (antes un texto suelto),
+    para que el cliente no anuncie «cuenta reseteada» sobre una cuenta intacta.
+    """
     try:
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
-            
+
         from db_profiles import reset_user_account_preferences
         success = reset_user_account_preferences(verified_user_id)
-        
+
         if success:
             return {"success": True, "message": "Preferencias de la cuenta restablecidas."}
         else:
-            raise HTTPException(status_code=500, detail="Error al restablecer las preferencias.")
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "reset_failed",
+                        "message": "No se pudo restablecer la cuenta. No se borró nada: inténtalo de nuevo."},
+            )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/account/reset-preferences: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P1-PLAN-LOTE-716 · 2026-09-28] Un borrado de cuenta A MEDIAS deja datos de salud que la persona pidió borrar: es una
+# obligación legal incumplida, no un log. Antes solo quedaba `logger.info(... ok=False ...)`. La alerta lleva los
+# errores CRUDOS (para el SRE); al cliente solo le llegan códigos (`delete_failed:<paso>`). Un reintento completo del
+# usuario la cierra (`_resolve_account_delete_partial_alert`); si no reintenta, la cierra el SRE con la purga admin.
+def _persist_account_delete_partial_alert(user_id: str, result: dict, billing_cancelled: bool) -> None:
+    alert_key = f"account_delete_partial:{user_id}"
+    failed_steps = [str(s) for s in (result.get("failed_steps") or [])][:40]
+    metadata = {
+        "user_id": str(user_id),
+        "failed_steps": failed_steps,
+        "profile_deleted": bool(result.get("profile_deleted")),
+        "identity_deleted": bool(result.get("identity_deleted")),
+        "billing_cancelled": bool(billing_cancelled),
+        "errors": [str(e)[:300] for e in (result.get("errors") or [])][:10],
+    }
+    message = (
+        f"Borrado de cuenta incompleto para {str(user_id)[:8]}: fallaron {len(failed_steps)} paso(s) "
+        f"({', '.join(failed_steps[:8])}). Perfil borrado={metadata['profile_deleted']}, "
+        f"identidad borrada={metadata['identity_deleted']}. Terminar con POST /api/system/admin/account/purge-data."
+    )
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids, triggered_at, resolved_at)
+            VALUES (%s, %s, 'critical', %s, %s, %s::jsonb, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET severity = EXCLUDED.severity, title = EXCLUDED.title, message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata, affected_user_ids = EXCLUDED.affected_user_ids,
+                triggered_at = EXCLUDED.triggered_at, resolved_at = NULL
+            """,
+            (alert_key, "account_delete_partial", "Borrado de cuenta incompleto", message,
+             json.dumps(metadata, ensure_ascii=False), json.dumps([str(user_id)])),
+        )
+    except Exception as e:
+        logger.error(f"❌ [P1-PLAN-LOTE-716] No se pudo persistir la alerta {alert_key}: {type(e).__name__}: {e}")
+
+
+def _resolve_account_delete_partial_alert(user_id: str) -> None:
+    alert_key = f"account_delete_partial:{user_id}"
+    try:
+        execute_sql_write(
+            "UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key = %s AND resolved_at IS NULL",
+            (alert_key,),
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-716] No se pudo cerrar la alerta {alert_key}: {type(e).__name__}: {e}")
 
 
 @app.post("/api/account/delete")
@@ -3585,6 +3671,17 @@ async def api_delete_my_account(
     OLVIDA el positivo cacheado de `auth_user_row_exists`, así que los tokens de esa
     cuenta en otros dispositivos dejan de valer en este proceso en el acto. Si la
     persona vuelve a entrar con el mismo correo obtiene una cuenta NUEVA vacía.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] Contrato de respuesta:
+      - Identidad borrada (la cuenta ya no existe) → 200 con `success`, `profile_deleted`,
+        `identity_deleted`, `billing_cancelled`, `deleted` y `errors` como CÓDIGOS
+        (`delete_failed:<paso>`), nunca el texto de la base. Si quedó algún paso fallido,
+        `success: false` + alerta `account_delete_partial:<uid>` (el usuario ya no puede
+        reintentar: lo termina el SRE).
+      - Identidad NO borrada (falló el perfil, la identidad o la precondición) → 503
+        `account_delete_incomplete` con los mismos flags: la cuenta sigue viva y entera, la
+        sesión NO se invalida y el reintento termina el trabajo. Antes respondía 200, limpiaba
+        la cookie y el cliente anunciaba «Borramos tu cuenta» sobre una cuenta que seguía ahí.
     """
     if not verified_user_id or verified_user_id == "guest":
         raise HTTPException(status_code=401, detail="Autenticación requerida.")
@@ -3614,19 +3711,47 @@ async def api_delete_my_account(
         from db_profiles import delete_account_data
         result = await asyncio.to_thread(delete_account_data, verified_user_id, True)
 
-        # 3. Invalidar la sesión first-party server-side.
-        clear_session_cookie(response)
-
-        ok = len(result.get("errors") or []) == 0
+        # [P1-PLAN-LOTE-716 · 2026-09-28] Pasos fallidos como CÓDIGOS: `errors` trae el texto crudo de la
+        # base (nombres de tablas, restricciones, valores) y antes viajaba tal cual al cliente.
+        failed_steps = [str(s) for s in (result.get("failed_steps") or [])]
+        if not failed_steps and result.get("errors"):
+            failed_steps = ["unknown"]
+        codigos = [f"delete_failed:{paso}" for paso in failed_steps]
+        profile_deleted = bool(result.get("profile_deleted"))
+        identity_deleted = bool(result.get("identity_deleted"))
+        ok = not failed_steps
+        if ok:
+            await asyncio.to_thread(_resolve_account_delete_partial_alert, verified_user_id)
+        else:
+            await asyncio.to_thread(_persist_account_delete_partial_alert, verified_user_id, result, billing_cancelled)
         logger.info(
-            f"[P1-ACCOUNT-DELETE-1] cuenta {verified_user_id} eliminada "
-            f"(ok={ok}, billing_cancelled={billing_cancelled}, errors={len(result.get('errors') or [])})"
+            f"[P1-ACCOUNT-DELETE-1] borrado de cuenta {verified_user_id}: ok={ok}, "
+            f"profile_deleted={profile_deleted}, identity_deleted={identity_deleted}, "
+            f"billing_cancelled={billing_cancelled}, pasos_fallidos={failed_steps}"
         )
+        if not identity_deleted:
+            # La cuenta sigue viva (y entera, si falló el perfil): se conserva la sesión para reintentar.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "account_delete_incomplete",
+                    "message": "No pudimos terminar de eliminar tu cuenta. Sigue activa: vuelve a intentarlo.",
+                    "profile_deleted": profile_deleted,
+                    "identity_deleted": False,
+                    "billing_cancelled": billing_cancelled,
+                    "errors": codigos,
+                },
+            )
+
+        # 3. Invalidar la sesión first-party server-side (solo con la cuenta ya cerrada).
+        clear_session_cookie(response)
         return {
             "success": ok,
             "billing_cancelled": billing_cancelled,
+            "profile_deleted": profile_deleted,
+            "identity_deleted": identity_deleted,
             "deleted": result.get("deleted"),
-            "errors": result.get("errors"),
+            "errors": codigos,
         }
     except HTTPException:
         raise
@@ -3635,11 +3760,17 @@ async def api_delete_my_account(
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 # [P2-PRIVACY-SETTINGS · 2026-07-04] Tablas incluidas en el export de datos del
-# usuario (sección Privacidad de Configuración). Best-effort per-tabla: una tabla
-# renombrada/faltante se salta (queda en `skipped`) sin tumbar el export completo.
+# usuario (sección Privacidad de Configuración): (tabla, columna de pertenencia, cap).
 # Caps de filas por tabla — acotan payload (plan_data puede pesar MBs) sin
 # recortar al usuario típico. Si un cap se alcanza, la tabla se lista en
 # `truncated` para que el usuario sepa que hay más data que la exportada.
+#
+# [P1-PLAN-LOTE-716 · 2026-09-28] El export prometía «perfil, planes, nevera, comidas registradas y memoria
+# del agente» y la memoria se quedaba fuera: ni la síntesis del Dreaming (`user_memory_profile`) ni los
+# resúmenes de las charlas (`conversation_summaries`, `summary_archive`). Tampoco el peso, el agua, los
+# gustos, rechazos y motivos de abandono, la lista de compras propia, las marcas elegidas, el registro de
+# consumo de la Nevera ni los datos del diario visual y de las fotos del chat. Todas existen en producción
+# (medido el 28-sep). Y una tabla que falla ya no se «salta» en silencio: va a `omitted` y `complete` es false.
 _ACCOUNT_EXPORT_TABLES = (
     ("user_profiles", "id", 1),
     ("meal_plans", "user_id", 50),
@@ -3647,14 +3778,89 @@ _ACCOUNT_EXPORT_TABLES = (
     ("user_depleted_items", "user_id", 2000),
     ("consumed_meals", "user_id", 5000),
     ("user_facts", "user_id", 2000),
+    ("user_memory_profile", "user_id", 1),
     ("user_taste_events", "user_id", 2000),
     ("agent_sessions", "user_id", 200),
     ("agent_messages", "user_id", 5000),
+    ("conversation_summaries", "user_id", 1000),
+    ("summary_archive", "session_id", 1000),
+    ("chat_attachments", "user_id", 500),
+    ("visual_diary", "user_id", 2000),
+    ("weight_log", "user_id", 5000),
+    ("water_intake_log", "user_id", 2000),
+    ("meal_likes", "user_id", 2000),
+    ("meal_rejections", "user_id", 2000),
+    ("abandoned_meal_reasons", "user_id", 2000),
+    ("custom_shopping_items", "user_id", 2000),
+    ("user_brand_preferences", "user_id", 2000),
+    ("inventory_consumption_events", "user_id", 5000),
+    # [P1-PLAN-LOTE-777 · 2026-09-28] Regalos de la cuenta (créditos extra,
+    # plan de cortesía): la Política de Privacidad §2 promete que aparecen en
+    # la exportación. `reason` (el motivo) SÍ se exporta — es información
+    # sobre la persona, no del personal que lo otorgó.
+    ("account_grants", "user_id", 500),
 )
 
 # Columnas internas sin valor para el usuario y costosas de serializar
 # (vectores pgvector de 1536 floats). Se eliminan de cada fila exportada.
-_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding",)
+# [P1-PLAN-LOTE-716] Todas las columnas vector del esquema, no solo `embedding` (la de los planes se llama
+# `profile_embedding`), y se quitan EN LA BASE (`to_jsonb(t) - [...]`): antes viajaban 1536 floats en texto
+# por fila hasta Python para tirarlos allí.
+# [P1-PLAN-LOTE-777] `granted_by`/`revoked_by` de `account_grants` identifican al PERSONAL que actuó sobre la
+# cuenta (el user_id del admin), no al titular: tampoco salen.
+_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding", "profile_embedding", "context_embedding", "granted_by", "revoked_by")
+
+# [P1-PLAN-LOTE-716] Columnas explícitas donde `*` arrastraría binarios: el contenido de las fotos del chat es
+# `bytea` (MBs por foto) y no viaja en un JSON; sí sus datos.
+_ACCOUNT_EXPORT_COLUMNS = {
+    "chat_attachments": (
+        "id, session_id, message_id, user_id, content_type, byte_size, original_name, width, height, "
+        "created_at, claimed_at"
+    ),
+}
+
+# [P1-PLAN-LOTE-716] El cap sin ORDER BY cortaba filas ARBITRARIAS (el orden físico). Cada tabla se ordena por
+# su columna de fecha, lo más reciente primero; la que falta aquí usa `created_at DESC NULLS LAST`.
+_ACCOUNT_EXPORT_ORDER = {
+    "user_profiles": "id",
+    "user_memory_profile": "updated_at DESC",
+    "meal_rejections": "rejected_at DESC NULLS LAST",
+    "water_intake_log": "log_date DESC",
+    "summary_archive": "archived_at DESC NULLS LAST",
+}
+
+
+def _account_export_query(tbl: str, col: str, cap: int, user_id: str, threads_sql: str) -> tuple:
+    """[P1-PLAN-LOTE-716] SQL y parámetros del export de UNA tabla. Todo `%s` del WHERE es el uid.
+
+    La pertenencia es `col = uid` salvo en el chat, que se busca por HILO con el mismo conjunto que borra
+    «Eliminar cuenta» (`db_profiles.USER_CHAT_THREAD_IDS_SQL`): la respuesta del coach puede llevar user_id NULL,
+    y el archivo de resúmenes no tiene user_id. Los hechos desactivados (`is_active` false: sustituidos por el
+    extractor o fusionados por el Dreaming) no salen: no son lo que el coach sabe de la persona.
+    """
+    if tbl == "user_facts":
+        where = "user_id = %s AND is_active IS TRUE"
+    elif tbl == "agent_sessions":
+        where = f"id::text IN ({threads_sql})"
+    elif tbl in ("agent_messages", "conversation_summaries"):
+        where = f"(user_id = %s OR session_id::text IN ({threads_sql}))"
+    elif tbl == "summary_archive":
+        where = f"session_id IN ({threads_sql})"
+    else:
+        where = f"{col} = %s"
+    cols = _ACCOUNT_EXPORT_COLUMNS.get(tbl, "*")
+    order = _ACCOUNT_EXPORT_ORDER.get(tbl, "created_at DESC NULLS LAST")
+    sql = (
+        f"SELECT to_jsonb(t) - %s::text[] AS r FROM (SELECT {cols} FROM public.{tbl}) AS t "
+        f"WHERE {where} ORDER BY {order} LIMIT {int(cap)}"
+    )
+    return sql, (list(_ACCOUNT_EXPORT_STRIPPED_KEYS),) + (user_id,) * where.count("%s")
+
+
+def _account_export_json_bytes(payload: dict) -> bytes:
+    """[P1-PLAN-LOTE-716] Serializa el export. Se llama DENTRO del hilo que junta los datos: devolver el dict
+    dejaba a FastAPI codificar decenas de MB en el event loop (producción corre con `--workers 1`)."""
+    return json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
 
 
 @app.get("/api/account/export")
@@ -3672,46 +3878,63 @@ async def api_export_my_account(
       - Quota-exempt: NO `verify_api_quota` ni `log_api_usage` (lección
         P1-NEVERA-QUOTA-EXEMPT — exportar tus datos es un derecho, no un
         consumo de IA; el throttle es `_ACCOUNT_EXPORT_LIMITER` 3/5min).
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] Lectura Y serialización en un hilo; la respuesta viaja ya en bytes.
+    `complete` + `omitted` dicen si la copia salió entera (antes una tabla que fallaba se listaba como
+    «no aplica a tu cuenta»). Si no se pudo leer NINGUNA tabla, 503 en vez de un archivo vacío.
     """
     if not verified_user_id or verified_user_id == "guest":
         raise HTTPException(status_code=401, detail="Autenticación requerida.")
 
-    def _collect() -> dict:
-        payload: dict = {"data": {}, "counts": {}, "truncated": [], "skipped": []}
+    def _collect_and_serialize() -> tuple:
+        from db import USER_CHAT_THREAD_IDS_SQL
+        payload: dict = {
+            "app": "Bioboros",
+            "format_version": 2,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "complete": True,
+            "data": {},
+            "counts": {},
+            "truncated": [],
+            "omitted": [],
+        }
         for tbl, col, cap in _ACCOUNT_EXPORT_TABLES:
+            sql, params = _account_export_query(tbl, col, cap, verified_user_id, USER_CHAT_THREAD_IDS_SQL)
             try:
-                rows = execute_sql_query(
-                    f"SELECT * FROM {tbl} WHERE {col} = %s LIMIT {int(cap)}",
-                    (verified_user_id,),
-                    fetch_all=True,
-                ) or []
-                for row in rows:
-                    for key in _ACCOUNT_EXPORT_STRIPPED_KEYS:
-                        row.pop(key, None)
-                payload["data"][tbl] = rows
-                payload["counts"][tbl] = len(rows)
-                if cap > 1 and len(rows) >= cap:
-                    payload["truncated"].append(tbl)
+                rows = execute_sql_query(sql, params, fetch_all=True) or []
             except Exception as exc:
-                # Best-effort: tabla faltante/renombrada no tumba el export.
-                logger.debug(f"[P2-PRIVACY-SETTINGS] export saltó {tbl}: {exc}")
-                payload["skipped"].append(tbl)
-        return payload
+                logger.warning(
+                    f"⚠️ [P1-PLAN-LOTE-716] export de {str(verified_user_id)[:8]} omitió {tbl}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                payload["omitted"].append(tbl)
+                continue
+            filas = [row.get("r") if isinstance(row, dict) else row for row in rows]
+            payload["data"][tbl] = filas
+            payload["counts"][tbl] = len(filas)
+            if cap > 1 and len(filas) >= cap:
+                payload["truncated"].append(tbl)
+        payload["complete"] = not payload["omitted"]
+        payload["notes"] = (
+            "Copia de tus datos en Bioboros. `complete` dice si salió entera: las tablas en `omitted` no se "
+            "pudieron leer en este intento (vuelve a exportar en unos minutos). Las de `truncated` tienen más "
+            "filas que el tope exportado: van las más recientes. No incluye datos internos del sistema: vectores "
+            "de búsqueda, el contenido de las fotos del chat (sí sus datos) ni los recuerdos ya desactivados."
+        )
+        return len(payload["counts"]), list(payload["omitted"]), _account_export_json_bytes(payload)
 
-    payload = await asyncio.to_thread(_collect)
-    payload["app"] = "Bioboros"
-    payload["format_version"] = 1
-    payload["generated_at"] = datetime.now(timezone.utc).isoformat()
-    payload["notes"] = (
-        "Copia de tus datos en Bioboros. Las tablas en `truncated` tienen más "
-        "filas que el límite exportado; `skipped` no aplican a tu cuenta o "
-        "no existen en esta versión."
-    )
+    exportadas, omitidas, cuerpo = await asyncio.to_thread(_collect_and_serialize)
+    if not exportadas:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "export_unavailable",
+                    "message": "No pudimos leer tus datos ahora mismo. Inténtalo en unos minutos."},
+        )
     logger.info(
         f"[P2-PRIVACY-SETTINGS] export generado para {verified_user_id} "
-        f"(tablas={len(payload['counts'])}, skipped={len(payload['skipped'])})"
+        f"(tablas={exportadas}, omitidas={omitidas}, bytes={len(cuerpo)})"
     )
-    return payload
+    return Response(content=cuerpo, media_type="application/json")
 
 
 @app.post("/api/webhooks/process-pending-facts")

@@ -510,6 +510,15 @@ _COACH_LIMITS = {
 }
 
 
+def _creditos_extra(profile, medidor: str) -> int:
+    """[P1-PLAN-LOTE-772] Créditos regalados vigentes de ese medidor, ya leídos por `get_user_profile`
+    (regalos_cuenta.superponer). Un valor raro cuenta como 0: nunca rompe una cuota."""
+    try:
+        return max(0, int(((profile or {}).get("creditos_extra") or {}).get(medidor) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def coach_quota_snapshot(user_id: str) -> dict:
     """[P1-COACH-QUOTA-METER · 2026-09-02] SSOT de la cuota mensual del coach: la misma
     aritmética que el gate (`get_monthly_api_usage(kind="coach")` + `_COACH_LIMITS` por tier),
@@ -518,14 +527,16 @@ def coach_quota_snapshot(user_id: str) -> dict:
     from datetime import datetime, timezone
     used = int(get_monthly_api_usage(user_id, kind="coach") or 0)
     plan_tier = "gratis"
+    extra = 0
     profile = get_user_profile(user_id)
     if profile:
         plan_tier = profile.get("plan_tier", "gratis") or "gratis"
-    limit = int(_COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"]))
+        extra = _creditos_extra(profile, "coach")
+    limit = int(_COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])) + extra
     now = datetime.now(timezone.utc)
     resets_at = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1, tzinfo=timezone.utc)
     return {
-        "used": used, "limit": limit, "remaining": max(0, limit - used), "tier": plan_tier,
+        "used": used, "limit": limit, "remaining": max(0, limit - used), "tier": plan_tier, "bonus": extra,
         "period": "month", "resets_at": resets_at.isoformat(),
     }
 
@@ -540,10 +551,12 @@ def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_us
     if verified_user_id:
         used = get_monthly_api_usage(verified_user_id, kind="coach")
         plan_tier = "gratis"
+        extra = 0
         profile = get_user_profile(verified_user_id)
         if profile:
             plan_tier = profile.get("plan_tier", "gratis")
-        limit = _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])
+            extra = _creditos_extra(profile, "coach")
+        limit = _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"]) + extra
         if used >= limit:
             # [P1-COACH-QUOTA-METER · 2026-09-02] Cabeceras estructuradas para que el cliente
             # pinte «se renueva el …» sin parsear la frase; el detail se conserva tal cual.
@@ -568,16 +581,18 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
     if verified_user_id:
         credits_used = get_monthly_api_usage(verified_user_id)
         plan_tier = "gratis"
+        extra = 0
 
         profile = get_user_profile(verified_user_id)
         if profile:
             plan_tier = profile.get("plan_tier", "gratis")
+            extra = _creditos_extra(profile, "generacion")
 
         # [P3-TIER-LIMITS-ENV · 2026-05-20] Dict literal reemplazado por
         # `_TIER_LIMITS` module-level (knobs auto-registrados). Default
         # gratis=15 cuando el tier es desconocido (defensive — usuario con
         # `plan_tier` corrupto NO debe quedar con quota ilimitada).
-        limit = _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"])
+        limit = _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"]) + extra  # [P1-PLAN-LOTE-772] + créditos regalados
 
         if credits_used >= limit:
             raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")

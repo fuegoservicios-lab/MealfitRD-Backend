@@ -410,6 +410,23 @@ def _nevera_activa_para_chat(user_id) -> bool:
         return True
 
 
+def _memoria_activa_para_chat(user_id) -> bool:
+    """[P1-PLAN-LOTE-717 · 2026-09-28] ¿Consulta el coach la MEMORIA A LARGO PLAZO en este turno? Se resuelve UNA vez, al
+    tope de los dos caminos del chat (como `_nevera_on`). Pausada, el interruptor promete «la IA no aprende ni consulta
+    lo aprendido», y los dos caminos seguían buscando en `user_facts` en cada turno: de este dato cuelgan el RAG entero
+    (router, hechos y diario visual) y el «modelo del usuario» del Dreaming. Al revés que la Nevera, falla CERRADO:
+    ilegible ⇒ pausada (privacidad; regla en `memoria_largo_plazo`). Las alergias y condiciones no dependen de esto:
+    llegan por `form_data` desde `health_profile`."""
+    if not user_id or user_id == "guest":
+        return False
+    try:
+        from memoria_largo_plazo import memoria_activa
+        return bool(memoria_activa(user_id, donde="chat"))
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-717] interruptor de memoria ilegible, el turno va sin memoria: {e}")
+        return False
+
+
 def _daily_goal_context(form_data, plan) -> str:
     """[P1-PLAN-LOTE-53 · 2026-09-15] La meta del día y su distancia REAL al mantenimiento.
 
@@ -6745,17 +6762,19 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
     _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
     _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
+    _memoria_on = _memoria_activa_para_chat(user_id)   # [P1-PLAN-LOTE-717] una vez por turno; ilegible ⇒ pausada
 
 
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
-    memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
+    memory = (build_memory_context(session_id, user_id) if _memoria_on   # [P1-DREAMING-1] user_id → modelo del usuario
+              else build_memory_context(session_id, None))              # [P1-PLAN-LOTE-717] pausada: sin ese modelo
 
-    
+
     # === RAG INJECTION (con Query Routing inteligente) ===
     user_facts_text = ""
     visual_facts_text = ""
-    
-    if user_id:
+
+    if user_id and _memoria_on:   # [P1-PLAN-LOTE-717] pausada ⇒ ni router, ni hechos, ni diario visual
         rag_decision = rag_query_router(prompt)
 
         if not rag_decision.get("skip"):
@@ -7364,8 +7383,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     except Exception:
         _coach_country = "DO"
 
-    memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
-    
+    _memoria_on = _memoria_activa_para_chat(user_id)   # [P1-PLAN-LOTE-717] una vez por turno; ilegible ⇒ pausada
+    memory = (build_memory_context(session_id, user_id) if _memoria_on   # [P1-DREAMING-1] user_id → modelo del usuario
+              else build_memory_context(session_id, None))              # [P1-PLAN-LOTE-717] pausada: sin ese modelo
+
     # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
     # [P3-GENCHUNK-SPEED · 2026-06-01] FASE 1 — `classify_sentiment` (gate
     # plus/ultra/admin) y `rag_query_router` (gate basic+) son LLM calls
@@ -7386,7 +7407,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # (auth._TIER_LIMITS). Pre-fix: sentimiento solo plus+ y RAG excluía a
     # gratis. Guests (sin cuenta) siguen fuera del RAG: no tienen user_facts.
     _do_sentiment = True
-    _do_rag = bool(user_id) and user_id != "guest"
+    # [P1-PLAN-LOTE-717 · 2026-09-28] Memoria pausada (o ilegible) ⇒ sin RAG: ni router, ni hechos, ni diario visual.
+    _do_rag = bool(user_id) and user_id != "guest" and _memoria_on
     _do_rag_router = _do_rag
     rag_decision = None
     # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz (para TODOS los tiers: la paridad de arriba no cambia): ni clasificador

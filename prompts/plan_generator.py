@@ -607,6 +607,13 @@ def clinical_profile_active_flags(form_data: dict) -> list:
     wh = cp.get("weightHistory") if isinstance(cp.get("weightHistory"), dict) else {}
     if wh.get("unintentionalLoss"):
         flags.append("perdida_no_intencional")
+    # [P1-PLAN-LOTE-719 · 2026-09-28] El texto libre clínico («Cirugías, diagnósticos en estudio, indicaciones de tu
+    # médico…») viaja LITERAL al prompt del plan (build_clinical_profile_context, «Contexto clínico en sus palabras»).
+    # Sin este flag era el único dato clínico que NO vetaba el bypass del reviewer: «tengo ERC estadio 4, tomo
+    # warfarina» escrito ahí producía un plan sin revisión clínica — justo lo que P1-MEDICAL-SCOPE-GATE existe para
+    # impedir. Con contenido, el reviewer LLM corre y lo ve.
+    if _scrub_superpers_text(cp.get("freeText") or ""):
+        flags.append("contexto_clinico_libre")
     return flags
 
 

@@ -24,6 +24,8 @@ from services import merge_form_data_with_profile
 from db_profiles import get_user_profile
 from db_plans import get_latest_meal_plan
 from fact_extractor import async_extract_and_save_facts
+# [P1-PLAN-LOTE-717 · 2026-09-28] La lectura del interruptor de memoria, fail-CLOSED (SSOT en su módulo).
+from memoria_largo_plazo import memoria_activa
 # [P1-BG-THREAD-TIMEOUT · 2026-05-15] SSOT para fire-and-forget con timeout
 # duro + alert. Reemplaza los `threading.Thread(target=..., daemon=True).start()`
 # que vivían inline en este router. Ver `backend/bg_executor.py`.
@@ -960,19 +962,17 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                         is_plus = bool(user_id and user_id != "guest")
 
                                         # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13]
-                                        # Además del gate de tier, respetar el flag user-controlled.
-                                        # Default TRUE si el perfil no expone el campo (legacy).
-                                        ltm_enabled = True
-                                        if is_plus and user_id and user_id != "guest":
-                                            try:
-                                                _p = get_user_profile(user_id)
-                                                if _p and "long_term_memory_enabled" in _p:
-                                                    ltm_enabled = bool(_p.get("long_term_memory_enabled", True))
-                                            except Exception:
-                                                ltm_enabled = True
+                                        # Además del gate de tier, respetar el flag user-controlled
+                                        # `long_term_memory_enabled`.
+                                        # [P1-PLAN-LOTE-717 · 2026-09-28] Fail-CLOSED: un perfil ilegible
+                                        # cuenta como PAUSADA. Antes contaba como «activada» y aprendía
+                                        # justo cuando no se podía confirmar que el usuario lo quería.
+                                        ltm_enabled = bool(is_plus) and memoria_activa(user_id, donde="chat/stream")
 
                                         if is_plus and ltm_enabled:
                                             async_extract_and_save_facts(user_id, prompt, recent_history_str)
+                                        elif is_plus:
+                                            logger.info(f"[LONG-TERM-MEMORY-TOGGLE] Captura pausada (user={user_id}).")
 
                                         summarize_and_prune(session_id)
                                     except Exception as inner_e:
@@ -1155,19 +1155,15 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         is_plus = False
         # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13] Además del tier, respetar el flag
         # `long_term_memory_enabled` controlado por el usuario desde Settings.
-        # Default TRUE si el campo no existe (perfil legacy pre-migración).
-        ltm_enabled = True
         # [P1-TIER-PARITY · 2026-07-12] La memoria a largo plazo es para TODOS
         # los tiers (decisión del owner: los planes solo difieren en créditos).
         # Pre-fix `is_plus` excluía a gratis — un usuario gratis con horas de
         # chat quedaba sin user_facts (y sin Dreaming, que come de ahí). Guests
         # (sin cuenta) siguen fuera: no hay user_id estable que recordar.
         is_plus = bool(user_id and user_id != "guest")
-        if user_id and user_id != "guest":
-            profile = get_user_profile(user_id)
-            if profile:
-                if "long_term_memory_enabled" in profile:
-                    ltm_enabled = bool(profile.get("long_term_memory_enabled", True))
+        # [P1-PLAN-LOTE-717 · 2026-09-28] Fail-CLOSED: `get_user_profile` devuelve None tanto si no hay fila como si
+        # la base falla, y None contaba como «activada». Ahora un perfil ilegible cuenta como PAUSADA.
+        ltm_enabled = is_plus and memoria_activa(user_id, donde="chat")
 
         if is_plus and ltm_enabled:
             # 🧠 Background: Extraer hechos y vectorizarlos

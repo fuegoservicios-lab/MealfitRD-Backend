@@ -141,7 +141,7 @@ def test_constants_has_anchor_p1_embedding_cache_bounded():
 # Sección 2 — P1-FRONTEND-LOCALSTORAGE-HOT-PATHS
 # ---------------------------------------------------------------------------
 _HOT_PATH_FILES_AND_KEYS = (
-    (_SETTINGS_JSX, "mealfit_notifications"),
+    # [P1-PLAN-LOTE-719] aquí iba Settings.jsx ('mealfit_notifications'): su estado era código muerto y se retiró.
     (_DASHBOARD_JSX, "mealfit_push_onboarding_seen"),
     (_PANTRY_JSX, "mealfit_plan"),
     (_PLAN_JSX, "mealfit_guest_session_id"),

@@ -461,14 +461,24 @@ def bloque_cuentas(ctx: _Ctx) -> dict:
     comidas = _uno(f"SELECT COUNT(*) AS n FROM public.consumed_meals WHERE consumed_at >= {_VENTANA} "
                    "AND user_id::text <> ALL(%s::text[])", (ctx.dias, ctx.fuera))
 
+    try:
+        cortesias = _uno("SELECT COUNT(DISTINCT user_id) AS n FROM public.account_grants WHERE kind = 'plan' "
+                         "AND revoked_at IS NULL AND starts_at <= now() AND (ends_at IS NULL OR ends_at > now()) "
+                         "AND user_id::text <> ALL(%s::text[])", (ctx.fuera,))
+    except Exception:  # noqa: BLE001 — antes de la migración 771 la tabla no existe: la fila se omite
+        cortesias = None
+
     def tier(v):
         v = str(v or "")
         return v if v in _ETIQUETA_TIER else "otro"
     grupos = _agrupar(tiers, "tier", tier, "n")
     filas = [("Cuentas", _entero(sum(g["n"] for _, g in grupos)), {"ayuda": f"Sin contar {len(ctx.fuera)} de admin."})]
     filas += [(_ETIQUETA_TIER[k], _entero(g["n"]), _SUBFILA) for k, g in grupos]
-    filas += [("Suscripciones de pago activas", _entero(subs.get("n"))),
-              (f"Comidas registradas en {ctx.dias} días", _entero(comidas.get("n")))]
+    filas.append(("Suscripciones de pago activas", _entero(subs.get("n"))))
+    if cortesias is not None:
+        filas.append(("Con plan de cortesía", _entero(cortesias.get("n")),
+                      {"ayuda": "Regalado desde «Cuentas»; no pagan."}))
+    filas.append((f"Comidas registradas en {ctx.dias} días", _entero(comidas.get("n"))))
     return _kpis("cuentas", "Cuentas", filas) | {"seccion": "Usuarios"}
 
 

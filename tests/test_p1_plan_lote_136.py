@@ -93,7 +93,10 @@ def test_el_interruptor_obedece_al_servidor_y_refresca_el_perfil_sin_plan():
 def test_guardar_en_modo_contador_no_escribe_el_formulario_entero():
     st = _front("src/pages/Settings.jsx")
     g = st[st.index("const handleSaveTracking = async () => {"):st.index("const handleUpdatePlanWithMetrics = async () => {")]
-    assert "{ ...(userProfile?.health_profile || {}), ...overrides }" in g
+    # [P1-PLAN-LOTE-715 · 2026-09-28] Solo lo editado: ni el formulario entero ni el perfil en memoria entero (puede ser
+    # más viejo que el del servidor y el PATCH devolvía, por ejemplo, una lista de alergias vieja).
+    assert "const hp = Object.keys(overrides).length ? { ...overrides } : null;" in g
+    assert "...(userProfile?.health_profile" not in g
     assert "buildHealthProfilePayload(formData, overrides, session)" not in g
     po = _front("src/components/settings/PlanObjetivo.jsx")
     assert "{kcal == null ? '—' : formatNumber(Number(kcal))}" in po, "sin metas va «—», no «0 kcal»"

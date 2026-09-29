@@ -439,8 +439,11 @@ def get_user_profile(user_id: str):
                 profile["plan_tier"] = "gratis"
                 profile["subscription_status"] = "INACTIVE"
         # ---------------------------------------
-        
-        return profile
+
+        # [P1-PLAN-LOTE-772] El plan que la persona DISFRUTA: la cortesía se superpone al LEER, después de la
+        # degradación (que sigue escribiendo solo lo pagado). Nunca se escribe de vuelta.
+        from regalos_cuenta import superponer
+        return superponer(profile)
     except Exception as e:
         logger.error(f"Error obteniendo perfil: {e}")
         return None
@@ -455,10 +458,11 @@ def get_user_plan_tier(user_id: str) -> Optional[str]:
     El router de modelos corre en el hot path de CADA llamada LLM (con cache
     TTL upstream) — necesita un SELECT de una columna, sin side-effects.
 
-    Retorna el tier crudo (`gratis`/`basic`/`plus`/`ultra`) o None si el
-    perfil no existe (guests / session_ids). El caller normaliza y aplica
-    fail-cheap. Excepciones propagan — el caller (`llm_provider.get_user_tier`)
-    las captura y degrada a `gratis`.
+    Retorna el tier EFECTIVO (`gratis`/`basic`/`plus`/`ultra`): lo pagado con
+    la cortesía vigente superpuesta [P1-PLAN-LOTE-772] (`admin` tal cual, sin
+    leer regalos), o None si el perfil no existe (guests / session_ids). El
+    caller normaliza y aplica fail-cheap. Excepciones propagan — el caller
+    (`llm_provider.get_user_tier`) las captura y degrada a `gratis`.
     """
     if not user_id:
         return None
@@ -471,8 +475,58 @@ def get_user_plan_tier(user_id: str) -> Optional[str]:
         fetch_one=True,
     )
     if row:
-        return row.get("plan_tier") or "gratis"
+        pagado = row.get("plan_tier") or "gratis"
+        if pagado == "admin":
+            return pagado
+        # [P1-PLAN-LOTE-772] el enrutado de modelos sigue al plan que la persona disfruta (cortesía incluida).
+        # `regalos_vigentes` no lanza: si no puede leer, queda lo pagado.
+        from regalos_cuenta import cortesia_de, plan_efectivo, regalos_vigentes
+        return plan_efectivo(pagado, cortesia_de(regalos_vigentes(user_id))) or "gratis"
     return None
+
+
+def _como_conjunto(valor) -> set:
+    if isinstance(valor, (list, tuple, set)):
+        return {str(x).strip().lower() for x in valor if x is not None and str(x).strip()}
+    if isinstance(valor, str) and valor.strip():
+        return {valor.strip().lower()}
+    return set()
+
+
+def _razones_para_invalidar(viejo: dict, nuevo: dict) -> list:
+    """[P1-PLAN-LOTE-719 · 2026-09-28] Qué cambios del perfil dejan viejos los bloques pendientes del plan. SSOT de los
+    dos escritores (`update_user_health_profile_atomic` y `update_user_health_profile`), que antes repetían la lista a
+    mano con dos agujeros:
+      · el objetivo se comparaba en `goal`, pero el formulario lo guarda en `mainGoal`: cambiar de «Perder grasa» a
+        «Ganar músculo» nunca invalidaba nada;
+      · condiciones médicas, medicamentos, dieta y rechazos no invalidaban: una renal nueva, o pasar a vegetariana
+        desde Configuración → «Alergias y dieta», dejaba los bloques pendientes generándose con el perfil viejo.
+    Invalidar marca los bloques PENDIENTES como `stale` (se regeneran con datos frescos); los ya generados no se tocan."""
+    viejo = viejo if isinstance(viejo, dict) else {}
+    nuevo = nuevo if isinstance(nuevo, dict) else {}
+    razones = []
+    if viejo.get("goal") != nuevo.get("goal") or viejo.get("mainGoal") != nuevo.get("mainGoal"):
+        razones.append("goal_changed")
+    if viejo.get("budget") != nuevo.get("budget") or viejo.get("budgetAmount") != nuevo.get("budgetAmount"):
+        razones.append("budget_changed")
+    if _como_conjunto(viejo.get("allergies")) != _como_conjunto(nuevo.get("allergies")) \
+            or (viejo.get("otherAllergies") or "").strip() != (nuevo.get("otherAllergies") or "").strip():
+        razones.append("allergies_changed")
+    if any(_como_conjunto(viejo.get(k)) != _como_conjunto(nuevo.get(k))
+           for k in ("medicalConditions", "otherConditions", "medications", "otherMedications")):
+        razones.append("medical_changed")
+    if viejo.get("dietType") != nuevo.get("dietType"):
+        razones.append("diet_changed")
+    if _como_conjunto(viejo.get("dislikes")) != _como_conjunto(nuevo.get("dislikes")):
+        razones.append("dislikes_changed")
+    try:
+        old_w = float(viejo.get("weight", 0) or 0)
+        new_w = float(nuevo.get("weight", 0) or 0)
+        if old_w and new_w and abs(old_w - new_w) >= 5:
+            razones.append("significant_weight_change")
+    except (TypeError, ValueError):
+        pass
+    return razones
 
 
 def _invalidate_stale_chunks(user_id: str, reason: str):
@@ -661,21 +715,8 @@ def update_user_health_profile_atomic(user_id: str, mutator):
                 # [P3-4] SSOT del contrato; loguea WARNING si tipo inesperado.
                 new_hp = _resolve_mutator_result(result, old_hp, user_id=user_id, path_label="atomic")
 
-                # Detectar invalidaciones críticas — mismo conjunto de checks que
-                # `update_user_health_profile` (mantener alineado si se añade uno).
-                if snapshot_old.get("goal") != new_hp.get("goal"):
-                    invalidation_reasons.append("goal_changed")
-                if snapshot_old.get("budget") != new_hp.get("budget"):
-                    invalidation_reasons.append("budget_changed")
-                if set(snapshot_old.get("allergies", []) or []) != set(new_hp.get("allergies", []) or []):
-                    invalidation_reasons.append("allergies_changed")
-                try:
-                    old_w = float(snapshot_old.get("weight", 0) or 0)
-                    new_w = float(new_hp.get("weight", 0) or 0)
-                    if old_w and new_w and abs(old_w - new_w) >= 5:
-                        invalidation_reasons.append("significant_weight_change")
-                except (TypeError, ValueError):
-                    pass
+                # Detectar invalidaciones críticas — SSOT compartido con `update_user_health_profile`.
+                invalidation_reasons.extend(_razones_para_invalidar(snapshot_old, new_hp))
 
                 _old_tz = snapshot_old.get("tz_offset_minutes")
                 if _old_tz is None:
@@ -732,18 +773,7 @@ def update_user_health_profile(user_id: str, health_profile: dict):
             if old_profile_data and old_profile_data.get('health_profile'):
                 old_hp = old_profile_data['health_profile']
 
-                invalidation_reasons = []
-                if old_hp.get('goal') != health_profile.get('goal'):
-                    invalidation_reasons.append("goal_changed")
-                if old_hp.get('budget') != health_profile.get('budget'):
-                    invalidation_reasons.append("budget_changed")
-                if set(old_hp.get('allergies', [])) != set(health_profile.get('allergies', [])):
-                    invalidation_reasons.append("allergies_changed")
-
-                old_w = float(old_hp.get('weight', 0) or 0)
-                new_w = float(health_profile.get('weight', 0) or 0)
-                if old_w and new_w and abs(old_w - new_w) >= 5:
-                    invalidation_reasons.append("significant_weight_change")
+                invalidation_reasons = _razones_para_invalidar(old_hp, health_profile)
 
                 # [P0-5] Detección de cambio de TZ. Acepta tanto `tz_offset_minutes` como
                 # `tzOffset` (legacy). Si cambió y el delta supera el threshold, marcamos
@@ -1086,12 +1116,13 @@ def get_monthly_api_usage(user_id: str, kind: str = "generation") -> int:
     endpoint nuevo quedaría GRATIS por olvido; en negativo queda caro por defecto
     y alguien lo nota."""
     if not user_id or user_id == "guest": return 0
-    from datetime import datetime
-    
+
     try:
-        now = datetime.now()
-        start_date = datetime(now.year, now.month, 1).isoformat()
-        
+        # [P1-PLAN-LOTE-772] la MISMA ventana que la caducidad de los regalos (día 1, 00:00 UTC; el VPS ya corre en
+        # UTC, así que ninguna cifra cambia): un regalo «de este mes» se acaba justo cuando este contador se reinicia.
+        from regalos_cuenta import inicio_de_mes
+        start_date = inicio_de_mes().isoformat()
+
         # [P1-NEON-DB-MIGRATION · 2026-06-12] Rama fallback PostgREST (con su
         # retry loop específico de red REST) eliminada — pool o nada.
         from db_core import connection_pool
@@ -1205,6 +1236,19 @@ def reset_user_account_preferences(user_id: str) -> bool:
     Atomicidad bonus: si cualquier statement falla, ROLLBACK preserva la
     cuenta consistente. Pre-fix, un fallo en el statement #5 (después de
     borrar #1-4) dejaba la cuenta en estado parcial.
+
+    [P1-PLAN-LOTE-716 · 2026-09-28] «Empezar desde cero» dejaba viva la MEMORIA del coach: la cola
+    de mensajes por extraer (`pending_facts_queue`, cuyo drenaje recreaba los hechos recién
+    borrados), la síntesis del Dreaming (`user_memory_profile`) y su bitácora con el texto de los
+    hechos fusionados (`dream_consolidation_log`), los gustos aprendidos del uso
+    (`user_taste_events`: preferencias, como los likes y rechazos que ya se borraban) y las cachés
+    del contexto RAG / reflexión en `app_kv_store`, que servían los hechos borrados hasta su TTL.
+    Todo entra en la MISMA transacción; Redis (si lo hay) se limpia tras el COMMIT.
+
+    Se CONSERVA a propósito el historial del chat (sesiones, mensajes, resúmenes, archivo de
+    resúmenes y checkpoints): el coach puede seguir leyendo lo que se dijo en esas conversaciones,
+    y el copy de la pantalla tiene que decirlo. Si la transacción hace ROLLBACK devuelve False y NO
+    se borró nada (el endpoint responde 500 `reset_failed`).
     """
     # [P1-NEON-DB-MIGRATION · 2026-06-12] El object storage ya no es precondición:
     # el reset es 100% SQL; el purge de object storage (best-effort) valida
@@ -1248,11 +1292,25 @@ def reset_user_account_preferences(user_id: str) -> bool:
                     # objeto físico en Storage se purga best-effort fuera de la
                     # transacción (Storage no es transaccional con Postgres).
                     cursor.execute("DELETE FROM visual_diary WHERE user_id = %s", (user_id,))
+                    # 9. [P1-PLAN-LOTE-716 · 2026-09-28] La memoria del coach que sobrevivía al reset
+                    # (ver docstring): lo que queda por extraer, la síntesis y su bitácora.
+                    cursor.execute("DELETE FROM pending_facts_queue WHERE user_id = %s", (user_id,))
+                    cursor.execute("DELETE FROM user_memory_profile WHERE user_id = %s", (user_id,))
+                    cursor.execute("DELETE FROM dream_consolidation_log WHERE user_id = %s", (user_id,))
+                    # 10. Gustos aprendidos del uso: preferencias, como likes y rechazos (1-2).
+                    cursor.execute("DELETE FROM user_taste_events WHERE user_id = %s", (user_id,))
+                    # 11. Cachés derivadas de esa memoria (contexto RAG y reflexión del meta-aprendizaje).
+                    cursor.execute(
+                        "DELETE FROM app_kv_store WHERE key LIKE ANY(%s)",
+                        (_kv_like_patterns(user_id, _USER_MEMORY_CACHE_TEMPLATES),),
+                    )
         # [P1-PROD-AUDIT-2] Storage best-effort tras commit DB (no bloquea el reset).
         try:
             _purge_visual_diary_storage(user_id)
         except Exception as _st_e:
             logger.warning(f"[P1-PROD-AUDIT-2] reset: purge Storage visual_diary falló (best-effort): {_st_e}")
+        # [P1-PLAN-LOTE-716] La copia en Redis de esas cachés (si hay Redis), también tras el COMMIT.
+        _purge_user_redis_caches(user_id, _USER_MEMORY_CACHE_TEMPLATES)
         logger.info(f"♻️ Preferencias y planes reseteados DESDE CERO con éxito para UUID {user_id}")
         return True
     except Exception as e:
@@ -1315,6 +1373,13 @@ _USER_SCOPED_TABLES_USERID = (
     # borrado, NO el grafo de FKs — Neon eliminó los FKs a auth.users) y para que
     # include_profile=False (data-erasure conservando cuenta) no las deje huérfanas.
     "user_memory_profile", "dream_work_queue", "dream_consolidation_log",
+    # [P1-PLAN-LOTE-716 · 2026-09-28] Tablas con user_id que solo caían por el FK CASCADE del perfil —o, las
+    # que no tienen FK (`ai_training_corpus`), nunca—: con `include_profile=False` (el «vaciar» del admin) o si
+    # fallaba el DELETE del perfil sobrevivían las fotos del chat, el formulario de cada generación
+    # (`plan_generation_runs.input_snapshot`), los gustos aprendidos y el registro de consumo de la Nevera.
+    # Medido en el esquema el 28-sep: todas existen con `user_id` y ninguna bloquea a otra por FK.
+    "ai_training_corpus", "chat_attachments", "device_push_tokens", "inventory_consumption_events",
+    "plan_generation_runs", "plan_jobs", "user_brand_preferences", "user_taste_events",
     # `meal_plans` al final: sus children (plan_chunk_queue, etc.) pueden
     # FK-cascade a él; borrarlas antes evita cualquier orden problemático.
     "meal_plans",
@@ -1326,7 +1391,58 @@ _USER_SCOPED_TABLES_ANONYMIZE = ("llm_usage_events",)
 # [P1-PLAN-LOTE-135 · 2026-09-20] Estado por usuario que vive en `app_kv_store` con la clave `<prefijo><user_id>`
 # (no tiene columna user_id: la lista de tablas de arriba no lo ve). Tambien caduca por TTL (`_KV_SWEEP_PREFIXES`),
 # pero una cuenta borrada no espera al barrido.
-_USER_SCOPED_KV_PREFIXES = ("hydration_state:", "avisos_locales:", "plan_invite:")
+# [P1-PLAN-LOTE-716 · 2026-09-28] + el rastreador de la generación en curso (`pending_pipeline:`) y el enfriamiento
+# del aviso de la Nevera (`pantry_nudge_last:`), las otras dos claves exactas con el uid.
+_USER_SCOPED_KV_PREFIXES = (
+    "hydration_state:", "avisos_locales:", "plan_invite:", "pending_pipeline:", "pantry_nudge_last:",
+)
+
+# [P1-PLAN-LOTE-716 · 2026-09-28] Cachés con el uid DENTRO de la clave, seguido de más texto: el contexto RAG
+# (`rag_<uid>_<hash>`: los hechos de memoria y el diario visual que el generador recuperó) y la reflexión del
+# meta-aprendizaje (`reflection_<uid>_<score>_<hash>`). Su TTL es de LECTURA (`_LLM_CACHE`, 300 s): la fila se queda
+# en `app_kv_store` hasta el barrido de 24 h, así que una cuenta borrada dejaba ahí esa memoria un día. El reset las
+# purga también (las mismas dos: son memoria). `regen_day_done:<uid>:<plan>:<día>` solo lo purga el borrado de cuenta.
+_USER_MEMORY_CACHE_TEMPLATES = ("rag_{uid}_", "reflection_{uid}_")
+_USER_SCOPED_KV_LIKE_TEMPLATES = _USER_MEMORY_CACHE_TEMPLATES + ("regen_day_done:{uid}:",)
+
+# [P1-PLAN-LOTE-716 · 2026-09-28] SSOT de «los hilos de chat de un usuario» (`agent_sessions.id::text`, que es también
+# el `thread_id` de los checkpoints y el `session_id` de `summary_archive`). Tres fuentes, no una: sus sesiones, las
+# sesiones donde escribió mensajes (la sesión puede tener user_id NULL mientras el mensaje lo lleva) y el hilo cuyo
+# id ES su user_id (convención session_id = user_id). Lo usan el borrado de cuenta (checkpoints, archivo de
+# resúmenes) y el export de datos (sesiones, mensajes, resúmenes). Parámetros: el uid tres veces.
+USER_CHAT_THREAD_IDS_SQL = (
+    "SELECT id::text FROM agent_sessions WHERE user_id = %s "
+    "UNION SELECT session_id::text FROM agent_messages WHERE user_id = %s "
+    "UNION SELECT %s::text"
+)
+
+
+def _kv_like_patterns(user_id: str, templates) -> List[str]:
+    """[P1-PLAN-LOTE-716] Patrones LIKE para claves que EMPIEZAN por una plantilla con el uid. En LIKE `_` y `%` son
+    comodines (y `\\` el escape por defecto): sin escaparlos, `rag_<uid>_%` casaría también `ragX<uid>Y...`."""
+    def _esc(texto: str) -> str:
+        return texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return [_esc(plantilla.format(uid=user_id)) + "%" for plantilla in templates]
+
+
+def _purge_user_redis_caches(user_id: str, templates) -> int:
+    """[P1-PLAN-LOTE-716] Best-effort: borra de Redis (si está configurado) las cachés por usuario de `templates`. En
+    Redis caducan solas a los 300 s; se borran para que la purga no dependa de ese reloj. Nunca levanta."""
+    try:
+        from cache_manager import redis_client
+    except Exception:
+        return 0
+    if not redis_client:
+        return 0
+    borradas = 0
+    for plantilla in templates:
+        try:
+            for key in redis_client.scan_iter(f"{plantilla.format(uid=user_id)}*"):  # pyright: ignore[reportGeneralTypeIssues]
+                redis_client.delete(key)
+                borradas += 1
+        except Exception as e:
+            logger.warning(f"[P1-PLAN-LOTE-716] purga Redis {plantilla} de {str(user_id)[:8]} falló (best-effort): {e}")
+    return borradas
 
 
 def _purge_visual_diary_storage(user_id: str) -> int:
@@ -1369,24 +1485,39 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
             tocar el perfil (e.g. GDPR data-erasure conservando la cuenta auth).
 
     Returns:
-        dict con `deleted` y `anonymized` (counts per tabla), `storage_objects_removed`, `errors`.
+        dict con `deleted` y `anonymized` (counts per tabla), `storage_objects_removed`, `errors`
+        (crudos: logs, alerta y endpoint admin — NUNCA al cliente final), `failed_steps` (el nombre
+        de cada paso que falló, sin texto de la base) y, [P1-PLAN-LOTE-716], `profile_deleted` /
+        `identity_deleted` (False con `include_profile=False`: no se intentan).
     """
     result: Dict[str, Any] = {
         "user_id": user_id,
         "deleted": {},
         "anonymized": {},
         "errors": [],
+        "failed_steps": [],
+        "profile_deleted": False,
+        "identity_deleted": False,
         "storage_objects_removed": 0,
     }
+
+    def _fallo(paso: str, exc: Exception) -> None:
+        # [P1-PLAN-LOTE-716 · 2026-09-28] El texto crudo de la base va a `errors` (logs, alerta, admin); al usuario
+        # solo le llega el nombre del paso (`failed_steps`), que el endpoint convierte en código.
+        result["errors"].append(f"{paso}: {exc}")
+        result["failed_steps"].append(paso)
+
     # [P1-NEON-DB-MIGRATION · 2026-06-12] El object storage queda fuera de la precondición:
     # la purga de datos es 100% SQL; el object storage (best-effort) chequea su cliente.
     if not connection_pool or not user_id or user_id == "guest":
         result["errors"].append("precondición inválida (pool/user_id)")
+        result["failed_steps"].append("precondition")
         return result
     try:
         uuid.UUID(str(user_id))
     except Exception:
         result["errors"].append("user_id no es UUID válido")
+        result["failed_steps"].append("precondition")
         return result
 
     # 1. Checkpoints LangGraph (keyed por thread_id = agent_sessions.id::text).
@@ -1395,19 +1526,50 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
     #    sesiones, las sesiones donde escribió mensajes (la sesión puede tener user_id NULL — el
     #    forense halló las 175 así — mientras el mensaje sí lo lleva) y el hilo cuyo id ES su
     #    user_id (convención session_id = user_id; 2 sesiones vivas así). Un uuid de usuario
-    #    como thread_id sólo puede ser suyo.
+    #    como thread_id sólo puede ser suyo. [P1-PLAN-LOTE-716] Ese conjunto es ahora el SSOT
+    #    `USER_CHAT_THREAD_IDS_SQL` (lo comparten el archivo de resúmenes y el export).
     for ck_tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
         try:
             r = execute_sql_write(
-                f"DELETE FROM {ck_tbl} WHERE thread_id IN ("
-                "SELECT id::text FROM agent_sessions WHERE user_id = %s "
-                "UNION SELECT session_id::text FROM agent_messages WHERE user_id = %s "
-                "UNION SELECT %s::text) RETURNING thread_id",
+                f"DELETE FROM {ck_tbl} WHERE thread_id IN ({USER_CHAT_THREAD_IDS_SQL}) RETURNING thread_id",
                 (user_id, user_id, user_id), returning=True,
             )
             result["deleted"][ck_tbl] = len(r) if isinstance(r, list) else 0
         except Exception as e:
-            result["errors"].append(f"{ck_tbl}: {e}")
+            _fallo(ck_tbl, e)
+
+    # 1-bis. [P1-PLAN-LOTE-716 · 2026-09-28] El archivo frío de resúmenes del coach (`summary_archive`): sin user_id
+    #        ni FK, solo `session_id` TEXT, y ninguna vía lo borraba — los resúmenes de las charlas de salud
+    #        sobrevivían a «Eliminar cuenta». Mismo conjunto de hilos que los checkpoints y, como ellos, ANTES de
+    #        borrar sesiones y mensajes, que es de donde sale ese conjunto.
+    try:
+        r = execute_sql_write(
+            f"DELETE FROM summary_archive WHERE session_id IN ({USER_CHAT_THREAD_IDS_SQL}) RETURNING id",
+            (user_id, user_id, user_id), returning=True,
+        )
+        result["deleted"]["summary_archive"] = len(r) if isinstance(r, list) else 0
+    except Exception as e:
+        _fallo("summary_archive", e)
+
+    # 1-ter. [P1-PLAN-LOTE-716 · 2026-09-28] Sesiones SIN dueño (`user_id` NULL) que son inequívocamente suyas: la
+    #        que tiene por id su propio uid (convención session_id = user_id) y aquellas donde escribió mensajes y
+    #        NINGUNA otra cuenta escribió. El paso 2 solo borra `WHERE user_id = uid`: estas sobrevivían con las
+    #        respuestas del coach dentro (sus mensajes llevan user_id NULL y no caían con `agent_messages`). Va
+    #        ANTES del paso 2, que borra los mensajes que las identifican; el CASCADE arrastra sus mensajes,
+    #        resúmenes y adjuntos. Medido el 28-sep: de 174 sesiones sin dueño, 1 casa por id y 0 por mensajes (el
+    #        resto no lleva nada que las ate a una cuenta: las purga el TTL de 90 días).
+    try:
+        r = execute_sql_write(
+            "DELETE FROM agent_sessions s WHERE s.user_id IS NULL AND ("
+            "s.id = %s::uuid OR ("
+            "EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id AND m.user_id = %s) "
+            "AND NOT EXISTS (SELECT 1 FROM agent_messages o WHERE o.session_id = s.id "
+            "AND o.user_id IS NOT NULL AND o.user_id <> %s))) RETURNING s.id",
+            (user_id, user_id, user_id), returning=True,
+        )
+        result["deleted"]["agent_sessions_sin_dueno"] = len(r) if isinstance(r, list) else 0
+    except Exception as e:
+        _fallo("agent_sessions_sin_dueno", e)
 
     # 2. agent_sessions + 3. todas las tablas user-scoped (best-effort per-tabla).
     for tbl in ("agent_sessions",) + _USER_SCOPED_TABLES_USERID:
@@ -1418,7 +1580,7 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
             )
             result["deleted"][tbl] = len(r) if isinstance(r, list) else 0
         except Exception as e:
-            result["errors"].append(f"{tbl}: {e}")
+            _fallo(tbl, e)
 
     # 3-bis. El gasto de IA se conserva ANÓNIMO (P1-PLAN-LOTE-56): sin user_id, plan_id ni corr.
     for tbl in _USER_SCOPED_TABLES_ANONYMIZE:
@@ -1430,7 +1592,7 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
             )
             result["anonymized"][tbl] = len(r) if isinstance(r, list) else 0
         except Exception as e:
-            result["errors"].append(f"{tbl}: {e}")
+            _fallo(tbl, e)
 
     # 3-ter. [P1-PLAN-LOTE-135] Estado por usuario en app_kv_store (avisos de agua, canal local, invitacion al plan).
     try:
@@ -1440,7 +1602,19 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
         )
         result["deleted"]["app_kv_store"] = len(r) if isinstance(r, list) else 0
     except Exception as e:
-        result["errors"].append(f"app_kv_store: {e}")
+        _fallo("app_kv_store", e)
+
+    # 3-quater. [P1-PLAN-LOTE-716 · 2026-09-28] Las cachés con el uid DENTRO de la clave (contexto RAG, reflexión,
+    #           dedupe de regenerar día): antes esperaban al barrido de 24 h. Y su copia en Redis, si la hay.
+    try:
+        r = execute_sql_write(
+            "DELETE FROM app_kv_store WHERE key LIKE ANY(%s) RETURNING key",
+            (_kv_like_patterns(user_id, _USER_SCOPED_KV_LIKE_TEMPLATES),), returning=True,
+        )
+        result["deleted"]["app_kv_store_caches"] = len(r) if isinstance(r, list) else 0
+    except Exception as e:
+        _fallo("app_kv_store_caches", e)
+    _purge_user_redis_caches(user_id, _USER_SCOPED_KV_LIKE_TEMPLATES)
 
     # 4. Storage (best-effort, no transaccional con Postgres).
     result["storage_objects_removed"] = _purge_visual_diary_storage(user_id)
@@ -1453,8 +1627,9 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
                 (user_id,), returning=True,
             )
             result["deleted"]["user_profiles"] = len(r) if isinstance(r, list) else 0
+            result["profile_deleted"] = True
         except Exception as e:
-            result["errors"].append(f"user_profiles: {e}")
+            _fallo("user_profiles", e)
 
         # 6. [P1-ACCOUNT-DELETE-IDENTITY · 2026-08-22] La IDENTIDAD, y solo cuando se
         #    borra el perfil. Hasta aquí «Eliminar cuenta» borraba los datos y dejaba
@@ -1468,14 +1643,25 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
         #    una identidad sin perfil (entra y `ensure_user_profile_exists` lo
         #    resucita). `include_profile=False` (purge admin) NO pasa por aquí: es
         #    «vaciar», no «cerrar».
-        try:
-            r = execute_sql_write(
-                'DELETE FROM neon_auth."user" WHERE id = %s RETURNING id',
-                (user_id,), returning=True,
+        #    [P1-PLAN-LOTE-716 · 2026-09-28] «Solo cuando se borra el perfil» decía el comentario, pero el código la
+        #    borraba SIEMPRE: con el DELETE del perfil fallido, el `health_profile` quedaba huérfano en la base y el
+        #    usuario, sin identidad, ya no podía entrar a reintentar. Ahora, si el perfil no se borró, la identidad se
+        #    CONSERVA: la cuenta sigue viva y completa, y el reintento (el endpoint responde 503) termina el trabajo.
+        if result["profile_deleted"]:
+            try:
+                r = execute_sql_write(
+                    'DELETE FROM neon_auth."user" WHERE id = %s RETURNING id',
+                    (user_id,), returning=True,
+                )
+                result["deleted"]["neon_auth_user"] = len(r) if isinstance(r, list) else 0
+                result["identity_deleted"] = True
+            except Exception as e:
+                _fallo("neon_auth_user", e)
+        else:
+            logger.error(
+                f"🛑 [P1-PLAN-LOTE-716] delete_account_data({user_id}): el perfil NO se borró — se conserva la "
+                f"identidad para que la cuenta siga accesible y el borrado se pueda reintentar."
             )
-            result["deleted"]["neon_auth_user"] = len(r) if isinstance(r, list) else 0
-        except Exception as e:
-            result["errors"].append(f"neon_auth.user: {e}")
         # [P1-PLAN-LOTE-161 · 2026-09-22] Olvidar el positivo cacheado de `auth_user_row_exists`. La purga del
         # admin lo hacía (lote 2, G3) y el borrado que pide el propio usuario NO: el proceso que acababa de
         # borrar la identidad seguía aceptando los tokens de esa cuenta en sus OTROS dispositivos hasta
@@ -1487,7 +1673,8 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
     logger.info(
         f"[P1-PROD-AUDIT-2] delete_account_data({user_id}): "
         f"tablas_con_filas={sum(1 for v in result['deleted'].values() if v)}, "
-        f"storage={result['storage_objects_removed']}, errors={len(result['errors'])}"
+        f"storage={result['storage_objects_removed']}, errors={len(result['errors'])}, "
+        f"profile_deleted={result['profile_deleted']}, identity_deleted={result['identity_deleted']}"
     )
     return result
 
