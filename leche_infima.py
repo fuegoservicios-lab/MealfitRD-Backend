@@ -69,7 +69,11 @@ _REGLAS = [
     (re.compile(r"\s*,\s*" + _NP + r"(?=\s+y\s)", re.IGNORECASE), ""),                       # «A, la leche y B» → «A y B»
     (re.compile(_NP + r"\s*,\s+", re.IGNORECASE), ""),                                       # «la leche, el agua»
     (re.compile(_NP + r"\s+y\s+", re.IGNORECASE), ""),                                       # «la leche y el agua»
-    (re.compile(r",\s*(?P<x>[^,.;]+?)\s+y\s+" + _NP, re.IGNORECASE), r" y \g<x>"),            # «A, B y la leche» → «A y B»
+    # [P1-PLAN-LOTE-914 · 2026-09-29] «A, B y la leche» → «A y B» es para una ENUMERACIÓN de alimentos: B no lleva verbo ni
+    # otra «y». Batería real rdv801: «…derretida, espolvorea la canela y acompaña con la guayaba fresca y la leche» se
+    # volvía «…derretida y espolvorea la canela y acompaña con la guayaba fresca» (una frase coja más) y el TODO O NADA
+    # dejaba «5 ml de leche pasteurizada» en el plato. tooltip-anchor: P1-PLAN-LOTE-914
+    (re.compile(r",\s*(?P<x>(?:(?!\s+y\s)(?!\b" + _VERBO + r"\b)[^,.;])+?)\s+y\s+" + _NP, re.IGNORECASE), r" y \g<x>"),
     (re.compile(r"\s+y\s+" + _NP, re.IGNORECASE), ""),                                       # «A y la leche»
     (re.compile(r"\s+con\s+" + _NP, re.IGNORECASE), ""),                                     # «con 5 ml de leche»
 ]
