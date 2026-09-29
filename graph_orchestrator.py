@@ -2445,7 +2445,7 @@ from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 # test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
 # este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
 from prompts.planner import build_planner_system_prompt
-from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel; import cierres_con_receta as _ccr; import mutadores_de_contenido as _mdc  # [P1-PLAN-LOTE-47/48/813]
+from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel; import cierres_con_receta as _ccr; import mutadores_de_contenido as _mdc; import basicos_por_token as _bpt  # [P1-PLAN-LOTE-47/48/813/857: _bpt al arranque, su knob en el inventario]
 
 
 # ============================================================
@@ -8861,7 +8861,7 @@ def _count_staple_repetitions(days: list) -> dict:
     que aparecen en >=2 días (señal de mode-collapse a nivel de staples).
     [P1-PLAN-LOTE-857 · 2026-09-29] por frontera de palabra (`basicos_por_token`), no subcadena: «pina» ⊂
     «espinaca» daba `pina: 2` en G24 DO sin una piña. tooltip-anchor: P1-PLAN-LOTE-857"""
-    return __import__("basicos_por_token").dias_por_basico(days, _STAPLE_INGREDIENT_ALIASES)
+    return _bpt.dias_por_basico(days, _STAPLE_INGREDIENT_ALIASES)  # `basicos_por_token`, importado al arranque (su knob)
 
 
 # [P1-INGREDIENT-SPREAD · 2026-07-28] Generalización de `_count_staple_repetitions`: ese detector
@@ -29523,7 +29523,7 @@ _PROTEIN_TARGET_FORMS = {
 # "filete de PESCADO blanco" + bare 'pollo' → "filete de pollo blanco". Caso del pase de
 # presupuesto, que emite exactamente "Filete de pescado blanco".
 _PROTEIN_SOURCE_COMPOUNDS = {
-    "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado"),
+    "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado", *__import__("pescado_especies").compuestos_de_conserva(_MAIN_PROTEIN_ALIASES["pescado"])),  # [P1-PLAN-LOTE-857] sardinas en lata, boquerones en vinagre… enteros
     # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] la forma enlatada/compuesta se reescribe ENTERA
     # (largo-primero) — sin esto el token suelto producía "lata de pollo en agua".
     "atun": ("atún en agua", "atun en agua", "atún en lata", "atun en lata",
@@ -29819,8 +29819,10 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         _diet = _sa_pr(str(_fd.get("dietType") or "").lower())  # fallback diet-aware
         _goal = _sa_pr(str(_fd.get("mainGoal") or _fd.get("goal") or "").lower())  # goal-aware
 
-        def _target_ok(label: str) -> bool:
+        def _target_ok(label: str, src: str = "") -> bool:
             probe = _PROTEIN_TARGET_FORMS[label]["default"]
+            if not __import__("pescado_especies").destino_apto_para_la_dieta(src, label, probe, _fd.get("dietType"), _diet_pool_item_banned):
+                return False  # [P1-PLAN-LOTE-857] la dieta manda: ni pollo al pescetariano (base: tilapia+mero → pechuga de pollo)
             probe_low = _sa_pr(probe.lower())
             if any(dk and dk in probe_low for dk in dislikes):
                 return False
@@ -29855,11 +29857,11 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
             # ("filete de pescado blanco" antes que "pescado"; "pechuga de pollo" antes que "pollo").
             # [P1-REWRITE-DORADO-HOMONYM · 2026-07-06] los homónimos culinarios ("dorado")
             # se excluyen de la REESCRITURA — detección intacta arriba.
-            _all_aliases = tuple(
+            _all_aliases = __import__("pescado_especies").preparar_reescritura(tuple(  # [P1-PLAN-LOTE-857] sólo los del plato
                 _al for _al in (tuple(_MAIN_PROTEIN_ALIASES.get(src, ())) +
                                 _PROTEIN_SOURCE_COMPOUNDS.get(src, ()))
                 if _sa_pr(str(_al).lower()) not in _PROTEIN_ALIAS_REWRITE_HOMONYMS
-            )
+            ), meal)
             for _al in sorted(_all_aliases, key=len, reverse=True):
                 repl = (forms["molido"] if "molid" in _sa_pr(_al)
                         else forms["bare"] if " " not in _al and _al == src
@@ -30135,14 +30137,14 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                         if "vegan" in _diet:
                             _search_sl = [t for t in _search_sl if t != "queso"]
                         tgt = next((t for t in _search_sl
-                                    if t not in day_labels and _target_ok(t)), None)
+                                    if t not in day_labels and _target_ok(t, _lbl)), None)
                         if tgt is None:
                             _log_autofix_impotent(_d.get("day", "?"), _lbl,
                                                   "no_safe_target_sweet_or_light", _meal.get("name"))
                             continue  # este meal no admite target seguro → siguiente hit
                     else:
                         tgt = next((t for t in _eff_ladder
-                                    if t not in day_labels and _target_ok(t)), None)
+                                    if t not in day_labels and _target_ok(t, _lbl)), None)
                         if tgt is None:
                             _log_autofix_impotent(_d.get("day", "?"), _lbl, "ladder_exhausted",
                                                   _meal.get("name"))
