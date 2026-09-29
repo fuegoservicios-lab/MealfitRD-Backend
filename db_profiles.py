@@ -730,8 +730,11 @@ def update_user_health_profile_atomic(user_id: str, mutator):
                 except (TypeError, ValueError):
                     pass
 
+                # [P1-PLAN-LOTE-837 · 2026-09-29] Con el origen del bloque en curso (p. ej. el coach apagando un
+                # recordatorio): va en esta misma sentencia, dentro de la transacción, que es donde lo lee el trigger.
+                from ajustes_cuenta import sql_con_origen
                 cursor.execute(
-                    "UPDATE user_profiles SET health_profile = %s::jsonb WHERE id = %s",
+                    sql_con_origen("UPDATE user_profiles SET health_profile = %s::jsonb WHERE id = %s"),
                     (Jsonb(new_hp), user_id),
                 )
         # Transacción comiteada al salir del `with conn.transaction()`.
@@ -800,8 +803,9 @@ def update_user_health_profile(user_id: str, health_profile: dict):
         # semántica PostgREST "res.data no-vacío si afectó fila" (los callers
         # solo chequean truthiness; None en error).
         from psycopg.types.json import Jsonb
+        from ajustes_cuenta import sql_con_origen   # [P1-PLAN-LOTE-837] el origen del bloque en curso, si lo hay
         res = execute_sql_write(
-            "UPDATE user_profiles SET health_profile = %s::jsonb WHERE id = %s RETURNING id",
+            sql_con_origen("UPDATE user_profiles SET health_profile = %s::jsonb WHERE id = %s RETURNING id"),
             (Jsonb(health_profile), user_id),
             returning=True,
         )
@@ -1708,9 +1712,12 @@ def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
     if not connection_pool:
         return False
     try:
+        # [P1-PLAN-LOTE-837 · 2026-09-29] `sql_con_origen`: sin bloque de origen, la sentencia de siempre (la persona,
+        # desde Configuración); dentro del bloque del coach, el historial de ajustes lo anota como «coach».
+        from ajustes_cuenta import sql_con_origen
         # I2: filtro por id=user_id. RETURNING id → "afectó una fila".
         res = execute_sql_write(
-            "UPDATE user_profiles SET long_term_memory_enabled = %s WHERE id = %s RETURNING id",
+            sql_con_origen("UPDATE user_profiles SET long_term_memory_enabled = %s WHERE id = %s RETURNING id"),
             (bool(enabled), user_id),
             returning=True,
         )
@@ -1776,10 +1783,13 @@ def update_water_tracker_enabled(user_id: str, enabled: bool) -> bool:
     if not connection_pool:
         return False
     try:
+        # [P1-PLAN-LOTE-837 · 2026-09-29] El origen del bloque en curso (el coach, o el apagado automático de
+        # `hydration_reminders`): sin bloque, la sentencia de siempre.
+        from ajustes_cuenta import sql_con_origen
         # I2: filtro por id=user_id (equivalente PostgREST legacy: .eq("id", user_id)).
         # RETURNING id → "afectó una fila".
         res = execute_sql_write(
-            "UPDATE user_profiles SET water_tracker_enabled = %s WHERE id = %s RETURNING id",
+            sql_con_origen("UPDATE user_profiles SET water_tracker_enabled = %s WHERE id = %s RETURNING id"),
             (bool(enabled), user_id),
             returning=True,
         )

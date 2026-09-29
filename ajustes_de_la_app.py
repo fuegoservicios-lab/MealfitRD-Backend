@@ -137,14 +137,19 @@ def cambiar_ajuste(user_id: str, ajuste: str, valor) -> str:
     if activar is None:
         return f"Para «{canon}» el valor es encender o apagar (true/false); recibí {valor!r}. Pregúntale qué prefiere."
     try:
-        return {
-            "hidratacion": _hidratacion,
-            "nevera": _nevera,
-            "memoria": _memoria,
-            "generador_de_planes": _generador,
-            "recordatorios_de_comida": lambda uid, a: _recordatorio(uid, "avisos_comida", a),
-            "recordatorios_de_agua": lambda uid, a: _recordatorio(uid, "avisos_agua", a),
-        }[canon](user_id, activar)
+        # [P1-PLAN-LOTE-837 · 2026-09-29] Todo lo que esta tool escribe en `user_profiles` lleva el origen «coach» EN LA
+        # MISMA SENTENCIA (`ajustes_cuenta.sql_con_origen`, dentro de los escritores de siempre): el historial de ajustes
+        # (`ajustes_cambios`) sabe que no lo cambió la persona desde Configuración.
+        from ajustes_cuenta import origen_de_ajustes
+        with origen_de_ajustes("coach"):
+            return {
+                "hidratacion": _hidratacion,
+                "nevera": _nevera,
+                "memoria": _memoria,
+                "generador_de_planes": _generador,
+                "recordatorios_de_comida": lambda uid, a: _recordatorio(uid, "avisos_comida", a),
+                "recordatorios_de_agua": lambda uid, a: _recordatorio(uid, "avisos_agua", a),
+            }[canon](user_id, activar)
     except Exception as e:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-900] cambiar «{canon}»={activar} falló para {user_id}: {type(e).__name__}: {e}")
         return "ERROR: no se pudo guardar el cambio ahora. No digas que se hizo: dile que lo intente de nuevo en un momento."

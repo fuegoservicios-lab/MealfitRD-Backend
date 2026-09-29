@@ -132,8 +132,11 @@ def fijar_nevera(user_id: str, enabled: bool) -> bool:
     """La elección EXPLÍCITA del usuario: TRUE o FALSE, nunca NULL (encenderla a mano la saca del apagado automático
     para siempre) y borra la marca del apagado automático (la nota ya no aplica). Filtra por id (I2)."""
     try:
+        # [P1-PLAN-LOTE-837 · 2026-09-29] El origen del bloque en curso (el coach): sin bloque, la persona.
+        from ajustes_cuenta import sql_con_origen
         res = execute_sql_write(
-            "UPDATE user_profiles SET nevera_enabled = %s, nevera_auto_off_at = NULL WHERE id = %s RETURNING id",
+            sql_con_origen(
+                "UPDATE user_profiles SET nevera_enabled = %s, nevera_auto_off_at = NULL WHERE id = %s RETURNING id"),
             (bool(enabled), user_id), returning=True,
         )
         return bool(res)
@@ -165,9 +168,12 @@ def encender_por_uso(user_id: str, *, forzar: bool = False) -> str:
     if nevera_activa_de(p):
         return "activa"
     if p.get("nevera_auto_off_at") and not forzar:
+        # [P1-PLAN-LOTE-837 · 2026-09-29] Vuelve a automático SOLA (la apagó el sistema y nadie la eligió): «sistema».
+        from ajustes_cuenta import sql_con_origen
         execute_sql_write(
-            "UPDATE user_profiles SET nevera_enabled = NULL, nevera_auto_off_at = NULL, nevera_reloj_desde = now() "
-            "WHERE id = %s",
+            sql_con_origen(
+                "UPDATE user_profiles SET nevera_enabled = NULL, nevera_auto_off_at = NULL, nevera_reloj_desde = now() "
+                "WHERE id = %s", "sistema"),
             (user_id,),
         )
         return "encendida"
@@ -209,7 +215,10 @@ def apagar_neveras_sin_uso(limite: int = 500) -> list:
         return []
     horas = horas_para_apagar()
     try:
-        filas = execute_sql_write(_SQL_APAGAR, (horas, horas, int(limite)), returning=True) or []
+        # [P1-PLAN-LOTE-837 · 2026-09-29] El apagado automático queda en el historial de ajustes como «sistema».
+        from ajustes_cuenta import sql_con_origen
+        filas = execute_sql_write(sql_con_origen(_SQL_APAGAR, "sistema"), (horas, horas, int(limite)),
+                                  returning=True) or []
     except Exception as e:
         # [P1-NEVERA-OPCIONAL · 2026-09-23] error, no warning: un apagado automático roto es silencioso por
         # naturaleza (nadie lo espera activamente) — debe ser RUIDOSO en los logs o nadie lo va a notar.
@@ -292,9 +301,13 @@ def apagar_por_plan_vacio(user_id: str) -> bool:
     if not interruptor_disponible() or not _auto_apagado_encendido() or not apagable_en_modo_plan():
         return False
     try:
+        # [P1-PLAN-LOTE-837 · 2026-09-29] El apagado automático queda en el historial de ajustes como «sistema».
+        from ajustes_cuenta import sql_con_origen
         res = execute_sql_write(
-            "UPDATE user_profiles SET nevera_enabled = FALSE, nevera_auto_off_at = now() "
-            "WHERE id = %s AND nevera_enabled IS NULL AND COALESCE(plan_mode, 'plan') <> 'tracking' RETURNING id",
+            sql_con_origen(
+                "UPDATE user_profiles SET nevera_enabled = FALSE, nevera_auto_off_at = now() "
+                "WHERE id = %s AND nevera_enabled IS NULL AND COALESCE(plan_mode, 'plan') <> 'tracking' RETURNING id",
+                "sistema"),
             (user_id,), returning=True,
         )
         if res:

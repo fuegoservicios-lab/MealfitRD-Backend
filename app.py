@@ -3832,6 +3832,9 @@ _ACCOUNT_EXPORT_TABLES = (
     # [P1-PLAN-LOTE-830 · 2026-09-29] Las marcas de cuenta de prueba de la persona (cuándo, por qué, si salió ella): la
     # Política de Privacidad §5 promete avisarle, y sus datos incluyen esa marca. Sin los ids del personal (abajo).
     ("cuentas_de_prueba", "user_id", 100),
+    # [P1-PLAN-LOTE-837 · 2026-09-29] El historial de cambios de sus ajustes (qué, antes, después, quién y cuándo): es
+    # información sobre la persona y la Política §5 dice que el soporte ve cuándo los cambió.
+    ("ajustes_cambios", "user_id", 5000),
 )
 
 # Columnas internas sin valor para el usuario y costosas de serializar
@@ -3867,6 +3870,8 @@ _ACCOUNT_EXPORT_ORDER = {
     # [P1-PLAN-LOTE-830] `cuentas_de_prueba` NO tiene `created_at` (su fecha es `marcada_at`): con el orden por defecto la
     # consulta revienta y CADA exportación saldría con `complete: false` y la tabla en `omitted`.
     "cuentas_de_prueba": "marcada_at DESC",
+    # [P1-PLAN-LOTE-837] `ajustes_cambios` tampoco: su fecha es `at`.
+    "ajustes_cambios": "at DESC",
 }
 
 

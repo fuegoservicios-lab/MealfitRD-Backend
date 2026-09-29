@@ -711,6 +711,12 @@ _TARGETS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 # `get_monthly_api_usage` cuenta toda fila de `api_usage` sin filtrar endpoint).
 _PROFILE_PATCH_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
+# [P1-PLAN-LOTE-837 · 2026-09-29] El informe de los ajustes que viven SOLO en el teléfono (tema, permiso de
+# notificaciones…): la app lo manda a lo sumo una vez al día y al cambiar el tema o las alertas. Cero IA: sin
+# `verify_api_quota` (al tope, un informe no puede costar créditos). Par (max, periodo) único en el repo: la ventana de
+# Redis es `rl:<max>:<periodo>:<uid>` y con un par compartido se comería el cupo de otro endpoint.
+_AJUSTES_DISPOSITIVO_LIMITER = RateLimiter(max_calls=6, period_seconds=60)
+
 # [P1-PLAN-LOTE-225 · 2026-09-24] Traducir AL LEER el texto libre que no vive en `_display`: lo que el coach recuerda
 # del usuario (`user_facts.fact`) y los suplementos del día (`days[i].supplements`: nombre, dosis, momento, motivo).
 # Lo escribe el modelo en español y la app lo pintaba así en los cinco idiomas. El cliente pide sólo lo que su caché
@@ -1274,6 +1280,24 @@ async def api_patch_profile(
     if _sin_permiso_ia:
         salida["translation_skipped"] = "ai_consent_required"
     return salida
+
+
+@router.put("/profile/ajustes-dispositivo")
+async def api_put_ajustes_dispositivo(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_AJUSTES_DISPOSITIVO_LIMITER),
+):
+    """[P1-PLAN-LOTE-837 · 2026-09-29] Los ajustes que viven solo en el dispositivo (spec del panel admin §13.3).
+
+    `{"plataforma": "web|ios|android", "pwa": bool, "app_build": "≤64", "ajustes": {"tema", "notificaciones_permiso",
+    "alertas_activadas", "analitica_vetada", "barra_plegada", "unidad_altura", "avatar_elegido"}}` → `{"ok": true,
+    "guardado": bool}`. LISTA CERRADA: una clave desconocida o un valor fuera de lista se descarta
+    (`ajustes_cuenta.limpiar_dispositivo`). Con el interruptor maestro `MEALFIT_ADMIN_TEST_ACCOUNTS` apagado responde
+    `guardado: false` sin escribir. Nunca un 5xx por el informe: la app no espera por él."""
+    uid = _require_user(verified_user_id)
+    import ajustes_cuenta
+    guardado = await asyncio.to_thread(ajustes_cuenta.guardar_dispositivo, uid, data)
+    return {"ok": True, "guardado": bool(guardado)}
 
 
 # ---------------------------------------------------------------------------

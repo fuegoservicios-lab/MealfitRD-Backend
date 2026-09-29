@@ -8658,6 +8658,22 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info("⏰ [P1-PLAN-LOTE-841] Cron purge_admin_access_log registrado cada 24 h.")
 
+    # [P1-PLAN-LOTE-837 · 2026-09-29] Purga diaria del historial de ajustes (`ajustes_cambios`) que pasa del plazo
+    # (MEALFIT_AJUSTES_CAMBIOS_RETENTION_DAYS, 730 por defecto). La purga y su SQL viven en ajustes_cuenta.
+    if not scheduler.get_job("purge_ajustes_cambios"):
+        from ajustes_cuenta import purgar_cambios_antiguos as _purgar_cambios_antiguos
+        _add_job_jittered(scheduler,
+            _purgar_cambios_antiguos,
+            "interval",
+            hours=24,
+            id="purge_ajustes_cambios",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info("⏰ [P1-PLAN-LOTE-837] Cron purge_ajustes_cambios registrado cada 24 h.")
+
 
 def _pantry_refresh_horizon_hours_for_plan(total_days_requested: int | None) -> int:
     """Return the proactive pantry horizon based on plan length."""

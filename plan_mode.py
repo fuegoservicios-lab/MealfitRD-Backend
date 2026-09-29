@@ -111,14 +111,17 @@ def pause_plan_generation(user_id: str) -> dict:
         return {"plan_mode": "plan", "skipped": "switch_off"}
 
     # 1. LA BANDERA PRIMERO (ver cabecera: el orden es la mitad del diseño).
+    # [P1-PLAN-LOTE-837 · 2026-09-29] Con el origen del bloque en curso (el coach): el historial de ajustes sabe quién
+    # la apagó. Sin bloque, la sentencia de siempre (la persona, desde Configuración).
+    from ajustes_cuenta import sql_con_origen
     execute_sql_write(
-        """
+        sql_con_origen("""
         UPDATE user_profiles
         SET plan_mode = 'tracking',
             plan_mode_changed_at = CASE WHEN plan_mode <> 'tracking' THEN NOW()
                                         ELSE plan_mode_changed_at END
         WHERE id = %s
-        """,
+        """),
         (user_id,),
     )
 
@@ -376,14 +379,15 @@ def resume_plan_generation(user_id: str) -> dict:
 
     # 1. Bandera primero: encolar con el gate puesto deja chunks que el pickup ignora.
     if not ya_encendida:
+        from ajustes_cuenta import sql_con_origen   # [P1-PLAN-LOTE-837] el origen del bloque en curso, si lo hay
         execute_sql_write(
-            """
+            sql_con_origen("""
             UPDATE user_profiles
             SET plan_mode = 'plan',
                 plan_mode_changed_at = CASE WHEN plan_mode <> 'plan' THEN NOW()
                                             ELSE plan_mode_changed_at END
             WHERE id = %s
-            """,
+            """),
             (user_id,),
         )
 

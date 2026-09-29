@@ -269,7 +269,11 @@ def revisar_usuario(user_id: str, locale: Optional[str], con_push: bool, ahora: 
         desde = None
 
     if evaluar_apagado(estado, ahora, hubo_agua=False):
-        update_water_tracker_enabled(user_id, False)
+        # [P1-PLAN-LOTE-837 · 2026-09-29] El apagado automático queda en el historial de ajustes como «sistema»: el
+        # escritor (`db_profiles.update_water_tracker_enabled`) lleva el origen del bloque en su misma sentencia.
+        from ajustes_cuenta import origen_de_ajustes
+        with origen_de_ajustes("sistema"):
+            update_water_tracker_enabled(user_id, False)
         _guardar_estado(user_id, {"auto_off_at": ahora.isoformat(), "nudges_ignorados": int(estado.get("nudges") or 0)})
         if con_push:
             from utils_push import send_push_notification
