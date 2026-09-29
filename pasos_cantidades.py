@@ -3580,7 +3580,9 @@ def claras_del_cerrador(meal) -> int:
 # 14 («lava y corta 5 g;», «y mide 30 g.»). Un «corta/pica/mide/pesa N g» sin alimento detrás se retira con su «y».
 # tooltip-anchor: P1-PLAN-LOTE-422
 _MIGAJA_422_RE = re.compile(
-    r"(?P<pre>(?:,|;|:)\s*|\s+y\s+)(?:(?:lava|pela)\s+y\s+)?(?:corta|pica|mide|pesa)\s+\d+(?:[.,]\d+)?\s*g(?=\s*[,;.])")
+    r"(?P<pre>(?:,|;|:)\s*|\s+y\s+)(?:(?:lava|pela)\s+y\s+)?(?:corta|pica|mide|pesa|"
+    r"desmenuza|ralla|rebana|trocea|lamina|machaca|tritura)"   # [P1-PLAN-LOTE-865] «…y desmenuza 5 g.» (el queso se fue)
+    r"\s+\d+(?:[.,]\d+)?\s*g(?=\s*[,;.])")
 
 
 def migaja_sin_alimento(meal) -> int:
