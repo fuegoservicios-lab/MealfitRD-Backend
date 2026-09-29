@@ -428,7 +428,11 @@ def quantize_ingredient_string(s: str):
         return raw, 1.0
     low = _strip_accents(raw.lower())
     # 'al gusto'/'opcional': la cantidad es espuria → quítala, deja el texto legible.
-    if "al gusto" in low or "a gusto" in low or "opcional" in low:
+    # [P1-PLAN-LOTE-916 · 2026-09-29] Sólo el número SUELTO («0.91 sal y pimienta al gusto»). Con gramos, mililitros,
+    # tazas o cucharas la cantidad es real: «30 g de queso blanco fresco (extensor opcional)» salía «G de queso blanco
+    # fresco (extensor opcional)» en la lista visible y en la del motor (batería rdb524: la compra y los macros perdían
+    # el queso). Se redondea como cualquier otra línea. tooltip-anchor: P1-PLAN-LOTE-916
+    if ("al gusto" in low or "a gusto" in low or "opcional" in low) and _detect_kind(raw) == "count":
         cleaned = _LEAD_QTY_RE.sub("", norm, count=1).strip()
         if cleaned:
             cleaned = cleaned[:1].upper() + cleaned[1:]
