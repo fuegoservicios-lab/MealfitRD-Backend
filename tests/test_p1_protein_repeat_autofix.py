@@ -190,9 +190,12 @@ def test_huevo_protagonists_and_atun_now_fixed(go):
         _meal("Cena", "Wrap de Atún", ["1 lata de atún en agua"]),
     ]}]
     assert go._protein_repeat_autofix(days2, {}, db=object()) == 0, "la conserva no se reescribe"
+    # [P1-PLAN-LOTE-857] (ronda 7) y sólo si una cláusula que lo nombra lo cuece (regla positiva de V7f)
     days3 = [{"day": 1, "meals": [
-        _meal("Almuerzo", "Atún a la plancha", ["150 g de atún fresco"]),
-        _meal("Cena", "Atún guisado con arroz", ["150 g de atún fresco", "1 taza de arroz"]),
+        _meal("Almuerzo", "Atún a la plancha", ["150 g de atún fresco"],
+              ["Cocina el atún a la plancha 2 minutos por lado."]),
+        _meal("Cena", "Atún guisado con arroz", ["150 g de atún fresco", "1 taza de arroz"],
+              ["Guisa el atún 15 minutos en salsa de tomate."]),
     ]}]
     fixed = go._protein_repeat_autofix(days3, {}, db=object())
     assert fixed >= 1, "atún ×2 same-day debe corregirse (escalera + compounds)"
@@ -229,11 +232,14 @@ def test_idempotent(go):
 def test_budget_collision_two_pescado_same_day(go):
     """Estado post-budget del caso vivo: dos mariscos del mismo día colapsados al mismo
     'filete de pescado blanco' → el re-fire diversifica el segundo a pollo (escalera)."""
+    # [P1-PLAN-LOTE-857 · 2026-09-29] con pasos que cuecen el pez (regla positiva de V7f; «Cocina.» a secas va al gate)
     days = [{"day": 1, "meals": [
         _meal("Almuerzo", "Filete de Pescado Blanco al Ajillo",
-              ["150 g de filete de pescado blanco", "150 g de arroz"]),
+              ["150 g de filete de pescado blanco", "150 g de arroz"],
+              ["Saltea el filete de pescado blanco con ajo 4 minutos por lado."]),
         _meal("Cena", "Filete de Pescado Blanco Guisado",
-              ["120 g de filete de pescado blanco", "100 g de batata"]),
+              ["120 g de filete de pescado blanco", "100 g de batata"],
+              ["Guisa el filete de pescado blanco 15 minutos en salsa de tomate."]),
     ]}]
     n = go._protein_repeat_autofix(days, {}, db=object())
     assert n == 1

@@ -14095,6 +14095,7 @@ _ALLERGEN_SYNONYMS = {
     "sesamo": ["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
                "semillas de sesamo", "gomasio", "halva", *__import__("vocabulario_alergenos").EXTRA["sesamo"]],  # [P1-PLAN-LOTE-252]
 }
+_PESCADO_ANTES = tuple(_MAIN_PROTEIN_ALIASES["pescado"])  # [P1-PLAN-LOTE-857] el mapa de la base: el replay del autofix compara contra él
 _PEZ_NUEVO = tuple(__import__("pescado_especies").extender_pescado(_MAIN_PROTEIN_ALIASES, _ALLERGEN_SYNONYMS["pescado"])[0])  # [P1-PLAN-LOTE-857] trucha/sardina detectan, «dorado» no; el autofix no las reescribe
 
 
@@ -29935,6 +29936,10 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     if _hit is not None:
                         day_labels.add(_lbl)
                         day_hits.setdefault(_lbl, []).append((meal, _hit[1]))
+            _nueva = __import__("pescado_especies").especie_nueva_en([m for m, _ in day_hits.get("pescado", ())], _PEZ_NUEVO)
+            if _nueva:  # [P1-PLAN-LOTE-857] repetición de pescado con una especie nueva: el día ENTERO al gate
+                _log_autofix_impotent(_d.get("day", "?"), "pescado", "especie_nueva", _nueva)
+                continue
             fixes_left = PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY
             for _lbl, hits in day_hits.items():
                 if len(hits) < 2 or fixes_left <= 0:
@@ -30110,8 +30115,9 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 for i, (_meal, _) in enumerate(hits):
                     if i == _keep_idx or fixes_left <= 0:
                         continue
-                    # [P1-PLAN-LOTE-46] / [P1-PLAN-LOTE-857] especie nueva o pez listo/crudo/frío: no se toca, decide el gate
-                    _no = "receta_congelada" if _receta_congelada(_meal) else __import__("pescado_especies").motivo_para_no_reescribir(_lbl, _meal, _MAIN_PROTEIN_ALIASES.get(_lbl, ()), _PEZ_NUEVO, _PRECOOKED_PROTEIN_HINT, _diet_pool_item_banned)
+                    # [P1-PLAN-LOTE-46] / [P1-PLAN-LOTE-857] receta de biblioteca, o pez que la receta no cuece: no se toca, decide el gate
+                    _ctx_sweet, _ctx_light = _is_sweet_meal(_meal, _sa_pr), _meal_slot_is_light(_meal, _sa_pr)  # ligero ⇒ sólo queso (abajo)
+                    _no = "receta_congelada" if _receta_congelada(_meal) else __import__("pescado_especies").motivo_para_no_reescribir(_lbl, _meal, _MAIN_PROTEIN_ALIASES.get(_lbl, ()), _PRECOOKED_PROTEIN_HINT, _diet_pool_item_banned, _ctx_sweet or _ctx_light)
                     if _no:
                         _log_autofix_impotent(_d.get("day", "?"), _lbl, _no, _meal.get("name"))
                         continue
@@ -30121,8 +30127,6 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     # dulce solo 'queso' (CLOSER-SWEET-NO-LEGUME veta legumbre en dulce); en slot
                     # ligero salado queso/legumbres; sin candidato → NO tocar (decide el gate, que
                     # además degrada a advisory en el intento final).
-                    _ctx_sweet = _is_sweet_meal(_meal, _sa_pr)
-                    _ctx_light = _meal_slot_is_light(_meal, _sa_pr)
                     if _ctx_sweet or _ctx_light:
                         _allowed = ("queso",)  # [P1-PLAN-LOTE-190] ligero salado ya SIN legumbres: «habichuelas rojas guisadas» choca SIEMPRE con la regla de horario (merienda «guisada», desayuno «habichuela») — rd18
                         # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] deadlock medido en vivo (plan cb150867):

@@ -106,9 +106,11 @@ def test_camarones_repeat_fixed():
         _meal("Camarones Guisados", "Almuerzo",
               ["150 g de camarones frescos", "arroz"],
               ["Guisa los camarones frescos."]),
+        # [P1-PLAN-LOTE-857 · 2026-09-29] crudos y salteados con tiempo: «Saltea los camarones cocidos» es precocido
+        # (su paso no cuece la carne que entraría) y va al gate — test_p1_plan_lote_857.py.
         _meal("Salteado de Camarones", "Cena",
-              ["120 g de camarones cocidos", "vegetales"],
-              ["Saltea los camarones cocidos."]),
+              ["120 g de camarones frescos", "vegetales"],
+              ["Saltea los camarones 4 minutos."]),
     ])
     fixed = _protein_repeat_autofix([d], {"mainGoal": "lose_fat"})
     assert fixed >= 1, "camarones ×2 same-day debe corregirse (label del gate desde b27eb26)"

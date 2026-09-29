@@ -28,6 +28,10 @@ Ronda 5 (revisión r4). En la comida ligera, el pescetariano vuelve a recibir qu
 Ronda 6 (revisión r5, cambio de estrategia). Las rondas 4-5 intentaban que el autofix REESCRIBIERA bien la conserva o el
 crudo de las especies nuevas, y cada una dejaba otro caso límite con pollo crudo. Ahora las especies nuevas sólo sirven
 para DETECTAR; el autofix no toca su comida ni ninguna con un pez listo, crudo o frío (`motivo_para_no_reescribir`, abajo).
+
+Ronda 7 (revisión r6). El día cuya repetición de pescado incluye una especie nueva se salta ENTERO (`especie_nueva_en`), y
+el filtro de crudo/frío por patrones cede a la regla positiva de V7f: el pez se reescribe sólo si una cláusula que lo nombra
+lo cuece (detalle abajo). Las reescrituras del lote son un subconjunto de las de la base, medido en un replay congelado.
 """
 from __future__ import annotations
 
@@ -98,20 +102,27 @@ def extender_pescado(alias_por_etiqueta: dict, vocabulario_pescado) -> tuple:
         return [], []
 
 
-# ── ronda 6 · detectar sí; reescribir sólo lo de antes, y nunca un pez listo, crudo o frío ──────────────────────────────
+# ── rondas 6-7 · detectar sí; reescribir sólo el pez de antes, y sólo si la receta lo cuece ───────────────────────────────
 # Cinco rondas intentando que `_protein_repeat_autofix` REESCRIBIERA bien las especies nuevas dejaban pollo crudo en casos
-# límite (la lata que la línea no llama «en lata»: «90 g de Sardinas» + «Escurre las sardinas de la lata»; el ceviche
-# blanqueado 1-2 minutos antes de marinar). Y la base ya lo hacía con el atún: «Ensalada de atún… Sirve frío» salía
-# «Escurre pechuga de pollo y mézclala… Sirve frío». Regla nueva, más simple:
-#   (1) Las especies nuevas cuentan para DETECTAR (contador cross-día, gate same-day, `variety_report`), pero el autofix no
-#       toca una comida que las lleve (`especie_nueva`): decide el gate, que regenera el día. Y reescribe con los alias de
-#       antes del lote (`graph_orchestrator._PEZ_NUEVO` fuera del reescritor).
+# límite, y la base ya lo hacía con el atún («Ensalada de atún… Sirve frío» salía «Escurre pechuga de pollo y mézclala…
+# Sirve frío»). La ronda 6 filtraba lo crudo o frío por patrones y la revisión r6 encontró los que se le escapaban
+# («Marina la cebolla, el ají y el mero», «se marina», «sírvelo helado», «camarones ya cocidos»). Ronda 7:
+#   (1) Las especies nuevas cuentan para DETECTAR (contador cross-día, gate same-day, `variety_report`), pero un día cuya
+#       repetición de pescado incluye una especie nueva se salta ENTERO en el autofix (`especie_nueva_en`, motivo
+#       `especie_nueva`): decide el gate, que regenera el día. Con la especie nueva DELANTE, ella se quedaba de guardiana
+#       y el autofix reescribía el otro pez, uno de la base, en una repetición que la base no veía (d8b10b05 D2,
+#       «Espaguetis con sardinas»: la tilapia pasaba a pollo). Saltando el día, las reescrituras del lote son un
+#       subconjunto de las de la base (`tests/test_p1_plan_lote_857_replay.py`). El reescritor usa los alias de antes.
 #   (2) Para cualquier etiqueta del mar (la que la guarda de dieta veta al vegetariano y no al pescetariano: pescado, atún,
-#       camarones…), el autofix nunca reescribe una comida cuyo pez es conserva o precocido (`pez_en_conserva`), crudo
-#       (`pez_crudo`) o servido frío (`pez_servido_frio`): su receta no cuece la carne que entraría.
+#       camarones…), la REGLA POSITIVA de V7f: el autofix reescribe el pez sólo si una cláusula que lo nombra (o su
+#       enclítico en la cláusula siguiente: «…; hornéalo 20 minutos») lo cuece (`culinary_coherence._v7f_evidencia`: verbo
+#       de cocción que no sea participio, o fuego y tiempo). El blanqueo antes de marinar no cuenta; una nota de seguridad
+#       tampoco. Además nunca reescribe la conserva (`pez_en_conserva`), el precocido («ya cocido», «precocido», «cocidos»
+#       junto al pez: `pez_precocido`) ni el plato crudo por su nombre (ceviche, tiradito, tataki…: `pez_crudo`).
+#       Excepciones: sin pasos no hay cláusula que deje el pez crudo (se reescribe como en la base), y en la comida ligera
+#       o dulce el único destino es el queso, que no se cuece (el arreglo de la ronda 5).
 # SSOT: la conserva es la lista del cerrador (`graph_orchestrator._PRECOOKED_PROTEIN_HINT`, con la que escribe «ya viene
-# cocido»), la cocción es la de V7f (`culinary_coherence._v7f_evidencia`). Sin guardiana nueva: la comida que se conserva
-# es la de la base; la intocable se queda y el log dice por qué. Knob `MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD` (2).
+# cocido»), la cocción es la de V7f. Knob `MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD` (2).
 # tooltip-anchor: P1-PLAN-LOTE-857-NO-REESCRIBIR
 PEZ_LISTO_GUARD = _env_bool("MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD", True)
 
@@ -120,16 +131,26 @@ PEZ_LISTO_GUARD = _env_bool("MEALFIT_PROTEIN_AUTOFIX_FISH_READY_GUARD", True)
 SIEMPRE_EN_CONSERVA = ("anchoa", "mojama")
 _LATA_RE = re.compile(r"\b(?:latas?|enlatad\w*|conservas?)\b|\bya\s+viene\s+cocid")
 _SARDINA_FRESCA_RE = re.compile(r"\bsardinas?\s+fresc")
-# Crudo: el plato lo es por su NOMBRE (se blanquee o no), o el pez va pegado a «marinado/crudo» y ninguna cláusula que lo
-# nombre lo cuece. Un blanqueo breve antes de marinar no es una cocción (lo inyecta `_inject_blanch_for_citrus_marinade`).
-_PLATO_CRUDO_RE = re.compile(r"\b(?:ceviche|cebiche|tiradito|aguachile|tartar|tartare|carpaccio|sashimi|sushi|poke)\b")
+# El producto listo junto al pez: «atún al natural», «atún en salmuera», «bacalao en aceite» (en el nombre o la línea; en
+# un paso «el pescado en aceite caliente» es freírlo, así que ahí sólo cuentan «al natural» y «en salmuera»).
+_PRODUCTO_LINEA = r"(?:al\s+natural|en\s+salmuera|en\s+aceite)\b"
+_PRODUCTO_PASO = r"(?:al\s+natural|en\s+salmuera)\b"
+_JUNTO = r"\w*(?:\s+\w+){0,2}?\s+"
+# Precocido junto al pez: «el pescado ya cocido y desmenuzado», «camarones precocidos», y en un PASO también «agrega los
+# camarones cocidos». Entre medias sólo un tamaño o estado («camarones grandes cocidos»), nunca un verbo («hasta que el
+# pescado esté cocido»). En la LÍNEA, «cocido» a secas es la convención del cerrador de proteína para el peso cocido: escribe
+# «30 g de arenque cocido» y en el paso «Cocina arenque a la plancha o hervido» (12 líneas así en el corpus del replay);
+# ahí decide el paso.
+_PEZ_HASTA_COCIDO = r"\w*\s+(?:(?:grandes?|pequen\w*|median\w*|pelad\w*|limpi\w*)\s+){0,2}"
+_PRECOCIDO_LINEA = r"(?:ya\s+(?:pre)?cocid|precocid)"
+_PRECOCIDO_PASO = r"(?:ya\s+)?(?:pre)?cocid"
+_PRECOCIDO_ANTES = r"\bprecocid\w*\s+(?:de\s+)?"
+# Crudo por el NOMBRE del plato (se blanquee o no).
+_PLATO_CRUDO_RE = re.compile(r"\b(?:ceviche|cebiche|tiradito|aguachile|tartar|tartare|carpaccio|sashimi|sushi|poke|"
+                             r"tataki)\b")
+# Un blanqueo breve antes de marinar no es una cocción (lo inyecta `_inject_blanch_for_citrus_marinade`).
 _BLANQUEO_RE = re.compile(r"\bblanque\w*|\bescald\w*|\bantes\s+de\s+marinar")
-# Hasta dos palabras entre el pez y la señal, ninguna de las que introducen OTRO alimento («tilapia con cebolla marinada»).
-_ENTRE = r"(?:\W+(?!(?:con|y|e|o|u|sobre|junto|mas|acompanad\w*)\b)\w+){0,2}?\W+"
-_CRUDO_DESPUES = r"(?:marinad\w*|crud[oa]s?)\b"
-_MARINA_ANTES = r"\bmarin(?:a|ar|ala|alo|alas|alos)\W+(?:\w+\W+){0,2}?"
-# Frío: «sirve frío», «sírvela bien fría», «servir frío» en la misma frase, o «frío/fría» en el nombre del plato.
-_SERVIDO_FRIO_RE = re.compile(r"\b(?:sirv|serv)\w*\b[^.;:]*?\bfri[oa]s?\b")
+# «sirve frío»: sin acentos, V7f lee «frio» como «frío» de freír (`fri[eo]`); en una receta es el adjetivo.
 _FRIO_RE = re.compile(r"\bfri[oa]s?\b")
 
 
@@ -143,68 +164,88 @@ def _rx_alias(alias) -> "re.Pattern | None":
     return re.compile(r"\b(?:" + "|".join(re.escape(a) for a in als) + r")") if als else None
 
 
+def especie_nueva_en(comidas, especies_nuevas):
+    """El nombre de la primera comida de una repetición de pescado (≥2 comidas) que lleva una especie NUEVA en el nombre o
+    las líneas, o None. Con uno así, el autofix salta el día entero. Knob apagado o sin especies nuevas ⇒ None."""
+    try:
+        comidas = [m for m in (comidas or ()) if isinstance(m, dict)]
+        if not BETA_FISH_SPECIES_COUNT or not especies_nuevas or len(comidas) < 2:
+            return None
+        nueva = _rx_alias(especies_nuevas)
+        for m in comidas:
+            if any(nueva.search(_norm(t)) for t in [m.get("name")] + _lista(m.get("ingredients")) if t):
+                return str(m.get("name") or "—")
+        return None
+    except Exception as e:                                             # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-857] especie_nueva_en: {type(e).__name__}: {e} — el día va al gate")
+        return "sin_verificar"
+
+
 def _en_conserva(lineas, pasos, pez, precocido) -> bool:
     fresca = any(_SARDINA_FRESCA_RE.search(t) for t in lineas + pasos)
     pistas = [_norm(h) for h in (precocido or ()) if not (fresca and _norm(h) == "sardina")] + list(SIEMPRE_EN_CONSERVA)
-    for t in lineas:                                   # el nombre, la lista y los crudos: la lista entera del cerrador
-        if pez.search(t) and (any(h in t for h in pistas) or _LATA_RE.search(t)):
+    producto_linea = re.compile(pez.pattern + _JUNTO + _PRODUCTO_LINEA)
+    for t in lineas:                                   # el nombre y las líneas: la lista entera del cerrador
+        if pez.search(t) and (any(h in t for h in pistas) or _LATA_RE.search(t) or producto_linea.search(t)):
             return True
     import culinary_coherence as cc
-    for paso in pasos:                                 # en los pasos, sólo la lata o «ya viene cocido» en la frase del pez
+    producto_paso = re.compile(pez.pattern + _JUNTO + _PRODUCTO_PASO)
+    for paso in pasos:                                 # en los pasos, la lata en la frase del pez o el producto junto a él
         for a, b in cc.clause_bounds(paso):
-            if pez.search(paso[a:b]) and _LATA_RE.search(paso[a:b]):
+            cl = paso[a:b]
+            if pez.search(cl) and (_LATA_RE.search(cl) or producto_paso.search(cl)):
                 return True
     return False
 
 
-def _crudo(nombre, lineas, pasos, pez) -> bool:
+def _precocido(lineas, pasos, pez) -> bool:
+    antes = _PRECOCIDO_ANTES + pez.pattern
+    linea = re.compile(pez.pattern + _PEZ_HASTA_COCIDO + _PRECOCIDO_LINEA + "|" + antes)
+    paso = re.compile(pez.pattern + _PEZ_HASTA_COCIDO + _PRECOCIDO_PASO + "|" + antes)
+    return any(linea.search(t) for t in lineas) or any(paso.search(t) for t in pasos)
+
+
+def _lo_cuece(pasos, pez) -> bool:
+    """¿Alguna cláusula que nombra el pez (o su enclítico en la cláusula siguiente) lo cuece, con el criterio de V7f? El
+    blanqueo antes de marinar y las notas de seguridad no cuentan."""
     import culinary_coherence as cc
-    if _PLATO_CRUDO_RE.search(nombre):
-        return True
-    pez_rx = pez.pattern
-    pegado = re.compile(pez_rx + r"\w*" + _ENTRE + _CRUDO_DESPUES + "|" + _MARINA_ANTES + pez_rx)
-    pasos = [p for p in pasos if not cc._V5_NOTA.search(p)]
-    if not any(pegado.search(t) for t in lineas + pasos):
-        return False
-    if cc._V7F_DECLARADO_COCIDO_RE.search(nombre) or cc._V7F_FUEGO_RE.search(nombre):
-        return False                                   # «Tilapia marinada al horno»
     for paso in pasos:
+        if cc._V5_NOTA.search(paso):
+            continue
         previa = False
         for a, b in cc.clause_bounds(paso):
             cl = paso[a:b]
             nombra = bool(pez.search(cl))
             if ((nombra or (previa and cc._V7F_ENCLITICO_RE.search(cl))) and not _BLANQUEO_RE.search(cl)
-                    and cc._v7f_evidencia(cl)):
-                return False                           # una cláusula lo cuece (el blanqueo no cuenta)
+                    and cc._v7f_evidencia(_FRIO_RE.sub(" ", cl))):
+                return True
             previa = nombra
-    return True
+    return False
 
 
-def motivo_para_no_reescribir(etiqueta, meal, alias_etiqueta, especies_nuevas, precocido, vetado):
+def motivo_para_no_reescribir(etiqueta, meal, alias_etiqueta, precocido, vetado, ligero=False):
     """¿Por qué el autofix de proteína repetida NO debe reescribir `meal` (una comida con la etiqueta `etiqueta`)?
-    `especie_nueva` | `pez_en_conserva` | `pez_crudo` | `pez_servido_frio` | `sin_verificar` (falló la lectura: no se
-    reescribe) | None (se reescribe como en la base). `especies_nuevas` son los alias que `extender_pescado` añadió;
-    `precocido`, `graph_orchestrator._PRECOOKED_PROTEIN_HINT`; `vetado`, `_diet_pool_item_banned` (qué etiqueta es del
-    mar). Pura; nunca lanza."""
+    `pez_en_conserva` | `pez_precocido` | `pez_crudo` | `pez_sin_coccion` | `sin_verificar` (falló la lectura: no se
+    reescribe) | None (se reescribe como en la base). `precocido` es `graph_orchestrator._PRECOOKED_PROTEIN_HINT`;
+    `vetado`, `_diet_pool_item_banned` (qué etiqueta es del mar); `ligero`, que el único destino posible es el queso
+    (merienda, desayuno ligero o plato dulce). Pura; nunca lanza."""
     if not isinstance(meal, dict):
         return None
     try:
-        nombre = _norm(meal.get("name"))
-        if etiqueta == "pescado" and BETA_FISH_SPECIES_COUNT and especies_nuevas:
-            nueva = _rx_alias(especies_nuevas)
-            if any(nueva.search(t) for t in [nombre] + [_norm(x) for x in _lista(meal.get("ingredients")) if x]):
-                return "especie_nueva"
         if not PEZ_LISTO_GUARD or not _del_mar(etiqueta, vetado):
             return None
         pez = _rx_alias(alias_etiqueta) or _rx_alias([etiqueta])
+        nombre = _norm(meal.get("name"))
         lineas = [nombre] + [_norm(x) for k in ("ingredients", "ingredients_raw") for x in _lista(meal.get(k)) if x]
-        pasos = [_norm(x) for x in _lista(meal.get("recipe")) if isinstance(x, str)]
+        pasos = [_norm(x) for x in _lista(meal.get("recipe")) if isinstance(x, str) and x.strip()]
         if _en_conserva(lineas, pasos, pez, precocido):
             return "pez_en_conserva"
-        if _crudo(nombre, lineas, pasos, pez):
+        if _precocido(lineas, pasos, pez):
+            return "pez_precocido"
+        if _PLATO_CRUDO_RE.search(nombre):
             return "pez_crudo"
-        if _FRIO_RE.search(nombre) or any(_SERVIDO_FRIO_RE.search(t) for t in [nombre] + pasos):
-            return "pez_servido_frio"
+        if pasos and not ligero and not _lo_cuece(pasos, pez):
+            return "pez_sin_coccion"
         return None
     except Exception as e:                                             # noqa: BLE001
         logger.warning(f"[P1-PLAN-LOTE-857] motivo_para_no_reescribir: {type(e).__name__}: {e} — no se reescribe")

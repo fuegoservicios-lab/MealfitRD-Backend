@@ -70,11 +70,14 @@ def test_ladder_exhausted_logs_impotence(go, caplog):
     # pescado repetido; su escalera es (pollo, pavo) — AMBOS ya presentes en el día (day_labels los
     # incluye desde el escaneo) → ladder agotado, break silencioso antes de este fix. mainGoal=
     # gain_muscle desactiva el fallback no-gated (queso/legumbre) que si no, resolvería el swap.
+    # [P1-PLAN-LOTE-857 · 2026-09-29] los pasos cuecen el pez en una cláusula que lo nombra: con el «Cocina.» genérico
+    # la regla positiva de V7f no reescribe (reason=pez_sin_coccion) y nunca se llegaría a la escalera.
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Pollo al Horno", ["150 g de pechuga de pollo", "100 g de arroz"]),
         _meal("Merienda", "Pavo Ahumado", ["80 g de pechuga de pavo"]),
-        _meal("Almuerzo", "Pescado a la Plancha", ["150 g de filete de pescado blanco", "100 g de arroz"]),
-        _meal("Cena", "Tilapia Guisada", ["150 g de tilapia", "100 g de yuca"]),
+        _meal("Almuerzo", "Pescado a la Plancha", ["150 g de filete de pescado blanco", "100 g de arroz"],
+              ["Cocina el filete de pescado blanco a la plancha 4 minutos por lado."]),
+        _meal("Cena", "Tilapia Guisada", ["150 g de tilapia", "100 g de yuca"], ["Guisa la tilapia 20 minutos."]),
     ]}]
     with caplog.at_level(logging.INFO, logger="graph_orchestrator"):
         go._protein_repeat_autofix(days, {"mainGoal": "gain_muscle"})
