@@ -33,7 +33,7 @@ def test_con_la_nota_ya_puesta_el_escudo_repone_el_paso_del_queso():
     plan = {"days": [{"day": 1, "meals": [copy.deepcopy(_NABO)]}]}
     ec.etiquetar(plan, {"medicalConditions": ["Embarazo"]})
     rec = plan["days"][0]["meals"][0]["recipe"]
-    assert rec[1].endswith("Dora el queso blanco pasteurizado en la sartén caliente, 1-2 minutos por lado, hasta que humee "
+    assert rec[1].endswith("Calienta el queso blanco pasteurizado en la sartén caliente, 1-2 minutos por lado, hasta que humee "
                            "y esté bien caliente por dentro (74 °C)."), rec
     assert sum(p == _NOTA_QUESO for p in rec) == 1, "la nota no se duplica"
     antes = copy.deepcopy(plan)

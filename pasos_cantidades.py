@@ -349,6 +349,9 @@ def ya_va_dentro(texto_otros_pasos: str, alimento: str) -> bool:
 _FRASE_RE = re.compile(r"[^.!?]+[.!?]+\s*")
 
 
+_ECO_Y_867_RE = re.compile(r"\b((?:[\wáéíóúñü]+\s+){2,9}[\wáéíóúñü]+)\s+y\s+\1\b", re.IGNORECASE)
+
+
 def frases_repetidas(meal) -> int:
     """Nº de pasos donde se quitó una frase repetida seguida (comparada sin acentos ni mayúsculas). 0 ante error."""
     try:
@@ -359,6 +362,12 @@ def frases_repetidas(meal) -> int:
         for i, paso in enumerate(rec):
             if not isinstance(paso, str) or any(e in paso for e in ("⚠", "💡", "🌱", "⚕")):
                 continue
+            # [P1-PLAN-LOTE-867] «hasta que no quede rosada por dentro y no quede rosada por dentro» (batería real de
+            # embarazo del 29-sep): la misma frase de 3+ palabras a los dos lados de un «y» se queda una vez
+            sin_eco = _ECO_Y_867_RE.sub(r"\1", paso)
+            if sin_eco != paso:
+                rec[i] = paso = sin_eco
+                n += 1
             frases = _FRASE_RE.findall(paso)
             if len(frases) < 2 or "".join(frases) != paso:
                 continue
@@ -3580,7 +3589,9 @@ def claras_del_cerrador(meal) -> int:
 # 14 («lava y corta 5 g;», «y mide 30 g.»). Un «corta/pica/mide/pesa N g» sin alimento detrás se retira con su «y».
 # tooltip-anchor: P1-PLAN-LOTE-422
 _MIGAJA_422_RE = re.compile(
-    r"(?P<pre>(?:,|;|:)\s*|\s+y\s+)(?:(?:lava|pela)\s+y\s+)?(?:corta|pica|mide|pesa)\s+\d+(?:[.,]\d+)?\s*g(?=\s*[,;.])")
+    r"(?P<pre>(?:,|;|:)\s*|\s+y\s+)(?:(?:lava|pela)\s+y\s+)?(?:corta|pica|mide|pesa|"
+    r"desmenuza|ralla|rebana|trocea|lamina|machaca|tritura)"   # [P1-PLAN-LOTE-865] «…y desmenuza 5 g.» (el queso se fue)
+    r"\s+\d+(?:[.,]\d+)?\s*g(?=\s*[,;.])")
 
 
 def migaja_sin_alimento(meal) -> int:
