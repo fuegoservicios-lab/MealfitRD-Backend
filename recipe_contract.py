@@ -1006,6 +1006,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("restos_de_sustitucion").limpiar(meal)  # [P1-PLAN-LOTE-731] el pollo no se cuaja ni el yogur se desmenuza
         __import__("mani_picado").limpiar(meal)  # [P1-PLAN-LOTE-781] el maní no se filetea: «maní picado»
         __import__("restante_sin_choque").limpiar_pasos(meal)  # [P1-PLAN-LOTE-920] «los el queso restante restante»
+        __import__("unidad_repetida").limpiar(meal)  # [P1-PLAN-LOTE-921] «el filete de filete de pescado blanco»
         __import__("doble_punto").limpiar(meal)  # [P1-PLAN-LOTE-634] «pollo..» → «pollo.»: lo último que toca los pasos
         if r.get("lista_reescrita"):
             _remedir_macros(meal, db)
