@@ -142,9 +142,14 @@ def test_frontend_analytics_opt_out_real():
     trackEvent gatea en isAnalyticsOptedOut (no un switch decorativo)."""
     analytics = _read(_REPO_ROOT / "frontend" / "src" / "utils" / "analytics.js")
     assert "ANALYTICS_OPT_OUT_KEY" in analytics
-    assert re.search(r"if\s*\(\s*isAnalyticsOptedOut\(\)\s*\)\s*return", analytics), (
-        "trackEvent debe cortar en isAnalyticsOptedOut() — sin el gate, el "
+    # [P1-PLAN-LOTE-847] El corte pasó a `analiticaPermitida()` (opt-in), la regla única que INCLUYE el «no» del
+    # dispositivo: `trackEvent` corta en ella y ella corta en `isAnalyticsOptedOut()`.
+    assert re.search(r"if\s*\(\s*!\s*analiticaPermitida\(\)\s*\)\s*return", analytics), (
+        "trackEvent debe cortar en analiticaPermitida() — sin el gate, el "
         "toggle de Privacidad sería un ajuste falso."
+    )
+    assert re.search(r"analiticaPermitida\s*=\s*\(\)\s*=>[^;\n]*!\s*isAnalyticsOptedOut\(\)", analytics), (
+        "analiticaPermitida() dejó de respetar el opt-out del dispositivo (isAnalyticsOptedOut)."
     )
     settings = _read(_SETTINGS)
     # [P1-LANDING-OBS-PAPER · 2026-08-14] Esta aserción exigía ver

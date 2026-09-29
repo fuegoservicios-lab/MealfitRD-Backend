@@ -177,7 +177,9 @@ def test_una_sola_puerta_a_sentry_en_todo_el_arbol() -> None:
     El import DINÁMICO de `main.jsx` (`await import('@sentry/react')` para las
     integraciones) es legítimo y no cuenta: no ata nada al entry.
     """
-    permitidos = {"src/utils/sentryBoot.js"}
+    # [P1-PLAN-LOTE-847] `sentryIntegraciones.js` (tracing + replay con permiso) es la segunda puerta legítima por la
+    # misma razón que `sentryBoot.js`: `main.jsx` sólo llega a ella por `import()`. El test de abajo lo sostiene.
+    permitidos = {"src/utils/sentryBoot.js", "src/utils/sentryIntegraciones.js"}
     infractores: list[str] = []
 
     for ruta in _SRC.rglob("*"):
@@ -199,6 +201,21 @@ def test_una_sola_puerta_a_sentry_en_todo_el_arbol() -> None:
         "`utils/observability.js`, que además ENCOLA lo que llegue antes del "
         "init en vez de perderlo."
     )
+
+
+def test_las_puertas_a_sentry_solo_se_cargan_por_import_dinamico() -> None:
+    """[P1-PLAN-LOTE-847] Una puerta permitida importada de forma ESTÁTICA arrastraría el SDK al entry igual."""
+    estaticos: list[str] = []
+    for ruta in _SRC.rglob("*"):
+        if ruta.suffix not in {".js", ".jsx"}:
+            continue
+        rel = ruta.relative_to(_FRONTEND).as_posix()
+        if "__tests__" in rel:
+            continue
+        texto = ruta.read_text(encoding="utf-8", errors="ignore")
+        if re.search(r"""from\s+['"][./]*(?:utils/)?(?:sentryBoot|sentryIntegraciones)['"]""", texto):
+            estaticos.append(rel)
+    assert not estaticos, f"Import estático de una puerta a Sentry: {estaticos}"
 
 
 def test_la_fachada_no_importa_sentry() -> None:

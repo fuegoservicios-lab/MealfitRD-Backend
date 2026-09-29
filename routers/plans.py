@@ -1134,9 +1134,7 @@ def _close_medical_freetext_scope(data: dict) -> None:
 #
 # Filosofía de los rangos: PERMISIVOS en sentido médico (no rechazamos BMI<18.5
 # o usuarios atléticos con %BF<5), solo blindamos contra TYPOS y BOGUS payloads.
-# Cubrimos extremos humanos reales (3'3" — 8'2", 30-300 kg, 18-100 años).
-# [P1-PLAN-LOTE-846 · 2026-09-29] La edad NO es un rango permisivo: 18 es la edad mínima de los Términos. Un menor
-# recibe antes el 422 `underage` de `edad_minima.rechazar_si_menor` (SSOT `edad_minima.EDAD_MINIMA`).
+# Cubrimos extremos humanos reales (3'3" — 8'2", 30-300 kg, 18-100 años). La edad NO es permisiva (846): 422 `underage` antes.
 # ============================================================
 _BIO_RANGES = {
     "age":       (18, 100),       # años; solo mayores de edad (Términos §2) — [P1-PLAN-LOTE-846]
@@ -3510,9 +3508,7 @@ def api_analyze(
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
-        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: el 422 `underage` va ANTES de tocar nada más.
-        rechazar_si_menor(data.get("age"), origen="/analyze")
-
+        rechazar_si_menor(data.get("age"), origen="/analyze")  # [P1-PLAN-LOTE-846] 422 `underage` ANTES de nada
         # [P1-16/CANCEL-RACE-FIX 2026-05-06] Mismo fix que en /analyze/stream:
         # limpiar registry de cancels para este session_id antes de iniciar.
         # Evita que un cancel obsoleto en vuelo aborte esta nueva pipeline.
@@ -3950,10 +3946,7 @@ async def api_analyze_stream(
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
-        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: el 422 `underage` va ANTES de abrir el stream y de
-        # tocar nada más (mismo sitio que en el endpoint síncrono).
-        rechazar_si_menor(data.get("age"), origen="/analyze/stream")
-
+        rechazar_si_menor(data.get("age"), origen="/analyze/stream")  # [P1-PLAN-LOTE-846] ANTES de abrir el stream
         # [P1-16/CANCEL-RACE-FIX 2026-05-06] Limpiar cualquier cancel pendiente
         # del registry para este session_id ANTES de iniciar la pipeline.
         #
@@ -7120,10 +7113,8 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
-        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: la edad que trae el plato y la del perfil.
-        rechazar_si_menor_en_perfil(verified_user_id if (user_id and user_id != "guest") else None,
+        rechazar_si_menor_en_perfil(verified_user_id if (user_id and user_id != "guest") else None,  # [P1-PLAN-LOTE-846]
                                     data.get("age"), origen="/swap-meal")
-
         # [P1-PLAN-LOTE-15 · 2026-09-12] Atribución del coste LLM del swap (medido el 09-12: 117 de 117 filas
         # `swap_meal` sin user_id ni plan_id). El plan se atribuye sólo si es SUYO. El contexto es por request
         # (Starlette copia el contexto al thread del handler), así que no hay que deshacerlo.
@@ -8461,8 +8452,7 @@ def api_fix_sodium_day(
         raise HTTPException(status_code=401, detail="Crea tu cuenta para usar Arreglar este día.")
     if not plan_id or not isinstance(plan_id, str):
         raise HTTPException(status_code=400, detail="plan_id required")
-    # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18 (la edad del perfil: este botón no la trae).
-    rechazar_si_menor_en_perfil(verified_user_id, origen="/fix-sodium-day")
+    rechazar_si_menor_en_perfil(verified_user_id, origen="/fix-sodium-day")  # [P1-PLAN-LOTE-846] edad del perfil
 
     from db_core import execute_sql_query
     from nutrition_db import IngredientNutritionDB
@@ -9027,8 +9017,7 @@ def api_regenerate_day(
             raise HTTPException(status_code=401, detail="Crea tu cuenta para actualizar platos con IA.")
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
-        # [P1-PLAN-LOTE-846 · 2026-09-29] Solo mayores de 18: la edad que trae el día y la del perfil.
-        rechazar_si_menor_en_perfil(verified_user_id, data.get("age"), origen="/regenerate-day")
+        rechazar_si_menor_en_perfil(verified_user_id, data.get("age"), origen="/regenerate-day")  # [P1-PLAN-LOTE-846]
 
         # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
         # perfil → el loop de swaps (meal_form lee data["allergies"]/data["diet_type"]) hereda el
@@ -13916,8 +13905,7 @@ def api_adopt_guest_plan(
     existing = get_latest_meal_plan_with_id(verified_user_id)
     if existing:
         raise HTTPException(status_code=409, detail="account_already_has_plan")
-    # [P1-PLAN-LOTE-843] El permiso de IA del invitado pasa con su fecha original ANTES de guardar (el título es IA).
-    _permiso_ia = adoptar_de_invitado((data or {}).get("session_id"), verified_user_id)
+    _permiso_ia = adoptar_de_invitado((data or {}).get("session_id"), verified_user_id)  # [P1-PLAN-LOTE-843] con su fecha, ANTES de guardar
 
     # I1: plan_id nace del INSERT. return_id=True corre SÍNCRONO + propaga la
     # excepción + retorna el UUID; su dedup interno retorna None si una doble

@@ -85,7 +85,8 @@ def test_el_contador_no_se_cierra_por_una_condicion_fuera_de_alcance():
 def test_medidas_avisan_y_el_idioma_del_formulario_se_guarda():
     m = _f("src/components/assessment/questions/QMeasurements.jsx")
     for clave in ("¿Son kilos? Toca KG: en libras el mínimo es {min}.", "≈ {valor} {unidad}",
-                  "Escribe una edad entre {min} y {max} años."):
+                  # [P1-PLAN-LOTE-846 · ronda 1] el aviso de la edad no revela el umbral (18): «Revisa la edad.»
+                  "Revisa la edad."):
         assert f"t('{clave}'" in m
     ls = _f("src/components/common/LocaleSwitcher.jsx")
     assert "if (!aplicado || aplicado === SUPERSEDED || !guardarEnCuenta) return;" in ls

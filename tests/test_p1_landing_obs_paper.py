@@ -83,7 +83,9 @@ def test_sentry_replay_gateado_por_la_politica():
 
 
 def test_posthog_toma_sus_opciones_de_la_politica():
-    contenido = _read(_POSTHOG)
+    # [P1-PLAN-LOTE-847] Las opciones de `posthog.init` viven en `posthogConfig.js`, que llega con el SDK en el
+    # import perezoso de `posthogClient.js`: la regla se mira en los dos.
+    contenido = _read(_POSTHOG) + _read(_SRC / "utils" / "posthogConfig.js")
     assert "posthogCaptureOptions" in contenido, (
         "[P1-LANDING-OBS-PAPER] `posthogClient.js` no usa `posthogCaptureOptions`."
     )
