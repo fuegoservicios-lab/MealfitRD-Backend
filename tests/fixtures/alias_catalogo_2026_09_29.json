@@ -1,0 +1,6533 @@
+{
+"leido": "2026-09-29",
+"fuente": "public.master_ingredients (Neon prod, SELECT de solo lectura): nombre, categoría, alias, métodos de preparación, listo para comer, si tiene precio RD; `pais_beta` = país de las 140 altas del 17-ago (scripts/data/new_foods_{es,mx_co,pr_us}_2026_08_17.json), null en las demás",
+"filas": [
+{
+"name": "Aceite de achiote",
+"category": "Despensa",
+"aliases": [
+"achiote oil",
+"aceite con achiote",
+"aceite de annatto",
+"aceite anaranjado"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Aceite de coco",
+"category": "Despensa",
+"aliases": [
+"aceite coco"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Aceite de oliva",
+"category": "Despensa",
+"aliases": [
+"aceite oliva",
+"aceite de oliva extra virgen"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Aceite de sésamo",
+"category": "Despensa",
+"aliases": [
+"aceite sesamo",
+"aceite de ajonjolí"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Aceite vegetal",
+"category": "Despensa",
+"aliases": [
+"aceite",
+"aceite de soya",
+"aceite de canola",
+"aceite canola"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Aceitunas",
+"category": "Despensa",
+"aliases": [
+"aceitunas verdes",
+"aceitunas negras",
+"olivas"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Aceitunas rellenas",
+"category": "Despensa",
+"aliases": [
+"stuffed olives",
+"aceitunas rellenas de pimiento",
+"aceitunas manzanilla rellenas"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Acelgas",
+"category": "Vegetales",
+"aliases": [
+"acelgas",
+"acelga",
+"swiss chard"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Achiote",
+"category": "Despensa",
+"aliases": [
+"color",
+"annatto",
+"annatto seed",
+"semillas de achiote",
+"bija",
+"onoto",
+"color (bijol)",
+"bijol"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX,CO"
+},
+{
+"name": "Aderezo ranch",
+"category": "Despensa",
+"aliases": [
+"ranch dressing",
+"aderezo ranch regular"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Adobo",
+"category": "Despensa",
+"aliases": [
+"adobo seco",
+"sazonador adobo",
+"adobo goya",
+"adobo en polvo"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Aguacate",
+"category": "Frutas",
+"aliases": [
+"palta",
+"avocado"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ajo",
+"category": "Vegetales",
+"aliases": [
+"ajo fresco",
+"ajo machacado",
+"ajo majado",
+"ajo picado",
+"ajo triturado",
+"diente de ajo",
+"diente de ajo machacado",
+"diente de ajo picado",
+"dientes de ajo"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ajo en polvo",
+"category": "Despensa",
+"aliases": [
+"ajo molido",
+"garlic powder"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ajonjolí",
+"category": "Despensa",
+"aliases": [
+"ajonjoli",
+"sesamo",
+"semillas de sesamo",
+"semilla de ajonjoli",
+"sesame seeds",
+"sesame"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ají cubanela",
+"category": "Vegetales",
+"aliases": [
+"ajíes cubanela",
+"ají",
+"ajíes"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ají morrón",
+"category": "Vegetales",
+"aliases": [
+"pimiento",
+"pimiento rojo",
+"pimiento verde",
+"pimiento amarillo",
+"ají morrón",
+"ají morrón rojo",
+"ají morrón amarillo",
+"pimientos mixtos",
+"pimiento verde",
+"ajíes morrones",
+"pimiento morrón",
+"pimientos morrones",
+"ají morrón grande",
+"chile morrón",
+"chile morron",
+"chiles morrones"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Albahaca seca",
+"category": "Despensa",
+"aliases": [
+"albahaca"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Alcachofa",
+"category": "Vegetales",
+"aliases": [
+"alcachofa",
+"alcachofas",
+"alcaucil",
+"artichoke",
+"globe artichoke"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Alcaparrado",
+"category": "Despensa",
+"aliases": [
+"alcaparrado goya",
+"aceitunas y alcaparras",
+"mezcla de aceitunas y alcaparras"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Alioli",
+"category": "Despensa",
+"aliases": [
+"alioli",
+"aioli",
+"ajoaceite",
+"mayonesa con ajo"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Almejas",
+"category": "Proteínas",
+"aliases": [
+"almejas",
+"almeja",
+"clams"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Almendra marcona",
+"category": "Despensa",
+"aliases": [
+"almendra marcona",
+"almendras marcona",
+"marcona almonds"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Almendras fileteadas",
+"category": "Despensa",
+"aliases": [
+"almendras",
+"almendras trituradas",
+"almendras fileteadas o trituradas",
+"nueces",
+"nueces/almendras"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Anchoas",
+"category": "Proteínas",
+"aliases": [
+"anchoas",
+"anchoa",
+"filetes de anchoa",
+"anchoas en aceite"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Apio",
+"category": "Vegetales",
+"aliases": [
+"celery",
+"tallo de apio",
+"apio en rama",
+"apio crudo"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Arenque",
+"category": "Proteínas",
+"aliases": [
+"arenque",
+"arenque ahumado",
+"arenque salado",
+"filete de arenque",
+"herring",
+"kippered herring"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Arequipe",
+"category": "Despensa",
+"aliases": [
+"dulce de leche",
+"manjar blanco",
+"cajeta"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Arracacha",
+"category": "Víveres",
+"aliases": [
+"arracacha blanca",
+"apio criollo",
+"zanahoria blanca andina"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Arroz blanco",
+"category": "Despensa",
+"aliases": [
+"arroz",
+"concón",
+"concon",
+"arroz tostado",
+"raspa de arroz"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Arroz integral",
+"category": "Despensa",
+"aliases": [
+"arroz integral largo"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Arándanos",
+"category": "Frutas",
+"aliases": [
+"arandanos",
+"arandano azul",
+"blueberry",
+"blueberries",
+"mora azul"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Arándanos rojos",
+"category": "Frutas",
+"aliases": [
+"cranberries",
+"arandano rojo",
+"arandano agrio"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Atún en agua",
+"category": "Proteínas",
+"aliases": [
+"atún",
+"atún enlatado",
+"atún en lata"
+],
+"prep_methods": [
+"ninguno",
+"plancha",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Auyama",
+"category": "Víveres",
+"aliases": [
+"calabaza",
+"squash",
+"zapallo",
+"auyama criolla",
+"calabaza dominicana"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Avena",
+"category": "Despensa",
+"aliases": [
+"avena en hojuelas",
+"oats",
+"avena instantánea"
+],
+"prep_methods": [
+"hervir",
+"ninguno",
+"tostar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Azafrán",
+"category": "Despensa",
+"aliases": [
+"azafran",
+"azafrán",
+"saffron",
+"hebras de azafran"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Azúcar morena",
+"category": "Despensa",
+"aliases": [
+"brown sugar",
+"azucar negra"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": "US"
+},
+{
+"name": "Bacalao",
+"category": "Proteínas",
+"aliases": [
+"bacalao fresco",
+"bacalao desalado",
+"bacalao (desalado)",
+"bacalao seco",
+"bacalao remojado",
+"cod fish"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Bacalaítos",
+"category": "Proteínas",
+"aliases": [
+"bacalaitos fritos",
+"frituras de bacalao",
+"bacalaitos (masa de bacalao)"
+],
+"prep_methods": [
+"ninguno",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Bagels",
+"category": "Despensa",
+"aliases": [
+"bagel",
+"bagels planos",
+"plain bagels"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Batata",
+"category": "Víveres",
+"aliases": [
+"batatas",
+"camote",
+"boniato"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Berenjena",
+"category": "Vegetales",
+"aliases": [
+"berenjenas"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Berro",
+"category": "Vegetales",
+"aliases": [
+"watercress",
+"berros",
+"berro de agua"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Bok choy",
+"category": "Vegetales",
+"aliases": [
+"bok choy",
+"pak choi",
+"pak choy",
+"col china",
+"repollo chino",
+"bok-choy"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Bolitas de papa",
+"category": "Despensa",
+"aliases": [
+"tater tots",
+"croquetas de papa fritas",
+"bolitas de papa fritas"
+],
+"prep_methods": [
+"freir",
+"hornear",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Boquerones",
+"category": "Proteínas",
+"aliases": [
+"boquerones",
+"boqueron",
+"anchoas frescas",
+"boquerones en vinagre"
+],
+"prep_methods": [
+"ninguno",
+"freir",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Borojó",
+"category": "Frutas",
+"aliases": [
+"borojo",
+"pulpa de borojó"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Brócoli",
+"category": "Vegetales",
+"aliases": [
+"brócoli",
+"flores de brócoli"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Bulgur",
+"category": "Despensa",
+"aliases": [
+"bulgur",
+"trigo bulgur",
+"trigo partido",
+"bulghur",
+"burgol",
+"cracked wheat",
+"cuchuco de trigo",
+"cuchuco",
+"cuchuco boyacense"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Butifarra",
+"category": "Proteínas",
+"aliases": [
+"butifarra",
+"butifarra blanca",
+"butifarra catalana"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Cacao en polvo",
+"category": "Despensa",
+"aliases": [
+"cacao",
+"cacao en polvo",
+"cacao puro",
+"cacao amargo",
+"cocoa",
+"cocoa powder"
+],
+"prep_methods": [
+"ninguno",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Calabacín",
+"category": "Vegetales",
+"aliases": [
+"zucchini",
+"calabacita",
+"zapallito",
+"calabacin verde",
+"courgette"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Calamar",
+"category": "Proteínas",
+"aliases": [
+"calamar",
+"calamares",
+"calamar crudo",
+"squid",
+"chipiron",
+"mariscos"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Camarones",
+"category": "Proteínas",
+"aliases": [
+"camarón",
+"langostinos"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Canela en polvo",
+"category": "Despensa",
+"aliases": [
+"canela"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cangrejo",
+"category": "Proteínas",
+"aliases": [
+"cangrejo",
+"jaiba",
+"crab",
+"blue crab",
+"cangrejo azul"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Carne de res",
+"category": "Proteínas",
+"aliases": [
+"res",
+"bistec de res",
+"bistec",
+"carne"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Carne de res molida",
+"category": "Proteínas",
+"aliases": [
+"carne molida",
+"res molida"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Carne molida mixta",
+"category": "Proteínas",
+"aliases": [
+"meatloaf mix",
+"carne mixta para pastel de carne",
+"mezcla de carne para meatloaf"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Casabe",
+"category": "Despensa",
+"aliases": [
+"casabe tradicional",
+"casabe dominicano"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Casabe albahaca",
+"category": "Despensa",
+"aliases": [
+"casabe sabor albahaca",
+"casabe de albahaca",
+"casabe wala albahaca",
+"casabe con albahaca",
+"casabe albahaca"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cebada",
+"category": "Despensa",
+"aliases": [
+"cebada",
+"cebada perlada",
+"barley",
+"pearled barley",
+"cebada en grano"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cebolla",
+"category": "Vegetales",
+"aliases": [
+"cebolla blanca",
+"cebolla roja",
+"cebolla morada"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cebolla en polvo",
+"category": "Despensa",
+"aliases": [
+"cebolla en polvo",
+"cebolla molida",
+"polvo de cebolla",
+"onion powder",
+"cebolla deshidratada en polvo"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cebollín",
+"category": "Vegetales",
+"aliases": [
+"cebollin",
+"cebollino",
+"cebolleta",
+"cebolla verde",
+"cebollin de hoja",
+"scallion",
+"scallions",
+"green onion",
+"green onions",
+"spring onion"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cecina",
+"category": "Proteínas",
+"aliases": [
+"cecina de res",
+"cecina enchilada",
+"cecina yecapixtla"
+],
+"prep_methods": [
+"ninguno",
+"plancha",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Cerdo",
+"category": "Proteínas",
+"aliases": [
+"carne de cerdo",
+"lomo de cerdo",
+"chuleta de cerdo",
+"chuleta"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cereza maraschino",
+"category": "Frutas",
+"aliases": [
+"cereza maraschino",
+"cereza de coctel",
+"cereza confitada",
+"maraschino cherry"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Champiñones",
+"category": "Vegetales",
+"aliases": [
+"champinon",
+"hongos",
+"setas",
+"mushrooms",
+"hongo blanco",
+"seta"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Champús",
+"category": "Despensa",
+"aliases": [
+"champus",
+"champús vallecaucano"
+],
+"prep_methods": [
+"ninguno",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Chicharrón",
+"category": "Proteínas",
+"aliases": [
+"chicharrones",
+"cuero de cerdo frito",
+"torreznos"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": "CO"
+},
+{
+"name": "Chile ancho",
+"category": "Despensa",
+"aliases": [
+"ancho",
+"chiles anchos",
+"chile ancho seco",
+"anchos secos"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile chipotle",
+"category": "Despensa",
+"aliases": [
+"chipotle",
+"chiles chipotles",
+"chipotle seco",
+"chipotles secos"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile de árbol",
+"category": "Despensa",
+"aliases": [
+"chile de arbol",
+"chiles de árbol",
+"chiles de arbol",
+"arbol seco"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile en polvo",
+"category": "Despensa",
+"aliases": [
+"chili powder",
+"polvo de chile"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Chile guajillo",
+"category": "Despensa",
+"aliases": [
+"guajillo",
+"chiles guajillos",
+"guajillos secos"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile habanero",
+"category": "Vegetales",
+"aliases": [
+"habanero",
+"chiles habaneros",
+"habaneros"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile jalapeño",
+"category": "Vegetales",
+"aliases": [
+"jalapeno",
+"jalapeños",
+"jalapeno fresco",
+"chiles jalapeños",
+"chile cuaresmeño",
+"chiles cuaresmeños",
+"cuaresmeño"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile mulato",
+"category": "Despensa",
+"aliases": [
+"mulato",
+"chiles mulatos",
+"mulatos secos"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile pasilla",
+"category": "Despensa",
+"aliases": [
+"pasilla",
+"chiles pasilla",
+"chile pasilla negro",
+"pasillas secos"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile poblano",
+"category": "Vegetales",
+"aliases": [
+"poblano",
+"chiles poblanos",
+"chile para rellenar",
+"poblanos"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chile serrano",
+"category": "Vegetales",
+"aliases": [
+"serranos",
+"chiles serranos",
+"chile serrano fresco"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chili con carne",
+"category": "Despensa",
+"aliases": [
+"canned chili",
+"chili enlatado",
+"chili con carne y frijoles"
+],
+"prep_methods": [
+"ninguno",
+"hervir",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Chinola",
+"category": "Frutas",
+"aliases": [
+"maracuyá",
+"pulpa de chinola",
+"parcha",
+"parchas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Chistorra",
+"category": "Proteínas",
+"aliases": [
+"chistorra",
+"chorizo fresco fino"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Chivo",
+"category": "Proteínas",
+"aliases": [
+"chivo",
+"carne de chivo",
+"cabra",
+"carne de cabra",
+"goat",
+"goat meat",
+"chivo crudo",
+"cabro"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Chocolate de mesa",
+"category": "Despensa",
+"aliases": [
+"chocolate de mesa mexicano",
+"chocolate para mole",
+"tablilla de chocolate",
+"chocolate abuelita"
+],
+"prep_methods": [
+"ninguno",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chontaduro",
+"category": "Víveres",
+"aliases": [
+"chontaduros",
+"pejibaye",
+"fruta de chontaduro"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Chorizo español",
+"category": "Proteínas",
+"aliases": [
+"chorizo espanol",
+"chorizo español",
+"chorizo ibérico",
+"spanish chorizo"
+],
+"prep_methods": [
+"ninguno",
+"plancha",
+"saltear",
+"guisar",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Chorizo mexicano",
+"category": "Proteínas",
+"aliases": [
+"chorizo mexicano fresco",
+"chorizo rojo",
+"chorizo criollo mexicano"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chorizo santarrosano",
+"category": "Proteínas",
+"aliases": [
+"chorizo de santa rosa de cabal",
+"chorizo santarrosano tradicional"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Chorizo verde",
+"category": "Proteínas",
+"aliases": [
+"chorizo verde toluca",
+"chorizo verde de toluca",
+"chorizo verde mexicano"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Chuleta ahumada",
+"category": "Proteínas",
+"aliases": [
+"pork chop smoked",
+"chuleta de cerdo ahumada",
+"chuleta ahumada de cerdo"
+],
+"prep_methods": [
+"ninguno",
+"plancha",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Cilantro",
+"category": "Vegetales",
+"aliases": [
+"cilantrico",
+"cilantro fresco"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ciruela",
+"category": "Frutas",
+"aliases": [
+"ciruela",
+"plum",
+"ciruela fresca"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ciruela pasa",
+"category": "Frutas",
+"aliases": [
+"ciruela pasa",
+"ciruelas pasas",
+"prunes",
+"ciruela seca",
+"ciruelas secas",
+"dried plum",
+"prune"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Clara de huevo",
+"category": "Proteínas",
+"aliases": [
+"claras de huevo",
+"clara de huevo",
+"claras",
+"clara de huevos"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Coco",
+"category": "Frutas",
+"aliases": [
+"coco",
+"coco rallado",
+"coconut",
+"pulpa de coco",
+"coco fresco",
+"coco maduro"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Coditos",
+"category": "Despensa",
+"aliases": [
+"elbow macaroni",
+"macarrones codo",
+"pasta codito"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": "US"
+},
+{
+"name": "Coles de Bruselas",
+"category": "Vegetales",
+"aliases": [
+"repollitos de bruselas",
+"brussels sprouts",
+"col de bruselas",
+"coles de brusela"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Coliflor",
+"category": "Vegetales",
+"aliases": [
+"cauliflower"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Comino",
+"category": "Despensa",
+"aliases": [
+"comino",
+"comino molido",
+"comino en polvo",
+"comino entero",
+"cumin",
+"ground cumin",
+"cumin seed"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Conejo",
+"category": "Proteínas",
+"aliases": [
+"conejo",
+"carne de conejo",
+"rabbit",
+"conejo crudo",
+"conejo domestico"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Cordero",
+"category": "Proteínas",
+"aliases": [
+"cordero",
+"carne de cordero",
+"pierna de cordero"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Costilla de cerdo",
+"category": "Proteínas",
+"aliases": [
+"costilla de cerdo",
+"costillas de cerdo",
+"costilla de puerco",
+"costillitas",
+"pork ribs",
+"pork spareribs",
+"spareribs"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Crema agria",
+"category": "Lácteos",
+"aliases": [
+"sour cream",
+"crema agria regular"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Crema mexicana",
+"category": "Lácteos",
+"aliases": [
+"crema mexicana espesa",
+"crema agria mexicana",
+"crema para tacos",
+"crema fresca mexicana"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Crema mitad y mitad",
+"category": "Lácteos",
+"aliases": [
+"half and half",
+"crema half and half"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Cuajada",
+"category": "Lácteos",
+"aliases": [
+"cuajada",
+"cuajada casera"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"plancha",
+"freir",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Cundeamor",
+"category": "Vegetales",
+"aliases": [
+"cundeamor",
+"cunde amor",
+"bitter gourd",
+"balsam pear",
+"balsamina",
+"achochilla"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Curry en polvo",
+"category": "Despensa",
+"aliases": [
+"curry en polvo",
+"curry",
+"curry molido",
+"polvo de curry",
+"curry powder",
+"curri en polvo"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Curuba",
+"category": "Frutas",
+"aliases": [
+"curuba larga",
+"curuba andina",
+"taxo"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Cúrcuma",
+"category": "Despensa",
+"aliases": [
+"curcuma",
+"cúrcuma",
+"curcuma en polvo",
+"curcuma molida",
+"turmeric",
+"ground turmeric",
+"azafran de la india",
+"palillo"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Durazno en almíbar",
+"category": "Frutas",
+"aliases": [
+"durazno",
+"durazno en almibar",
+"durazno en lata",
+"durazno mitades",
+"melocoton en almibar",
+"melocoton",
+"canned peach"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Duraznos",
+"category": "Frutas",
+"aliases": [
+"peaches",
+"durazno fresco"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Dátiles",
+"category": "Frutas",
+"aliases": [
+"datil",
+"datiles",
+"dates",
+"datiles medjool"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Edamame",
+"category": "Proteínas",
+"aliases": [
+"edamame",
+"soya verde",
+"frijol de soya verde",
+"vainas de soya"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ensalada de macarrones",
+"category": "Despensa",
+"aliases": [
+"macaroni salad",
+"ensalada de coditos",
+"ensalada de pasta con mayonesa"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Epazote",
+"category": "Vegetales",
+"aliases": [
+"epazote fresco",
+"paico"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Espaguetis",
+"category": "Despensa",
+"aliases": [
+"espagueti",
+"spaghetti",
+"pasta blanca",
+"pasta larga",
+"espaguetis blancos",
+"tallarines"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Especias para arroz con dulce",
+"category": "Despensa",
+"aliases": [
+"especias arroz con dulce",
+"especias para arroz dulce",
+"canela para arroz con dulce"
+],
+"prep_methods": [
+"ninguno",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Espinacas",
+"category": "Vegetales",
+"aliases": [
+"espinaca",
+"baby spinach",
+"espinaca fresca",
+"espinacas frescas",
+"espinacas baby"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Espárragos",
+"category": "Vegetales",
+"aliases": [
+"asparagus",
+"esparrago",
+"esparragos verdes",
+"esparragos crudos"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Feijoa",
+"category": "Frutas",
+"aliases": [
+"feijoas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Fideos",
+"category": "Despensa",
+"aliases": [
+"fideos",
+"fideo",
+"pasta fina",
+"fideos finos"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": "ES"
+},
+{
+"name": "Filete de pescado blanco",
+"category": "Proteínas",
+"aliases": [
+"pescado blanco",
+"filete de pescado",
+"chillo",
+"pescado fresco",
+"pescado"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Flor de Jamaica",
+"category": "Despensa",
+"aliases": [
+"jamaica",
+"jamaica flor seca",
+"flor de jamaica seca",
+"hibisco seco",
+"jamaica (flor de)",
+"roselle",
+"flor de hibisco"
+],
+"prep_methods": [
+"ninguno",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Fresas",
+"category": "Frutas",
+"aliases": [
+"fresa",
+"fresas congeladas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Frijol cargamanto",
+"category": "Despensa",
+"aliases": [
+"cargamanto",
+"frijol cargamanto rojo",
+"habichuela cargamanto"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Frijoles horneados",
+"category": "Despensa",
+"aliases": [
+"baked beans",
+"habichuelas horneadas",
+"frijoles horneados en salsa dulce"
+],
+"prep_methods": [
+"ninguno",
+"hervir",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Frijoles pintos",
+"category": "Despensa",
+"aliases": [
+"frijoles pintos",
+"habichuelas pintas",
+"pinto beans",
+"frijol pinto",
+"habichuela pinta"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Frijoles refritos",
+"category": "Despensa",
+"aliases": [
+"frijoles fritos",
+"frijoles refritos enlatados",
+"frijoles refritos de lata"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Galletas Graham",
+"category": "Despensa",
+"aliases": [
+"graham crackers",
+"galletas graham de canela"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Galletas de soda",
+"category": "Despensa",
+"aliases": [
+"galletas de soda (30g)",
+"galletas de soda (60g)",
+"crackers",
+"saltines",
+"galleta de soda",
+"soda crackers",
+"galletas soda"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Gallina criolla",
+"category": "Proteínas",
+"aliases": [
+"gallina",
+"gallina de campo",
+"gallina para sancocho"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": "CO"
+},
+{
+"name": "Gambas",
+"category": "Proteínas",
+"aliases": [
+"gambas",
+"gamba",
+"camarones españoles",
+"prawns"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Gandules",
+"category": "Despensa",
+"aliases": [
+"gandules verdes",
+"guandules"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Garbanzos",
+"category": "Despensa",
+"aliases": [
+"garbanzo"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Granada",
+"category": "Frutas",
+"aliases": [
+"granada",
+"pomegranate",
+"granada arilos"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Granadilla",
+"category": "Frutas",
+"aliases": [
+"granadillas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Granola",
+"category": "Despensa",
+"aliases": [
+"granola sin azucar"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Guanábana",
+"category": "Frutas",
+"aliases": [
+"soursop",
+"graviola",
+"catuche",
+"guanabana"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Guascas",
+"category": "Vegetales",
+"aliases": [
+"guasca",
+"guascas frescas",
+"guasca para ajiaco"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Guayaba",
+"category": "Frutas",
+"aliases": [
+"guava",
+"guayabo",
+"guava comun"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Guineo",
+"category": "Frutas",
+"aliases": [
+"banana",
+"banano"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Guineo verde",
+"category": "Víveres",
+"aliases": [
+"guineítos verdes",
+"guineitos verdes",
+"guineos verdes",
+"guineito verde",
+"guineíto verde"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Guisantes secos",
+"category": "Despensa",
+"aliases": [
+"guisantes secos",
+"arvejas secas",
+"guisantes partidos",
+"split peas",
+"petit pois secos"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Habas",
+"category": "Despensa",
+"aliases": [
+"habas",
+"habas secas",
+"fava beans",
+"broad beans",
+"haba seca"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Habichuelas blancas",
+"category": "Despensa",
+"aliases": [
+"frijoles blancos",
+"navy beans"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Habichuelas negras",
+"category": "Despensa",
+"aliases": [
+"frijoles negros"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Habichuelas rojas",
+"category": "Despensa",
+"aliases": [
+"habichuelas",
+"frijoles rojos"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Harina de Negrito",
+"category": "Despensa",
+"aliases": [
+"harina de negrito",
+"crema de trigo",
+"creamy wheat",
+"cream of wheat",
+"farina",
+"harina quaker"
+],
+"prep_methods": [
+"hervir",
+"ninguno"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Harina de maíz precocida",
+"category": "Despensa",
+"aliases": [
+"harina de maiz",
+"harina de maíz",
+"harina de maiz precocida",
+"harina pan"
+],
+"prep_methods": [
+"hervir",
+"freir"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Harina de trigo",
+"category": "Despensa",
+"aliases": [
+"harina",
+"harina blanca",
+"harina de todo uso",
+"all-purpose flour",
+"harina multiusos"
+],
+"prep_methods": [
+"hornear",
+"freir"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Harina de yuca",
+"category": "Despensa",
+"aliases": [
+"cassava flour",
+"harina de mandioca"
+],
+"prep_methods": [
+"hornear",
+"freir",
+"hervir"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Higo",
+"category": "Frutas",
+"aliases": [
+"higo",
+"higos",
+"figs",
+"higo fresco"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno",
+"hornear",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Hoja santa",
+"category": "Vegetales",
+"aliases": [
+"hoja santa fresca",
+"acuyo",
+"momo",
+"hierba santa"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Huevo",
+"category": "Proteínas",
+"aliases": [
+"huevos",
+"huevos enteros"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Huevos rellenos",
+"category": "Proteínas",
+"aliases": [
+"deviled eggs",
+"huevos endiablados",
+"huevos rellenos con mayonesa"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Huitlacoche",
+"category": "Vegetales",
+"aliases": [
+"cuitlacoche",
+"hongo de maíz",
+"huitlacoche enlatado"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Hummus",
+"category": "Despensa",
+"aliases": [
+"humus",
+"hummus de garbanzo",
+"hummus de garbanzos",
+"hummus casero"
+],
+"prep_methods": [
+"ninguno",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Hígado de res",
+"category": "Proteínas",
+"aliases": [
+"higado",
+"hígado",
+"higado de res",
+"higado res",
+"beef liver",
+"higado vacuno"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Jamón de cocinar",
+"category": "Proteínas",
+"aliases": [
+"jamon para cocinar",
+"jamon de hervir",
+"cooking ham",
+"whole cooking ham"
+],
+"prep_methods": [
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Jamón de pavo",
+"category": "Proteínas",
+"aliases": [
+"pavo",
+"jamón pavo"
+],
+"prep_methods": [
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Jamón de sándwich",
+"category": "Proteínas",
+"aliases": [
+"deli ham",
+"jamon de charcuteria",
+"sliced deli ham"
+],
+"prep_methods": [
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Jamón ibérico",
+"category": "Proteínas",
+"aliases": [
+"jamon iberico",
+"jamón ibérico",
+"iberian ham",
+"pata negra"
+],
+"prep_methods": [
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Jamón serrano",
+"category": "Proteínas",
+"aliases": [
+"jamon serrano",
+"jamón serrano",
+"serrano ham",
+"jamon curado"
+],
+"prep_methods": [
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Jarabe de arce",
+"category": "Despensa",
+"aliases": [
+"maple syrup",
+"sirope de arce",
+"jarabe de maple"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Jengibre",
+"category": "Vegetales",
+"aliases": [
+"jengibre fresco",
+"jengibre rallado",
+"jengibre en polvo",
+"ginger",
+"jengibre fresco rallado"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Judías blancas",
+"category": "Despensa",
+"aliases": [
+"judias blancas",
+"judías blancas",
+"alubias blancas",
+"fabes"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Judías pintas",
+"category": "Despensa",
+"aliases": [
+"judias pintas",
+"judías pintas",
+"alubias pintas"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Jícama",
+"category": "Vegetales",
+"aliases": [
+"jicama",
+"yam bean"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Kale",
+"category": "Vegetales",
+"aliases": [
+"col rizada",
+"berza",
+"kale crudo",
+"col crespa"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Kiwi",
+"category": "Frutas",
+"aliases": [
+"kiwi",
+"kiwifruit",
+"kivi"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Kéfir",
+"category": "Lácteos",
+"aliases": [
+"kefir",
+"kefir natural",
+"yogur de kefir",
+"kefir liquido",
+"leche kefirada",
+"kefir plain"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Kétchup",
+"category": "Despensa",
+"aliases": [
+"ketchup",
+"catsup",
+"salsa de tomate estilo ketchup"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Laurel",
+"category": "Despensa",
+"aliases": [
+"laurel",
+"hojas de laurel",
+"hoja de laurel",
+"laurel seco",
+"bay leaf",
+"bay leaves",
+"laurel en hojas"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche",
+"category": "Lácteos",
+"aliases": [
+"leche deslactosada",
+"leche entera",
+"leche líquida"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche de almendras",
+"category": "Lácteos",
+"aliases": [
+"almond milk",
+"leche de almendra",
+"almendra liquida",
+"bebida de almendras"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche de avena",
+"category": "Lácteos",
+"aliases": [
+"oat milk",
+"bebida de avena",
+"leche de avena sin azucar",
+"oatmilk"
+],
+"prep_methods": [
+"hervir",
+"ninguno"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche de cabra en polvo",
+"category": "Lácteos",
+"aliases": [
+"leche de cabra en polvo",
+"leche caprina en polvo",
+"goat milk powder",
+"leche de cabra deshidratada"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche de coco",
+"category": "Lácteos",
+"aliases": [
+"coconut milk",
+"bebida de coco",
+"leche de coco para tomar",
+"coconut beverage"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche de soya",
+"category": "Lácteos",
+"aliases": [
+"soy milk",
+"leche de soja",
+"bebida de soya",
+"soya liquida"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche descremada",
+"category": "Lácteos",
+"aliases": [
+"leche descremada",
+"leche desnatada",
+"leche 0% grasa",
+"leche sin grasa",
+"leche descremada en polvo reconstituida"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche descremada en polvo",
+"category": "Lácteos",
+"aliases": [
+"leche descremada en polvo",
+"leche en polvo descremada",
+"leche desnatada en polvo",
+"leche en polvo desnatada",
+"leche en polvo sin grasa",
+"leche descremada en polvo instantanea"
+],
+"prep_methods": [
+"ninguno",
+"licuar",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche entera en polvo",
+"category": "Lácteos",
+"aliases": [
+"leche en polvo",
+"leche entera en polvo",
+"leche en polvo entera",
+"leche en polvo instantanea",
+"leche en polvo fortificada"
+],
+"prep_methods": [
+"ninguno",
+"licuar",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Leche evaporada",
+"category": "Lácteos",
+"aliases": [
+"leche evaporada light",
+"evaporated milk",
+"leche evaporada baja en grasa"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Lechosa",
+"category": "Frutas",
+"aliases": [
+"papaya"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Lechuga",
+"category": "Vegetales",
+"aliases": [
+"lechuga repollada",
+"lechuga iceberg",
+"hojas verdes mixtas"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Lechuga romana",
+"category": "Vegetales",
+"aliases": [
+"lechuga romana",
+"romana",
+"cos",
+"romaine",
+"romaine lettuce",
+"lechuga cos"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Lentejas",
+"category": "Despensa",
+"aliases": [
+"lenteja"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Limón",
+"category": "Frutas",
+"aliases": [
+"limones",
+"jugo de limón"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Linaza",
+"category": "Despensa",
+"aliases": [
+"semillas de lino",
+"semillas de linaza",
+"semilla de lino",
+"semilla de linaza",
+"semillas de lino molido",
+"semillas de lino molida",
+"linaza molida",
+"linaza dorada",
+"lino",
+"flaxseed",
+"flax"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Lomo embuchado",
+"category": "Proteínas",
+"aliases": [
+"lomo embuchado",
+"lomo curado",
+"lomo iberico embuchado"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Longaniza dominicana",
+"category": "Proteínas",
+"aliases": [
+"longaniza"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Longaniza puertorriqueña",
+"category": "Proteínas",
+"aliases": [
+"longaniza de puerto rico",
+"longaniza boricua",
+"longaniza fresca"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Lulo",
+"category": "Frutas",
+"aliases": [
+"lulo naranjilla",
+"naranjilla"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Malvaviscos",
+"category": "Despensa",
+"aliases": [
+"marshmallows",
+"malvavisco"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Mandarina",
+"category": "Frutas",
+"aliases": [
+"tangerine",
+"mandarin",
+"clementina",
+"tangerina"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mango",
+"category": "Frutas",
+"aliases": [
+"pulpa de mango"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mantequilla",
+"category": "Lácteos",
+"aliases": [
+"mantequilla con sal",
+"mantequilla sin sal",
+"butter"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mantequilla de almendras",
+"category": "Despensa",
+"aliases": [
+"mantequilla de almendra",
+"crema de almendra",
+"almond butter"
+],
+"prep_methods": [
+"ninguno",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mantequilla de maní",
+"category": "Despensa",
+"aliases": [
+"crema de maní",
+"peanut butter",
+"mani tostado molido",
+"crema de mani",
+"maní molido"
+],
+"prep_methods": [
+"ninguno",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Manzana",
+"category": "Frutas",
+"aliases": [
+"manzanas",
+"apple"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Maní",
+"category": "Despensa",
+"aliases": [
+"mani",
+"mani tostado",
+"mani tostado sin sal",
+"cacahuate",
+"cacahuates",
+"peanuts"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mapuey",
+"category": "Víveres",
+"aliases": [
+"mapuey",
+"cush-cush yam",
+"cushcush",
+"dioscorea trifida",
+"yampee"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Masa para pie",
+"category": "Despensa",
+"aliases": [
+"pie crust",
+"pie crust refrigerada",
+"corteza de pie"
+],
+"prep_methods": [
+"hornear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Mazapán",
+"category": "Despensa",
+"aliases": [
+"mazapan",
+"mazapán",
+"pasta de almendra",
+"marzipan"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Maíz dulce en granos",
+"category": "Despensa",
+"aliases": [
+"corn",
+"elote",
+"maiz",
+"maíz",
+"maíz dulce",
+"maiz dulce desgranado",
+"maíz en granos",
+"maiz integral",
+"maíz integral",
+"maíz integral desgranado",
+"maiz tierno",
+"maíz tierno",
+"mazorca",
+"mazorcas",
+"choclo",
+"choclos"
+],
+"prep_methods": [
+"ninguno",
+"hervir",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mejillones",
+"category": "Proteínas",
+"aliases": [
+"mejillones",
+"mejillon",
+"mejillones crudos",
+"mussels",
+"blue mussels",
+"mariscos"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Melón",
+"category": "Frutas",
+"aliases": [
+"melón"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Membrillo",
+"category": "Frutas",
+"aliases": [
+"membrillo",
+"quince",
+"membrillo fresco"
+],
+"prep_methods": [
+"hervir",
+"hornear",
+"guisar",
+"ninguno"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Membrillo dulce",
+"category": "Despensa",
+"aliases": [
+"membrillo dulce",
+"dulce de membrillo",
+"carne de membrillo",
+"pasta de membrillo"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Merey",
+"category": "Despensa",
+"aliases": [
+"merey",
+"cajuil",
+"marañon",
+"anacardo",
+"cashew",
+"nuez de la india",
+"mereyes"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mero",
+"category": "Proteínas",
+"aliases": [
+"mero",
+"grouper",
+"filete de mero",
+"mero fresco"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mezcla para panqueques",
+"category": "Despensa",
+"aliases": [
+"pancake mix",
+"mezcla para hotcakes"
+],
+"prep_methods": [
+"plancha",
+"freir"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Miel",
+"category": "Despensa",
+"aliases": [
+"miel de abeja",
+"miel de abejas",
+"miel natural",
+"miel pura"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Molondrones",
+"category": "Vegetales",
+"aliases": [
+"molondrón",
+"okra",
+"ocra",
+"quimbombó",
+"molondrones en ruedas",
+"molondrón en ruedas",
+"molondron"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Mora",
+"category": "Frutas",
+"aliases": [
+"moras",
+"mora de castilla",
+"moras andinas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Morcilla",
+"category": "Proteínas",
+"aliases": [
+"morcilla",
+"blood sausage",
+"morcilla de burgos"
+],
+"prep_methods": [
+"ninguno",
+"plancha",
+"freir",
+"saltear",
+"hornear",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Mostaza",
+"category": "Despensa",
+"aliases": [
+"mostaza dijon",
+"mostaza regular",
+"mostaza dijon o regular"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Muslo de pollo",
+"category": "Proteínas",
+"aliases": [
+"muslo",
+"muslos de pollo",
+"muslo pollo",
+"pierna de pollo",
+"chicken thigh",
+"contramuslo"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Nabo",
+"category": "Vegetales",
+"aliases": [
+"nabo",
+"nabos",
+"turnip",
+"turnips",
+"naba"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Naranja",
+"category": "Frutas",
+"aliases": [
+"naranja dulce",
+"orange"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Nata",
+"category": "Lácteos",
+"aliases": [
+"nata",
+"nata liquida",
+"crema de leche espesa",
+"heavy cream"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Natilla",
+"category": "Lácteos",
+"aliases": [
+"natilla navideña",
+"natilla colombiana"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Nopal",
+"category": "Vegetales",
+"aliases": [
+"nopales",
+"nopalitos",
+"penca de nopal",
+"nopal fresco"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Nori",
+"category": "Vegetales",
+"aliases": [
+"nori",
+"alga marina",
+"algas marinas",
+"alga nori",
+"yaki nori",
+"seaweed",
+"laver"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Nueces mixtas",
+"category": "Despensa",
+"aliases": [
+"nueces mixtas",
+"nueces",
+"nuez",
+"mixed nuts",
+"frutos secos mixtos",
+"nueces surtidas"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Nueces pecanas",
+"category": "Despensa",
+"aliases": [
+"pecans",
+"nuez pecana",
+"pacanas"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Nuez de Castilla",
+"category": "Despensa",
+"aliases": [
+"walnuts",
+"nueces de nogal",
+"nuez inglesa",
+"english walnut"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Níspero",
+"category": "Frutas",
+"aliases": [
+"sapodilla",
+"sapote",
+"chicozapote",
+"nispero"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Orégano dominicano",
+"category": "Despensa",
+"aliases": [
+"orégano",
+"oregano dominicano",
+"oregano seco",
+"orégano seco",
+"oregano seco dominicano",
+"orégano seco dominicano"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Palmito",
+"category": "Vegetales",
+"aliases": [
+"palmito",
+"palmitos",
+"corazon de palma",
+"corazones de palma",
+"hearts of palm",
+"heart of palm",
+"palmito en conserva"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pan blanco familiar",
+"category": "Despensa",
+"aliases": [
+"pan blanco",
+"pan de molde",
+"pan blanco familiar",
+"pan de molde blanco",
+"pan de caja",
+"pan blanco grande",
+"pan"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pan de agua",
+"category": "Despensa",
+"aliases": [
+"pan de agua",
+"pan agua",
+"pan de agua dominicano",
+"pan criollo",
+"pan de panaderia"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pan de maíz",
+"category": "Despensa",
+"aliases": [
+"cornbread",
+"pan de maiz dulce"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Pan integral familiar",
+"category": "Despensa",
+"aliases": [
+"pan integral",
+"pan integral familiar",
+"pan de trigo integral",
+"pan integral grande"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pan integral personal",
+"category": "Despensa",
+"aliases": [
+"pan integral personal",
+"pan integral mini",
+"pan integral pequeno",
+"pan integral mini club"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pan rallado",
+"category": "Despensa",
+"aliases": [
+"breadcrumbs",
+"migas de pan",
+"pan molido"
+],
+"prep_methods": [
+"ninguno",
+"tostar",
+"freir",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": "US"
+},
+{
+"name": "Pan sobao",
+"category": "Despensa",
+"aliases": [
+"pan sobao",
+"pan sobado",
+"sobao",
+"pan dulce de mesa"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Panapén",
+"category": "Víveres",
+"aliases": [
+"breadfruit",
+"pana",
+"fruta de pan"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Panceta ibérica",
+"category": "Proteínas",
+"aliases": [
+"panceta iberica",
+"panceta ibérica",
+"panceta curada",
+"tocino iberico"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Panecillos de mantequilla",
+"category": "Despensa",
+"aliases": [
+"buttermilk biscuits",
+"biscuits de mantequilla",
+"panecillos tipo biscuit"
+],
+"prep_methods": [
+"tostar",
+"ninguno",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Panecillos ingleses",
+"category": "Despensa",
+"aliases": [
+"english muffins",
+"muffins ingleses"
+],
+"prep_methods": [
+"tostar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Panela",
+"category": "Despensa",
+"aliases": [
+"piloncillo",
+"panela rallada",
+"panela en bloque",
+"papelón",
+"raspadura"
+],
+"prep_methods": [
+"ninguno",
+"hervir",
+"licuar",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX,CO"
+},
+{
+"name": "Papa",
+"category": "Víveres",
+"aliases": [
+"papas",
+"patata",
+"patatas"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Papas ralladas",
+"category": "Despensa",
+"aliases": [
+"hash browns",
+"papa rallada congelada",
+"hash browns congeladas"
+],
+"prep_methods": [
+"freir",
+"plancha",
+"hornear",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Pasas",
+"category": "Frutas",
+"aliases": [
+"pasas",
+"uvas pasas",
+"uva pasa",
+"pasitas",
+"raisins"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pasta integral",
+"category": "Despensa",
+"aliases": [
+"pasta de trigo",
+"pasta",
+"espagueti integral"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pavo molido",
+"category": "Proteínas",
+"aliases": [
+"pavo molido",
+"carne de pavo molida",
+"ground turkey",
+"molido de pavo",
+"pavo picado"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pavochón",
+"category": "Proteínas",
+"aliases": [
+"pavo asado sazonado",
+"turkey pernil style",
+"pavo estilo pernil"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Pechuga de pavo",
+"category": "Proteínas",
+"aliases": [
+"pechuga de pavo",
+"filete de pavo",
+"pechuga de pavo deshuesada",
+"pavo pechuga",
+"turkey breast"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pechuga de pollo",
+"category": "Proteínas",
+"aliases": [
+"pollo",
+"pechuga",
+"pechuga de pollo deshuesada"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pepino",
+"category": "Vegetales",
+"aliases": [
+"pepinos",
+"cohombro"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pepperoni",
+"category": "Proteínas",
+"aliases": [
+"pepperoni en rodajas",
+"pepperoni sliced"
+],
+"prep_methods": [
+"ninguno",
+"hornear",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Pera",
+"category": "Frutas",
+"aliases": [
+"pera",
+"pear",
+"pera de agua"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Percebes",
+"category": "Proteínas",
+"aliases": [
+"percebes",
+"percebe",
+"goose barnacles"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Perejil",
+"category": "Vegetales",
+"aliases": [
+"perejil fresco",
+"perejil liso",
+"perejil rizado"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pernil",
+"category": "Proteínas",
+"aliases": [
+"pernil de cerdo",
+"pierna de cerdo para hornear",
+"pork leg whole",
+"pierna de cerdo"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": "PR"
+},
+{
+"name": "Pimentón",
+"category": "Despensa",
+"aliases": [
+"paprika",
+"pimentón ahumado",
+"pimentón dulce"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pimienta negra",
+"category": "Despensa",
+"aliases": [
+"pimienta",
+"pimienta molida"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pique",
+"category": "Despensa",
+"aliases": [
+"vinagre pique",
+"pique boricua",
+"pique criollo",
+"salsa picante puertorriqueña",
+"pique (vinagre picante)"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Pistachos",
+"category": "Despensa",
+"aliases": [
+"pistacho",
+"pistache",
+"pistaches",
+"pistachio",
+"pistachios"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Piña",
+"category": "Frutas",
+"aliases": [
+"piña"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Piñones",
+"category": "Despensa",
+"aliases": [
+"pinones",
+"piñones",
+"pine nuts",
+"piñón"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Plátano maduro",
+"category": "Víveres",
+"aliases": [
+"plátanos maduros",
+"maduro"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Plátano verde",
+"category": "Víveres",
+"aliases": [
+"plátano",
+"plátanos verdes"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Polvo de hornear",
+"category": "Despensa",
+"aliases": [
+"polvo para hornear",
+"baking powder",
+"royal"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pretzels",
+"category": "Despensa",
+"aliases": [
+"pretzel",
+"galletas pretzel"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Puerro",
+"category": "Vegetales",
+"aliases": [
+"puerro",
+"poro",
+"ajo porro",
+"ajoporro",
+"leek",
+"leeks"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Pulpo",
+"category": "Proteínas",
+"aliases": [
+"pulpo",
+"pulpo crudo",
+"octopus",
+"pulpo fresco",
+"mariscos"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso blanco",
+"category": "Lácteos",
+"aliases": [
+"queso blanco dominicano",
+"queso blanco en cubos",
+"queso blanco fresco",
+"queso blanco rallado",
+"queso de freír",
+"queso",
+"queso fresco",
+"queso panela",
+"quesito panela"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso cheddar",
+"category": "Lácteos",
+"aliases": [
+"queso cheddar",
+"cheddar",
+"cheddar cheese",
+"queso amarillo cheddar",
+"queso cheddar curado"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso cottage",
+"category": "Lácteos",
+"aliases": [
+"cottage"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso crema",
+"category": "Lácteos",
+"aliases": [
+"cream cheese",
+"queso crema philadelphia"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso de hoja",
+"category": "Lácteos",
+"aliases": [
+"queso hoja"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso de papa",
+"category": "Lácteos",
+"aliases": [
+"queso de bola",
+"edam",
+"queso amarillo de bola",
+"queso de papa puertorriqueño"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hornear",
+"plancha",
+"saltear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Queso en hebras",
+"category": "Lácteos",
+"aliases": [
+"string cheese",
+"queso de hebra",
+"mozzarella en barra"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hornear",
+"plancha",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Queso gouda",
+"category": "Lácteos",
+"aliases": [
+"queso gouda",
+"gouda",
+"gouda cheese",
+"queso holandes",
+"gouda madurado"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso mozzarella",
+"category": "Lácteos",
+"aliases": [
+"mozzarella",
+"queso mozarela"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso parmesano",
+"category": "Lácteos",
+"aliases": [
+"parmesano",
+"queso parmesano rallado"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Queso provolone",
+"category": "Lácteos",
+"aliases": [
+"provolone",
+"queso provolone italiano"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"hornear",
+"plancha",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Queso ricotta",
+"category": "Lácteos",
+"aliases": [
+"ricotta"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Quinoa",
+"category": "Despensa",
+"aliases": [
+"quinua"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Recao",
+"category": "Vegetales",
+"aliases": [
+"recao de monte",
+"shadow beni",
+"spiny coriander",
+"culantro cimarron"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Remolacha",
+"category": "Vegetales",
+"aliases": [
+"betabel",
+"betarraga",
+"beet",
+"beets",
+"remolacha cruda"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Repollo",
+"category": "Vegetales",
+"aliases": [
+"repollo blanco",
+"repollo morado",
+"hojas de repollo"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Repollo morado",
+"category": "Vegetales",
+"aliases": [
+"col morada",
+"repollo rojo",
+"col roja",
+"red cabbage",
+"lombarda"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Requesón",
+"category": "Lácteos",
+"aliases": [
+"requeson",
+"requesón"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Ron de cocina",
+"category": "Despensa",
+"aliases": [
+"cooking rum",
+"ron blanco para cocinar",
+"ron para flambear"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Rábano",
+"category": "Vegetales",
+"aliases": [
+"radish",
+"radishes",
+"rabanito",
+"rabanitos",
+"rabano rojo",
+"rabanos"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Rúcula",
+"category": "Vegetales",
+"aliases": [
+"arugula",
+"rocket",
+"ruccola",
+"oruga",
+"rucula cruda"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Sal",
+"category": "Despensa",
+"aliases": [
+"sal marina",
+"sal rosada",
+"sal de mesa"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Salami",
+"category": "Proteínas",
+"aliases": [
+"salami",
+"salami super especial",
+"salami especial",
+"salami dominicano",
+"salami induveca"
+],
+"prep_methods": [
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Salchicha italiana",
+"category": "Proteínas",
+"aliases": [
+"italian sausage",
+"salchicha italiana dulce"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Salchichas",
+"category": "Proteínas",
+"aliases": [
+"hot dogs",
+"frankfurters",
+"salchichas tipo hot dog"
+],
+"prep_methods": [
+"ninguno",
+"hervir",
+"plancha",
+"saltear",
+"freir",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": "US"
+},
+{
+"name": "Salmón",
+"category": "Proteínas",
+"aliases": [
+"salmon",
+"salmón",
+"salmon fresco",
+"filete de salmon",
+"atlantic salmon",
+"salmon atlantico"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Salsa barbacoa",
+"category": "Despensa",
+"aliases": [
+"barbecue sauce",
+"salsa bbq"
+],
+"prep_methods": [
+"ninguno",
+"hornear",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Salsa de salchicha",
+"category": "Despensa",
+"aliases": [
+"sausage gravy",
+"gravy de salchicha",
+"salsa cremosa de salchicha"
+],
+"prep_methods": [
+"ninguno",
+"hervir",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Salsa de soya",
+"category": "Despensa",
+"aliases": [
+"salsa de soya",
+"soya",
+"salsa de soja",
+"salsa de soja baja en sodio"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Salsa de tomate",
+"category": "Despensa",
+"aliases": [
+"tomato sauce"
+],
+"prep_methods": [
+"ninguno",
+"guisar",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Salsa inglesa",
+"category": "Despensa",
+"aliases": [
+"worcestershire",
+"worcestershire sauce",
+"salsa worcestershire"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Sandía",
+"category": "Frutas",
+"aliases": [
+"sandía",
+"patilla"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Sardinas en lata",
+"category": "Proteínas",
+"aliases": [
+"sardina",
+"sardinas",
+"sardina enlatada",
+"sardinas enlatadas",
+"canned sardines",
+"sardine"
+],
+"prep_methods": [
+"ninguno",
+"plancha",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Sazonador para tacos",
+"category": "Despensa",
+"aliases": [
+"taco seasoning",
+"sazonador de tacos",
+"mezcla para tacos"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Sazón con culantro y achiote",
+"category": "Despensa",
+"aliases": [
+"sazon",
+"sazon goya",
+"sazon con achiote",
+"sazon completa",
+"sazon con culantro"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar",
+"hervir",
+"hornear",
+"freir"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": "PR"
+},
+{
+"name": "Semillas de calabaza",
+"category": "Despensa",
+"aliases": [
+"semillas de calabaza",
+"pepitas",
+"pepitas de calabaza",
+"pumpkin seeds",
+"semilla de auyama"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Semillas de chía",
+"category": "Despensa",
+"aliases": [
+"chia",
+"chía",
+"semilla de chia",
+"semilla de chía",
+"semillas de chia (opcional para textura)"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Semillas de girasol",
+"category": "Despensa",
+"aliases": [
+"semillas de girasol",
+"pipas",
+"pipas de girasol",
+"sunflower seeds",
+"semilla de girasol"
+],
+"prep_methods": [
+"ninguno",
+"tostar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Sobrasada",
+"category": "Proteínas",
+"aliases": [
+"sobrasada",
+"sobrasada mallorquina",
+"chorizo untable"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Sofrito",
+"category": "Despensa",
+"aliases": [
+"recaito",
+"base de sofrito",
+"sofrito puertorriqueño"
+],
+"prep_methods": [
+"ninguno",
+"saltear",
+"guisar"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "PR"
+},
+{
+"name": "Soya texturizada",
+"category": "Proteínas",
+"aliases": [
+"proteina de soya texturizada",
+"tvp",
+"carne de soya",
+"soya texturizada",
+"proteina vegetal texturizada"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Soya tostada",
+"category": "Despensa",
+"aliases": [
+"soya tostada",
+"soya tostada sin sal",
+"frijol de soya tostado",
+"frijoles de soya tostados",
+"habas de soya tostadas",
+"granos de soya tostados",
+"soja tostada",
+"soy nuts"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Suero costeño",
+"category": "Lácteos",
+"aliases": [
+"suero costeño colombiano",
+"suero atollabuey",
+"crema costeña agria"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Suero de mantequilla",
+"category": "Lácteos",
+"aliases": [
+"buttermilk",
+"leche cultivada",
+"suero de mantequilla cultivado"
+],
+"prep_methods": [
+"ninguno",
+"crudo"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Sémola de maíz",
+"category": "Despensa",
+"aliases": [
+"grits",
+"semola de maiz blanca",
+"grits de maiz"
+],
+"prep_methods": [
+"hervir",
+"guisar"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Tamarindo",
+"category": "Frutas",
+"aliases": [
+"tamarindo",
+"tamarind",
+"tamarindo pulpa"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tayota",
+"category": "Vegetales",
+"aliases": [
+"tayotas",
+"chayote"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tilapia",
+"category": "Proteínas",
+"aliases": [
+"tilapia",
+"filete de tilapia",
+"mojarra",
+"tilapia fresca"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tocineta",
+"category": "Proteínas",
+"aliases": [
+"bacon",
+"tocino",
+"pork bacon raw"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": "US"
+},
+{
+"name": "Tofu firme",
+"category": "Proteínas",
+"aliases": [
+"tofu",
+"tofu duro",
+"queso de soya",
+"firm tofu",
+"tofu firme"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tomate",
+"category": "Vegetales",
+"aliases": [
+"tomates",
+"tomate de ensalada",
+"tomate bugalú",
+"tomate cherry",
+"jitomate",
+"jitomates"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tomatillo",
+"category": "Vegetales",
+"aliases": [
+"tomatillo",
+"tomatillos",
+"tomate verde mexicano",
+"tomatillo verde",
+"tomatillos verdes"
+],
+"prep_methods": [
+"crudo",
+"asar",
+"hervir",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tomillo",
+"category": "Despensa",
+"aliases": [
+"tomillo",
+"tomillo seco",
+"tomillo molido",
+"thyme",
+"dried thyme",
+"tomillo en polvo"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Toronja",
+"category": "Frutas",
+"aliases": [
+"grapefruit",
+"pomelo",
+"toronja rosada"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tortilla de maíz",
+"category": "Despensa",
+"aliases": [
+"tortillas de maíz",
+"tortilla de maiz",
+"tortillas de maiz",
+"corn tortilla",
+"tortillas de maíz sin grasa"
+],
+"prep_methods": [
+"tostar",
+"ninguno",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Tortilla de trigo",
+"category": "Despensa",
+"aliases": [
+"tortilla de trigo",
+"tortilla de harina de trigo",
+"tortillas de harina de trigo",
+"tortillas de trigo",
+"wrap de trigo"
+],
+"prep_methods": [
+"tostar",
+"ninguno",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tortilla integral",
+"category": "Despensa",
+"aliases": [
+"tortillas integrales",
+"wraps integrales",
+"tortillas de trigo integral",
+"tortilla integral"
+],
+"prep_methods": [
+"tostar",
+"ninguno",
+"saltear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Tostadas de maíz",
+"category": "Despensa",
+"aliases": [
+"tostadas de maiz",
+"tostada de maiz",
+"tostadas de maiz integrales",
+"tostadas horneadas de maiz",
+"tostadas de maiz horneadas",
+"corn tostadas"
+],
+"prep_methods": [
+"ninguno",
+"hornear"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Trucha",
+"category": "Proteínas",
+"aliases": [
+"trucha arcoiris",
+"trucha de rio",
+"filete de trucha"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Tuna de nopal",
+"category": "Frutas",
+"aliases": [
+"tuna",
+"tuna de nopal",
+"fruta de nopal",
+"tunas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Turrón",
+"category": "Despensa",
+"aliases": [
+"turron",
+"turrón",
+"turron de almendra",
+"nougat"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Uchuva",
+"category": "Frutas",
+"aliases": [
+"uvilla",
+"physalis",
+"aguaymanto",
+"golden berry",
+"uchuvas"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "CO"
+},
+{
+"name": "Uva",
+"category": "Frutas",
+"aliases": [
+"grapes",
+"grape",
+"uvas",
+"uva roja"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Vainilla",
+"category": "Despensa",
+"aliases": [
+"vainilla",
+"esencia de vainilla",
+"vainilla líquida"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Vainitas",
+"category": "Vegetales",
+"aliases": [
+"habichuelas verdes",
+"ejotes",
+"judías verdes"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Vieira",
+"category": "Proteínas",
+"aliases": [
+"vieira",
+"vieiras",
+"scallops",
+"concha de abanico"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": false,
+"pais_beta": "ES"
+},
+{
+"name": "Vinagre balsámico",
+"category": "Despensa",
+"aliases": [
+"vinagre balsamico",
+"balsamico",
+"aceto balsamico",
+"vinagre balsamico de modena"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Vinagre blanco",
+"category": "Despensa",
+"aliases": [
+"vinagre"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Vinagre de manzana",
+"category": "Despensa",
+"aliases": [
+"vinagre manzana",
+"vinagre de sidra"
+],
+"prep_methods": [
+"ninguno"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Wafles",
+"category": "Despensa",
+"aliases": [
+"waffles",
+"wafles congelados"
+],
+"prep_methods": [
+"tostar",
+"ninguno",
+"plancha"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "US"
+},
+{
+"name": "Xoconostle",
+"category": "Frutas",
+"aliases": [
+"xoconostles",
+"tuna agria",
+"xoconoxtle"
+],
+"prep_methods": [
+"crudo",
+"licuar",
+"ninguno",
+"guisar",
+"hervir"
+],
+"ready_to_eat": true,
+"con_precio": false,
+"pais_beta": "MX"
+},
+{
+"name": "Yautía",
+"category": "Víveres",
+"aliases": [
+"yautía blanca",
+"yautia blanca",
+"yautía lila",
+"malanga",
+"malangas",
+"malanga blanca",
+"malanga amarilla"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yema de huevo",
+"category": "Proteínas",
+"aliases": [
+"yema de huevo",
+"yemas de huevo",
+"yemas",
+"yema de huevos"
+],
+"prep_methods": [
+"hervir",
+"plancha",
+"freir",
+"hornear",
+"guisar",
+"saltear"
+],
+"ready_to_eat": false,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yogur de coco",
+"category": "Lácteos",
+"aliases": [
+"coconut yogurt",
+"yogurt de coco",
+"yogur vegetal de coco",
+"coconut yoghurt"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yogurt",
+"category": "Lácteos",
+"aliases": [
+"yogurt regular"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yogurt de cabra",
+"category": "Lácteos",
+"aliases": [
+"yogur de cabra",
+"yogurt de cabra natural",
+"yogur caprino",
+"goat milk yogurt",
+"yogurt caprino"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yogurt griego entero",
+"category": "Lácteos",
+"aliases": [
+"yogur griego entero",
+"yogurt griego entero",
+"yogur entero",
+"yogurt entero",
+"yogur natural entero",
+"yogur griego natural entero",
+"yogur griego",
+"yogurt griego",
+"yogurt griego natural"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yogurt griego sin azúcar",
+"category": "Lácteos",
+"aliases": [
+"yogur griego natural sin azucar",
+"yogur griego natural sin azúcar",
+"yogur griego sin grasa",
+"yogurt griego (natural sin azucar)",
+"yogurt griego 0%",
+"yogurt griego 0% grasa",
+"yogurt griego natural sin azucar",
+"yogurt griego natural sin azúcar"
+],
+"prep_methods": [
+"ninguno",
+"crudo",
+"licuar"
+],
+"ready_to_eat": true,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Yuca",
+"category": "Víveres",
+"aliases": [
+"mandioca",
+"cassava"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Zanahoria",
+"category": "Vegetales",
+"aliases": [
+"zanahorias"
+],
+"prep_methods": [
+"hervir",
+"saltear",
+"plancha",
+"hornear",
+"guisar",
+"crudo"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+},
+{
+"name": "Ñame",
+"category": "Víveres",
+"aliases": [
+"ñame blanco",
+"ñame amarillo",
+"name",
+"name blanco"
+],
+"prep_methods": [
+"hervir",
+"freir",
+"hornear",
+"guisar"
+],
+"ready_to_eat": null,
+"con_precio": true,
+"pais_beta": null
+}
+]
+}

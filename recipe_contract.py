@@ -851,13 +851,43 @@ def reconcile_meal(meal: dict, index: dict) -> dict:
 _INDEX_CACHE: dict = {"index": None, "n": -1}
 
 
+def index_by_content_on() -> bool:
+    """[P1-PLAN-LOTE-856 · 2026-09-29] Knob `MEALFIT_RECIPE_CONTRACT_INDEX_BY_CONTENT` (default True): la caché del índice
+    se invalida por el CONTENIDO que el índice lee de cada fila, no sólo por el número de filas. False = la caché por
+    tamaño de antes. tooltip-anchor: P1-PLAN-LOTE-856-INDEX-BY-CONTENT"""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_RECIPE_CONTRACT_INDEX_BY_CONTENT", True)
+    except Exception:
+        return True
+
+
+def _huella_catalogo(catalog: list) -> int:
+    """[P1-PLAN-LOTE-856] Lo que `build_culinary_index` lee de cada fila: nombre, alias, métodos, «listo para comer» y
+    categoría. Una migración que sólo AÑADE alias (la del lote 856: «merluza» → Filete de pescado blanco) no cambia el
+    número de filas, y con la caché por tamaño el contrato seguía ciego al alias hasta reiniciar el proceso, mientras el
+    scan (que construye su índice en cada llamada) ya lo medía: medidor y reparador en desacuerdo."""
+    return hash(tuple(
+        (str(r.get("name") or ""), tuple(str(a) for a in (r.get("aliases") or ())),
+         tuple(str(p) for p in (r.get("prep_methods") or ())), r.get("ready_to_eat"), str(r.get("category") or ""))
+        for r in (catalog or []) if isinstance(r, dict)))
+
+
 def index_for_catalog(catalog: list) -> dict:
-    """Índice culinario con caché por tamaño de catálogo (el catálogo cambia rara vez; el índice cuesta construirlo)."""
+    """Índice culinario con caché (el catálogo cambia rara vez; el índice cuesta construirlo). [P1-PLAN-LOTE-856] La
+    caché se invalida por tamaño Y, con el knob encendido, por la huella del contenido que el índice lee."""
     try:
         n = len(catalog or [])
-        if _INDEX_CACHE["index"] is None or _INDEX_CACHE["n"] != n:
+        huella = None
+        if index_by_content_on():
+            try:
+                huella = _huella_catalogo(catalog)
+            except Exception:
+                huella = None                                # sin huella: la caché por tamaño de siempre
+        if _INDEX_CACHE["index"] is None or _INDEX_CACHE["n"] != n or _INDEX_CACHE.get("huella") != huella:
             _INDEX_CACHE["index"] = build_culinary_index(catalog or [])
             _INDEX_CACHE["n"] = n
+            _INDEX_CACHE["huella"] = huella
         return _INDEX_CACHE["index"] or {}
     except Exception:
         return {}
