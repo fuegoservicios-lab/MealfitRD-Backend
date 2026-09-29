@@ -41,6 +41,10 @@ APPLE_AUDIENCE = "https://appleid.apple.com"
 # Apple admite un client_secret de hasta 6 meses; se firma uno nuevo por llamada, así que basta con minutos.
 CLIENT_SECRET_TTL_S = 300
 _HTTP_TIMEOUT_S = 8.0
+_HTTP_CONNECT_TIMEOUT_S = 3.0
+# Plazo TOTAL de la revocación (lectura de la base + una llamada a Apple) dentro del borrado de cuenta: pasado este
+# tiempo el borrado sigue sin esperarla.
+REVOKE_DEADLINE_S = 12.0
 _MAX_CODE_LEN = 2048
 _MAX_TOKEN_LEN = 4096
 
@@ -95,6 +99,15 @@ def faltantes() -> list:
         falta.append("APPLE_SIWA_PRIVATE_KEY|APPLE_SIWA_KEY_FILE")
     if not c["cifrado"]:
         falta.append("MEALFIT_TOKEN_ENC_KEY")
+    else:
+        # [ronda 1] Una clave mal formada cuenta como ausente: si no, el canje se hacía (gastando el código de un solo
+        # uso) y luego reventaba al cifrar, y el borrado leía la base para nada.
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(c["cifrado"].encode("ascii"))
+        except Exception:
+            falta.append("MEALFIT_TOKEN_ENC_KEY (mal formada)")
     return falta
 
 
@@ -115,7 +128,7 @@ def _avisar_sin_configurar(donde: str) -> None:
         )
 
 
-def construir_client_secret(ahora: Optional[int] = None) -> str:
+def construir_client_secret(ahora: Optional[int] = None, client_id: Optional[str] = None) -> str:
     """JWT ES256 que Apple exige como `client_secret` en /auth/token y /auth/revoke.
     iss = Team ID · sub = client_id (bundle) · aud = https://appleid.apple.com · header kid = Key ID."""
     import jwt
@@ -123,7 +136,8 @@ def construir_client_secret(ahora: Optional[int] = None) -> str:
     c = _conf()
     t = int(time.time()) if ahora is None else int(ahora)
     return jwt.encode(
-        {"iss": c["team"], "iat": t, "exp": t + CLIENT_SECRET_TTL_S, "aud": APPLE_AUDIENCE, "sub": c["client_id"]},
+        {"iss": c["team"], "iat": t, "exp": t + CLIENT_SECRET_TTL_S, "aud": APPLE_AUDIENCE,
+         "sub": client_id or c["client_id"]},
         c["clave"],
         algorithm="ES256",
         headers={"kid": c["kid"]},
@@ -148,7 +162,7 @@ def _post_form(url: str, datos: dict):
     """POST x-www-form-urlencoded a Apple. Devuelve (status, json|None). Punto único de red (los tests lo sustituyen)."""
     import httpx
 
-    with httpx.Client(timeout=_HTTP_TIMEOUT_S) as cliente:
+    with httpx.Client(timeout=httpx.Timeout(_HTTP_TIMEOUT_S, connect=_HTTP_CONNECT_TIMEOUT_S)) as cliente:
         r = cliente.post(url, data=datos, headers={"Accept": "application/json"})
     try:
         cuerpo = r.json()
@@ -157,8 +171,33 @@ def _post_form(url: str, datos: dict):
     return r.status_code, cuerpo
 
 
-def canjear_codigo(codigo: str) -> Optional[str]:
-    """`authorizationCode` → `refresh_token`, o None. Nunca lanza."""
+def _sub_del_id_token(id_token) -> Optional[str]:
+    """El `sub` del id_token que Apple devuelve en el canje. Sin verificar la firma, a sabiendas: llega por TLS desde
+    appleid.apple.com como respuesta a NUESTRO client_secret firmado, no del cliente. Sí se exigen iss y aud."""
+    import jwt
+
+    try:
+        claims = jwt.decode(
+            str(id_token or ""),
+            options={"verify_signature": False, "verify_exp": False, "verify_aud": False},
+        )
+    except Exception:
+        return None
+    if claims.get("iss") != APPLE_AUDIENCE:
+        return None
+    aud = claims.get("aud")
+    auds = aud if isinstance(aud, list) else [aud]
+    if _conf()["client_id"] not in auds:
+        return None
+    return str(claims.get("sub") or "").strip() or None
+
+
+def canjear_codigo(codigo: str, sub_esperado: Optional[str] = None) -> Optional[str]:
+    """`authorizationCode` → `refresh_token`, o None. Nunca lanza.
+
+    [ronda 1] El código lo manda el cliente junto al identity token, pero nada los ataba: un código de OTRA cuenta de
+    Apple se habría guardado en esta. Se exige que el `sub` del id_token del canje sea el de la identidad ya verificada;
+    si no coincide (o falta), no se guarda nada."""
     try:
         status, cuerpo = _post_form(APPLE_TOKEN_URL, {
             "client_id": _conf()["client_id"],
@@ -177,6 +216,10 @@ def canjear_codigo(codigo: str) -> Optional[str]:
     if not refresco or len(refresco) > _MAX_TOKEN_LEN:
         logger.warning("[P1-PLAN-LOTE-848] el canje de Apple no trajo refresh_token.")
         return None
+    sub = _sub_del_id_token(cuerpo.get("id_token"))
+    if not sub_esperado or sub != sub_esperado:
+        logger.warning("[P1-PLAN-LOTE-848] el código de Apple no es de la identidad verificada — no se guarda nada.")
+        return None
     return refresco
 
 
@@ -191,11 +234,12 @@ def guardar_refresh_token(user_id: str, refresh_token: str) -> bool:
     ))
 
 
-def canjear_y_guardar(user_id: str, codigo: Optional[str]) -> bool:
-    """Lo que corre tras el login con Apple. Best-effort: devuelve si quedó guardado y JAMÁS lanza."""
+def canjear_y_guardar(user_id: str, codigo: Optional[str], sub_apple: Optional[str] = None) -> bool:
+    """Lo que corre tras el login con Apple. Best-effort: devuelve si quedó guardado y JAMÁS lanza.
+    `sub_apple` = el `sub` del identity token YA verificado: el código solo se guarda si es de esa identidad."""
     try:
         codigo = str(codigo or "").strip()
-        if not user_id or not codigo:
+        if not user_id or not codigo or not sub_apple:
             return False
         if len(codigo) > _MAX_CODE_LEN:
             logger.info("[P1-PLAN-LOTE-848] authorizationCode demasiado largo — ignorado.")
@@ -203,7 +247,7 @@ def canjear_y_guardar(user_id: str, codigo: Optional[str]) -> bool:
         if not configurado():
             _avisar_sin_configurar("login")
             return False
-        refresco = canjear_codigo(codigo)
+        refresco = canjear_codigo(codigo, sub_apple)
         if not refresco:
             return False
         guardado = guardar_refresh_token(user_id, refresco)
@@ -224,15 +268,18 @@ def revocar_de_usuario(user_id: str) -> dict:
         from db import execute_sql_query
 
         fila = execute_sql_query(
-            "SELECT refresh_token_enc FROM public.apple_signin_tokens WHERE user_id = %s",
+            "SELECT refresh_token_enc, client_id FROM public.apple_signin_tokens WHERE user_id = %s",
             (user_id,), fetch_one=True,
         )
         cifrado = (fila or {}).get("refresh_token_enc")
         if not cifrado:
             return {"revocado": False, "motivo": "sin_token"}
+        # [ronda 1] El client_id con el que se EMITIÓ ese token (el de la fila), no el configurado hoy: Apple solo
+        # revoca un token con el client_id que lo obtuvo.
+        client_id = str((fila or {}).get("client_id") or "").strip() or _conf()["client_id"]
         status, _ = _post_form(APPLE_REVOKE_URL, {
-            "client_id": _conf()["client_id"],
-            "client_secret": construir_client_secret(),
+            "client_id": client_id,
+            "client_secret": construir_client_secret(client_id=client_id),
             "token": descifrar(cifrado),
             "token_type_hint": "refresh_token",
         })
@@ -243,4 +290,22 @@ def revocar_de_usuario(user_id: str) -> dict:
         return {"revocado": False, "motivo": f"http_{status}"}
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-848] revocar_de_usuario lanzó {type(e).__name__} (el borrado sigue).")
+        return {"revocado": False, "motivo": "error"}
+
+
+async def revocar_con_plazo(user_id: str, plazo_s: Optional[float] = None) -> dict:
+    """[ronda 1] `revocar_de_usuario` con un plazo TOTAL para el borrado de cuenta: si Apple o la base tardan, el
+    borrado sigue sin esperar (el hilo termina solo, con sus timeouts de httpx). Nunca lanza."""
+    import asyncio
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(revocar_de_usuario, user_id),
+            timeout=REVOKE_DEADLINE_S if plazo_s is None else plazo_s,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[P1-PLAN-LOTE-848] la revocación en Apple pasó el plazo (el borrado sigue).")
+        return {"revocado": False, "motivo": "plazo"}
+    except Exception as e:
+        logger.warning(f"[P1-PLAN-LOTE-848] revocar_con_plazo lanzó {type(e).__name__} (el borrado sigue).")
         return {"revocado": False, "motivo": "error"}

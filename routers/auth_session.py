@@ -424,7 +424,8 @@ async def apple_native_sign_in(
     codigo = str((data or {}).get("authorization_code") or "").strip()
     if codigo:
         from apple_tokens import canjear_y_guardar
-        background_tasks.add_task(canjear_y_guardar, uid, codigo)
+        # [ronda 1] con el `sub` VERIFICADO: el código solo se guarda si Apple dice que es de esta identidad.
+        background_tasks.add_task(canjear_y_guardar, uid, codigo, identidad["sub"])
     return {
         "ok": True,
         "user_id": uid,

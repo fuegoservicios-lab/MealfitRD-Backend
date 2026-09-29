@@ -3721,8 +3721,9 @@ async def api_delete_my_account(
         # lleva la fila del refresh token en cascada). Después de PayPal: si PayPal aborta, la cuenta sigue viva y su
         # enlace con Apple también. Best-effort: nunca lanza ni bloquea el borrado (App Review 5.1.1(v), fila 3.2).
         # tooltip-anchor: P1-PLAN-LOTE-848-REVOCAR
-        from apple_tokens import revocar_de_usuario
-        apple_revocacion = await asyncio.to_thread(revocar_de_usuario, verified_user_id)
+        # Con plazo TOTAL (`apple_tokens.REVOKE_DEADLINE_S`): si Apple o la base tardan, el borrado no espera.
+        from apple_tokens import revocar_con_plazo
+        apple_revocacion = await revocar_con_plazo(verified_user_id)
 
         # 2. Purga determinística de TODA la data user-scoped (motor existente).
         from db_profiles import delete_account_data

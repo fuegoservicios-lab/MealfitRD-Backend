@@ -30,6 +30,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _ROOT = _BACKEND.parent
 _MIG = "p1_plan_lote_848_apple_tokens_2026_09_29.sql"
 _UID = "11111111-2222-3333-4444-555555555555"
+_SUB = "001234.abcdef.5678"
 _ENV = ("APPLE_SIWA_KEY_ID", "APPLE_SIWA_TEAM_ID", "APPLE_SIWA_PRIVATE_KEY", "APPLE_SIWA_KEY_FILE",
         "MEALFIT_TOKEN_ENC_KEY", "APNS_TEAM_ID", "MEALFIT_APPLE_SIWA_TOKENS", "MEALFIT_APPLE_SIWA_CLIENT_ID")
 
@@ -57,6 +58,11 @@ def configurado(sin_env, clave_ec):
     sin_env.setenv("APPLE_SIWA_PRIVATE_KEY", pem)
     sin_env.setenv("MEALFIT_TOKEN_ENC_KEY", Fernet.generate_key().decode())
     return sin_env
+
+
+def _id_token(sub=_SUB, aud="com.bioboros.app", iss="https://appleid.apple.com"):
+    """El id_token que Apple devuelve en el canje (firmado aquí con cualquier cosa: no se verifica la firma)."""
+    return jwt.encode({"iss": iss, "aud": aud, "sub": sub, "iat": int(time.time())}, "x" * 32, algorithm="HS256")
 
 
 @pytest.fixture()
@@ -160,10 +166,11 @@ def test_migracion_identica_en_los_dos_dirs_idempotente_y_con_cascada():
 
 def test_canje_manda_el_codigo_con_client_secret_y_guarda_el_refresh(configurado, red, monkeypatch):
     llamadas, respuestas = red
-    respuestas[apple_tokens.APPLE_TOKEN_URL] = (200, {"refresh_token": "r.nuevo", "access_token": "a", "id_token": "i"})
+    respuestas[apple_tokens.APPLE_TOKEN_URL] = (200, {"refresh_token": "r.nuevo", "access_token": "a",
+                                                      "id_token": _id_token()})
     guardados: list = []
     monkeypatch.setattr(apple_tokens, "guardar_refresh_token", lambda uid, tok: guardados.append((uid, tok)) or True)
-    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo") is True
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is True
     (url, datos), = llamadas
     assert url == "https://appleid.apple.com/auth/token"
     assert datos["grant_type"] == "authorization_code" and datos["code"] == "c.codigo"
@@ -179,14 +186,14 @@ def test_un_canje_fallido_no_lanza_ni_guarda(configurado, red, monkeypatch, resp
     _, respuestas = red
     respuestas[apple_tokens.APPLE_TOKEN_URL] = respuesta
     monkeypatch.setattr(apple_tokens, "guardar_refresh_token", lambda *a: pytest.fail("no debía guardar"))
-    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo") is False
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is False
 
 
 def test_sin_configurar_no_hay_canje_y_se_avisa_una_vez(sin_env, red, caplog):
     llamadas, _ = red
     with caplog.at_level("WARNING"):
-        assert apple_tokens.canjear_y_guardar(_UID, "c.codigo") is False
-        assert apple_tokens.canjear_y_guardar(_UID, "c.codigo") is False
+        assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is False
+        assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is False
     assert llamadas == []
     avisos = [r for r in caplog.records if "P1-PLAN-LOTE-848" in r.getMessage()]
     assert len(avisos) == 1 and "MEALFIT_TOKEN_ENC_KEY" in avisos[0].getMessage()
@@ -195,7 +202,7 @@ def test_sin_configurar_no_hay_canje_y_se_avisa_una_vez(sin_env, red, caplog):
 def test_el_interruptor_apaga_canje_y_revocacion(configurado, red):
     llamadas, _ = red
     configurado.setenv("MEALFIT_APPLE_SIWA_TOKENS", "false")
-    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo") is False
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is False
     assert apple_tokens.revocar_de_usuario(_UID) == {"revocado": False, "motivo": "sin_configurar"}
     assert llamadas == []
 
@@ -209,7 +216,7 @@ def test_nunca_se_loguean_codigos_ni_tokens(configurado, red, monkeypatch, caplo
     monkeypatch.setattr(db, "execute_sql_query",
                         lambda *a, **k: {"refresh_token_enc": apple_tokens.cifrar("r.SECRETO")})
     with caplog.at_level("DEBUG"):
-        apple_tokens.canjear_y_guardar(_UID, "c.SECRETO")
+        apple_tokens.canjear_y_guardar(_UID, "c.SECRETO", _SUB)
         apple_tokens.revocar_de_usuario(_UID)
     texto = "\n".join(r.getMessage() for r in caplog.records)
     assert "SECRETO" not in texto
@@ -246,15 +253,15 @@ def _cliente_login(monkeypatch, canje):
 
 def test_el_login_manda_el_codigo_al_canje_despues_de_emitir_la_sesion(monkeypatch):
     canjes: list = []
-    c = _cliente_login(monkeypatch, lambda uid, codigo: canjes.append((uid, codigo)) or True)
+    c = _cliente_login(monkeypatch, lambda uid, codigo, sub: canjes.append((uid, codigo, sub)) or True)
     r = c.post("/api/auth/apple/native", json={"identity_token": "jwt", "nonce": "n" * 32,
                                                "authorization_code": "c.codigo"})
     assert r.status_code == 200 and r.json()["token"] == f"mf-token-{_UID}"
-    assert canjes == [(_UID, "c.codigo")]
+    assert canjes == [(_UID, "c.codigo", "001.a.2")], "con el sub VERIFICADO, no uno del cliente"
 
 
 def test_el_login_nunca_falla_por_el_canje(monkeypatch):
-    def _revienta(uid, codigo):
+    def _revienta(uid, codigo, sub):
         raise RuntimeError("Apple caído")
 
     c = _cliente_login(monkeypatch, _revienta)
@@ -274,7 +281,7 @@ def test_el_canje_real_sin_configurar_tampoco_rompe_el_login(monkeypatch, sin_en
 
 def test_un_binario_viejo_sin_codigo_entra_igual_y_no_hay_canje(monkeypatch):
     canjes: list = []
-    c = _cliente_login(monkeypatch, lambda uid, codigo: canjes.append(codigo))
+    c = _cliente_login(monkeypatch, lambda uid, codigo, sub: canjes.append(codigo))
     r = c.post("/api/auth/apple/native", json={"identity_token": "jwt", "nonce": "n" * 32})
     assert r.status_code == 200 and canjes == []
 
@@ -285,7 +292,7 @@ def test_el_canje_va_despues_de_la_sesion_y_en_segundo_plano():
     from routers import auth_session
 
     src = inspect.getsource(auth_session.apple_native_sign_in)
-    assert "background_tasks.add_task(canjear_y_guardar, uid, codigo)" in src
+    assert 'background_tasks.add_task(canjear_y_guardar, uid, codigo, identidad["sub"])' in src
     assert src.index("sesion = set_session_cookie(response, uid)") < src.index("background_tasks.add_task(")
     assert "tooltip-anchor: P1-PLAN-LOTE-848-CANJE" in src
 
@@ -301,7 +308,7 @@ def test_revocar_manda_el_refresh_descifrado_a_auth_revoke(configurado, red, mon
 
     def _query(q, p=None, **k):
         consultas.append((q, p))
-        return {"refresh_token_enc": apple_tokens.cifrar("r.guardado")}
+        return {"refresh_token_enc": apple_tokens.cifrar("r.guardado"), "client_id": "com.bioboros.app"}
 
     monkeypatch.setattr(db, "execute_sql_query", _query)
     assert apple_tokens.revocar_de_usuario(_UID) == {"revocado": True, "motivo": "ok"}
@@ -350,7 +357,7 @@ def _cuerpo_borrado() -> str:
 
 def test_el_borrado_revoca_despues_de_paypal_y_antes_de_la_purga():
     cuerpo = _cuerpo_borrado()
-    revoca = cuerpo.index("await asyncio.to_thread(revocar_de_usuario, verified_user_id)")
+    revoca = cuerpo.index("await revocar_con_plazo(verified_user_id)")
     assert cuerpo.index("await cancel_paypal_subscription_for_user(") < revoca
     assert revoca < cuerpo.index("asyncio.to_thread(delete_account_data")
     assert "tooltip-anchor: P1-PLAN-LOTE-848-REVOCAR" in cuerpo
@@ -385,3 +392,99 @@ def test_el_borrado_llama_a_revocar_y_sigue_aunque_apple_falle(app_module, monke
         response=Response(), data={"confirm": "ELIMINAR"}, verified_user_id=_UID))
     assert orden == [("revocar", _UID), ("purga", _UID)]
     assert out["success"] is True and out["identity_deleted"] is True
+
+
+# ─────────────────────────── ronda 1 de la revisión ───────────────────────────
+
+@pytest.mark.parametrize("cuerpo", [
+    {"refresh_token": "r.ajeno", "id_token": _id_token(sub="000999.otra.cuenta")},   # código de OTRA cuenta de Apple
+    {"refresh_token": "r.ajeno"},                                                        # sin id_token
+    {"refresh_token": "r.ajeno", "id_token": "no-es-un-jwt"},
+    {"refresh_token": "r.ajeno", "id_token": _id_token(aud="com.otra.app")},           # emitido para otra app
+    {"refresh_token": "r.ajeno", "id_token": _id_token(iss="https://evil.example")},
+])
+def test_un_codigo_que_no_es_de_la_identidad_verificada_no_se_guarda(configurado, red, monkeypatch, cuerpo):
+    _, respuestas = red
+    respuestas[apple_tokens.APPLE_TOKEN_URL] = (200, cuerpo)
+    monkeypatch.setattr(apple_tokens, "guardar_refresh_token", lambda *a: pytest.fail("no debía guardar"))
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is False
+
+
+def test_sin_sub_verificado_ni_siquiera_se_canjea(configurado, red):
+    llamadas, _ = red
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", None) is False
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", "") is False
+    assert llamadas == [], "sin identidad verificada no se gasta el código"
+
+
+def test_una_clave_de_cifrado_mal_formada_cuenta_como_ausente(configurado, red):
+    llamadas, _ = red
+    configurado.setenv("MEALFIT_TOKEN_ENC_KEY", "no-es-una-clave-fernet")
+    assert not apple_tokens.configurado()
+    assert any("MEALFIT_TOKEN_ENC_KEY" in f for f in apple_tokens.faltantes())
+    assert apple_tokens.canjear_y_guardar(_UID, "c.codigo", _SUB) is False
+    assert apple_tokens.revocar_de_usuario(_UID) == {"revocado": False, "motivo": "sin_configurar"}
+    assert llamadas == []
+
+
+def test_revocar_usa_el_client_id_de_la_fila(configurado, red, monkeypatch, clave_ec):
+    llamadas, respuestas = red
+    respuestas[apple_tokens.APPLE_REVOKE_URL] = (200, None)
+    import db
+
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: {
+        "refresh_token_enc": apple_tokens.cifrar("r.x"), "client_id": "com.bioboros.antes"})
+    assert apple_tokens.revocar_de_usuario(_UID)["revocado"] is True
+    (_, datos), = llamadas
+    assert datos["client_id"] == "com.bioboros.antes"
+    claims = jwt.decode(datos["client_secret"], clave_ec.public_key(), algorithms=["ES256"],
+                        audience="https://appleid.apple.com")
+    assert claims["sub"] == "com.bioboros.antes", "el client_secret habla por el MISMO client_id"
+
+
+def test_el_http_tiene_timeout_de_conexion_corto(monkeypatch):
+    import httpx
+
+    vistos: list = []
+
+    class _Cliente:
+        def __init__(self, timeout=None, **k):
+            vistos.append(timeout)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, data=None, headers=None):
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "Client", _Cliente)
+    assert apple_tokens._post_form(apple_tokens.APPLE_REVOKE_URL, {}) == (200, {"ok": True})
+    (t,), = [vistos]
+    assert isinstance(t, httpx.Timeout) and t.connect == 3.0 and t.read == 8.0
+
+
+def test_la_revocacion_tiene_plazo_total_y_el_borrado_no_la_espera(monkeypatch):
+    import time as _t
+
+    monkeypatch.setattr(apple_tokens, "revocar_de_usuario", lambda uid: _t.sleep(1.0) or {"revocado": True})
+    async def _medir():
+        # Se mide DENTRO del bucle: `asyncio.run` espera al hilo al cerrar su executor; el servidor no.
+        inicio = _t.monotonic()
+        r = await apple_tokens.revocar_con_plazo(_UID, plazo_s=0.05)
+        return r, _t.monotonic() - inicio
+
+    r, espera = asyncio.run(_medir())
+    assert r == {"revocado": False, "motivo": "plazo"}
+    assert espera < 0.5
+    assert 5 <= apple_tokens.REVOKE_DEADLINE_S <= 15
+
+
+def test_revocar_con_plazo_nunca_lanza(monkeypatch):
+    def _revienta(uid):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(apple_tokens, "revocar_de_usuario", _revienta)
+    assert asyncio.run(apple_tokens.revocar_con_plazo(_UID)) == {"revocado": False, "motivo": "error"}
