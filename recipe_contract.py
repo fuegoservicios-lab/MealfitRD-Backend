@@ -976,6 +976,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("claras_pochadas").alinear(meal)  # [P1-PLAN-LOTE-591] sólo claras: nada de huevo pochado entero
         __import__("pasos_cantidades").masa_con_su_agua(meal)  # [P1-PLAN-LOTE-406] la masa de maíz, con su agua
         __import__("pasos_cantidades").proteina_cocida_de_la_lista(meal)  # [P1-PLAN-LOTE-407] el pollo cocido que la lista compra crudo
+        __import__("mise_sin_desmenuzar").ordenar(meal)  # [P1-PLAN-LOTE-884] la mise en place no desmenuza la carne cruda
         __import__("pasos_cantidades").viver_cocido_de_la_lista(meal)  # [P1-PLAN-LOTE-408] el víver hervido que la lista compra crudo
         __import__("pasos_cantidades").huevo_duro_de_la_lista(meal)  # [P1-PLAN-LOTE-409] el huevo duro, con su hervor
         __import__("pasos_cantidades").claras_del_cerrador(meal)  # [P1-PLAN-LOTE-421] las claras no se hierven
