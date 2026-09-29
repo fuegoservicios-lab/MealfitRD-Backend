@@ -184,6 +184,7 @@ def pulir_linea(s: str) -> str:
     m = _UNIDAD_DE_541.match(out)                                          # [P1-PLAN-LOTE-541]
     if m and _cabeza_541(out[m.end():]) in _CONTABLES_541:
         out = m.group(1).rstrip() + " " + out[m.end():]
+    out = __import__("lista_sin_de").quitar(out)  # [P1-PLAN-LOTE-912] «½ de pimiento morrón» → «½ pimiento morrón»
     m = _UNO_PLURAL.match(out)
     if m:
         sing = _SINGULAR[m.group(2).lower()]
