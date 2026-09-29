@@ -20545,6 +20545,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                     logger.info(f"🧀 [P1-CLOSER-NO-DUP-CHEESE] plato ya tiene queso → uso '{_alt.name}' en vez de un "
                                 f"2º queso ('{chosen.name}') | meal={str(meal.get('name'))[:30]}")
                     chosen = _alt
+        chosen = __import__("cierre_medido").como_se_mide(meal, chosen, no_cook, db)  # [P1-PLAN-LOTE-933] la línea que se escribe
         gap = target - cur_p
         grams = int(round(gap / (chosen.protein / 100.0)))
         # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] techo global de bolt (275g de atún en vivo).
