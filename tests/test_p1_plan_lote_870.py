@@ -117,9 +117,13 @@ def test_do_la_vista_no_toca_nada(ola):
     pytest.skip("lexico_vista_pais no expone una función de texto con (texto, país)")
 
 
-def test_do_la_descripcion_no_se_reescribe_por_defecto(ola):
+def test_do_la_descripcion_se_encendio_aparte_con_su_palanca(ola):
+    """Esta ola dejó la descripción veraz APAGADA en RD; la encendió aparte el lote 858/890, tras leer el replay de DO.
+    Lo que este test fija es que en RD sigue habiendo una palanca propia para volver a apagarla sin redeploy."""
     import descripcion_veraz as dv
-    assert dv.incluye_do() is False, "encender la descripción veraz en RD es una decisión aparte (lote 858)"
+    assert dv.incluye_do() is True, "RD encendido por defecto desde el lote 858 (marcador 890)"
+    ola.setenv("MEALFIT_DESCRIPTION_TRUTH_DO", "false")
+    assert dv.incluye_do() is False, "MEALFIT_DESCRIPTION_TRUTH_DO=false vuelve a dejar RD como antes"
 
 
 # ─── 3. cada costura con su palanca de vuelta atrás, registrada y documentada ───────────────────────────────────────
