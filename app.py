@@ -3762,6 +3762,14 @@ async def api_delete_my_account(
                 },
             )
 
+        # [P1-PLAN-LOTE-847 · 2026-09-29] Borrar en PostHog la persona `distinct_id = user_id` y sus eventos (fila 3.3):
+        # junto a la revocación de Apple, pero DESPUÉS de la purga y solo con la cuenta ya cerrada (PostHog no depende de
+        # la base, y con la cuenta viva un reintento lo haría igual). Best-effort con plazo TOTAL: nunca lanza ni bloquea.
+        # tooltip-anchor: P1-PLAN-LOTE-847-BORRAR-POSTHOG
+        from posthog_borrado import borrar_de_posthog_con_plazo
+        posthog_borrado = await borrar_de_posthog_con_plazo(verified_user_id)
+        logger.info(f"[P1-PLAN-LOTE-847] borrado de cuenta {verified_user_id[:8]}: posthog={posthog_borrado.get('motivo')}")
+
         # 3. Invalidar la sesión first-party server-side (solo con la cuenta ya cerrada).
         clear_session_cookie(response)
         return {
