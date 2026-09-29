@@ -151,11 +151,19 @@ def test_sin_parentesis_numerico_en_la_salida():
 # ───────────── 3. cableado ─────────────
 
 def test_corre_antes_de_la_lista_y_despues_del_kcal_floor():
-    from pathlib import Path
-    src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
-    i_floor = src.index("[P1-GAINMUSCLE-KCAL-FLOOR] en assemble falló")
-    i_rewrite = src.index("_normalize_cooked_grain_lines(result.get(\"days\")")
-    i_list = src.index("# Calcular shopping lists")
+    # [P1-PLAN-LOTE-813 · 2026-09-29] los 5 mutadores de contenido viven en `mutadores_de_contenido.aplicar` y assemble
+    # los llama en DOS sitios (antes de la cadena con el knob encendido; el sitio viejo con él apagado): los dos sitios
+    # preceden a la lista de compras.
+    import inspect
+    import mutadores_de_contenido as _mdc
+    mut = inspect.getsource(_mdc)
+    asm = inspect.getsource(go.assemble_plan_node)
+    i_list = asm.index("# Calcular shopping lists")
+    assert asm.index('_mdc.en_posicion(result, "antes"') < i_list
+    assert asm.index('_mdc.en_posicion(result, "despues"') < i_list
+    assert "_normalize_cooked_grain_lines(result.get(\"days\")" in mut
+    i_floor = asm.index("[P1-GAINMUSCLE-KCAL-FLOOR] en assemble falló")
+    i_rewrite = min(asm.index('_mdc.en_posicion(result, "antes"'), asm.index('_mdc.en_posicion(result, "despues"'))
     assert i_floor < i_rewrite < i_list, (
         "debe correr DESPUÉS del kcal-floor (uno de los escritores de la línea cocida) "
         "y ANTES de la lista de compras (que tiene que comprar gramos secos)"

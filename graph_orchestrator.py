@@ -2445,7 +2445,7 @@ from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 # test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
 # este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
 from prompts.planner import build_planner_system_prompt
-from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel; import cierres_con_receta as _ccr  # [P1-PLAN-LOTE-47/48]
+from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context; from deterministic_day import build_day_for_skeleton as _det_day; import pasos_sustitucion as _ps; import reeleccion_dia as _reel; import cierres_con_receta as _ccr; import mutadores_de_contenido as _mdc  # [P1-PLAN-LOTE-47/48/813]
 
 
 # ============================================================
@@ -39608,9 +39608,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.info(f"🎭 [P1-PHANTOM-PROTEIN-NAMEFIX] {_phantom_fixed} nombre(s) de plato corregido(s) "
                         f"(proteína fantasma del título → proteína real del plato).")
 
-    # [P0-BAND-PRE-REVIEW · 2026-07-10] Chain de calidad/banda del shield pre-INSERT (SSOT
-    # `db_plans.apply_plan_quality_finalize_chain`) corrido AQUÍ: tras la ÚLTIMA mutación de
-    # assemble y ANTES de construir la lista de compras (el closer de banda muta cantidades —
+    _mdc.en_posicion(result, "antes", _ck)  # [P1-PLAN-LOTE-813 · 2026-09-29] los 5 mutadores de contenido ANTES de la cadena (knob)
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] Chain de calidad/banda del shield pre-INSERT (SSOT `db_plans.apply_plan_quality_finalize_chain`)
+    # corrido AQUÍ: tras los mutadores de contenido ([P1-PLAN-LOTE-813]: NO es la última mutación de assemble — detrás aún tocan
+    # `days` los re-autofix tardíos, el reconciliador display↔raw y el AUTO-PATCH) y ANTES de construir la lista de compras (el closer de banda muta cantidades —
     # construirla antes daría divergencias receta↔lista en el coherence guard) y del review.
     # Efectos medidos en vivo (corr=2451c8ac): (a) el gate de banda del review y el
     # P2-BAND-SCORE-GATE pasan a medir el estado CERRADO (banda 0.583→1.00 pre-review, no
@@ -39618,7 +39619,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # (5× precio; $1.57/48h = driver #1 del gasto LLM) — y (b) el payload SSE ya no viaja con
     # `_quality_degraded` stale ("precisión de las calorías...", dolor recurrente del owner):
     # el flag jamás se marca porque el estado ya está en banda. El shield del INSERT queda
-    # como red idempotente para los paths que saltan assemble. Vía `_adb` (executor DB) para
+    # como red (NO idempotente: P1-PLAN-LOTE-813) para los paths que saltan assemble. Vía `_adb` (executor DB) para
     # no bloquear el event loop (~5-20s CPU: fuzzy matching + motor all-4).
     try:
         from db import apply_plan_quality_finalize_chain as _apqfc
@@ -39750,65 +39751,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # post_humanize, post_gen_sanity) acota en qué tramo nace cada tipo de divergencia.
     _trace_misalign(result.get("days"), "pre_shopping_passes")
 
-    # [P1-PHANTOM-INGREDIENT · 2026-07-24] Dirección INVERSA del validador de coherencia.
-    # DEBE correr aquí: antes de construir la lista de compras (la línea insertada tiene que
-    # llegar a la lista) y antes del truth-up pre-INSERT (que recalcula macros desde strings).
-    if PHANTOM_INGREDIENT_REPAIR:
-        try:
-            _ck("pre_phantom_repair")
-            _ph_fixed = _repair_declared_but_unlisted_ingredients(result.get("days") or [])
-            if _ph_fixed:
-                result["_phantom_ingredients_repaired"] = _ph_fixed
-                logger.info(f"👻 [P1-PHANTOM-INGREDIENT] {len(_ph_fixed)} ingrediente(s) fantasma "
-                            f"reinsertado(s): " + "; ".join(
-                                f"D{f['day']} {f['meal'][:24]!r} → {f['line']!r}" for f in _ph_fixed[:6]))
-        except Exception as _ph_e:
-            logger.warning(f"[P1-PHANTOM-INGREDIENT] falló (no bloquea): {type(_ph_e).__name__}: {_ph_e}")
-
-    # [P1-PLAN-LOTE-48 · 2026-09-14] El «queso» genérico de un cerrador toma el nombre del queso del plato ANTES de que el
-    # lácteo del nombre se inserte aparte y de la lista de compras (plan 358a2cdf: la lista compró queso blanco para dos
-    # platos «con queso cottage»). tooltip-anchor: P1-PLAN-LOTE-48-QUESO-NOMBRADO
-    _ccr.nombrar_quesos_genericos(result.get("days") or [])
-    # [P1-NAME-PHANTOM-DAIRY · 2026-07-25] El lácteo que el NOMBRE promete y el plato no lleva.
-    # Va DESPUÉS del repair por cantidad declarada (si los pasos ya la traían, ese lo resolvió) y
-    # antes de la lista de compras. Los caps corren después como última palabra.
-    if NAME_PHANTOM_DAIRY_REPAIR:
-        try:
-            _npd = _repair_name_phantom_dairy(result.get("days") or [])
-            if _npd:
-                result["_name_phantom_dairy_repaired"] = _npd
-                logger.info(f"🧀 [P1-NAME-PHANTOM-DAIRY] {len(_npd)} lácteo(s) del NOMBRE añadido(s) al "
-                            f"plato: " + "; ".join(f"D{d['day']} {d['meal'][:26]!r} → {d['line']!r}"
-                                                   for d in _npd[:5]))
-        except Exception as _npd_e:
-            logger.warning(f"[P1-NAME-PHANTOM-DAIRY] falló (no bloquea): {type(_npd_e).__name__}: {_npd_e}")
-
-    # [P1-COOKED-GRAIN-DRY · 2026-07-24] Gramos COCIDOS → gramos SECOS (unidades del catálogo).
-    # Mismo requisito de orden: antes de la lista de compras y del truth-up pre-INSERT.
-    # Va DESPUÉS del kcal-floor de gain_muscle (L28378), que es uno de los escritores de
-    # "{g}g de arroz blanco cocido" — así su línea también queda normalizada.
-    if COOKED_GRAIN_DRY_REWRITE:
-        try:
-            _cg = _normalize_cooked_grain_lines(result.get("days") or [])
-            if _cg:
-                result["_cooked_grain_dry_rewrites"] = _cg
-                logger.info(f"🍚 [P1-COOKED-GRAIN-DRY] {len(_cg)} línea(s) cocido→crudo: " + "; ".join(
-                    f"D{c['day']} {c['before']!r}→{c['after'].strip()!r}" for c in _cg[:6]))
-        except Exception as _cg_e:
-            logger.warning(f"[P1-COOKED-GRAIN-DRY] falló (no bloquea): {type(_cg_e).__name__}: {_cg_e}")
-
-    # [P1-DUP-FOOD-LINE-MERGE · 2026-07-24] El mismo alimento en dos líneas de la misma comida.
-    # Va DESPUÉS del repair de fantasmas (si la línea reinsertada coincide con una existente,
-    # aquí se funden) y antes de la lista.
-    if MERGE_DUPLICATE_FOOD_LINES:
-        try:
-            _dm = _merge_duplicate_food_lines(result.get("days") or [])
-            if _dm:
-                result["_duplicate_food_lines_merged"] = _dm
-                logger.info(f"🔗 [P1-DUP-FOOD-LINE-MERGE] {len(_dm)} grupo(s) fundido(s): " + "; ".join(
-                    f"D{d['day']} {d['food']} → {d['into']!r}" for d in _dm[:6]))
-        except Exception as _dm_e:
-            logger.warning(f"[P1-DUP-FOOD-LINE-MERGE] falló (no bloquea): {type(_dm_e).__name__}: {_dm_e}")
+    # [P1-PLAN-LOTE-813 · 2026-09-29] Sitio VIEJO de los 5 mutadores de contenido (fantasma de los pasos, queso nombrado,
+    # lácteo del nombre, cocido→seco, duplicados): los cinco corren aquí con MEALFIT_ASSEMBLE_MUTATORS_BEFORE_CHAIN=false;
+    # encendido, aquí sólo la fusión de duplicados (la cadena los crea). Código y razones en `mutadores_de_contenido.py`.
+    _mdc.en_posicion(result, "despues", _ck)
 
     # [P1-MISALIGN-DEEP-TRACE · 2026-07-24] Foto JUSTO ANTES de reparar: es el estado que
     # produce el pipeline por sí solo. Si se tomara después del reconciliador, la telemetría
@@ -48815,6 +48761,7 @@ def _emit_clinical_band_final_metric(band: dict, prev_score, plan_data: dict,
                 plan_data.get("form_data") or ({"user_id": user_id} if user_id else {})),
             "daygen_canary_model": DAYGEN_CANARY_MODEL or None,
         }
+        _meta.update(_mdc.metadata_banda_final(plan_data, _score))  # [P1-PLAN-LOTE-813] final_score double, plan_id/run_id, input_equals_chain_out
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
             "tokens_estimated, confidence, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",

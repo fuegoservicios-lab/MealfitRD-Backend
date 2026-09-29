@@ -198,7 +198,9 @@ def test_el_queso_generico_toma_el_nombre_del_plato_en_la_lista_y_en_la_compra(m
 
 def test_el_queso_se_nombra_antes_del_lacteo_del_nombre_y_de_los_dos_barridos():
     asm = inspect.getsource(go.assemble_plan_node)
-    assert asm.index("_ccr.nombrar_quesos_genericos(result.get(\"days\") or [])") < asm.index("_repair_name_phantom_dairy(")
+    import mutadores_de_contenido as _mdc   # [P1-PLAN-LOTE-813] los mutadores de la cola viven allí
+    mut = inspect.getsource(_mdc.aplicar)
+    assert mut.index("_ccr.nombrar_quesos_genericos(result.get(\"days\") or [])") < mut.index("_repair_name_phantom_dairy(")
     i_bar = asm.index("_barrer_lineas_muertas_de_raw(days)")
     assert asm.rfind("_ccr.nombrar_quesos_genericos(days)", 0, i_bar) != -1
     fin = inspect.getsource(go.finalize_plan_data_coherence)
@@ -270,7 +272,7 @@ def test_knobs_docs_marcador_y_el_god_file_no_subio_el_tope():
     for f, ancla in (("cierres_con_receta.py", "P1-PLAN-LOTE-48-CIERRES-CON-RECETA"),
                      ("deterministic_day.py", "P1-PLAN-LOTE-48-PISO-PROTEINA"),
                      ("graph_orchestrator.py", "P1-PLAN-LOTE-48-BASE-PROPIA"),
-                     ("graph_orchestrator.py", "P1-PLAN-LOTE-48-QUESO-NOMBRADO"),
+                     ("mutadores_de_contenido.py", "P1-PLAN-LOTE-48-QUESO-NOMBRADO"),   # [P1-PLAN-LOTE-813]
                      ("graph_orchestrator.py", "P1-PLAN-LOTE-48-PULPA")):
         assert ancla in (_BACKEND / f).read_text(encoding="utf-8"), (f, ancla)
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")

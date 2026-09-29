@@ -151,11 +151,19 @@ def test_sin_catalogo_no_inventa(monkeypatch):
 # ───────────── 3. cableado ─────────────
 
 def test_corre_antes_de_la_lista_y_con_los_caps_detras():
+    # [P1-PLAN-LOTE-813 · 2026-09-29] los 5 mutadores de contenido viven en `mutadores_de_contenido.aplicar` y assemble
+    # los llama en DOS sitios (antes de la cadena con el knob encendido; el sitio viejo con él apagado): los dos sitios
+    # preceden a la lista de compras.
+    import inspect
+    import mutadores_de_contenido as _mdc
+    mut = inspect.getsource(_mdc)
+    asm = inspect.getsource(go.assemble_plan_node)
+    i_list = asm.index("# Calcular shopping lists")
+    assert asm.index('_mdc.en_posicion(result, "antes"') < i_list
+    assert asm.index('_mdc.en_posicion(result, "despues"') < i_list
+    assert '_repair_name_phantom_dairy(result.get("days")' in mut, "sin esto el queso añadido no se compraría"
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
-    i_npd = src.index('_repair_name_phantom_dairy(result.get("days")')
-    i_list = src.index("# Calcular shopping lists")
-    assert i_npd < i_list, "sin esto el queso añadido no se compraría"
     assert "P1-CAPS-LAST-WORD" in src, "los caps quedan como última palabra tras insertar grasa"
 
 

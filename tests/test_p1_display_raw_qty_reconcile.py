@@ -137,11 +137,19 @@ def test_los_macros_salen_del_display_que_es_la_autoridad():
 
 
 def test_corre_al_final_y_antes_de_la_lista():
-    from pathlib import Path
-    src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
-    i_dm = src.index('_merge_duplicate_food_lines(result.get("days")')
-    i_rc = src.index('_reconcile_display_raw_lines(result.get("days")')
-    i_list = src.index("# Calcular shopping lists")
+    # [P1-PLAN-LOTE-813 · 2026-09-29] los 5 mutadores de contenido viven en `mutadores_de_contenido.aplicar` y assemble
+    # los llama en DOS sitios (antes de la cadena con el knob encendido; el sitio viejo con él apagado): los dos sitios
+    # preceden a la lista de compras.
+    import inspect
+    import mutadores_de_contenido as _mdc
+    mut = inspect.getsource(_mdc)
+    asm = inspect.getsource(go.assemble_plan_node)
+    i_list = asm.index("# Calcular shopping lists")
+    assert asm.index('_mdc.en_posicion(result, "antes"') < i_list
+    assert asm.index('_mdc.en_posicion(result, "despues"') < i_list
+    assert '_merge_duplicate_food_lines(result.get("days")' in mut
+    i_rc = asm.index('_reconcile_display_raw_lines(result.get("days")')
+    i_dm = max(asm.index('_mdc.en_posicion(result, "antes"'), asm.index('_mdc.en_posicion(result, "despues"'))
     assert i_dm < i_rc < i_list, (
         "último pase antes de la lista: los anteriores dejan el display en su forma definitiva"
     )

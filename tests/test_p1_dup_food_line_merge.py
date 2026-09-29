@@ -151,12 +151,19 @@ def test_sin_densidades_no_hace_nada(monkeypatch):
 # ───────────── 3. cableado ─────────────
 
 def test_corre_despues_del_fantasma_y_antes_de_la_lista():
-    from pathlib import Path
-    src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
-    i_ph = src.index('_repair_declared_but_unlisted_ingredients(result.get("days")')
-    i_dm = src.index('_merge_duplicate_food_lines(result.get("days")')
-    i_list = src.index("# Calcular shopping lists")
-    assert i_ph < i_dm < i_list, (
+    # [P1-PLAN-LOTE-813 · 2026-09-29] los 5 mutadores de contenido viven en `mutadores_de_contenido.aplicar` y assemble
+    # los llama en DOS sitios (antes de la cadena con el knob encendido; el sitio viejo con él apagado): los dos sitios
+    # preceden a la lista de compras.
+    import inspect
+    import mutadores_de_contenido as _mdc
+    mut = inspect.getsource(_mdc)
+    asm = inspect.getsource(go.assemble_plan_node)
+    i_list = asm.index("# Calcular shopping lists")
+    assert asm.index('_mdc.en_posicion(result, "antes"') < i_list
+    assert asm.index('_mdc.en_posicion(result, "despues"') < i_list
+    i_ph = mut.index('_repair_declared_but_unlisted_ingredients(result.get("days")')
+    i_dm = mut.index('_merge_duplicate_food_lines(result.get("days")')
+    assert i_ph < i_dm, (
         "después del fantasma (si la línea reinsertada coincide con una existente, aquí se funden) "
         "y antes de la lista"
     )
