@@ -81,6 +81,25 @@ def test_el_nabo_sube_a_su_racion_con_el_dia_una_decima_sobre_su_grasa():
     assert 69 < margen["kcal"] < 71 and -0.7 < margen["grasa"] < -0.6, "el margen se gasta igual"
 
 
+def test_lo_que_sube_por_lo_inapreciable_suma_su_delta_y_no_re_mide_el_plato():
+    """El nivelado de kcal ajusta los NÚMEROS del plato sin tocar sus líneas: re-medirlo desde ellas mueve el día (lote
+    178). Medido sobre 92 planes: con la re-medición, 3 de 43 días tocados acababan sobre el 105 % de sus kcal."""
+    m = _plato("Nabo crujiente al horno con queso blanco", "30 g de nabo")      # 300 kcal guardadas; sus líneas dan 112
+    assert _subir(m, _margen()) == ["↑30→100 g de Nabo"]
+    assert (m["cals"], m["fats"], m["protein"]) == (320, 12, 16), (m["cals"], m["fats"], m["protein"])
+    assert m["macros"] == ["P:16g", "C:37g", "G:12g"]
+    m = _plato("Avena cremosa con queso blanco", "15 g de avena")               # con sitio de grasa: la subida de siempre
+    assert _subir(m, _margen(kcal=90.0, grasa=5.0)) == ["↑15→30 g de Avena"]
+    assert m["cals"] != 300 + 57, "re-medido desde sus líneas, como antes"
+
+
+def test_una_subida_parcial_que_no_se_nota_no_se_hace():
+    m = _plato("Yuca guisada con queso blanco", "85 g de yuca")
+    assert _subir(m, _margen(kcal=10.0)) == [] and m["ingredients"][0] == "85 g de yuca", "6 g de 15 que faltan"
+    m = _plato("Yuca guisada con queso blanco", "85 g de yuca")
+    assert _subir(m, _margen(kcal=30.0)) == ["↑85→100 g de Yuca"], "cabe entera"
+
+
 def test_la_yuca_tambien():
     m = _plato("Yuca guisada con queso blanco", "60 g de yuca")
     assert _subir(m, _margen()) == ["↑60→100 g de Yuca"], m["ingredients"]

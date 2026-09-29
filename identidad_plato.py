@@ -402,7 +402,8 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
                    (m_p / dp) if dp > max(0.0, _tz) else 1.0)
         objetivo = int(g_cur + (piso - g_cur) * max(0.0, frac))
         # [P1-PLAN-LOTE-915] …y si la subida se nota: «60→66 g de yuca» no le cambia el plato a nadie
-        if objetivo >= piso * 0.5 and objetivo > g_cur + 1 and (_tz < 0 or objetivo - g_cur >= 0.25 * (piso - g_cur)):
+        if objetivo >= piso * 0.5 and objetivo > g_cur + 1 and (
+                _tz < 0 or objetivo - g_cur >= max(0.25 * (piso - g_cur), 0.15 * piso)):
             mac = db.macros_from_ingredient_string(f"{objetivo - g_cur:.0f} g de {canon}") or {}
             dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
             dp = float(mac.get("protein") or 0)
@@ -434,6 +435,11 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
         meal["ingredients_raw"] = [linea if _es_de(r) else r for r in raw]
     elif isinstance(raw, list):
         raw.append(linea)
+    # [P1-PLAN-LOTE-915] Lo que sube sólo porque su grasa es inapreciable suma su DELTA y no re-mide el plato: el día
+    # está en su techo porque el nivelado ajustó sus números, y re-medirlo desde las líneas lo movía (lote 178).
+    if _tz >= 0 and (dg > margen["grasa"] + 0.05 or dp > m_p + 0.5):
+        _delta(meal, vieja, linea, db)
+        margen.setdefault("_por_delta", {})[id(meal)] = margen.get("_por_delta", {}).get(id(meal), 0) + 1
     margen["kcal"] -= dk
     margen["grasa"] -= dg
     if "proteina" in margen:
@@ -757,7 +763,8 @@ def _subir_identidad_del_modelo(meal: dict, index: dict, *, db=None, allergies=N
     if hechos:
         meal["_identidad_restaurada"] = list(meal.get("_identidad_restaurada") or []) + hechos
         meal.pop("_display", None)
-        _remedir(meal, db)
+        if (margen.get("_por_delta") or {}).pop(id(meal), 0) != len(hechos):   # [P1-PLAN-LOTE-915] las de delta ya sumaron
+            _remedir(meal, db)
     return hechos
 
 
