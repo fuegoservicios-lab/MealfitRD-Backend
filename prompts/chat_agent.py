@@ -1070,11 +1070,14 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         return ""
     _etiqueta = _ETIQUETA_INSTRUCCION if nevera_activa else _ETIQUETA_INSTRUCCION_SIN_NEVERA
     # [P1-PLAN-LOTE-690] las dudas ya contestadas: fuera de la descripción, ajuste aplicado y la regla de registrar
-    from respuestas_de_la_foto import preparar_vision, instruccion as _instruccion_respuestas, instruccion_rotulo
+    from respuestas_de_la_foto import (preparar_vision, instruccion as _instruccion_respuestas, instruccion_rotulo,
+                                       instruccion_solo_foto)
     vision = preparar_vision(vision)
     _respuestas = _instruccion_respuestas(vision)
     # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto es el RÓTULO del plato (lo marca agent.py con `marcar_rotulo`)
     _respuestas += instruccion_rotulo(vision.get("rotulo") if "rotulo" in vision else None)
+    # [P1-PLAN-LOTE-687] la foto SOLA de un plato claro: se registra (también lo marca `marcar_rotulo`)
+    _respuestas += instruccion_solo_foto(vision)
     kind = str(vision.get("kind"))
     if kind == "multi":
         raw_items = vision.get("items") if isinstance(vision.get("items"), list) else []

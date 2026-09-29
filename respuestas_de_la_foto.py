@@ -205,8 +205,30 @@ def instruccion_rotulo(tipo) -> str:
     )
 
 
+# [P1-PLAN-LOTE-687 · 2026-09-28] SOLO LA FOTO. El dueño mandó la foto de su cena (huevos fritos con plátano maduro: el
+# escáner la clavó y sin dudas) sin escribir nada, y el coach contestó «No me llegó el detalle de esa foto» — venía de
+# pedirle la tabla de un suplemento y el bloque de la foto quedaba a mitad del prompt. «Si la foto es 100 %, que lo
+# anote directo; si no, que pregunte primero»: una foto de PLATO sola y SIN dudas es un registro; con dudas manda su
+# regla (P1-PLAN-LOTE-305/690: lo obvio se anota y se pregunta solo la duda, o la tarjeta de dudas antes del coach).
+MARCADOR_SOLO_FOTO = "\U0001f4f7"   # el turno que `routers/chat.py` manda cuando el usuario no escribió nada
+
+
+def es_solo_foto(prompt) -> bool:
+    """¿El usuario no escribió nada (turno vacío o el marcador de foto)?"""
+    t = str(prompt or "").strip()
+    return not t or t == MARCADOR_SOLO_FOTO
+
+
+def _platos_claros(vision) -> bool:
+    items = vision.get("items") if vision.get("kind") == "multi" else [vision]
+    platos = [i for i in (items or []) if isinstance(i, dict) and str(i.get("kind") or "") == "plato"
+              and i.get("description")]
+    return bool(platos) and not any(_MARCA_DUDAS.strip() in str(i.get("description")) for i in platos)
+
+
 def foto_para_anotar(vision, prompt) -> bool:
-    """¿Este turno es el de ANOTAR un plato de la foto? Con las dudas contestadas o con el texto como rótulo."""
+    """¿Este turno es el de ANOTAR un plato de la foto? Con las dudas contestadas, con el texto como rótulo o con la
+    foto SOLA de un plato sin dudas (P1-PLAN-LOTE-687)."""
     if not isinstance(vision, dict) or not vision.get("kind"):
         return False
     items = vision.get("items") if vision.get("kind") == "multi" else [vision]
@@ -214,11 +236,26 @@ def foto_para_anotar(vision, prompt) -> bool:
                     for i in (items or []))
     if not hay_plato:
         return False
-    return bool(respuestas_de(vision)) or rotulo_de_comida(prompt) is not None
+    if respuestas_de(vision) or rotulo_de_comida(prompt) is not None:
+        return True
+    return es_solo_foto(prompt) and _platos_claros(vision)
+
+
+def instruccion_solo_foto(vision) -> str:
+    """[P1-PLAN-LOTE-687] La regla del turno de la foto SOLA de un plato claro ("" si no lo es)."""
+    if not (isinstance(vision, dict) and vision.get("solo_foto")):
+        return ""
+    return (
+        " SOLO LA FOTO: el usuario te mandó la foto de su plato sin escribir nada: se lo comió. Regístralo EN ESTE TURNO "
+        "con `log_consumed_meal`, las cifras del análisis y el `meal_type` que toque por la hora y lo que ya lleva "
+        "registrado hoy, sin preguntarle antes si se lo comió, y confírmalo en una frase: qué anotaste. Aunque la "
+        "conversación viniera de otro tema, ESTA foto es su comida."
+    )
 
 
 NOTA_REINTENTO = (
-    "ALTO. El usuario te está ANOTANDO el plato de la foto (contestó sus dudas o te dijo qué comida es) y terminaste "
+    "ALTO. El usuario te está ANOTANDO el plato de la foto (te la mandó sola, contestó sus dudas o te dijo qué comida "
+    "es) y terminaste "
     "el turno sin registrarlo. Llama AHORA a `log_consumed_meal` con las cifras del plato YA ajustadas a lo que contestó "
     "y el `meal_type` que dijo (o el de la hora si no lo dijo). Solo si dijo que todavía no se "
     "lo ha comido, o te pregunta si puede comerlo, no registres nada: vuelve a escribir tu respuesta COMPLETA sin darlo "
@@ -231,4 +268,6 @@ def marcar_rotulo(vision, prompt):
     ellas manda su propia regla). Sin rótulo, el MISMO objeto."""
     if not isinstance(vision, dict) or respuestas_de(vision) or not foto_para_anotar(vision, prompt):
         return vision
+    if es_solo_foto(prompt):   # [P1-PLAN-LOTE-687] sin texto no hay rótulo: la foto sola manda
+        return dict(vision, solo_foto=True)
     return dict(vision, rotulo=rotulo_de_comida(prompt))

@@ -7529,8 +7529,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                                          contador_sin_plan=_contador_sin_plan)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
@@ -7541,8 +7539,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         system_prompt = _base_inline
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
@@ -7791,6 +7787,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # P1-CHAT-PAUSED-PROMPT-BLOCKS): la directiva de idioma repetida como ÚLTIMO
     # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
     # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
+    # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+    # [P1-PLAN-LOTE-687 · 2026-09-28] …y va al FINAL, UNA vez para las dos ramas: a mitad del prompt (posición 25.595
+    # de 36.550, con el diario, el plan y los días anteriores detrás) el modelo no la vio y contestó «No me llegó el
+    # detalle de esa foto» a una foto de plato perfectamente analizada.
+    system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
     # [P1-PLAN-LOTE-686 · 2026-09-28] Modo voz: el recordatorio de las reglas V al FINAL, detrás de todos los bloques de
     # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
     if is_call_mode:
