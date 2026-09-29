@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 _NO_ES_FRUTO_SECO = ("leche", "bebida", "harina", "aceite", "yogur", "yogurt", "queso", "salsa", "nuez moscada")
 _PESCADO_LATA = re.compile(r"\b(?:at[uú]n|sardinas?|caballa|arenque)\b", re.IGNORECASE)
+# [P1-PLAN-LOTE-889 · 2026-09-29] El tope por ALIMENTO que el dueño aprobó («sólo si es mejor»): el cerrador de proteína
+# llenaba metas altas con UN alimento — 200-300 g de edamame cocido en una cena (11 de 14 porciones exageradas en el
+# replay del escudo vivo; 153 de 247 en el corpus). 155 g = 1 taza. Aquí como última palabra; el cerrador consulta
+# `margen_g` al elegir, así que el resto de la proteína va a otro alimento o a otra comida. Knob
+# `MEALFIT_EDAMAME_LINE_CAP_G` (155; 0 = apagado). tooltip-anchor: P1-PLAN-LOTE-889
+_EDAMAME = re.compile(r"\bedamames?\b", re.IGNORECASE)
 _EN_LATA = re.compile(r"\ben\s+(?:agua|lata|aceite)\b|\benlatad[oa]s?\b|\blata\b|\bescurrid[oa]s?\b", re.IGNORECASE)
 
 
@@ -43,9 +49,43 @@ def _tope_de(linea: str, tokens_semillas, sa):
         return 0, None
     if _PESCADO_LATA.search(s) and _EN_LATA.search(s):
         return _knob("MEALFIT_CANNED_FISH_LINE_CAP_G", 170), "pescado en lata"
+    if _EDAMAME.search(s):
+        return _knob("MEALFIT_EDAMAME_LINE_CAP_G", 155), "edamame"
     if not any(t in s for t in _NO_ES_FRUTO_SECO) and any(sa(t) in s for t in tokens_semillas):
         return _knob("MEALFIT_SEED_NUT_LINE_CAP_G", 40), "semillas/frutos secos"
     return 0, None
+
+
+def margen_g(meal, nombre, db=None) -> float:
+    """[P1-PLAN-LOTE-889] Gramos de `nombre` que aún caben en esta comida bajo su tope por línea (lo que ya lleva de esa
+    clase cuenta); infinito si el alimento no tiene tope. Nunca lanza (ante error, infinito: no bloquea al cerrador)."""
+    try:
+        import graph_orchestrator as go
+        from constants import strip_accents as sa
+        tokens = tuple(go._SEED_NUT_TOKENS)
+        tope, clase = _tope_de(nombre, tokens, sa)
+        if not tope:
+            return float("inf")
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        ya = 0.0
+        for linea in (meal.get("ingredients") or []) if isinstance(meal, dict) else []:
+            if isinstance(linea, str) and _tope_de(linea, tokens, sa)[1] == clase:
+                ya += float(db.grams_from_ingredient_string(linea) or 0)
+        return max(0.0, float(tope) - ya)
+    except Exception:                                                          # noqa: BLE001
+        return float("inf")
+
+
+def caben(meal, pool, db, minimo) -> list:
+    """[P1-PLAN-LOTE-889] El pool `(info, nombre)` del cerrador sin los alimentos que ya no caben en esta comida (margen
+    < `minimo`, la porción cocinable). Sin ninguno que quepa, el pool tal cual: el cerrador pondrá 0 g de ese alimento."""
+    try:
+        quedan = [(i, n) for (i, n) in (pool or []) if margen_g(meal, n, db) >= minimo]
+        return quedan or pool
+    except Exception:                                                          # noqa: BLE001
+        return pool
 
 
 def cap(days, db=None) -> int:

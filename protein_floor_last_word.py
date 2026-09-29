@@ -153,6 +153,9 @@ def reencuadra_y_mide(plan_data: dict, *, form_data: Optional[dict] = None,
                 try:
                     if go.PORTION_REALISM_CAP_ENABLED and go.CAPS_AFTER_BAND_CLOSER:
                         go._cap_unrealistic_portions(plan_data.get("days"))
+                        # [P1-PLAN-LOTE-889] …y el tope por ALIMENTO (edamame 155 g, lata 170 g): el bump re-escalaba el
+                        # edamame +10 g por pasada del escudo (105→115→125, auditoría de ia-59) y el techo genérico es 300 g
+                        __import__("topes_por_linea").cap(plan_data.get("days"))
                 except Exception as e_cap:
                     logger.debug(f"[P1-PROTEIN-FLOOR-LAST-WORD] cap post-bump no-op: "
                                  f"{type(e_cap).__name__}: {e_cap}")

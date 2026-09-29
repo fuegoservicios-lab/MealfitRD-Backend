@@ -18942,7 +18942,7 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
                 cur_p = _meal_macro_num(meal.get("protein"))
                 gap = max(0.0, fill_to_g - cur_p)
                 grams = min(int(round(gap / (info.protein / 100.0))), int(max(0.0, slot_cal_target - cur_cal) / (info.kcal / 100.0)))
-        grams = min(max_add_g, grams)
+        grams = min(max_add_g, grams, int(min(__import__("topes_por_linea").margen_g(meal, str(info.name), db), 9999)))  # [P1-PLAN-LOTE-889]
         if grams < 15:
             return 0
         f = grams / 100.0
@@ -20141,6 +20141,8 @@ def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_acc
         _d = factor - 1.0
         if cur_ing_p * _d < min_added_protein:
             return 0  # crecimiento trivial → mejor caer al pool/append
+        if float(mc["grams"]) * _d > __import__("topes_por_linea").margen_g(meal, str(ings[idx]), db):  # [P1-PLAN-LOTE-889]
+            return 0                                             # crecerla pasaría su ración → otro alimento
         from nutrition_db import rescale_ingredient_string as _resc
         new_ing = _resc(str(ings[idx]), factor)
         if new_ing == ings[idx]:
@@ -20403,6 +20405,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _pool = _pool_no_second_main
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
+        _pool = __import__("topes_por_linea").caben(meal, _pool, db, CLOSER_COOKABLE_MIN_G)  # [P1-PLAN-LOTE-889] tope por alimento
         # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
         # INGREDIENTES del estado FINAL → una proteína que el closer INTRODUCE aquí y que otra comida
         # del día ya usa se convierte en rechazo del reviewer (medido en vivo corr=2451c8ac: el _alt
@@ -20546,6 +20549,10 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         grams = int(round(gap / (chosen.protein / 100.0)))
         # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] techo global de bolt (275g de atún en vivo).
         grams = min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G))
+        _marg = __import__("topes_por_linea").margen_g(meal, str(chosen.name), db)  # [P1-PLAN-LOTE-889] 1 ración, no 300 g
+        if _marg < CLOSER_COOKABLE_MIN_G:
+            return 0
+        grams = min(grams, int(min(_marg, 9999)))
         # [P2-CLOSER-SNACK-CAP · 2026-07-05] (plan vivo 7e4e5570: 145-155g de cottage sobre un
         # plato de fruta — macro-perfecto, culinariamente plano). En meriendas/platos ligeros el
         # añadido del closer se capea físicamente; el déficit restante se cubre en las comidas
@@ -20613,7 +20620,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # add que SÍ procede se SUBE al piso COCINABLE (40g servibles > 10g absurdos; el leve overshoot de
         # proteína lo tolera la banda y el reconcile aguas abajo). El caso sin-headroom ya retornó 0 arriba
         # (nunca se infla por encima del techo calórico del slot). tooltip-anchor: P1-CLOSER-COOKABLE-MIN
-        grams = max(CLOSER_COOKABLE_MIN_G, min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G)))
+        grams = max(CLOSER_COOKABLE_MIN_G, min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G), int(min(_marg, 9999))))
         f = grams / 100.0
         nm = str(chosen.name).lower()
         # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] No añadir " cocido" a un alimento que YA viene cocido (enlatado):
