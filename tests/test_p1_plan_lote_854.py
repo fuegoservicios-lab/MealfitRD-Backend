@@ -136,7 +136,9 @@ def test_mx_d2_merienda_manzana_es_lechosa():
                 ["½ lechosa mediana (405g)", "15 g de almendras fileteadas", "Canela en polvo al gusto",
                  "120 g de queso cottage"])
     dv.alinear_con_ingredientes(m)
-    assert "con lechosa crujiente" in m["desc"] and "manzana" not in m["desc"]
+    # [ronda 2 · revisor] la lechosa no cruje: el adjetivo era de la manzana y se va con ella
+    assert m["desc"] == ("Una pausa sencilla y refrescante con lechosa, almendras tostadas y un toque de canela."), \
+        m["desc"]
 
 
 def test_pr_d3_merienda_sin_lacteos_falso_y_mango_es_lechosa():
@@ -264,3 +266,203 @@ def test_no_quedan_frases_del_prompt_en_los_textos_de_g24_tras_limpiar():
     ]
     for t in textos:
         assert not _META.search(dv.limpiar_metalenguaje(t)), dv.limpiar_metalenguaje(t)
+
+
+# ---------------------------------------------------------------- 5. ronda 2 del revisor (29-sep)
+# (1) «con identidad propia y sin X»: la preposición era del modificador, no de la ausencia.
+@pytest.mark.parametrize("antes,despues", [
+    ("Cena reconfortante de lentejas guisadas con pollo, ají morrón y espinacas, servida sobre yuca hervida y "
+     "terminada con limón; un plato de cuchara con identidad propia y sin lácteos.",
+     "Cena reconfortante de lentejas guisadas con pollo, ají morrón y espinacas, servida sobre yuca hervida y "
+     "terminada con limón; un plato de cuchara sin lácteos."),
+    ("Merienda con maní tostado y guineo, con nombre propio y sin gluten.",
+     "Merienda con maní tostado y guineo, sin gluten."),
+])
+def test_propio_y_sin_no_deja_con_sin(antes, despues):
+    salida = dv.limpiar_metalenguaje(antes)
+    assert salida == despues
+    assert not re.search(r"\b(?:con|de) (?:sin|ni|no)\b", salida)
+
+
+# (2) la ausencia CLÍNICA (alergia, dieta, sal, azúcar) es verdad y se queda; la de una base que rota se va.
+@pytest.mark.parametrize("antes,despues", [
+    ("Pescado a la plancha con tayota. Sin lácteos y sin repetir la base del almuerzo.",
+     "Pescado a la plancha con tayota. Sin lácteos."),
+    ("Pescado a la plancha con tayota. Sin gluten y sin repetir la base del almuerzo.",
+     "Pescado a la plancha con tayota. Sin gluten."),
+    ("Guiso de pollo con papas y zanahoria. Sin cerdo y sin repetir la proteína del almuerzo.",
+     "Guiso de pollo con papas y zanahoria. Sin cerdo."),
+    ("Tostadas integrales con aguacate y huevo; sin azúcar añadida y sin repetir la base del desayuno.",
+     "Tostadas integrales con aguacate y huevo; sin azúcar añadida."),
+    ("Pechuga de pollo jugosa horneada con ajo, orégano y limón, servida con yautía suave. Una cena reconfortante, "
+     "sin gluten y con base distinta a la del almuerzo.",
+     "Pechuga de pollo jugosa horneada con ajo, orégano y limón, servida con yautía suave. Una cena reconfortante y "
+     "sin gluten."),
+    ("Cena sin gluten con identidad propia: ñame horneado hasta quedar tierno y dorado, huevo cuajado a la sartén.",
+     "Cena sin gluten: ñame horneado hasta quedar tierno y dorado, huevo cuajado a la sartén."),
+    ("Cena horneada de sabor criollo: capas de plátano maduro majado con queso blanco fresco. Plato fuerte propio, "
+     "sin pescado ni gluten, distinto al almuerzo.",
+     "Cena horneada de sabor criollo: capas de plátano maduro majado con queso blanco fresco. Plato fuerte propio, "
+     "sin pescado ni gluten."),
+    ("Batata tierna con relleno cremoso de queso blanco, cebolla y cilantro; una cena reconfortante, sin ser pesada, "
+     "y distinta al almuerzo.",
+     "Batata tierna con relleno cremoso de queso blanco, cebolla y cilantro; una cena reconfortante, sin ser pesada."),
+])
+def test_la_ausencia_clinica_se_conserva(antes, despues):
+    assert dv.limpiar_metalenguaje(antes) == despues
+    assert dv.limpiar_metalenguaje(despues) == despues, "idempotente"
+
+
+@pytest.mark.parametrize("texto", [
+    "Merienda fresca y salada: casabe crujiente con queso fresco y pepino. Sin avena ni yogurt, para no repetir "
+    "bases del día.",
+    "Quinoa con berenjena estofada. Sin arroz y sin repetir la base del almuerzo.",
+    "Yogurt natural con fresas y maní tostado. Sin pan ni avena, para no repetir la base del desayuno.",
+])
+def test_la_ausencia_de_una_base_que_rota_se_va(texto):
+    salida = dv.limpiar_metalenguaje(texto)
+    assert not re.search(r"\bsin (?:avena|arroz|pan|yogurt)\b", salida, re.IGNORECASE), salida
+
+
+def test_la_ausencia_falsa_de_la_justificacion_no_se_conserva():
+    """«Sin lácteos y sin aguacate, para variar…» con aguacate en la lista: se queda sólo la parte verdadera."""
+    m = _comida("Desayuno de categoría pan/tostadas: tostadas de maíz precocida bien crujientes, huevo revuelto con "
+                "tomate, y aguacate fresco. Sin lácteos y sin aguacate, para variar del resto de la semana.",
+                ["25 g de harina de maíz precocida", "3 huevos", "½ tomate", "½ aguacate mediano"])
+    p = {"_country": "MX", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"] == ("Tostadas de maíz precocida bien crujientes, huevo revuelto con tomate, y aguacate fresco. "
+                         "Sin lácteos."), m["desc"]
+
+
+def test_plan_con_alergia_a_lacteos_conserva_su_sin_lacteos():
+    m = _comida("Cena con identidad propia: filete de pescado blanco al horno con ajo y limón, majado cremoso de "
+                "tayota. Sin lácteos y sin repetir la base del almuerzo.",
+                ["1½ filetes de pescado (≈245 g)", "250 g de tayota", "1 limón"])
+    p = {"_country": "MX", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"] == ("Filete de pescado blanco al horno con ajo y limón, majado cremoso de tayota. Sin lácteos."), \
+        m["desc"]
+
+
+# (3) la leche vegetal también es leche: «cocida en leche» con leche de almendras no pasa a «agua».
+@pytest.mark.parametrize("leche", ["200 ml de leche de almendras", "200 ml de Leche de soya", "½ taza de leche vegetal"])
+def test_cocida_en_leche_vegetal_no_pasa_a_agua(leche):
+    desc = "Avena cremosa cocida en leche con canela y fresas."
+    m = _comida(desc, ["40 g de avena en hojuelas", leche, "100 ml de agua", "80 g de fresas"])
+    dv.alinear_con_ingredientes(m)
+    assert m["desc"] == desc
+
+
+# (4) yogur y queso de coco (o veganos) no son lácteos: el «sin lácteos» es verdad.
+@pytest.mark.parametrize("desc,ingredientes", [
+    ("Merienda sin lácteos: yogur de coco con fresas y almendras.",
+     ["150 g de yogur de coco", "80 g de fresas", "10 g de almendras"]),
+    ("Merienda vegana y sin lácteos, con yogur de coco y mango.", ["150 g de Yogur de coco", "80 g de mango"]),
+    ("Tostada vegana sin lácteos, con queso vegano y tomate.", ["1 rebanada de pan", "30 g de queso vegano",
+                                                                "1 tomate"]),
+    ("Casabe con mantequilla de maní, sin lácteos.", ["1 casabe", "1 cda de Mantequilla de maní"]),
+])
+def test_yogur_de_coco_no_es_lacteo(desc, ingredientes):
+    m = _comida(desc, ingredientes)
+    dv.alinear_con_ingredientes(m)
+    assert m["desc"] == desc
+
+
+def test_cuajada_y_mantequilla_si_son_lacteos():
+    for ing in ("40 g de cuajada", "1 cdta de mantequilla"):
+        m = _comida("Arepa asada con hogao, sin lácteos y con café.", ["1 arepa", ing])
+        dv.alinear_con_ingredientes(m)
+        assert "sin lácteos" not in m["desc"], (ing, m["desc"])
+
+
+# (5) familia «dulce»: el adjetivo que no casa con la lista blanca era de la fruta vieja.
+def test_el_participio_de_preparacion_se_queda_y_concuerda():
+    m = _comida("Batido de mango licuado con leche fría.", ["300 g de lechosa", "200 ml de leche"])
+    dv.alinear_con_ingredientes(m)
+    assert m["desc"] == "Batido de lechosa licuada con leche fría.", m["desc"]
+
+
+def test_un_verbo_tras_la_fruta_no_es_un_adjetivo():
+    m = _comida("Merienda de manzana aporta fibra y frescor.", ["300 g de lechosa"])
+    dv.alinear_con_ingredientes(m)
+    assert m["desc"] == "Merienda de lechosa aporta fibra y frescor.", m["desc"]
+
+
+# (6) el nombre no se toca: `services.py` calcula `meal_names` antes del escudo.
+def test_el_nombre_no_se_toca():
+    m = _comida("Mangú cremoso con huevo y queso frito.", ["2 plátanos verdes", "2 huevos", "30 g de queso"],
+                "Mangú transformado con huevo y queso")
+    p = {"_country": "PR", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["name"] == "Mangú transformado con huevo y queso"
+
+
+# menores: requesón/cuajada cuentan como queso; «plátano» (banana en ES/MX) con guineo no se borra.
+@pytest.mark.parametrize("desc,ingredientes", [
+    ("Tostadas de pan integral con tomate rallado y queso.", ["2 rebanadas de pan integral", "1 tomate",
+                                                              "60 g de requesón"]),
+    ("Arepa asada con hogao y queso.", ["1 arepa", "40 g de cuajada", "hogao"]),
+    ("Tortitas de avena y claras con plátano.", ["40 g de avena", "3 claras", "1 guineo"]),
+])
+def test_hiponimos_cuentan_como_presentes(desc, ingredientes):
+    m = _comida(desc, ingredientes)
+    dv.alinear_con_ingredientes(m)
+    assert m["desc"] == desc
+
+
+# el paréntesis: «(distinta al bulgur del almuerzo)» se va entero, sin dejar «(,».
+def test_el_parentesis_de_comparacion_se_va_entero():
+    antes = ("Cena ligera y rápida con base de maíz dulce en granos (distinta al bulgur del almuerzo), queso blanco "
+             "fresco, zanahoria rallada, pepino y cilantro al limón. Sin aguacate para variar respecto a los otros días.")
+    salida = dv.limpiar_metalenguaje(antes)
+    assert salida.count("(") == salida.count(")") and "(," not in salida, salida
+    assert salida.startswith("Cena ligera y rápida con base de maíz dulce en granos, queso blanco fresco"), salida
+
+
+# ---------------------------------------------------------------- 6. lo que la lectura del replay de la ronda 2 cazó
+def test_quitar_una_ausencia_falsa_no_deja_una_oracion_munon():
+    m = _comida("Casabe crujiente untado con mantequilla de maní natural y espolvoreado con canela, acompañado de mango "
+                "fresco. Merienda sin lácteo, distinta a las meriendas de los otros días del plan.",
+                ["1 porción de casabe (30 g)", "1½ cdas de mantequilla de maní natural", "40 g de mango",
+                 "¾ taza de yogurt natural entero"])
+    p = {"_country": "MX", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"] == ("Casabe crujiente untado con mantequilla de maní natural y espolvoreado con canela, acompañado "
+                         "de mango fresco."), m["desc"]
+
+
+def test_el_adjetivo_que_concuerda_con_otro_sustantivo_no_se_toca():
+    m = _comida("Yogur natural batido con jugo de limón y cubos de melón bien fríos, sin cocción.",
+                ["⅓ taza de yogurt natural", "215 g de lechosa", "1 limón"])
+    dv.alinear_con_ingredientes(m)
+    assert m["desc"] == "Yogur natural batido con jugo de limón y cubos de lechosa bien fríos, sin cocción.", m["desc"]
+
+
+def test_la_enumeracion_de_ausencias_se_filtra_entera():
+    m = _comida("Pan integral crujiente con queso blanco fresco, huevo cocido y guanábana fresca en cubos. Sin yogurt, "
+                "sin avena y sin lechosa, para romper la repetición de los días anteriores.",
+                ["3 rebanadas de pan integral", "20 g de queso blanco", "65 g de guanábana", "60 g de huevo"])
+    p = {"_country": "CO", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"].endswith("guanábana fresca en cubos. Sin lechosa."), m["desc"]
+
+
+def test_la_ausencia_que_queda_se_verifica_con_los_hiponimos():
+    m = _comida("Pasta integral con champiñones y una salsa cremosa de yogurt natural, limón y cilantro. Sin queso "
+                "blanco ni aguacate, para variar los acompañamientos y moderar la sal.",
+                ["40 g de pasta integral seca", "80 g de yogurt", "170 g de champiñones",
+                 "70 g de queso cottage bajo en sodio"])
+    p = {"_country": "US", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"].endswith("limón y cilantro. Sin aguacate."), m["desc"]
+
+
+def test_la_clausula_de_repeticion_no_se_traga_la_ausencia_clinica():
+    m = _comida("Merienda sin lácteos ni cereal repetido: tostada integral con aguacate machacado, láminas de lechosa "
+                "y maní triturado.",
+                ["1 rebanada de pan integral", "½ aguacate mediano", "1 lechosa mediana (200g)", "15 g de maní"])
+    p = {"_country": "ES", "days": [{"day": 1, "meals": [m]}]}
+    dv.aplicar_plan(p)
+    assert m["desc"] == ("Merienda sin lácteos: tostada integral con aguacate machacado, láminas de lechosa y maní "
+                         "triturado."), m["desc"]
