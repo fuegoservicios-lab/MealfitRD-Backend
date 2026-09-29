@@ -196,6 +196,11 @@ def allergen_classes_for(names: Iterable[str]) -> list[str]:
                     break
             if str(cls) in out:
                 break
+    # [P1-PLAN-LOTE-796 · paridad · 2026-09-29] Los PLATOS que esconden la clase (`vocabulario_alergenos.OCULTOS`:
+    # «Wafles», «Pan de maíz», «Aderezo ranch», «Nueces mixtas»…) los decide el escáner con sus plurales y excusas;
+    # sin esta unión la fila del catálogo se declaraba sin lácteo mientras el backstop la rechazaba (el gate del 29-sep
+    # cayó en `test_las_dos_capas_de_lacteo_coinciden`). Misma SSOT que el filtro del registry (`_clases_ocultas`).
+    out.update(_clases_ocultas(tuple(str(n) for n in names if n)))
     return sorted(out)
 
 
