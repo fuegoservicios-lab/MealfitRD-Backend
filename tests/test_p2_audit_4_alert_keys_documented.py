@@ -96,6 +96,9 @@ _EMITTER_FILES = (
     # Ambos ahora con resolver Auto-explicit (sweep window-based / cleanup tick).
     _BACKEND / "bg_executor.py",
     _BACKEND / "rate_limiter.py",
+    # [P1-PLAN-LOTE-845 · 2026-09-29] Acceso de App Review: `review_login_used:<user_id>` y
+    # `review_login_account_missing`.
+    _BACKEND / "review_login.py",
 )
 
 # Whitelist de patterns emitidos pero sin row (excepción documentada).

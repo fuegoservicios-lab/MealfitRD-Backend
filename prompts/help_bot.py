@@ -143,12 +143,81 @@ _REGLA_TONO_ES = (
 # [P1-HELP-BOT-NATIVE-NO-COMMERCE · 2026-08-22] Dentro de la app nativa de iPhone no
 # puede haber comercio ni enlaces a él (Apple 3.1.1 / 3.1.3(b)); un bot que recita
 # precios es comercio. El cliente manda `hide_commerce: true` cuando corre en nativo.
+#
+# [P1-PLAN-LOTE-845 · 2026-09-29] Auditoría App Store, fila 10.3 y §A.5. Aquella versión
+# añadía una REGLA al final de un prompt que seguía llevando el bloque «Planes y precios»
+# con sus importes: dependía de que el modelo obedeciera, y la propia regla mandaba a
+# «la web en bioboros.com» a quien preguntara por la suscripción, que es justo remitir a
+# comprar fuera. Ahora el prompt nativo se CONSTRUYE sin nada de eso (`_prompt_base_app`)
+# y la regla dice que desde la app no se gestionan pagos. El de la web no cambia: sigue
+# siendo `_PROMPT_BASE` tal cual.
 _DIRECTIVA_SIN_COMERCIO = (
-    "\n\nREGLA ADICIONAL (app nativa): NO menciones precios, planes de pago, suscripciones, "
-    "cómo mejorar el plan ni nada relacionado con comprar. Si el usuario pregunta por eso, "
-    "responde solo que la suscripción se gestiona desde la web en bioboros.com, sin dar cifras "
-    "ni nombres de planes, y sigue ayudando con el resto de la app."
+    "\n\nREGLA ADICIONAL (app nativa): NO menciones precios, planes de pago, suscripciones "
+    "ni nada relacionado con comprar o pagar, y nunca remitas a una web ni a ningún otro "
+    "sitio para hacerlo. Si preguntan por planes, precios, pagos o cómo conseguir más "
+    "créditos, responde que desde la app no se gestionan pagos ni suscripciones y sigue "
+    "ayudando con el resto de la app; para problemas de cuenta, bioboros.support@gmail.com."
 )
+
+#: Encabezados que delimitan el bloque de planes y precios dentro de `_PROMPT_BASE`.
+_SECCION_PLANES = "## Planes y precios"
+_SECCION_REGLAS = "## Reglas"
+
+#: Líneas de `_PROMPT_BASE` que en la app nativa cambian (o desaparecen, con `None`): todo lo
+#: que nombra el dominio (el supermercado lleva precios y su web enlaza a /precios), el
+#: importe en «RD$» y las reglas que hablan de precios o pagos. Emparejadas por la línea
+#: ENTERA de la web: si alguien la reescribe, la de la app deja de sustituirse y
+#: `test_p1_plan_lote_845_help_bot.py` lo acusa (el prompt nativo volvería a llevar el
+#: dominio o el «$»), en vez de derivarse en silencio de una frase que ya no existe.
+_LINEAS_APP = {
+    "Eres el asistente de ayuda oficial de Bioboros (bioboros.com), una aplicación dominicana "
+    "que genera planes de alimentación personalizados con inteligencia artificial.":
+        "Eres el asistente de ayuda oficial de Bioboros, una aplicación dominicana que genera "
+        "planes de alimentación personalizados con inteligencia artificial.",
+    "- Precios de la lista de compras: en República Dominicana la lista llega costeada con "
+    "precios estimados en RD$. En los países en fase beta la lista llega SIN precios — es lo "
+    "esperado, no un fallo: todavía no tenemos datos de supermercado de esos países. Todo lo "
+    "demás (recetas, calorías, macros, PDF) funciona igual.":
+        "- Precios de la lista de compras: en República Dominicana la lista llega costeada con "
+        "precios estimados en pesos dominicanos. En los países en fase beta la lista llega SIN "
+        "precios — es lo esperado, no un fallo: todavía no tenemos datos de supermercado de esos "
+        "países. Todo lo demás (recetas, calorías, macros, PDF) funciona igual.",
+    "- Supermercado RD: catálogo público de productos y precios en bioboros.com/supermercado.": None,
+    "1. SOLO respondes temas de Bioboros: cómo usar la app, planes, precios, funciones. Si "
+    "preguntan otra cosa, redirige con amabilidad hacia la app.":
+        "1. SOLO respondes temas de Bioboros: cómo usar la app y sus funciones. Si preguntan "
+        "otra cosa, redirige con amabilidad hacia la app.",
+    "3. NO das consejo médico ni nutricional personalizado; recomienda el Agente y, para temas "
+    "de salud, consultar a un profesional (aviso médico: bioboros.com/medical).":
+        "3. NO das consejo médico ni nutricional personalizado; recomienda el Agente y, para "
+        "temas de salud, consultar a un profesional (el Aviso médico está en el menú de la app, "
+        "en «Más información»).",
+    "4. Problemas de cuenta, pagos o errores que no puedas resolver: indica escribir a "
+    "**bioboros.support@gmail.com**.":
+        "4. Problemas de cuenta o errores que no puedas resolver: indica escribir a "
+        "**bioboros.support@gmail.com**.",
+}
+
+
+def _prompt_base_app(base: str) -> str:
+    """`_PROMPT_BASE` sin comercio, por CONSTRUCCIÓN (fila 10.3): fuera el bloque «Planes y
+    precios» entero y cada línea de `_LINEAS_APP` sustituida o quitada. Determinista y sin
+    excepciones: si un encabezado o una línea ya no está, no se toca nada y el test lo acusa
+    (tumbar el arranque del backend por el prompt de un bot de ayuda sería peor)."""
+    ini, fin = base.find(_SECCION_PLANES), base.find(_SECCION_REGLAS)
+    if 0 <= ini < fin:
+        base = base[:ini] + base[fin:]
+    lineas = []
+    for linea in base.split("\n"):
+        if linea in _LINEAS_APP:
+            if _LINEAS_APP[linea] is None:
+                continue
+            linea = _LINEAS_APP[linea]
+        lineas.append(linea)
+    return "\n".join(lineas)
+
+
+_PROMPT_BASE_APP = _prompt_base_app(_PROMPT_BASE)
 
 
 def help_bot_system_prompt(locale=None, hide_commerce: bool = False) -> str:
@@ -157,10 +226,14 @@ def help_bot_system_prompt(locale=None, hide_commerce: bool = False) -> str:
     `locale` llega del CLIENTE y NO se interpola en el prompt: solo se le pasa al SSOT,
     que devuelve "" ante cualquier valor no reconocido (fail-safe silencioso). Sin
     directiva, el prompt es exactamente el de es-DO de siempre.
+
+    [P1-PLAN-LOTE-845] `hide_commerce` (la app nativa) cambia la BASE, no solo el final:
+    `_PROMPT_BASE_APP` no lleva planes, precios, «$» ni «bioboros.com».
     """
     directiva = build_language_directive(locale)
     regla = _REGLA_TONO if directiva else _REGLA_TONO_ES
-    prompt = _PROMPT_BASE.replace("{regla_idioma}", regla) + directiva
+    base = _PROMPT_BASE_APP if hide_commerce else _PROMPT_BASE
+    prompt = base.replace("{regla_idioma}", regla) + directiva
     if hide_commerce:
         prompt += _DIRECTIVA_SIN_COMERCIO
     return prompt

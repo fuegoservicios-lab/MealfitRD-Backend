@@ -9,7 +9,10 @@ Contrato en DOS capas (la del cliente puede fallar si el gate no se aplica; la d
 servidor es la que manda):
   - Cliente: en nativo, saludo sin «planes y precios» y sin la sugerencia de precios.
   - Servidor: `hide_commerce: true` en el body ⇒ el prompt de sistema lleva la directiva
-    de no citar precios/planes/suscripción y remitir a la web SIN cifras.
+    de no citar precios/planes/suscripción. [P1-PLAN-LOTE-845] Ya NO remite a la web (eso era
+    remitir a comprar fuera, 3.1.1): el prompt nativo se construye sin el bloque de planes y
+    precios ni el dominio, y dice que desde la app no se gestionan pagos
+    (`test_p1_plan_lote_845_help_bot.py`).
 Y la cabecera de la hoja móvil reserva el notch (pisaba el reloj, medido en el iPhone).
 """
 

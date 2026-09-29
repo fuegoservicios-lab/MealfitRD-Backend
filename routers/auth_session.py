@@ -17,6 +17,8 @@ verificado por esta cookie.
       se canjea con Google, se verifica el id_token y se emite la sesión first-party.
   POST /api/auth/email-otp/verify — [P1-OTP-FIRST-PARTY · 2026-07-03] verifica el código
       OTP contra Neon Auth SERVER-SIDE y emite la sesión first-party directo.
+      [P1-PLAN-LOTE-845] Con el correo y el código fijo de App Review (`review_login.py`) emite
+      la sesión sin pasar por Neon; cualquier otro correo o código sigue el camino de siempre.
 """
 import asyncio
 import logging
@@ -45,6 +47,8 @@ from auth import (
     verify_session_cookie,
 )
 from rate_limiter import RateLimiter
+# [P1-PLAN-LOTE-845] Acceso de App Review (auditoría App Store, fila 8.1): un código fijo para UNA cuenta.
+import review_login
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +166,11 @@ async def email_otp_verify(
     otp = str((data or {}).get("otp") or "").strip()
     if not email or "@" not in email or not otp or not (4 <= len(otp) <= 12):
         return Response(status_code=401)
+    # [P1-PLAN-LOTE-845] El revisor de Apple no puede leer el buzón de la cuenta de demostración: con SU correo y el
+    # código fijo se emite la sesión aquí mismo. Cualquier otro correo o código sigue hacia Neon como siempre (misma
+    # respuesta, mismo camino). Inerte sin las dos variables de `review_login`. Va DETRÁS de `_OTP_VERIFY_LIMITER`.
+    if review_login.coincide(email, otp):
+        return await _sesion_de_revision(response, email)
     if not NEON_AUTH_BASE_URL:
         logger.error("[P1-OTP-FIRST-PARTY] NEON_AUTH_BASE_URL ausente — no se puede verificar OTP.")
         return Response(status_code=503)
@@ -206,6 +215,45 @@ async def email_otp_verify(
         "ok": True,
         "user_id": uid,
         "email": user.get("email") or email,
+        "token": token,
+        "form_key": derive_form_key(uid),
+        "session_cookie": True,
+    }
+
+
+async def _sesion_de_revision(response: Response, email: str):
+    """[P1-PLAN-LOTE-845 · 2026-09-29] Sesión de la cuenta de demostración de App Review (auditoría, fila 8.1).
+
+    Solo se llega aquí con el correo y el código fijo ya comprobados (`review_login.coincide`). La cuenta se resuelve
+    por correo y tiene que EXISTIR: si no está (o está vetada) no se crea y la respuesta es el 401 de un código
+    inválido. La sesión es la misma first-party del OTP y de Apple (`set_session_cookie`) con la misma forma de
+    respuesta, y cada uso deja rastro (`review_login.anotar_uso`). tooltip-anchor: P1-PLAN-LOTE-845-SESION"""
+    if not session_cookies_enabled():
+        logger.error("[P1-PLAN-LOTE-845] session_cookies deshabilitadas — el acceso de App Review requiere la feature.")
+        return Response(status_code=503)
+    correo = email.strip().lower()
+    try:
+        cuenta = await asyncio.to_thread(review_login.cuenta_existente, correo)
+    except Exception as e:
+        # Fail-secure: sin poder leer la identidad no hay sesión, y la respuesta es la de un código inválido.
+        logger.error(f"[P1-PLAN-LOTE-845] no se pudo leer la cuenta de App Review: {type(e).__name__}: {e}")
+        return Response(status_code=401)
+    if not cuenta:
+        await asyncio.to_thread(review_login.anotar_cuenta_ausente)
+        return Response(status_code=401)
+    uid = str(cuenta["id"])
+    try:
+        await asyncio.to_thread(ensure_user_profile_exists, uid, cuenta.get("email") or correo, cuenta.get("name"))
+    except Exception as _ens_e:
+        logger.warning(f"[P1-PLAN-LOTE-845] ensure_user_profile_exists lanzó {type(_ens_e).__name__} (auth continúa)")
+    token = set_session_cookie(response, uid)
+    if not token:
+        return Response(status_code=503)
+    await asyncio.to_thread(review_login.anotar_uso, uid)
+    return {
+        "ok": True,
+        "user_id": uid,
+        "email": cuenta.get("email") or correo,
         "token": token,
         "form_key": derive_form_key(uid),
         "session_cookie": True,
