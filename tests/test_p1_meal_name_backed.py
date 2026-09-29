@@ -141,5 +141,7 @@ def test_el_prompt_tambien_lo_pide():
     """Prompt Y guard: el prompt evita el caso fácil, el guard cubre cuando no
     obedece — que es lo que pasó tres veces con este mismo campo."""
     i = _VA_SRC.find("_MEAL_VISION_PROMPT = (")
-    prompt = _VA_SRC[i:i + 5000]
+    # [P1-PLAN-LOTE-767] el prompt ENTERO (hasta su paréntesis de cierre), no 5 000 caracteres fijos: iba por 4 900 y
+    # la regla del frente del envase lo empujó fuera sin que la regla dejara de estar
+    prompt = _VA_SRC[i:_VA_SRC.find("\n)\n", i)]
     assert "SOLO puede nombrar componentes" in prompt

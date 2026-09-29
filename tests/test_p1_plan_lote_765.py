@@ -83,6 +83,7 @@ def test_la_bateria_del_coach_tiene_los_casos_del_pote():
     casos = {c["id"]: c for c in json.loads(ruta.read_text(encoding="utf-8"))["casos"]}
     p6, p7, p8 = casos["P6"], casos["P7"], casos["P8"]
     assert p6["turns"] == [""] and p6["vision"]["items"][0]["kind"] == "etiqueta"
-    assert p6["expect"]["tools"] == ["guardar_suplemento"] and "log_consumed_meal" in p6["expect"]["no_tools"]
+    # [P1-PLAN-LOTE-767] antes de guardarlo sin etiqueta, busca su tabla en internet
+    assert p6["expect"]["tools"][-1] == "guardar_suplemento" and "log_consumed_meal" in p6["expect"]["no_tools"]
     assert set(p7["expect"]["tools"]) == {"guardar_suplemento", "log_consumed_meal"}
     assert "guardar_suplemento" in p8["expect"]["no_tools"]   # una barra (UNA porción) no es un pote
