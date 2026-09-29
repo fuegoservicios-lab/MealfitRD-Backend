@@ -652,6 +652,48 @@ async def api_chat_voz(background_tasks: BackgroundTasks, data: dict = Body(...)
                     headers={"Cache-Control": "no-store", "X-Voz-Ms": str(voz.ms)})
 
 
+@router.post("/voz/flujo")
+async def api_chat_voz_flujo(data: dict = Body(...),
+                             verified_user_id: Optional[str] = Depends(get_verified_user_id),
+                             _rl: None = Depends(_VOZ_LIMITER)):
+    """[P1-PLAN-LOTE-901 · 2026-09-29] La misma voz que `/voz`, en streaming: PCM 16 bits mono mientras Google lo
+    produce (el primer audio a ~0,65 s en vez de ~2-3 s del WAV entero). Mismas reglas: exenta del paywall, tope de
+    dinero diario, 204 = «usa la voz del teléfono». `X-Voz-Motivo: flujo_apagado` = el cliente vuelve a `/voz`."""
+    import asyncio
+    from coach_voz import abrir_flujo, hay_presupuesto, voz_en_flujo_activa, voz_en_la_nube_activa
+    texto = str((data or {}).get("texto") or "").strip()
+    locale = str((data or {}).get("locale") or "es-DO").strip()[:10]
+    if not texto:
+        raise HTTPException(status_code=400, detail="Falta el texto.")
+    if not voz_en_la_nube_activa():
+        return Response(status_code=204, headers={"X-Voz-Motivo": "apagada"})
+    if not voz_en_flujo_activa():
+        return Response(status_code=204, headers={"X-Voz-Motivo": "flujo_apagado"})
+    if not await asyncio.to_thread(hay_presupuesto):
+        logger.warning("⚠️ [P1-PLAN-LOTE-901] voz del coach sin presupuesto hoy: el teléfono pone la suya.")
+        return Response(status_code=204, headers={"X-Voz-Motivo": "presupuesto"})
+    try:
+        async with _semaforo_de_voz():
+            flujo = await asyncio.to_thread(abrir_flujo, texto, locale, verified_user_id)
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-901] la voz en streaming falló, el teléfono pone la suya: "
+                       f"{type(e).__name__}: {str(e)[:160]}")
+        return Response(status_code=204, headers={"X-Voz-Motivo": "error"})
+    if flujo is None:
+        return Response(status_code=204, headers={"X-Voz-Motivo": "vacio"})
+    # Un iterador síncrono: Starlette lo recorre en el threadpool (cada trozo es una lectura de red bloqueante).
+    return StreamingResponse(
+        iter(flujo),
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",   # nginx: sin esto juntaría el audio y el primer trozo llegaría al final
+            "X-Voz-Frecuencia": str(flujo.frecuencia),
+            "X-Voz-Primer-Audio-Ms": str(flujo.primer_audio_ms),
+        },
+    )
+
+
 # [P1-PLAN-LOTE-682 · 2026-09-28] Aquí vivía `POST /tts`: el proxy a ElevenLabs del viejo Modo Llamada.
 # Sin llamadores desde mayo (P1-DEADCODE-TTS) y reemplazado por la voz del propio dispositivo
 # (`speechSynthesis`, frontend `utils/vozDelCoach.js`): ya no se manda texto a ElevenLabs, y un endpoint

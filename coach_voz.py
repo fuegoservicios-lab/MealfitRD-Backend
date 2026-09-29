@@ -290,7 +290,7 @@ def sintetizar(texto: str, locale: str = "es-DO") -> Optional[VozSintetizada]:
     )
 
 
-def registrar_uso(voz: VozSintetizada, user_id: Optional[str]) -> None:
+def registrar_uso(voz: VozSintetizada, user_id: Optional[str], extra: Optional[dict] = None) -> None:
     """El gasto a `llm_usage_events` (NUNCA a `api_usage`: la voz no quema créditos del plan) y al tope del día."""
     from db import compute_llm_cost_micros, log_llm_usage_event
     modelo = _modelo()
@@ -302,5 +302,145 @@ def registrar_uso(voz: VozSintetizada, user_id: Optional[str]) -> None:
         node=_NODO_USO,
         input_tokens=voz.tokens_texto,
         output_tokens=voz.tokens_audio,
-        metadata={"duration_s": round(voz.ms / 1000, 3), "audio_s": voz.segundos},
+        metadata={"duration_s": round(voz.ms / 1000, 3), "audio_s": voz.segundos, **(extra or {})},
     )
+
+
+# ============================================================
+# [P1-PLAN-LOTE-901 · 2026-09-29] La voz en streaming
+# ============================================================
+# El dueño, tras el 688: «siento que todavía es muy lenta la latencia de respuesta del agente de voz». Medido en su
+# turno («Activa la hidratación», 29-sep 17:39 UTC): el texto completo a los 2,9 s y la primera frase SONANDO a los
+# 5,2 s — 2,1 s de ellos esperando el WAV entero de `generateContent`. `streamGenerateContent?alt=sse` (medido el
+# mismo día desde el VPS, la misma frase): el primer trozo de audio a los 0,64 s en vez de 2,94 s, y el resto más
+# rápido que el tiempo real. Los trozos son PCM crudo (`audio/l16; rate=24000; channels=1`), no WAV.
+#
+# `abrir_flujo` espera el PRIMER trozo antes de devolver: si Google falla, falla aquí, y el endpoint aún puede
+# contestar 204 (el teléfono pone su voz) en vez de una respuesta 200 cortada. El gasto se registra al terminar
+# el flujo (el `usageMetadata` de Google es acumulado: vale el último).
+
+_URL_TTS_FLUJO = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:streamGenerateContent?alt=sse"
+
+
+def voz_en_flujo_activa() -> bool:
+    """Kill switch del streaming: `MEALFIT_COACH_VOZ_FLUJO=0` devuelve la voz al WAV entero (`/api/chat/voz`)."""
+    return _env_bool("MEALFIT_COACH_VOZ_FLUJO", True)
+
+
+def _eventos_sse(respuesta):
+    import json as _json
+    for linea in respuesta.iter_lines():
+        if not linea or not linea.startswith("data:"):
+            continue
+        try:
+            yield _json.loads(linea[5:])
+        except ValueError:
+            continue
+
+
+def _trozo_de_evento(evento: dict) -> tuple:
+    """(pcm, mime, uso) de un evento del stream. Sin audio → b""."""
+    uso = evento.get("usageMetadata") or None
+    try:
+        parte = (evento["candidates"][0].get("content") or {}).get("parts") or []
+        datos = (parte[0].get("inlineData") or {}) if parte else {}
+    except (KeyError, IndexError, AttributeError, TypeError):
+        datos = {}
+    crudo = base64.b64decode(datos["data"]) if datos.get("data") else b""
+    return crudo, datos.get("mimeType"), uso
+
+
+class FlujoDeVoz:
+    """El audio de una frase MIENTRAS Google lo produce: PCM 16 bits little-endian, mono, a `frecuencia` Hz.
+    Iterarlo entrega bytes; al acabar (o al cortarse) cierra la conexión y registra el gasto."""
+
+    def __init__(self, respuesta, eventos, primero: bytes, frecuencia: int, uso: Optional[dict], t0: float,
+                 primer_audio_ms: int, user_id: Optional[str]):
+        self._respuesta = respuesta
+        self._eventos = eventos
+        self._primero = primero
+        self.frecuencia = frecuencia
+        self._uso = uso or {}
+        self._t0 = t0
+        self.primer_audio_ms = primer_audio_ms
+        self._user_id = user_id
+        self._bytes = 0
+        self._cerrado = False
+
+    def __iter__(self):
+        try:
+            self._bytes += len(self._primero)
+            yield self._primero
+            for evento in self._eventos:
+                pcm, _mime, uso = _trozo_de_evento(evento)
+                if uso:
+                    self._uso = uso
+                if pcm:
+                    self._bytes += len(pcm)
+                    yield pcm
+        finally:
+            self.cerrar()
+
+    def cerrar(self) -> None:
+        if self._cerrado:
+            return
+        self._cerrado = True
+        try:
+            self._respuesta.close()
+        except Exception:
+            pass
+        voz = VozSintetizada(
+            wav=b"",
+            segundos=round(self._bytes / (2 * max(1, self.frecuencia)), 2),
+            tokens_texto=int(self._uso.get("promptTokenCount") or 0),
+            tokens_audio=int(self._uso.get("candidatesTokenCount") or 0),
+            ms=int((time.monotonic() - self._t0) * 1000),
+        )
+        try:
+            registrar_uso(voz, self._user_id, extra={"flujo": True, "primer_audio_s": round(self.primer_audio_ms / 1000, 3)})
+        except Exception as e:
+            logger.warning(f"⚠️ [P1-PLAN-LOTE-901] no se pudo registrar el gasto de la voz en streaming: {e}")
+
+
+def abrir_flujo(texto: str, locale: str = "es-DO", user_id: Optional[str] = None) -> Optional[FlujoDeVoz]:
+    """Abre el streaming de la voz y espera su PRIMER trozo de audio. None si no hay nada que decir. Levanta si
+    Google falla antes de dar audio: quien llama responde 204 y el teléfono pone su voz."""
+    frase = _texto_para_decir(texto)
+    if not frase:
+        return None
+    cuerpo = {
+        "contents": [{"parts": [{"text": frase}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "languageCode": idioma_de_voz(locale),
+                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": _nombre_de_voz()}},
+            },
+        },
+    }
+    t0 = time.monotonic()
+    cliente = _cliente()
+    peticion = cliente.build_request(
+        "POST",
+        _URL_TTS_FLUJO.format(modelo=_modelo()),
+        headers={"x-goog-api-key": _clave()},
+        json=cuerpo,
+        timeout=_timeout_s(),
+    )
+    respuesta = cliente.send(peticion, stream=True)
+    try:
+        respuesta.raise_for_status()
+        eventos = _eventos_sse(respuesta)
+        uso = None
+        for evento in eventos:
+            pcm, mime, uso_ev = _trozo_de_evento(evento)
+            uso = uso_ev or uso
+            if pcm[:4] == b"RIFF":   # por si algún día llega con cabecera: se toca igual, sin ella
+                pcm = pcm[44:]
+            if pcm:
+                return FlujoDeVoz(respuesta, eventos, pcm, _frecuencia_de(mime), uso, t0,
+                                  int((time.monotonic() - t0) * 1000), user_id)
+        raise RuntimeError("el streaming de la voz terminó sin audio")
+    except BaseException:
+        respuesta.close()
+        raise
