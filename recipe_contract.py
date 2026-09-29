@@ -995,6 +995,7 @@ def _aplicar_meal(meal: dict, index: dict, mode: str, db=None) -> int:
         __import__("ave_tiempo_seguro").asegurar(meal)  # [P1-PLAN-LOTE-888] el ave cruda no se «calienta 1-2 min»: tiempo real y 74 °C
         __import__("ave_con_su_punto").asegurar(meal)  # [P1-PLAN-LOTE-737] y siempre dice cuándo está hecha
         __import__("pasos_cantidades").fresco_no_se_escurre(meal)  # [P1-PLAN-LOTE-442] lo fresco se seca
+        __import__("escurre_una_vez").limpiar(meal)  # [P1-PLAN-LOTE-911] lo que se escurre no viene «escurrido»
         __import__("pasos_cerrador").notas_de_otro_plato(meal)  # [P1-PLAN-LOTE-443] notas de otro plato
         __import__("concordancia").concordar_masculinos(meal)  # [P1-PLAN-LOTE-447] «aguacate fresca» → «aguacate fresco»
         __import__("huevo_concuerda").concordar_pasos(meal)  # [P1-PLAN-LOTE-809] «el huevo duros» → «el huevo duro»
