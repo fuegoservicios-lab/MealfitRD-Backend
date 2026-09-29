@@ -234,7 +234,9 @@ def test_reelegir_mide_tras_cada_cambio_y_barre_los_no_nombrados(monkeypatch):
 
 def test_reelegir_conserva_lo_que_nadie_senala_y_cede_al_llm_lo_que_no_mejora(monkeypatch):
     dias = _dias_bloque()
-    limpio = {"day": 4, "_day_source": "deterministic", "meals": [_m("Almuerzo", "Pescado a la plancha", ["150 g de tilapia"], "t_x")]}
+    # [P1-PLAN-LOTE-857] era «Pescado a la plancha»: con las sardinas del día 2 ya contadas como pescado, sería el
+    # TERCER día de pescado del bloque (1, 2 y 4) y reelegirlo es lo correcto. El caso limpio lleva una proteína sola.
+    limpio = {"day": 4, "_day_source": "deterministic", "meals": [_m("Almuerzo", "Pavo a la plancha", ["150 g de pechuga de pavo"], "t_x")]}
     dias.append(limpio)
     monkeypatch.setattr(dd, "build_day_for_skeleton", lambda *a, **k: pytest.fail("nada verificable: no se rearma"))
     assert rd.reelegir(dias, 4, nutrition={}, form_data=_GM) == (limpio, "conservado")

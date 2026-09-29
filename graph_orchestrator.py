@@ -29532,7 +29532,7 @@ _PROTEIN_SOURCE_COMPOUNDS = {
     "camarones": ("camarones cocidos", "camarones frescos", "camarones grandes"),
 }
 # [P1-REWRITE-DORADO-HOMONYM · 2026-07-06] Aliases EXCLUIDOS de la REESCRITURA de texto
-# (la DETECCIÓN de repetición los sigue usando): "dorado" es pez en
+# (la DETECCIÓN los usaba; [P1-PLAN-LOTE-857] ya no: `pescado_especies` lo saca del mapa): "dorado" es pez en
 # _MAIN_PROTEIN_ALIASES['pescado'] pero también participio culinario universal. El
 # rewriter del autofix los sustituía por la proteína destino — "hasta que estén
 # pechuga de pollo y crujientes por fuera" (bollitos del plan fcc7a9f0). Un alias de

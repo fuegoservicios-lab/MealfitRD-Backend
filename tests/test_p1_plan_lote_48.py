@@ -234,9 +234,11 @@ def test_lo_que_otro_rearmado_arreglo_no_va_al_llm(monkeypatch):
     """Plan 358a2cdf: el día 3 nombrado no mejoraba solo; el barrido rehízo el día 1 sin yuca y el 3 igual fue al LLM."""
     d1 = _det(1, ("Almuerzo", "Pinchos de pollo con yuca hervida", ["150 g de pechuga de pollo", "200 g de yuca"], "t_pinchos"),
               ("Cena", "Pescado al horno con batata", ["150 g de filete de pescado", "200 g de batata"], "t_pescado"))
-    d3 = _det(3, ("Almuerzo", "Espaguetis con sardinas", ["80 g de pasta", "100 g de sardinas en lata"], "t_esp"),
+    # [P1-PLAN-LOTE-857] el almuerzo era «Espaguetis con sardinas»: con las sardinas ya contadas como pescado, el día 3
+    # (sardinas + tilapia) tiene su propio pescado repetido y su rearmado lo arregla — otro caso. Éste lleva atún.
+    d3 = _det(3, ("Almuerzo", "Espaguetis con atún", ["80 g de pasta", "100 g de atún en lata"], "t_esp"),
               ("Cena", "Tilapia al horno con yuca y cebolla", ["150 g de tilapia", "200 g de yuca"], "t_tilapia"))
-    nuevo3 = _det(3, ("Almuerzo", "Espaguetis con sardinas", ["80 g de pasta", "100 g de sardinas en lata"], "t_esp"),
+    nuevo3 = _det(3, ("Almuerzo", "Espaguetis con atún", ["80 g de pasta", "100 g de atún en lata"], "t_esp"),
                   ("Cena", "Res guisada con yuca", ["150 g de carne de res", "200 g de yuca"], "t_res"))
     nuevo1 = _det(1, ("Almuerzo", "Pollo a la plancha con arroz", ["150 g de pechuga de pollo", "80 g de arroz blanco"], "t_pa"),
                   ("Cena", "Pescado al horno con batata", ["150 g de filete de pescado", "200 g de batata"], "t_pescado"))
