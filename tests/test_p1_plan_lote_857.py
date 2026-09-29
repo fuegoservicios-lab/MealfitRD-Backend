@@ -373,6 +373,77 @@ _SONDAS_R6 = {
     "en-aceite-bacalao": ("pescado", _comida("Tostada con bacalao en aceite", ["80 g de Bacalao en aceite"],
                                              ["Coloca el bacalao sobre la tostada."])),
 }
+# Ronda 8: las sondas de la revisión r7 (probe7.py) que la ronda 7 aún reescribía, con el motivo de cada veto.
+_SONDAS_R7 = {
+    # (1) «cocido» en la LÍNEA sin la firma del cerrador en los pasos: el paso sólo calienta
+    "linea-camarones-cocidos-saltea-1min": ("camarones", _comida("Arroz con camarones", [
+        "120 g de Camarones cocidos", "1 taza de Arroz"], ["Cocina el arroz 18 minutos.",
+                                                           "Saltea los camarones con ajo 1 minuto, sólo para calentarlos, "
+                                                           "y mézclalos con el arroz."])),
+    "linea-pescado-cocido-sarten-1min": ("pescado", _comida("Arroz con pescado", [
+        "120 g de Filete de pescado cocido", "1 taza de Arroz"],
+        ["Calienta el pescado en la sartén 1 minuto y mézclalo con el arroz."])),
+    "linea-pulpo-cocido-plancha-1min": ("pulpo", _comida("Pulpo a la plancha", ["120 g de Pulpo cocido", "1 papa"], [
+        "Pasa el pulpo por la plancha 1 minuto por lado.", "Hierve la papa 15 minutos."])),
+    # (2) «crudo»/«en crudo» hasta dos palabras después del pez, en un paso o en la línea
+    "arroz-y-mero-crudo": ("pescado", _comida("Arroz con mero en láminas", ["150 g de Filete de mero", "1 taza de Arroz"], [
+        "Cocina el arroz 18 minutos y sírvelo con el mero crudo en láminas finas y limón."])),
+    "atun-en-crudo-en-la-linea": ("atun", _comida("Arroz con atún y aguacate", ["120 g de Atún fresco en crudo",
+                                                                               "1 taza de Arroz"], [
+        "Cocina el arroz 18 minutos y sírvelo con el atún y el aguacate."])),
+    # (3) el plato crudo nombrado en un PASO, no en el nombre
+    "sebiche-en-pasos": ("pescado", _comida("Pescado al limón estilo peruano", ["150 g de Corvina", "1 camote"], [
+        "Prepara el cebiche: corta la corvina en cubos, cúbrela con limón 15 minutos y hierve el camote 20 minutos.",
+        "Sirve."])),
+    # (4) el pez ya listo en un paso: ahumado, curado, sobrante, ya horneado/asado/hervido/frito/cocinado
+    "ahumado-solo-en-paso": ("pescado", _comida("Tostada de salmón", ["60 g de Salmón", "1 pan"], [
+        "Tuesta el pan en la sartén 2 minutos y coloca encima el salmón ahumado con queso crema."])),
+    "ya-horneado-microondas": ("pescado", _comida("Arroz con pescado", ["120 g de Filete de pescado", "1 taza de Arroz"], [
+        "Calienta el pescado ya horneado en el microondas 1 minuto y sírvelo con el arroz."])),
+    "sobrante-sarten": ("pescado", _comida("Arroz con tilapia", ["120 g de Filete de tilapia", "1 taza de Arroz"], [
+        "Usa la tilapia sobrante de la cena, desmenúzala y caliéntala en la sartén 2 minutos con el arroz."])),
+    # (5) la cocción de OTRO alimento después de «mientras»
+    "coma-marina-y-sofrie": ("pescado", _comida("Mero al limón con cebolla", ["150 g de Filete de mero", "1 cebolla"], [
+        "Corta el mero en cubos, marínalo en jugo de limón 20 minutos y, mientras tanto, sofríe la cebolla 5 minutos.",
+        "Sirve el mero con la cebolla encima."])),
+    "marina-mientras-hierve": ("pescado", _comida("Tilapia al limón con arroz", ["150 g de Filete de tilapia",
+                                                                                 "1 taza de Arroz"], [
+        "Marina la tilapia en limón 20 minutos mientras hierve el arroz.", "Sirve la tilapia sobre el arroz."])),
+    "tartar-pan-horno": ("pescado", _comida("Mero picado con aguacate y pan", ["150 g de Filete de mero", "1 aguacate",
+                                                                               "2 rebanadas de pan"], [
+        "Pica el mero finamente y mézclalo con el aguacate y el limón mientras el pan se tuesta en el horno 5 minutos.",
+        "Sirve sobre el pan."])),
+}
+_MOTIVOS_R7 = {
+    "linea-camarones-cocidos-saltea-1min": "pez_precocido", "linea-pescado-cocido-sarten-1min": "pez_precocido",
+    "linea-pulpo-cocido-plancha-1min": "pez_precocido", "arroz-y-mero-crudo": "pez_crudo",
+    "atun-en-crudo-en-la-linea": "pez_crudo", "sebiche-en-pasos": "pez_crudo", "ahumado-solo-en-paso": "pez_en_conserva",
+    "ya-horneado-microondas": "pez_precocido", "sobrante-sarten": "pez_precocido", "coma-marina-y-sofrie": "pez_sin_coccion",
+    "marina-mientras-hierve": "pez_sin_coccion", "tartar-pan-horno": "pez_sin_coccion",
+}
+# Lo que la ronda 8 deja pasar A SABIENDAS (medido en probe7.py): la regla positiva de V7f ve una cocción en la cláusula
+# del pez, pero no es la del pez, o no alcanza para un ave. Si alguno deja de reescribirse, pasa a `_SONDAS_R7` y sale
+# del docstring de `test_nunca_sale_carne_sin_coccion` y de docs/knobs_reference.md.
+_RESIDUOS = {
+    # otro alimento se cuece en la MISMA frase que el pez, sin «mientras»
+    "sandwich-tuesta-el-pan": ("atun", _comida("Sándwich de atún", ["90 g de Atún", "2 rebanadas de pan"], [
+        "Escurre el atún, mézclalo con la mayonesa y la cebolla y tuesta el pan en la sartén 2 minutos.",
+        "Arma el sándwich y sirve."])),
+    # tiempos que cuecen el pez y no el ave que lo sustituye
+    "sellado-30-s": ("pescado", _comida("Salmón sellado con ensalada", ["150 g de Salmón"], [
+        "Sella el salmón 30 segundos por lado en sartén muy caliente; córtalo en láminas.", "Sirve con la ensalada."])),
+    "caldo-1-minuto": ("pescado", _comida("Sopa de mero", ["120 g de Filete de mero", "2 tazas de caldo"], [
+        "Corta el mero en láminas muy finas y colócalas en el tazón.",
+        "Vierte el caldo caliente de la olla sobre el mero y deja reposar 1 minuto."])),
+    "cocina-1-minuto-mas": ("pescado", _comida("Arroz con pescado", ["120 g de Filete de pescado", "1 taza de Arroz"], [
+        "Agrega el pescado hervido y desmenuzado al arroz y cocina 1 minuto más."])),
+    "escabeche": ("pescado", _comida("Pescado en escabeche", ["150 g de Filete de pescado", "1 cebolla"], [
+        "Fríe el pescado 3 minutos por lado; cúbrelo con el escabeche y refrigera 12 horas.", "Sirve frío."])),
+    # dos peces en la comida: la cocción de uno se lleva al otro
+    "dos-peces": ("pescado", _comida("Salmón al horno con ensalada de mero marinado", ["120 g de Salmón",
+                                                                                     "60 g de Filete de mero"], [
+        "Hornea el salmón 15 minutos.", "Marina el mero en limón 20 minutos y sírvelo al lado."])),
+}
 _COCINADOS = {
     "pescado": _tilapia(),
     "atun": _comida("Atún guisado con arroz", ["150 g de Atún fresco", "1 taza de Arroz"],
@@ -384,7 +455,22 @@ _COCINADOS = {
     "cangrejo": _comida("Cangrejo guisado", ["150 g de Cangrejo", "1 taza de Arroz"],
                         ["Guisa el cangrejo 20 minutos."], slot="Almuerzo"),
 }
-_NO_SE_REESCRIBEN = {**_PEZ_LISTO_CRUDO_FRIO, **_SONDAS_R6}
+_NO_SE_REESCRIBEN = {**_PEZ_LISTO_CRUDO_FRIO, **_SONDAS_R6, **_SONDAS_R7}
+
+
+@pytest.mark.parametrize("clave", list(_SONDAS_R7))
+def test_ronda_8_cada_veto_con_su_motivo(clave):
+    etiqueta, comida = _SONDAS_R7[clave]
+    assert _motivo(etiqueta, comida) == _MOTIVOS_R7[clave]
+
+
+@pytest.mark.xfail(strict=True, reason="residuo documentado del lote 857: la regla positiva de V7f lo da por cocido")
+@pytest.mark.parametrize("clave", list(_RESIDUOS))
+def test_residuos_conocidos(clave):
+    """Estas comidas SIGUEN reescribiéndose (xfail estricto): si una deja de hacerlo, el test avisa para sacarla de la
+    lista de residuos de los docs."""
+    etiqueta, comida = _RESIDUOS[clave]
+    assert _motivo(etiqueta, comida) is not None
 
 
 @pytest.mark.parametrize("cocinado_primero", [True, False], ids=["cocinado-primero", "sonda-primero"])
@@ -411,6 +497,15 @@ _REESCRIBIBLES = {
                                                     ["Cocina la merluza al vapor 8 minutos.", "Mezcla con el tomate."])),
     "marina-y-hornea": ("pescado", _comida("Tilapia con arroz", ["150 g de Filete de tilapia marinada"],
                                            ["Marina la tilapia con limón 10 minutos; luego hornéala 20 minutos a 200 °C."])),
+    # ronda 8: cortar en «mientras» no quita la cocción del pez que va ANTES, ni el enclítico de la frase siguiente
+    "hornea-mientras-hierve": ("pescado", _comida("Tilapia al horno con arroz", ["150 g de Filete de tilapia"], [
+        "Hornea la tilapia 20 minutos a 200 °C mientras hierve el arroz."])),
+    "marina-mientras-y-hornea-despues": ("pescado", _comida("Tilapia al limón al horno", ["150 g de Filete de tilapia"], [
+        "Marina la tilapia en limón 10 minutos mientras se calienta el horno; luego hornéala 20 minutos a 200 °C."])),
+    # ronda 8: «cocido» en la línea CON la firma del cerrador en el paso es el peso cocido (1461aeca D3, 92328ff7 D9)
+    "linea-cocido-con-la-firma-del-cerrador": ("pescado", _comida("Arroz con pescado", [
+        "120 g de pescado cocido", "1 taza de Arroz"], [
+        "Cocina el arroz 18 minutos.", "Cocina pescado a la plancha o hervido y sírvelo como proteína del plato."])),
 }
 
 
@@ -429,8 +524,19 @@ _ALERTA_RE = re.compile(r"\blatas?\b|enlatad|ya\s+(?:viene\s+)?cocid|precocid|\b
 
 @pytest.mark.parametrize("i", range(len(_FORMAS_PELIGROSAS)))
 def test_nunca_sale_carne_sin_coccion(i):
-    """La propiedad que las seis rondas perseguían: en ninguna combinación sale una carne en una comida que habla de lata,
-    marinado, curado, frío o precocido, y toda carne que el autofix escribe la cuece una cláusula que la nombra."""
+    """Sobre las formas de ESTE fichero (las de las revisiones r5, r6 y r7), en los dos órdenes y junto a cada plato
+    cocinado: no sale una carne en una comida que habla de lata, marinado, curado, frío o precocido, y toda carne que el
+    autofix escribe la cuece una cláusula que la nombra.
+
+    No es un «nunca» universal. La regla es la de V7f (un verbo de cocción, o fuego y tiempo, en la cláusula del pez), y
+    deja pasar a sabiendas los residuos de `_RESIDUOS` (xfail estricto en `test_residuos_conocidos`):
+      - otro alimento cocido en la misma frase que el pez, sin «mientras» («Escurre el atún, mézclalo con la mayonesa y
+        tuesta el pan en la sartén 2 minutos»: el sándwich sale con pollo sin cocer);
+      - tiempos que cuecen el pez y no el ave que lo sustituye: el sellado de 30 s, el caldo que reposa 1 minuto,
+        «cocina 1 minuto más» sobre el pescado ya hervido, el escabeche (frito 3 minutos por lado y servido frío);
+      - una comida con dos peces, donde la cocción de uno cuenta para el otro («Hornea el salmón… Marina el mero…»).
+    El tiempo mínimo del ave que hereda los tiempos del pez no es de este lote: es de la sesión de PLATO
+    (`pasos_cantidades.ave_a_74` sólo sube los °C)."""
     import pescado_especies as pe
     comida = _FORMAS_PELIGROSAS[i]
     for otro in _COCINADOS.values():
@@ -475,14 +581,16 @@ def test_nunca_sale_carne_sin_coccion(i):
     ("pescado", _SONDAS_R6["tilapia-y-camarones-marinados"][1], "pez_sin_coccion", False),
     ("pescado", _SONDAS_R6["cebiche-mixto-coord"][1], "pez_sin_coccion", False),
     ("pescado", _SONDAS_R6["corvina-leche-de-tigre"][1], "pez_sin_coccion", False),
-    ("pescado", _SONDAS_R6["salmon-curado"][1], "pez_sin_coccion", False),
+    # ronda 8: «el salmón curado» en el paso es el producto listo
+    ("pescado", _SONDAS_R6["salmon-curado"][1], "pez_en_conserva", False),
     ("pescado", _SONDAS_R6["sirve-helado"][1], "pez_sin_coccion", False),
     ("pescado", _SONDAS_R6["enfria-y-sirve"][1], "pez_sin_coccion", False),
     ("atun", _PEZ_LISTO_CRUDO_FRIO["atun-ensalada-sirve-frio"][1], "pez_sin_coccion", False),
     ("atun", _SONDAS_R6["lata-en-otra-frase-atun"][1], "pez_sin_coccion", False),
-    # «cocido» a secas en la LÍNEA es la convención del cerrador para el peso cocido: decide el paso, que aquí no lo cuece
-    ("camarones", _PEZ_LISTO_CRUDO_FRIO["coctel-de-camarones-frio"][1], "pez_sin_coccion", False),
-    ("pulpo", _SONDAS_R6["pulpo-cocido-ensalada"][1], "pez_sin_coccion", False),
+    # ronda 8: «cocido» en la LÍNEA es precocido salvo que un paso lleve la firma del cerrador («a la plancha o hervido»,
+    # «como proteína del plato»), que es la convención del peso cocido (la ronda 7 dejaba decidir al paso)
+    ("camarones", _PEZ_LISTO_CRUDO_FRIO["coctel-de-camarones-frio"][1], "pez_precocido", False),
+    ("pulpo", _SONDAS_R6["pulpo-cocido-ensalada"][1], "pez_precocido", False),
     # el blanqueo antes de marinar no cuenta, aunque el nombre no diga «ceviche»
     ("pescado", _comida("Corvina al limón", ["150 g de Corvina"], [_BLANQUEO.format(a="la corvina")]),
      "pez_sin_coccion", False),

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-857 · 2026-09-29] Replay del autofix de proteína repetida sobre el corpus congelado: el lote sólo QUITA
-reescrituras a la base; nunca añade una ni cambia la que la base hacía.
+"""[P1-PLAN-LOTE-857 · 2026-09-29] Replay del autofix de proteína repetida sobre el corpus congelado: en este corpus el
+lote sólo QUITA reescrituras a la base; no añade una ni cambia la que la base hacía (fuera del corpus, el «dorado» adjetivo
+cambia la guardiana: `test_dorado_adjetivo_cambia_la_guardiana_fuera_del_corpus`).
 
 Revisión r6: con las especies nuevas contando, la comida de sardinas se quedaba de guardiana y el autofix reescribía a
 pollo la tilapia de la base (d8b10b05 D2, «Espaguetis con sardinas»): una repetición que la base no veía y una comida que
@@ -117,16 +118,21 @@ def _correr(casos) -> tuple:
     return cambios, motivos
 
 
+def _como_la_base(m):
+    """La base: lo del lote, apagado."""
+    m.setattr(pe, "BETA_FISH_SPECIES_COUNT", False)
+    m.setattr(pe, "PEZ_LISTO_GUARD", False)
+    m.setattr(pe, "destino_apto_para_la_dieta", lambda *a, **k: True)
+    m.setattr(go, "_PEZ_NUEVO", ())
+    m.setitem(go._MAIN_PROTEIN_ALIASES, "pescado", list(go._PESCADO_ANTES))
+
+
 @pytest.fixture(scope="module")
 def replay():
     casos = _casos()
     rama = _correr(casos)
-    with pytest.MonkeyPatch.context() as m:                     # la base: lo del lote, apagado
-        m.setattr(pe, "BETA_FISH_SPECIES_COUNT", False)
-        m.setattr(pe, "PEZ_LISTO_GUARD", False)
-        m.setattr(pe, "destino_apto_para_la_dieta", lambda *a, **k: True)
-        m.setattr(go, "_PEZ_NUEVO", ())
-        m.setitem(go._MAIN_PROTEIN_ALIASES, "pescado", list(go._PESCADO_ANTES))
+    with pytest.MonkeyPatch.context() as m:
+        _como_la_base(m)
         base = _correr(casos)
     return {"rama": rama[0], "motivos": rama[1], "base": base[0], "base_motivos": base[1]}
 
@@ -175,7 +181,10 @@ _CON_COCCION = {
 }
 # Sin cláusula que cueza el pez: van al gate. cd1b2fd0 D2 («al guiso en los últimos minutos») es un acierto; 125e45b1 D1
 # y 92328ff7 D2 son falsos positivos (el pez se cuece, pero no en una cláusula que lo nombre): un reintento cada uno.
-_SIN_COCCION = {("prod-125e45b1", "D1"), ("prod-92328ff7", "D2"), ("prod-cd1b2fd0", "D2")}
+# [ronda 8] cd1b2fd0 D2 cambia de motivo, no de destino: su línea dice «140 g de filete de pescado blanco cocidos» y ningún
+# paso lleva la firma del cerrador («a la plancha o hervido», «como proteína del plato»), así que ahora es precocido.
+_SIN_COCCION = {("prod-125e45b1", "D1"): "pez_sin_coccion", ("prod-92328ff7", "D2"): "pez_sin_coccion",
+                ("prod-cd1b2fd0", "D2"): "pez_precocido"}
 
 
 def _reescritas_del_corpus(replay):
@@ -199,7 +208,34 @@ def test_las_21_con_coccion_siguen_reescribiendose(replay):
 
 def test_las_sin_coccion_van_al_gate_con_su_motivo(replay):
     hechas = _reescritas_del_corpus(replay)
-    for plan, dia in _SIN_COCCION:
+    for (plan, dia), motivo in _SIN_COCCION.items():
         assert not any(p == plan and d == dia for p, d, _o, _n in hechas), (plan, dia)
-        assert any(c[0] == plan and c[1] == dia and ("1", "pescado", "pez_sin_coccion") in replay["motivos"][c]
-                   for c in replay["motivos"] if len(c) == 5), (plan, dia)
+        assert any(c[0] == plan and c[1] == dia and ("1", "pescado", motivo) in replay["motivos"][c]
+                   for c in replay["motivos"] if len(c) == 5), (plan, dia, motivo)
+
+
+def test_dorado_adjetivo_cambia_la_guardiana_fuera_del_corpus():
+    """Nota menor de la revisión r7: el subconjunto se mide sobre el corpus, no es universal. La guardiana (la comida que
+    se queda) es la de la base: la PRIMERA con la proteína en el nombre; si ninguna la lleva, la primera aparición. La base
+    contaba «dorado» como pez, así que en un día con «Plátano maduro dorado» en el desayuno, tilapia y mero, la guardiana
+    era el plátano y reescribía los DOS peces (tilapia a pollo, mero a pavo): el día se quedaba sin pescado. La rama no
+    cuenta el adjetivo: la guardiana es la tilapia y sólo el mero cambia, a pollo (no a pavo, porque es el primer
+    cambio del día). Es mejor, pero es una reescritura que la base hacía distinta; el corpus no tiene ningún día así."""
+    def dia():
+        return [{"day": 1, "meals": [
+            {"meal": "Desayuno", "name": "Plátano maduro dorado con queso blanco",
+             "ingredients": ["1 plátano maduro", "40 g de queso blanco"], "recipe": ["Dora el plátano 4 minutos por lado."]},
+            {"meal": "Almuerzo", "name": "Tilapia al horno con arroz",
+             "ingredients": ["150 g de Filete de tilapia", "1 taza de Arroz"],
+             "recipe": ["Hornea la tilapia 20 minutos a 200 °C."]},
+            {"meal": "Cena", "name": "Mero a la plancha con ensalada", "ingredients": ["150 g de Filete de mero", "1 tomate"],
+             "recipe": ["Cocina el mero a la plancha 5 minutos por lado."]},
+        ]}]
+    rama = dia()
+    assert go._protein_repeat_autofix(rama, {"dietType": "balanced", "country": "DO"}, None) == 1
+    assert [m.get("_protein_autofix_applied") for m in rama[0]["meals"]] == [None, None, "pescado->pollo"]
+    base = dia()
+    with pytest.MonkeyPatch.context() as m:
+        _como_la_base(m)
+        assert go._protein_repeat_autofix(base, {"dietType": "balanced", "country": "DO"}, None) == 2
+    assert [m.get("_protein_autofix_applied") for m in base[0]["meals"]] == [None, "pescado->pollo", "pescado->pavo"]
