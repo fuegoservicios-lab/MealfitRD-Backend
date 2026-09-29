@@ -431,7 +431,29 @@ def _stub_update_form_field(**kw):
     return f"¡Éxito! El campo '{field}' ha sido actualizado a '{mostrar}'."
 
 
+def _stub_guardar_suplemento(**kw):
+    """[P1-PLAN-LOTE-765] Como `tools.guardar_suplemento` pero SIN escribir: el mismo texto de éxito (con la Nevera
+    encendida), con la etiqueta validada igual que `suplementos.guardar` (inverosímil o ausente ⇒ estimado de la clave, o
+    sin etiqueta)."""
+    import suplementos
+    nombre, marca, unidad = kw.get("nombre") or "", kw.get("marca"), kw.get("unidad") or "scoop"
+    fuente = kw.get("fuente") or "estimado"
+    e = suplementos.etiqueta_valida(kw.get("etiqueta"))
+    if e is None or fuente not in suplementos.FUENTES:
+        fuente = "estimado"
+        base = suplementos.ESTIMADOS.get(kw.get("clave") or "")
+        e = suplementos.etiqueta_valida(base) if base else None
+    txt = f"Guardado en su Alacena: {nombre}" + (f" ({marca})" if marca else "")
+    if e:
+        txt += f" — 1 {unidad}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g de proteína"
+    if fuente == "estimado":
+        txt += (" (Para el asistente: la etiqueta es un ESTIMADO genérico" if e else " (Para el asistente: SIN etiqueta")
+        txt += "; díselo y que la ajuste mandando una foto de la tabla nutricional del pote.)"
+    return txt + " [UI_ACTION: REFRESH_INVENTORY]"
+
+
 _STUBS = {
+    "guardar_suplemento": _stub_guardar_suplemento,   # [P1-PLAN-LOTE-765] escribía en la Alacena real
     "log_consumed_meal": _stub_log_consumed_meal,
     "correct_consumed_meal": _stub_correct_consumed_meal,
     "modify_pantry_inventory": _stub_modify_pantry_inventory,

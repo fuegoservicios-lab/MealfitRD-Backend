@@ -40,8 +40,19 @@ apaga en Configuración → Recordatorios de comida.
 «Escanear mi plato» y «Anotar comida» siempre en el teléfono con el chat quieto; las preguntas del momento solo con el
 hilo corto (≤ 4 mensajes; el chat del día nace con los avisos del coach).
 
+## La foto de un pote de suplemento se guarda (P1-PLAN-LOTE-765)
+
+El dueño mandó, sin texto, la foto de su ganador de peso entero y el coach le pidió la tabla nutricional: la instrucción
+de la foto de un envase (`_ETIQUETA_INSTRUCCION`) solo sabía de ANOTAR una toma y prohibía ofrecer la Nevera, y la tool,
+la regla S y el bloque 💊 decían «si dice que es suyo». Ahora un suplemento en pote, bolsa o frasco de VARIAS porciones
+se guarda en la Alacena en ese turno con `guardar_suplemento`, sin preguntar (`_POTE_DE_SUPLEMENTO`; en una foto de
+compra, `_POTE_EN_LA_COMPRA`). Sin tabla legible va SIN etiqueta —un ganador de peso no es whey— y se pide la tabla para
+completarlo; con el pote guardado no se pregunta si se lo tomó. Una barra o una batida lista (UNA porción) siguen el
+camino de siempre. Las frases no nombran la Nevera: la tool decide sola si está apagada.
+
 ## Pruebas
 
 Backend: `test_p1_plan_lote_690.py`, `_692`, `_693`, `_694`. Frontend: `lote690.test.jsx`, `lote691.test.js`,
 `lote695.test.jsx`. Batería real en seco (`scripts/coach_battery`, casos P1-P5): rótulo, dudas contestadas, pregunta,
-«todavía no me lo como», respuesta escrita.
+«todavía no me lo como», respuesta escrita. Casos P6-P8 (765): pote sin tabla, pote con tabla + «me tomé 2 scoops», barra.
+`test_p1_plan_lote_765.py`; la batería simula `guardar_suplemento` (antes escribía en la Alacena real).
