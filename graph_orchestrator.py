@@ -46810,6 +46810,7 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     "_failed_chunk_learning_disabled",
     "_failed_chunk_predecessor_weeks",
     "_days_offset",
+    "_single_trip_cycle_day",  # [P1-PLAN-LOTE-816] día del CICLO del bloque (`dia_del_ciclo.sellar`, worker)
     "_chunk_prior_meals",
     "_force_technique_variety",
     "_learning_window_starved",

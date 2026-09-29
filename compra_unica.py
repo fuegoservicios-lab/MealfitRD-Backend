@@ -352,13 +352,20 @@ def candidatos_del_dia(cands, dia, form_data=None):
     try:
         if not cands or not isinstance(dia, dict):
             return cands
-        n = int(dia.get("day") or 0) - 1
-        if n < 3:
-            return cands
         fd = form_data if isinstance(form_data, dict) else {}
         eff = fd.get("_plan_policy_effective") if isinstance(fd.get("_plan_policy_effective"), dict) else None
         if eff is None:
             eff, _off = _politica({})
+            if not fd:          # [P1-PLAN-LOTE-816] el formulario de la corrida, el mismo del que sale `eff`
+                try:
+                    fd = sys.modules["nevera_exigida"]._FD.get() or {}
+                except Exception:
+                    fd = {}
+        # [P1-PLAN-LOTE-816] «day» cuenta desde el ancla MÓVIL de la ventana (`days_offset + i + 1`); el índice del
+        # CICLO de compra suma lo que la ventana ya archivó (`dia_del_ciclo`). Sin fuente de verdad, +0.
+        n = int(dia.get("day") or 0) - 1 + __import__("dia_del_ciclo").desplazamiento(fd)
+        if n < 3:
+            return cands
         if not isinstance(eff, dict):
             return cands
         from pantry_durability import single_trip_requirements
@@ -755,7 +762,7 @@ def nevera_virtual(form_data, task_id=None, user_id=None, consultar=None):
         # nevera del día 22 (sin congelador el filete aguanta 3 días). Mismo criterio que la proyección
         # (`_aguanta` + `single_trip_requirements`); sin exigencia para el día del bloque, todo vale.
         # tooltip-anchor: P1-PLAN-LOTE-221-NEVERA-VIRTUAL-LO-QUE-LLEGA
-        dia0 = int(form_data.get("_days_offset") or 0)
+        dia0 = __import__("dia_del_ciclo").dia(form_data)   # [P1-PLAN-LOTE-816] el día del CICLO, no el de la ventana
         try:
             from pantry_durability import single_trip_requirements
             req = single_trip_requirements(eff, dia0)
@@ -779,7 +786,7 @@ def nevera_virtual(form_data, task_id=None, user_id=None, consultar=None):
         form_data["_nevera_virtual"] = True
         form_data.pop("_pantry_advisory_only", None)   # la compra del ciclo SÍ se exige: es lo que hay en casa
         logger.info(f"🧳 [P1-PLAN-LOTE-216] compra única sin Nevera real (user {str(user_id)[:8]}, bloque desde el día "
-                    f"{int(form_data.get('_days_offset') or 0) + 1}): el bloque cocina con la compra del ciclo "
+                    f"{dia0 + 1} del ciclo): el bloque cocina con la compra del ciclo "
                     f"({len(nombres)} alimentos).")
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-216] Nevera virtual no-op (fail-open): {type(e).__name__}: {e}")

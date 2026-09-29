@@ -57,9 +57,9 @@ ESTE caso llevarla no es estrictamente mejor que no llevarla; el resto (anclas, 
 correcto. Medido (replay SELECT, 29-sep): 6594aae1 (30 días, sin congelador), si hoy muriera su cola, iría con
 `_days_offset` 5 frente al día real 10 del ciclo y la Nevera virtual ofrecería 13 frescos que no llegan (Plátano,
 Fresas, Aguacate, Leche…). Es raro: exige que hayan muerto todos los bloques pendientes de un plan de 15/30 días de compra única. En la
-renovación semanal (P0-1) el índice es exacto (ancla = hoy; offsets 0, 4, 8… del ciclo nuevo). Arreglo pendiente,
-fuera de este lote: derivar el día del ciclo de `_cycle_started_at` (o del inicio del plan) y pasarlo a esos
-consumidores. tooltip-anchor: P1-PLAN-LOTE-811-DIA-DEL-CICLO
+renovación semanal (P0-1) el índice es exacto (ancla = hoy; offsets 0, 4, 8… del ciclo nuevo). [P1-PLAN-LOTE-816]
+Cerrada: el worker sella el día del ciclo (`dia_del_ciclo.sellar`: rebanada, calendario y columna, el más exigente)
+y esos consumidores lo leen. tooltip-anchor: P1-PLAN-LOTE-811-DIA-DEL-CICLO
 
 Presupuesto duro y `waiting_user` en una renovación: `budget_below_floor` (`action=waiting_user`) es una relajación que
 el COMPILADOR emite al crear el plan y que sólo consume el formulario (`frontend/src/config/planPolicy.js`,
