@@ -247,3 +247,25 @@ cambia nada), knob `MEALFIT_BETA_CULTURAL_ASSIGNMENT` (True):
   aplican después de las cachés de render (el knob se lee en cada llamada; memo acotado para devolver el mismo objeto).
   Los **nombres del catálogo no se tocan** (son identificadores del motor); el sobreviviente `P1-CASABE-NO-BOIL` y el
   enum «Mangú/Tubérculos» del esquema tampoco.
+
+**Ronda 1 de revisión** (mismo lote):
+
+- **El vocabulario resuelve al alimento que quiere decir.** El modelo copia las palabras del prompt a `plan_data` y la
+  lista las resuelve por alias: «plátano» es alias de **Plátano verde** (G24 ES: «½ plátano mediano» ⇒ «Green
+  plantain»). La banana se dice «banana» (ES, MX, US), «banano» (CO) o «guineo» (PR), las tres ⇒ Guineo; las
+  legumbres, con una fila concreta: «judías blancas» (ES), «frijoles negros» (MX, US), «fríjoles rojos» (CO). Puerto
+  Rico hereda las palabras dominicanas («habichuelas» ⇒ Habichuelas rojas). Test: cada palabra, por
+  `normalize_ingredient_for_tracking`.
+- **Integrales**: `cultural_profiles.BASES_INTEGRALES` (arroz, pasta y pan integrales) pasa el filtro por biblioteca
+  aunque la biblioteca escriba la versión blanca; sin él México perdía «Arroz integral» y «Pasta integral», Colombia
+  «Arroz integral» y EE. UU. «Pan integral familiar». Se descartó filtrar sólo lo que añaden los básicos universales:
+  devolvía «Frijoles horneados» a EE. UU. (G24: el sembrador los asignó los 3 días) y no recuperaba los integrales de
+  MX y CO, que vienen justo de los básicos universales.
+- **Qué sigue a la cocina y qué al mercado.** Carbos, técnicas, sistema, micros y variedad, a la COCINA (la variedad
+  acompaña a los carbos que asigna: `build_deterministic_variety_prompt(..., cocina=)`); el planificador, al MERCADO,
+  como todo su render desde F1: su ejemplo INCORRECTO lo acompaña para no contradecir al CORRECTO.
+- **Lo que el filtro quita además de lo criollo** (declarado): ES «Judías pintas», PR «Habichuelas blancas» y «Harina
+  de yuca», CO «Habichuelas negras» y «Frijoles pintos», US «Frijoles horneados» (a propósito). Siguen en el catálogo:
+  el modelo puede usarlos; sólo dejan de imponerse. Lo heredan también el cambio de plato (`agent.py`) y la Nevera (una
+  base ajena a la cocina ya no se impone). Las etiquetas de técnica persistidas (`_selected_techniques`,
+  `last_technique`) cambian de nombre: la primera vez, la penalización de repetición no reconoce las viejas.

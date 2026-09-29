@@ -4110,7 +4110,9 @@ def test_f1b_get_deterministic_variety_prompt_wire_country_en_el_builder():
     (el builder recibe país derivado vía la ÚNICA puerta T1, no un literal/'DO' hardcoded) sigue
     verificado — solo cambió DÓNDE se deriva, no que se derive."""
     cuerpo = _cuerpo_get_deterministic_variety_prompt()
-    assert "build_deterministic_variety_prompt(_dc, _variety_country)" in cuerpo
+    # [P1-PLAN-LOTE-850 · ronda 1] el mercado sigue siendo el 2º argumento; la COCINA viaja aparte (`cocina=`), para las
+    # reglas que acompañan a los carbos que se asignan por cocina (I16).
+    assert "build_deterministic_variety_prompt(_dc, _variety_country, cocina=_variety_culture)" in cuerpo
     assert cuerpo.count("country_for_form_data(form_data)") == 1, (
         "country_for_form_data(form_data) debe aparecer UNA sola vez (derivación única, closure)"
     )

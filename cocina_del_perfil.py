@@ -16,7 +16,11 @@ Reglas (I16, cocina ≠ mercado):
     —identificadores del motor: `pantry_names_match`, guard de coherencia, backstop de alergias— no se tocan.
   · La cocina es `constants.cultural_country_for_form_data` (la principal); el mercado sigue decidiendo el pool.
   · Los datos viven en `cultural_profiles.PROFILE_KITCHEN` y en la biblioteca compilada del país (`dish_registry`).
-  · DO (y la cocina DO en un mercado beta) devuelve la entrada INTACTA: mismo objeto, mismo orden, mismo sorteo.
+  · DO devuelve la entrada INTACTA: mismo objeto, mismo orden, mismo sorteo. La cocina DO en un mercado beta también,
+    en todo lo que decide la COCINA (carbos, técnicas, sistema, micros y variedad, que acompaña a los carbos que
+    asigna). Excepción declarada: el planificador sigue al MERCADO, como desde F1 (su cabecera, la categoría A y el
+    ejemplo CORRECTO son del mercado: los 3 call sites pasan `ctx['country']`); su ejemplo INCORRECTO lo acompaña para
+    que el prompt no se contradiga.
   · Knob `MEALFIT_BETA_CULTURAL_ASSIGNMENT` (True), leído en cada llamada: apagado ⇒ la conducta del 815.
 tooltip-anchor: P1-PLAN-LOTE-850
 """
@@ -83,6 +87,15 @@ def _constituyentes(cc: str) -> frozenset:
 
 
 # ─── (1) carbohidratos que el sembrador puede ASIGNAR ────────────────────────────────────────────────────────────────
+def _integrales() -> frozenset:
+    """[ronda 1 de revisión] Las bases integrales que ninguna biblioteca quita (dato en `cultural_profiles`)."""
+    try:
+        from cultural_profiles import BASES_INTEGRALES
+        return frozenset(_norm(x) for x in BASES_INTEGRALES)
+    except Exception:                                                          # noqa: BLE001
+        return frozenset()
+
+
 def _solo_desayuno() -> tuple:
     try:
         from ai_helpers import _BREAKFAST_ONLY_BASES                      # SSOT: la lista vive en el sembrador
@@ -92,9 +105,10 @@ def _solo_desayuno() -> tuple:
 
 
 def carbos_de_la_cocina(carbs, cocina) -> list:
-    """Del pool de carbohidratos del mercado, los que la biblioteca de platos de la cocina usa, menos los que el perfil
-    declara ajenos como base (`carb_bases_excluded`) y menos los cereales de desayuno. Orden del pool conservado. Sin
-    datos, sin biblioteca o con menos de `MIN_BASES` supervivientes ⇒ la lista tal cual (misma lista).
+    """Del pool de carbohidratos del mercado, los que la biblioteca de platos de la cocina usa (más sus versiones
+    integrales, `cultural_profiles.BASES_INTEGRALES`), menos los que el perfil declara ajenos como base
+    (`carb_bases_excluded`) y menos los cereales de desayuno. Orden del pool conservado. Sin datos, sin biblioteca o con
+    menos de `MIN_BASES` supervivientes ⇒ la lista tal cual (misma lista).
 
     Los cereales de desayuno (avena…) salen porque lo que el sembrador asigna es la base OBLIGATORIA del almuerzo o la
     cena («El Almuerzo o Cena principal DEBE incluir…») y la avena nunca lo es (P1-OATS-NOT-A-DINNER; su sitio es la
@@ -108,6 +122,7 @@ def carbos_de_la_cocina(carbs, cocina) -> list:
         return carbs
     fuera = {_norm(x) for x in (datos.get("carb_bases_excluded") or ())}
     desayuno = _solo_desayuno()
+    lib = lib | _integrales()
     quedan = [c for c in (carbs or []) if _norm(c) in lib and _norm(c) not in fuera
               and not any(t in _norm(c) for t in desayuno)]
     if len(quedan) < MIN_BASES:
@@ -174,7 +189,7 @@ _SISTEMA = (
     ("(queso, yogur, habichuelas, lentejas, garbanzos)", "(queso, yogur, {legumbre}, lentejas, garbanzos)"),
     ("Garbanzos/habichuelas raw equivalente", "Garbanzos/{legumbre} raw equivalente"),
     ("maíz o habichuela de lata", "maíz o {legumbre_1} de lata"),
-    ("½ tomate, ½ guineo)", "½ tomate{medio_banana})"),   # «½ plátano» ya está en la lista: en ES/MX no se repite
+    ("½ tomate, ½ guineo)", "½ tomate, ½ {banana})"),
     ("guineo maduro)", "{banana_maduro})"),
     # tabla de macros (`graph_orchestrator._NUTRITION_LOOKUP_INSTRUCTION`): casabe y salami no se venden en beta
     ("(ej. gandules, yuca, guineo, yogurt griego, mango, ñame, casabe, salami, jamón, sardina)",
@@ -233,7 +248,6 @@ def _voc(datos) -> dict:
     v = dict(datos.get("vocab") or {})
     b = str(v.get("banana") or "")
     v["Banana_tabla"] = "Banana" if b.lower() == "banana" else f"{b[:1].upper()}{b[1:]} (banana)"
-    v["medio_banana"] = "" if b.lower() == "plátano" else f", ½ {b}"
     return v
 
 
@@ -250,12 +264,21 @@ def localizar_sistema(texto, cocina):
 
 
 def localizar_planificador(texto, pais):
-    """El ejemplo INCORRECTO de la regla de desayunos, sin mangú (el CORRECTO lo neutralizó F1). DO ⇒ el mismo objeto."""
+    """El ejemplo INCORRECTO de la regla de desayunos, sin mangú (el CORRECTO lo neutralizó F1). DO ⇒ el mismo objeto.
+
+    `pais` es el MERCADO: el planificador sigue al MERCADO, como todo su render desde F1 (cabecera, categoría A, ejemplo
+    CORRECTO); decidir sólo este ejemplo por la cocina dejaría «Mangú de plátano» en el INCORRECTO junto a un CORRECTO
+    ya neutralizado (mercado US, cocina DO). Pasar la cocina al planificador es cambiar el contrato de F1 (tres call
+    sites anclados por `test_p1_country_system_f1`), fuera de este lote."""
     cc, datos = _perfil(pais)
     return _memo("planificador", cc, texto, lambda t: _aplica(t, _PLANIFICADOR, None)) if datos else texto
 
 
-def localizar_variedad(texto, pais):
-    """La regla de bases transformables y la de proteína en cada comida, sin víveres ni mangú. DO ⇒ el mismo objeto."""
-    _cc, datos = _perfil(pais)
+def localizar_variedad(texto, cocina):
+    """La regla de bases transformables y la de proteína en cada comida, sin víveres ni mangú. DO ⇒ el mismo objeto.
+
+    `cocina` es la COCINA [ronda 1 de revisión]: estas reglas acompañan a los carbohidratos asignados, que salen de la
+    cocina (`carbos_de_la_cocina`); con mercado US y cocina DO el sembrador puede asignar yuca o plátano y la regla que
+    los transforma (majado, mangú) sigue siendo la suya."""
+    _cc, datos = _perfil(cocina)
     return _aplica(texto, _VARIEDAD, None) if datos else texto

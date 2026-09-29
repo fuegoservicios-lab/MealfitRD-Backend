@@ -14,7 +14,18 @@ Contrato:
     compilado) menos lo que `cultural_profiles.PROFILE_KITCHEN` declara ajeno como base; las técnicas, de las etiquetas
     del perfil. El catálogo no cambia (el modelo puede seguir usando cualquier alimento que su mercado venda).
   · Los NOMBRES del catálogo (identificadores del motor) no se tocan: sólo se elige cuáles se asignan.
-  · DO no cambia NADA (ni la cocina DO en un mercado beta). Knob `MEALFIT_BETA_CULTURAL_ASSIGNMENT` (True).
+  · DO no cambia NADA. La cocina DO en un mercado beta queda intacta en todo lo que decide la COCINA (carbos, técnicas,
+    sistema, micros y, desde la ronda 1 de revisión, el prompt de variedad); el prompt del PLANIFICADOR es del MERCADO
+    desde F1 (cabecera, categoría A y ejemplo CORRECTO) y su ejemplo INCORRECTO lo sigue. Knob
+    `MEALFIT_BETA_CULTURAL_ASSIGNMENT` (True).
+
+Ronda 1 de revisión:
+  · «plátano» es, para el MOTOR, el alias de «Plátano verde» (152 kcal; G24 ES: «½ plátano mediano» ⇒ la lista compró
+    «Green plantain»); la banana es «Guineo» (alias «banana», «banano»). El vocabulario de los ejemplos, que el modelo
+    copia a `plan_data`, usa palabras que resuelven al alimento que se quiere decir: banana ⇒ Guineo; legumbres ⇒ una
+    fila del catálogo («judías blancas», «frijoles negros», «fríjoles rojos»), no «alubias»/«frijoles» sueltos.
+  · Los integrales (arroz, pasta, pan) son la versión integral de bases de TODAS las cocinas: el filtro por biblioteca no
+    los quita (México y Colombia perdían «Arroz integral»; Estados Unidos, «Pan integral familiar»).
 tooltip-anchor: P1-PLAN-LOTE-850
 """
 from __future__ import annotations
@@ -284,3 +295,113 @@ def test_knob_documentado_y_marker():
     for rel in ("cocina_del_perfil.py", "cultural_profiles.py", "constants.py", "graph_orchestrator.py",
                 "micronutrients.py", "prompts/day_generator.py", "prompts/planner.py", "prompts/preferences.py"):
         assert "P1-PLAN-LOTE-850" in _src(rel), rel
+
+
+# ─── 8. ronda 1 de revisión ─────────────────────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("pid", ("spain_mediterranea", "mexico_casera", "colombia_casera", "us_everyday",
+                                 "puertorico_criolla"))
+def test_vocab_banana_resuelve_al_guineo_no_al_platano_verde(pid):
+    """El modelo copia el vocabulario del prompt a `plan_data`; «plátano» resuelve a Plátano verde."""
+    import constants
+    from cultural_profiles import PROFILE_KITCHEN
+    voc = PROFILE_KITCHEN[pid]["vocab"]
+    for k in ("banana", "banana_maduro"):
+        assert constants.normalize_ingredient_for_tracking(voc[k]) == "guineo", (pid, k, voc[k])
+    primero = voc["potasio"].split(",")[0].strip()
+    assert constants.normalize_ingredient_for_tracking(primero) == "guineo", (pid, voc["potasio"])
+
+
+@pytest.mark.parametrize("pid,potasio", (("spain_mediterranea", "banana, patata, "), ("mexico_casera", "banana, papa, ")))
+def test_potasio_es_mx_sin_platano_como_banana(pid, potasio):
+    from cultural_profiles import PROFILE_KITCHEN
+    voc = PROFILE_KITCHEN[pid]["vocab"]
+    assert voc["potasio"].startswith(potasio) and "plátano" not in voc["potasio"], voc["potasio"]
+
+
+@pytest.mark.parametrize("cc", ("ES", "MX"))
+def test_sistema_es_mx_banana_no_platano(paises, cc):
+    t = _sistema(cc)
+    assert "  - Banana: ~89" in t and "banana madura)" in t, cc
+    assert "Plátano (banana)" not in t and "plátano maduro)" not in t, cc
+
+
+@pytest.mark.parametrize("pid", ("spain_mediterranea", "mexico_casera", "colombia_casera", "us_everyday"))
+def test_vocab_legumbres_resuelven_a_una_fila_del_catalogo(pid):
+    """«alubias», «frijoles» o «fríjoles» sueltos no resuelven a ninguna fila (verificado también con el resolvedor de la
+    lista, `shopping_calculator.normalize_name`, contra el catálogo de producción: «Alubias», «Frijoles», «Fríjoles» sin
+    fila); «judías blancas», «frijoles negros» y «fríjoles rojos» sí (Judías blancas, Habichuelas negras/rojas)."""
+    import constants
+    from cultural_profiles import PROFILE_KITCHEN
+    nombres = {x for cc in constants.COUNTRY_POOLS for k in ("carbs", "proteins") for x in constants.COUNTRY_POOLS[cc][k]}
+    nombres |= set(constants.UNIVERSAL_MARKET_STAPLES["carbs"])
+    filas = {constants.normalize_ingredient_for_tracking(n) for n in nombres}
+    voc = PROFILE_KITCHEN[pid]["vocab"]
+    palabras = [voc["legumbre"], voc["legumbre_1"]] + [w.strip() for w in voc["legumbres"].split(",")]
+    for w in palabras:
+        assert constants.normalize_ingredient_for_tracking(w) in filas, (pid, w)
+
+
+def test_vocab_pr_hereda_el_lexico_dominicano():
+    """Puerto Rico dice «habichuelas» y «guineo» como DO (alias del catálogo: Habichuelas rojas, Guineo)."""
+    from cultural_profiles import PROFILE_KITCHEN
+    voc = PROFILE_KITCHEN["puertorico_criolla"]["vocab"]
+    assert voc["legumbres"] == "habichuelas, gandules, lentejas" and voc["banana"] == "guineo"
+
+
+@pytest.mark.parametrize("cc,integrales", (("MX", ("Arroz integral", "Pasta integral")), ("CO", ("Arroz integral",)),
+                                           ("US", ("Pan integral familiar", "Arroz integral", "Pasta integral")),
+                                           ("ES", ("Arroz integral", "Pasta integral"))))
+def test_integrales_no_los_quita_la_biblioteca(paises, cc, integrales):
+    c = _carbs(cc, cc)
+    for x in integrales:
+        assert x in c, (cc, x, c)
+
+
+def test_frijoles_horneados_siguen_fuera_de_la_asignacion_us(paises):
+    """G24 US: el sembrador asignó «Arroz blanco + Frijoles horneados» los 3 días (1,1-1,4 g de sodio por ración, «de
+    lata, escurridos»): la biblioteca de EE. UU. no los usa como base y el filtro los sigue dejando fuera."""
+    assert "Frijoles horneados" not in _carbs("US", "US")
+
+
+def test_integrales_son_nombres_del_catalogo():
+    import constants
+    from cultural_profiles import BASES_INTEGRALES
+    pools = {x for cc in constants.COUNTRY_POOLS for x in constants.COUNTRY_POOLS[cc]["carbs"]}
+    pools |= set(constants.UNIVERSAL_MARKET_STAPLES["carbs"])
+    assert BASES_INTEGRALES and all(n in pools for n in BASES_INTEGRALES), BASES_INTEGRALES
+    assert all("integral" in n.lower() for n in BASES_INTEGRALES)
+
+
+def test_variedad_sigue_a_la_cocina_us_con_cocina_do(paises):
+    """Mercado US, cocina DO: la variedad es la de la cocina (DO ⇒ sin localizar), como los carbos que acompaña."""
+    from prompts.preferences import build_deterministic_variety_prompt as bv
+    paises.setenv(_KNOB, "false")
+    sin_localizar = bv(3, "US")
+    paises.delenv(_KNOB)
+    assert bv(3, "US", cocina="DO") == sin_localizar
+    assert "mangú" in bv(3, "US", cocina="DO").lower()
+    assert bv(3, "US", cocina="US") == bv(3, "US") != sin_localizar
+    assert "mangú" not in bv(3, "US", cocina="MX").lower()
+
+
+def test_variedad_el_sembrador_pasa_la_cocina(paises):
+    src = _src("ai_helpers.py")
+    assert "build_deterministic_variety_prompt(_dc, _variety_country, cocina=_variety_culture)" in src
+    from ai_helpers import get_deterministic_variety_prompt
+    f = _form("US", "g24-850-us-do")
+    f["cultureProfiles"] = {"main": "dominican_criolla", "secondary": []}
+    assert "mangú" in get_deterministic_variety_prompt("", f, user_id=None, days_count=3).lower()
+    assert "mangú" not in get_deterministic_variety_prompt("", _form("US", "g24-850-us-us"), user_id=None,
+                                                           days_count=3).lower()
+
+
+def test_planificador_es_del_mercado_como_f1(paises):
+    """El prompt del planificador es del MERCADO desde F1 (cabecera, categoría A, ejemplo CORRECTO: los 3 call sites
+    pasan `ctx['country']`); el ejemplo INCORRECTO sigue al mismo mercado para que el prompt no se contradiga. Con
+    mercado US y cocina DO el planificador es el de US: ninguno de los dos ejemplos lleva mangú."""
+    from prompts.planner import build_planner_system_prompt as bp, _EJEMPLO_CORRECTO_BETA
+    out = bp("US")
+    assert _EJEMPLO_CORRECTO_BETA in out and "Ejemplo INCORRECTO: Día 1=Avena con fresas (B)" in out
+    doc = _src("cocina_del_perfil.py")
+    assert "el planificador sigue al MERCADO" in doc
+    assert "(y la cocina DO en un mercado beta) devuelve la entrada INTACTA" not in doc
