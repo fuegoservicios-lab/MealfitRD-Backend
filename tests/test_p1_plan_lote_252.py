@@ -91,8 +91,9 @@ def test_ancla():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     # [P1-PLAN-LOTE-796] +1 en el escáner (lactosa) y +4 en el filtro del catálogo (lácteos, sésamo, huevo, mariscos);
     # revisión: +4 en el escáner (maní, las dos declaraciones, las excusas de base) y +6 en el filtro (ocultos de
-    # lácteos/lactosa/frutos secos/sésamo, EXTRA y OCULTOS del maní)
-    assert src.count('__import__("vocabulario_alergenos")') == 16
+    # lácteos/lactosa/frutos secos/sésamo, EXTRA y OCULTOS del maní); ronda 3: +1 en el escáner (PLATOS: el adjetivo
+    # vegetal no excusa un plato)
+    assert src.count('__import__("vocabulario_alergenos")') == 17
     assert (_BACKEND / "constants.py").read_text(encoding="utf-8").count('__import__("vocabulario_alergenos")') == 16
     assert "P1-PLAN-LOTE-252-VOCABULARIO-ALERGENOS" in (_BACKEND / "vocabulario_alergenos.py").read_text(encoding="utf-8")
 

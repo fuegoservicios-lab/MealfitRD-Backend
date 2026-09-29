@@ -1318,11 +1318,43 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list, vetos=None) 
 # Sin alergias ni rechazos, el texto es byte-idéntico. tooltip-anchor: P1-PLAN-LOTE-182-ALERGIA-EN-LA-ASIGNACION
 _SENTINELAS_SIN_DECLARAR = ("ninguna", "ninguno", "ninguna alergia", "nada", "none")
 # [P1-PLAN-LOTE-183] Los alimentos que el generador usa a diario van primero en la línea dura; el resto, por longitud.
+# [P1-PLAN-LOTE-796 · ronda 3] Y los que usa mucho aunque sean largos (mayonesa, pistacho, helado…): los alias y platos
+# ocultos del lote, cortos, los desplazaban del corte. El panqueque (de avena, el desayuno que más escribe: 39 nombres en
+# la batería) lleva huevo y trigo.
 _TERMINOS_COMUNES = ("leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "ricotta", "cottage",
                      "camaron", "camarones", "langosta", "cangrejo", "pulpo", "calamar", "lambi", "mejillon",
                      "huevo", "huevos", "clara", "claras", "mani", "mantequilla de mani", "almendra", "almendras",
                      "nueces", "merey", "trigo", "pan", "harina de trigo", "pasta", "soya", "tofu",
-                     "pescado", "atun", "sardinas", "bacalao", "tilapia")
+                     "pescado", "atun", "sardinas", "bacalao", "tilapia",
+                     "mayonesa", "merengue", "omelette", "holandesa", "pistacho", "avellana", "anacardo", "macadamia",
+                     "helado", "cuajada", "natilla", "arequipe", "caseina", "panqueque")
+# [P1-PLAN-LOTE-796 · ronda 3 · 2026-09-28] El corte es POR ALERGIA declarada (antes, 20 para todas juntas: con tres
+# alergias la línea sólo nombraba lo común de cada una) y, dentro de cada una, los ALIAS y los platos OCULTOS
+# (`vocabulario_alergenos.ALIAS`/`OCULTOS`: brie, kipe, caju, croqueta, mole…) van detrás de los nombres de su clase.
+# Así cada alergia conserva lo que la línea nombraba antes del lote. tooltip-anchor: P1-PLAN-LOTE-796-LINEA-DURA
+_TOPE_POR_ALERGIA = 24
+
+
+def _terminos_de_la_linea(alg) -> list:
+    import graph_orchestrator as _go
+    import vocabulario_alergenos as _va
+    from constants import strip_accents as _sa
+
+    def _n(x) -> str:
+        return _sa(str(x)).lower().strip()
+
+    _alias = {_n(t) for ts in _va.ALIAS.values() for t in ts}
+    out, al_final = [], set()
+    for decl in alg:
+        exp = {t for t in _go._expand_allergy_declarations([decl]) if t}
+        clases = [c for c, syns in _go._ALLERGEN_SYNONYMS.items() if syns and {_n(s) for s in syns} <= exp]
+        base = {_n(s) for c in clases for s in _go._ALLERGEN_SYNONYMS[c]} - _alias
+        oculto = (exp - base) if base else set()
+        al_final |= oculto
+        for t in sorted(exp, key=lambda t: (t not in _TERMINOS_COMUNES, t in oculto, len(t), t))[:_TOPE_POR_ALERGIA]:
+            if t not in out:
+                out.append(t)
+    return sorted(out, key=lambda t: (t not in _TERMINOS_COMUNES, t in al_final, len(t), t))
 
 
 def _declarados(v) -> list:
@@ -1376,12 +1408,10 @@ def allergy_hard_line(allergies) -> str:
     if not alg:
         return ""
     try:
-        import graph_orchestrator as _go
-        terms = sorted((t for t in _go._expand_allergy_declarations(alg) if t),
-                       key=lambda t: (t not in _TERMINOS_COMUNES, len(t), t))     # [P1-PLAN-LOTE-183]
+        terms = _terminos_de_la_linea(alg)                                     # [P1-PLAN-LOTE-183 · 796 ronda 3]
     except Exception:                                                          # noqa: BLE001
         terms = []
-    incl = f" (incluye: {', '.join(terms[:20])})" if terms else ""
+    incl = f" (incluye: {', '.join(terms)})" if terms else ""
     alternativas = ""
     if _lacteo_vetado(alg):                                            # [P1-PLAN-LOTE-183]
         _meriendas = _sin_vetados(["fruta con maní", "casabe con aguacate", "tostada integral con aguacate",

@@ -68,15 +68,52 @@ _PISTO_RX = re.compile(r"\bpistos?\s+$")
 # Y «macha» es una almeja chilena (vocabulario_mar), pero la «salsa macha» mexicana es aceite de chile con cacahuate.
 _SALSA_RX = re.compile(r"\bsalsas?\s+$")
 # El chocolate o el chile «para mole» (alias de la fila «Chocolate de mesa») es un INGREDIENTE del mole, no su pasta:
-# «2 cdas de pasta para mole» sigue siendo mole.
+# «2 cdas de pasta para mole» sigue siendo mole. [ronda 3] Y la «pasta/salsa de chiles para mole» también: es la pasta
+# (la comercial lleva cacahuate, ajonjolí y pan), no el chile suelto.
 _PARA_MOLE_RX = re.compile(r"\b(?:chocolates?|chiles?)(?:\s+(?!pastas?\b|salsas?\b|y\b|e\b|con\b)[a-z]+){0,3}\s+para\s+$")
+_PASTA_DE_RX = re.compile(r"\b(?:pastas?|salsas?|mezclas?|polvos?|bases?|concentrados?|preparados?)\s+(?:de\s+)?$")
 
 
-def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
+def _para_mole(antes: str) -> bool:
+    m = _PARA_MOLE_RX.search(antes)
+    return bool(m) and not _PASTA_DE_RX.search(antes[:m.start()])
+
+
+# [P1-PLAN-LOTE-796 · ronda 3 · 2026-09-28] El capuchino, el latte o la bechamel hechos con leche VEGETAL: el nombre del
+# preparado marcaba lácteo (al vegano y al alérgico) aunque la línea dijera con qué leche iba («1 capuchino con leche de
+# avena», «1 latte con bebida de almendras», «bechamel de coliflor»). Se excusa el NOMBRE del preparado cuando la misma
+# línea nombra la leche/bebida vegetal que lo hace; la leche de vaca que también nombre la línea se sigue marcando por su
+# propio término. La bechamel es además GLUTEN (la harina del roux): con leche vegetal sólo se le excusa a la dieta
+# (aquí, `dieta=True`) y al alérgico a lácteos (`termino_compartido.excusa_de_su_clase`); la «de coliflor» (puré de
+# verdura, sin roux ni leche) vale para todos. tooltip-anchor: P1-PLAN-LOTE-796-PREPARADO-VEGETAL
+_PREPARADOS = ("capuchino", "cappuccino", "latte", "bechamel")
+_LECHE_VEGETAL_RX = re.compile(
+    r"\b(?:leches?|bebidas?|cremas?)\s+(?:de\s+)?(?:vegetal(?:es)?|avena|almendras?|soya|soja|coco|arroz|nuez|nueces|"
+    r"avellanas?|anacardos?|maranon(?:es)?|cajuil|mani|cacahuates?|cacahuetes?|guisantes?|arvejas?|chufa|quinoa|"
+    r"linaza|ajonjoli|sesamo|pistachos?|macadamias?|canamo)\b")
+_BECHAMEL_DE_VERDURA_RX = re.compile(r"^\s*de\s+(?:coliflor(?:es)?|brocoli|auyama|calabaza|calabacin|papas?|patatas?|"
+                                     r"yuca|batata|anacardos?|maranon(?:es)?)\b")
+
+
+def leche_vegetal_en(linea: str) -> bool:
+    """¿La línea (sin acentos, minúsculas) nombra una leche, bebida o crema VEGETAL?"""
+    return bool(_LECHE_VEGETAL_RX.search(str(linea or "")))
+
+
+# [ronda 3] En DO «tortilla de yuca» es también el CASABE (pan de yuca, sin huevo): «1 porción de casabe (tortilla de
+# yuca)» es línea real de la batería. La de huevo con yuca rallada no nombra el casabe.
+_CASABE_RX = re.compile(r"\bcasabes?\b")
+# [ronda 3] «nueces y semillas» es la mezcla (maní); «nueces y semillas de linaza» nombra la nuez y UNA semilla.
+_DE_SEMILLA_RX = re.compile(r"^\s*de\s+(?:linaza|chia|girasol|calabaza|auyama|sesamo|ajonjoli|canamo|amapola)\b")
+
+
+def excusa_contextual(termino: str, linea: str, ini: int, fin: int, dieta: bool = False) -> bool:
     """¿El término de alérgeno que casó en `linea[ini:fin]` (sin acentos, minúsculas) es inocuo por su CONTEXTO?
 
     Reúne la excusa del 247 (la crema que resulta de moler un vegetal) y las del 262 (el adjetivo «tostada(s)» tras un
-    fruto seco o una semilla; el wrap hecho DE hojas). Acotada al TÉRMINO: nunca absuelve a otro que case en la línea."""
+    fruto seco o una semilla; el wrap hecho DE hojas). Acotada al TÉRMINO: nunca absuelve a otro que case en la línea.
+    `dieta=True` lo llama el escáner de dieta, que sólo pregunta por el producto animal (la bechamel con leche de avena
+    no lo lleva, aunque siga llevando harina)."""
     try:
         t = str(termino or "").strip().lower()
         s = str(linea or "")
@@ -97,7 +134,15 @@ def excusa_contextual(termino: str, linea: str, ini: int, fin: int) -> bool:
         if t == "macha":                                       # [P1-PLAN-LOTE-796] la salsa macha no es la almeja
             return bool(_SALSA_RX.search(s[:ini]))
         if t == "mole":                                        # [P1-PLAN-LOTE-796] chocolate para mole
-            return bool(_PARA_MOLE_RX.search(s[:ini]))
+            return _para_mole(s[:ini])
+        if t == "bechamel":                                    # [ronda 3] bechamel de coliflor · con leche vegetal
+            return bool(_BECHAMEL_DE_VERDURA_RX.match(s[fin:]) or (dieta and leche_vegetal_en(s)))
+        if t in _PREPARADOS:                                   # [ronda 3] capuchino con leche de avena
+            return leche_vegetal_en(s)
+        if t == "tortilla de yuca":                            # [ronda 3] el casabe
+            return bool(_CASABE_RX.search(s))
+        if t == "nueces y semillas":                           # [ronda 3] nueces y semillas de linaza
+            return bool(_DE_SEMILLA_RX.match(s[fin:]))
         return False
     except Exception:
         return False

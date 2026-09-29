@@ -14472,8 +14472,9 @@ _ALLERGEN_TERM_BASE_EXCUSES = {
     "cuchuco": ("maiz",), "cracker": ("arroz", "maiz", "yuca", "casabe"),  # [P1-PLAN-LOTE-796] cuchuco de maíz · crackers de arroz
     **__import__("vocabulario_alergenos").EXCUSAS_DE_BASE,  # [P1-PLAN-LOTE-796 · revisión] mole de olla · pastelito de yuca
 }
-_ALLERGEN_TERM_BASE_EXCUSE_RX = {
-    _t: _re_mod.compile(r"^\s*de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
+_ALLERGEN_TERM_BASE_EXCUSE_RX = {  # [P1-PLAN-LOTE-796 · ronda 3] con un adjetivo en medio: «tostada integral de maíz»
+    _t: _re_mod.compile(r"^\s*(?:(?:integral(?:es)?|fin[oa]s?|hornead[oa]s?|crujientes?|dorad[oa]s?|caser[oa]s?|inflad[oa]s?|"
+                        r"tostad[oa]s?)\s+)?de\s+(?:" + "|".join(_re_mod.escape(_b) for _b in _bases) + r")\b")
     for _t, _bases in _ALLERGEN_TERM_BASE_EXCUSES.items()
 }
 
@@ -14620,17 +14621,20 @@ def _scan_allergen_violations(plan: dict, allergies, terminos=None) -> list:
                 ing_low = strip_accents(str(ing).lower())
                 for f in forbidden:
                     # El patrón SSOT captura plural regular (fresa→fresas, pan→panes,
-                    # camaron→camarones) y -z→-ces, sin prefijos (leche≠lechosa).
-                    _m_al = _re.search(_patron_termino_alergeno(f), ing_low) if f else None
-                    if _m_al:
+                    # camaron→camarones) y -z→-ces, sin prefijos (leche≠lechosa). [P1-PLAN-LOTE-796 · ronda 3] CADA
+                    # aparición: excusar la primera («leche de almendras o leche descremada») no absuelve la segunda.
+                    for _m_al in (_re.finditer(_patron_termino_alergeno(f), ing_low) if f else ()):
                         # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] misma excusa plant-adj
                         # del scan de dieta: «leche de coco»/«mantequilla de maní»/«yogur de soya»
                         # no violan la alergia a LÁCTEOS (el alérgico a maní/coco matchea vía su
                         # propio término directo).
-                        if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
+                        if (_PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18])
+                                and f not in __import__("vocabulario_alergenos").PLATOS):  # [P1-PLAN-LOTE-796 · ronda 3]
                             continue
                         if __import__("excusas_vegetales").excusa_contextual(f, ing_low, _m_al.start(), _m_al.end()):
                             continue  # [P1-PLAN-LOTE-247/262] crema de maní molido · almendras TOSTADAS · wrap DE lechuga
+                        if __import__("termino_compartido").excusa_de_su_clase(f, ing_low, _m_al.start(), _m_al.end(), forbidden):
+                            continue  # [P1-PLAN-LOTE-796 · ronda 3] pancakes sin huevo · muffin inglés · pizza vegana
                         # [P3-SEMOLA-MAIZ-GLUTEN-FP · 2026-08-23] excusa acotada AL TÉRMINO que
                         # casó: «sémola de maíz/yuca/arroz» no lleva gluten. 'pan' y 'harina' no
                         # tienen entrada, así que «Pan de maíz» sigue marcado.
@@ -14672,6 +14676,9 @@ def _scan_allergen_violations(plan: dict, allergies, terminos=None) -> list:
                             continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break
+                    else:
+                        continue
+                    break  # una violación por ingrediente, como antes
     return violations
 
 
@@ -14837,14 +14844,15 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
             for ing in meal.get("ingredients", []) or []:
                 ing_low = strip_accents(str(ing).lower())
                 for term, label in forbidden:
-                    m = _re.search(r"\b" + _re.escape(term) + r"(?:s|es)?\b", ing_low)
-                    if not m:
+                    for m in _re.finditer(r"\b" + _re.escape(term) + r"(?:s|es)?\b", ing_low):  # [P1-PLAN-LOTE-796 · ronda 3] cada aparición
+                        if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
+                            continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
+                        if __import__("excusas_vegetales").excusa_contextual(term, ing_low, m.start(), m.end(), dieta=True):  # [P1-PLAN-LOTE-269]
+                            continue  # [P1-PLAN-LOTE-247] «maní molido hasta obtener una crema»
+                        violations.append((meal.get("name", "?"), str(ing), label))
+                        break
+                    else:
                         continue
-                    if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
-                        continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
-                    if __import__("excusas_vegetales").excusa_contextual(term, ing_low, m.start(), m.end()):  # [P1-PLAN-LOTE-269]
-                        continue  # [P1-PLAN-LOTE-247] «maní molido hasta obtener una crema»
-                    violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
 
