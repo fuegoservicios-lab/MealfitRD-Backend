@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""[P1-PLAN-LOTE-922 · 2026-09-29] El cerrador de banda no deja bajo el piso de 15 g una porción que ya lo cumplía, y las
-hierbas frescas son exentas del piso.
+"""[P1-PLAN-LOTE-922 · 2026-09-29] Las hierbas frescas son exentas del piso cocinable: «10 g de cilantro» no es una
+porción inservible.
 
-Medidor de punto fijo del escudo (913, ia-59): rdv805, «15 g de avena» → «10 g de avena» por
-`_rebalance_day_macros_to_target` (corre después del piso); la pasada siguiente la dropeaba. «10 g de cilantro» dropeado.
+Medidor de punto fijo del escudo (913, ia-59): `_floor_subservible_portions` dropeaba «10 g de cilantro» (sin headroom)
+y la receta seguía nombrándolo. Ronda 2: la primera versión además impedía que `_rebalance_day_macros_to_target` bajara
+bajo el piso una línea que lo cumplía («15 g de avena» → 10 g); el A/B del escudo sobre 92 planes (sellando la política
+como el router) mostró que, para sostener 15 g de maní o almendras, el grupo recortaba la proteína: 5 días entre -5 y
+-9 g (mozzarella 45 → 25 g, edamame 155 → 80 g). Esa parte se quitó: la proteína vale más que la guarnición.
 """
 from __future__ import annotations
 
@@ -16,9 +19,8 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 import graph_orchestrator as go  # noqa: E402
-import piso_en_rebalance as per  # noqa: E402
 
-_POR100 = {"avena": (13.0, 66.0, 7.0), "arroz": (2.7, 28.0, 0.3), "cilantro": (2.1, 3.7, 0.5)}
+_POR100 = {"avena": (13.0, 66.0, 7.0), "arroz": (2.7, 28.0, 0.3), "cilantro": (2.1, 3.7, 0.5), "pollo": (31.0, 0.0, 3.6)}
 
 
 class _DB:
@@ -35,42 +37,30 @@ class _DB:
         return {"grams": g, "protein": p, "carbs": c, "fats": f, "kcal": 4 * p + 4 * c + 9 * f}
 
 
-def _dia():
+def _dia(ings):
     db = _DB()
-    ings = ["15 g de avena", "300 g de arroz blanco cocido"]
-    mc = [db.macros_from_ingredient_string(x) for x in ings]
-    return [{"meal": "Desayuno", "name": "Bowl de yogur con frutas", "ingredients": list(ings),
-             "protein": round(sum(m["protein"] for m in mc)), "carbs": round(sum(m["carbs"] for m in mc)),
-             "fats": round(sum(m["fats"] for m in mc))}]
+    mc = [db.macros_from_ingredient_string(x) or {} for x in ings]
+    tot = {k: round(sum(m.get(k, 0) for m in mc)) for k in ("protein", "carbs", "fats", "kcal")}
+    return [{"meals": [{"meal": "Almuerzo", "name": "Pollo a la plancha con arroz blanco", "ingredients": list(ings),
+                        "ingredients_raw": list(ings), "protein": tot["protein"], "carbs": tot["carbs"],
+                        "fats": tot["fats"], "cals": tot["kcal"]}]}]
 
 
-def _gramos(meal, token):
-    return next(_DB().grams_from_ingredient_string(x) for x in meal["ingredients"] if token in x)
+def test_el_piso_no_dropea_el_cilantro_sin_headroom():
+    days = _dia(["10 g de cilantro fresco", "10 g de avena", "200 g de arroz blanco cocido", "150 g de pollo a la plancha"])
+    go._floor_subservible_portions(days, day_kcal_target=100.0, db=_DB())
+    ings = days[0]["meals"][0]["ingredients"]
+    assert any("cilantro" in x for x in ings), ings
+    assert not any("avena" in x for x in ings), "el piso sigue dropeando lo que no es hierba"
 
 
-def test_bajar_los_carbos_no_deja_la_avena_bajo_el_piso():
-    meals = _dia()
-    assert go._rebalance_day_macros_to_target(meals, 60.0, 5.0, _DB(), passes=1)
-    assert _gramos(meals[0], "avena") == 15.0, meals[0]["ingredients"]
-    assert _gramos(meals[0], "arroz") < 300.0, "el resto del grupo absorbe el ajuste"
-
-
-def test_knob_apagado_conducta_previa(monkeypatch):
-    monkeypatch.setenv("MEALFIT_REBALANCE_KEEPS_FLOOR", "false")
-    meals = _dia()
-    go._rebalance_day_macros_to_target(meals, 60.0, 5.0, _DB(), passes=1)
-    assert _gramos(meals[0], "avena") < 15.0, meals[0]["ingredients"]
-
-
-def test_las_hierbas_frescas_son_exentas_del_piso():
-    for h in ("cilantro", "perejil", "cebollin", "albahaca", "culantro"):
+def test_las_hierbas_estan_en_los_exentos():
+    for h in ("cilantro", "perejil", "cebollin", "albahaca", "culantro", "hierbabuena", "eneldo", "tomillo"):
         assert h in go._SHRINK_FLOOR_EXEMPT_TOKENS
-    assert per.bajo_el_piso("20 g de cilantro fresco", "10 g de cilantro fresco", _DB()) is False
-    assert per.bajo_el_piso("15 g de avena", "10 g de avena", _DB()) is True
-    assert per.bajo_el_piso("12 g de avena", "8 g de avena", _DB()) is False, "lo que ya estaba bajo el piso no es de este lote"
 
 
-def test_ancla():
+def test_el_rebalance_no_sostiene_la_linea_sobre_la_proteina():
+    """Ronda 2: el ajuste de banda puede bajar una guarnición bajo el piso; no se sostiene a costa del grupo."""
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
-    assert '__import__("piso_en_rebalance").bajo_el_piso(orig, quant, db)' in src
-    assert "tooltip-anchor: P1-PLAN-LOTE-922" in (_BACKEND / "piso_en_rebalance.py").read_text(encoding="utf-8")
+    assert "piso_en_rebalance" not in src
+    assert not (_BACKEND / "piso_en_rebalance.py").exists()

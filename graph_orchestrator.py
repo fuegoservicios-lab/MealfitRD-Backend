@@ -21567,8 +21567,8 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
                 _k = factor * _f
                 if factor < 1 and _identidad_protege(m, orig):  # [P1-PLAN-LOTE-177] el que da nombre, no bajo su piso
                     quant, _k = __import__("identidad_plato").no_bajo_del_piso(orig, quant, _k, db)
-                if quant == orig or (factor < 1 and __import__("piso_en_rebalance").bajo_el_piso(orig, quant, db)):
-                    continue  # [P1-PLAN-LOTE-922] ni lo que ya cumplía el piso de 15 g baja de él
+                if quant == orig:
+                    continue
                 _mo = db.macros_from_ingredient_string(orig) or {}
                 _mn = db.macros_from_ingredient_string(quant) or {}
                 _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
