@@ -21567,8 +21567,8 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
                 _k = factor * _f
                 if factor < 1 and _identidad_protege(m, orig):  # [P1-PLAN-LOTE-177] el que da nombre, no bajo su piso
                     quant, _k = __import__("identidad_plato").no_bajo_del_piso(orig, quant, _k, db)
-                if quant == orig:
-                    continue
+                if quant == orig or (factor < 1 and __import__("piso_en_rebalance").bajo_el_piso(orig, quant, db)):
+                    continue  # [P1-PLAN-LOTE-922] ni lo que ya cumplía el piso de 15 g baja de él
                 _mo = db.macros_from_ingredient_string(orig) or {}
                 _mn = db.macros_from_ingredient_string(quant) or {}
                 _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
@@ -33289,6 +33289,7 @@ _SHRINK_FLOOR_EXEMPT_TOKENS = (
     "limon", "ajo", "jengibre", "especias", "oregano", "canela", "comino", "pimienta", "achiote",
     "vainilla", "cacao", "levadura", "polvo de hornear", "mayonesa", "mostaza", "sazon",
     "semillas", "chia", "linaza", "ajonjoli", "rallado", "parmesano", "sofrito", "caldo", "cubito",
+    "cilantro", "perejil", "cebollin", "albahaca", "culantro", "hierbabuena", "eneldo", "tomillo",  # [P1-PLAN-LOTE-922] hierbas
 )
 # [P3-CANNED-MIN-SERVIBLE · 2026-07-05] (review visual #6: "20g de sardinas en lata") Nadie abre
 # una lata para 20g — la proteína enlatada/pre-cocida bajo el mínimo servible se bumpea a
