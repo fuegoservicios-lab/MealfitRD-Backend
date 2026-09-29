@@ -27,12 +27,21 @@ def _sa(s) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", str(s or "")) if unicodedata.category(c) != "Mn").lower()
 
 
+#: una base dulce (avena, yogur, batido…): ni tomate ni batata en lugar del aguacate que ya lleva — queda la conducta de
+#: siempre (el aguacate, que la fusión de duplicados suma en una línea). «Avena con tomate» es peor que el aguacate doble, y
+#: dejar la fruta con el huevo arriesga un rechazo del revisor que regenera el plan entero (lote 616). Corpus: 11 de 77
+#: aguacates dobles eran avenas o yogures.
+_BASE_DULCE_RE = re.compile(r"\b(?:avena|yogu?rt?|granola|batido|smoothie|licuado|panquec\w*|pancakes?|pudin|budin|cereal|"
+                            r"tostadas?\s+francesas?|crepas?)\b")
+
+
 def elegir(meal: dict, admitidos) -> "str | None":
-    """El primer sustituto admitido que el plato no lleva ya (en su lista); None si los lleva todos."""
+    """El primer sustituto admitido que el plato no lleva ya (en su lista); None si los lleva todos. En una base dulce, el
+    primero admitido, como siempre."""
     cands = [c for c in (admitidos or []) if c]
     if not cands:
         return None
-    if not on() or not isinstance(meal, dict):
+    if not on() or not isinstance(meal, dict) or _BASE_DULCE_RE.search(_sa(meal.get("name"))):
         return cands[0]
     lista = " ; ".join(_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str))
     for c in cands:

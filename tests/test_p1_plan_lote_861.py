@@ -43,6 +43,18 @@ def test_sin_aguacate_en_el_plato_sigue_el_aguacate():
     assert n == 1 and "85 g de aguacate" in m["ingredients"], m["ingredients"]
 
 
+def test_en_una_avena_no_sale_tomate():
+    """Corpus: 11 de 77 aguacates dobles eran avenas o yogures — «avena con tomate» sería peor que el aguacate doble."""
+    avena = {"meal": "Desayuno", "name": "Avena cremosa con aguacate, mango y huevo bien cocido",
+             "ingredients": ["30 g de avena", "½ aguacate", "85 g de mango", "1 huevo bien cocido"],
+             "recipe": ["Mise en place: mide la avena; corta el aguacate y el mango en cubos.",
+                        "El Toque de Fuego: cocina la avena con agua 7-9 minutos; hierve el huevo 10-12 minutos.",
+                        "Montaje: sirve la avena con el aguacate y acompaña con el huevo bien cocido."]}
+    assert sf.elegir(avena, ["Aguacate", "Tomate", "Batata"]) == "Aguacate", "la conducta de siempre"
+    n, m = _autofix(avena)
+    assert n == 1 and not any("tomate" in x.lower() for x in m["ingredients"]), m["ingredients"]
+
+
 def test_elegir():
     assert sf.elegir({"ingredients": ["½ aguacate", "1 huevo"]}, ["Aguacate", "Tomate", "Batata"]) == "Tomate"
     assert sf.elegir({"ingredients": ["½ aguacates", "2 tomates", "1 batata"]}, ["Aguacate", "Tomate", "Batata"]) is None
