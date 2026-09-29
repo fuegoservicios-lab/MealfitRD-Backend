@@ -29523,7 +29523,7 @@ _PROTEIN_TARGET_FORMS = {
 # "filete de PESCADO blanco" + bare 'pollo' → "filete de pollo blanco". Caso del pase de
 # presupuesto, que emite exactamente "Filete de pescado blanco".
 _PROTEIN_SOURCE_COMPOUNDS = {
-    "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado", *__import__("pescado_especies").compuestos_de_conserva(_MAIN_PROTEIN_ALIASES["pescado"])),  # [P1-PLAN-LOTE-857] sardinas en lata, boquerones en vinagre… enteros
+    "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado"),
     # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] la forma enlatada/compuesta se reescribe ENTERA
     # (largo-primero) — sin esto el token suelto producía "lata de pollo en agua".
     "atun": ("atún en agua", "atun en agua", "atún en lata", "atun en lata",
@@ -29819,9 +29819,9 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         _diet = _sa_pr(str(_fd.get("dietType") or "").lower())  # fallback diet-aware
         _goal = _sa_pr(str(_fd.get("mainGoal") or _fd.get("goal") or "").lower())  # goal-aware
 
-        def _target_ok(label: str, src: str = "") -> bool:
+        def _target_ok(label: str, src: str = "", ligero: bool = False) -> bool:
             probe = _PROTEIN_TARGET_FORMS[label]["default"]
-            if not __import__("pescado_especies").destino_apto_para_la_dieta(src, label, probe, _fd.get("dietType"), _diet_pool_item_banned):
+            if not __import__("pescado_especies").destino_apto_para_la_dieta(src, label, probe, _fd.get("dietType"), _diet_pool_item_banned, ligero):
                 return False  # [P1-PLAN-LOTE-857] la dieta manda: ni pollo al pescetariano (base: tilapia+mero → pechuga de pollo)
             probe_low = _sa_pr(probe.lower())
             if any(dk and dk in probe_low for dk in dislikes):
@@ -29857,11 +29857,11 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
             # ("filete de pescado blanco" antes que "pescado"; "pechuga de pollo" antes que "pollo").
             # [P1-REWRITE-DORADO-HOMONYM · 2026-07-06] los homónimos culinarios ("dorado")
             # se excluyen de la REESCRITURA — detección intacta arriba.
-            _all_aliases = __import__("pescado_especies").preparar_reescritura(tuple(  # [P1-PLAN-LOTE-857] sólo los del plato
+            _all_aliases = tuple(
                 _al for _al in (tuple(_MAIN_PROTEIN_ALIASES.get(src, ())) +
                                 _PROTEIN_SOURCE_COMPOUNDS.get(src, ()))
                 if _sa_pr(str(_al).lower()) not in _PROTEIN_ALIAS_REWRITE_HOMONYMS
-            ), meal)
+            )
             for _al in sorted(_all_aliases, key=len, reverse=True):
                 repl = (forms["molido"] if "molid" in _sa_pr(_al)
                         else forms["bare"] if " " not in _al and _al == src
@@ -30106,12 +30106,13 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     _eff_ladder = _eff_ladder + _fb
                 # conservar la PRIMERA comida con la proteína en el nombre (identidad); si ninguna
                 # la lleva en el nombre, conservar la primera aparición.
-                _keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)
+                # [P1-PLAN-LOTE-857] el pez en conserva o CRUDO se queda (su receta no cuece carne cruda); se cambia el otro
+                _keep_idx, _intocables = __import__("pescado_especies").guardiana_y_conservas(_lbl, [m for m, _ in hits], _MAIN_PROTEIN_ALIASES.get(_lbl, ()), next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0))
                 for i, (_meal, _) in enumerate(hits):
                     if i == _keep_idx or fixes_left <= 0:
                         continue
-                    if _receta_congelada(_meal):                 # [P1-PLAN-LOTE-46]
-                        _log_autofix_impotent(_d.get("day", "?"), _lbl, "receta_congelada", _meal.get("name"))
+                    if _receta_congelada(_meal) or i in _intocables:  # [P1-PLAN-LOTE-46] / [P1-PLAN-LOTE-857]
+                        _log_autofix_impotent(_d.get("day", "?"), _lbl, _intocables.get(i, "receta_congelada"), _meal.get("name"))
                         continue
                     # [P1-RECIPE-QUALITY-100 · 2026-07-10] contexto DULCE/LIGERO: el closer ya tenía
                     # sweet/light-guard pero este autofix NO — escribía pescado/camarones en meriendas
@@ -30137,7 +30138,7 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                         if "vegan" in _diet:
                             _search_sl = [t for t in _search_sl if t != "queso"]
                         tgt = next((t for t in _search_sl
-                                    if t not in day_labels and _target_ok(t, _lbl)), None)
+                                    if t not in day_labels and _target_ok(t, _lbl, True)), None)
                         if tgt is None:
                             _log_autofix_impotent(_d.get("day", "?"), _lbl,
                                                   "no_safe_target_sweet_or_light", _meal.get("name"))
