@@ -89,8 +89,10 @@ def test_ningun_pais_perdio_mas_tokens_de_los_suyos(sc):
     # [P1-DO-DESPENSA-DE-SU-MERCADO · 2026-09-10] cuatro más con el precio que trajo el dueño: PR −1
     # (sazón con culantro y achiote), US −2 (azúcar morena, pan rallado), DO −1 (hummus, su única).
     # [P1-PLAN-LOTE-624] ES/MX/CO/PR +1: «duraznos» (el fresco), que antes solo tenía US.
+    # [P1-PLAN-LOTE-790] ES +1 «trucha» (también de CO: en España se vende en cualquier pescadería) y MX +1
+    # «chile en polvo» (también de US: en México se vende en cualquier súper).
     assert {k: len(v) for k, v in d.items()} == {
-        "ES": 32, "MX": 28, "CO": 18, "PR": 18, "US": 38, "DO": 0}
+        "ES": 33, "MX": 29, "CO": 18, "PR": 18, "US": 38, "DO": 0}
 
 
 def test_la_vista_plana_se_deriva_y_no_se_edita_a_mano(sc):
