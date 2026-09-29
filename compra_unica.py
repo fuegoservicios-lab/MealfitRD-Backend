@@ -372,10 +372,43 @@ def candidatos_del_dia(cands, dia, form_data=None):
         req = single_trip_requirements(eff, n)
         if not req:
             return cands
-        out = [c for c in cands if _aguanta(f"100 g de {c}", n, req)]
+        out = [c for c in cands if _aguanta(f"100 g de {nombre_del_candidato(c)}", n, req)]
         return out or cands
     except Exception:
         return cands
+
+
+def nombre_del_candidato(c) -> str:
+    """[P1-PLAN-LOTE-932 · 2026-09-29] El NOMBRE de un candidato del cerrador, venga como venga: la tupla `(magrez,
+    nombre, ficha)` de `_safe_high_density_proteins`, el par `(ficha, nombre)` del pool, la ficha o el nombre suelto.
+
+    El filtro de arriba evaluaba `f"100 g de {c}"` con la tupla ENTERA —«100 g de (0.236, 'Camarones',
+    NutritionInfo(name='Camarones', kcal=85.0, …))»— y con ese texto sólo «aguantaba» lo que lleva la palabra en el nombre:
+    en el plan real de la batería rdb528 (compra mensual, alergia al pescado, día 25) de 38 candidatos quedaba UNO,
+    «Guisantes secos», donde por el nombre quedan 16 (huevos, habichuelas, lentejas, garbanzos, quesos curados…). Los
+    tests del lote 521 pasaban nombres; los tres cierres de proteína pasan tuplas. Knob
+    `MEALFIT_SINGLE_TRIP_CANDIDATE_BY_NAME` (True; False = el texto de antes). tooltip-anchor: P1-PLAN-LOTE-932"""
+    try:
+        if c is None:
+            return ""
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_SINGLE_TRIP_CANDIDATE_BY_NAME", True):
+            return str(c)
+    except Exception:                                                          # noqa: BLE001
+        pass
+    try:
+        if isinstance(c, str):
+            return c
+        if isinstance(c, (tuple, list)):
+            for parte in c:
+                nombre = getattr(parte, "name", None)
+                if isinstance(nombre, str) and nombre.strip():
+                    return nombre
+            return next((p for p in c if isinstance(p, str) and p.strip()), str(c))
+        nombre = getattr(c, "name", None)
+        return nombre if isinstance(nombre, str) and nombre.strip() else str(c)
+    except Exception:                                                          # noqa: BLE001
+        return str(c)
 
 
 def _redondea(gramos: float) -> str:
