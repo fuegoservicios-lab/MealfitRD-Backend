@@ -852,7 +852,7 @@ def _age_pantry_for_block(items, form_data, days: int) -> list:
     try:
         from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
         fd = form_data if isinstance(form_data, dict) else {}
-        first = int(fd.get("_days_offset") or 0)
+        first = __import__("dia_del_ciclo").dia(fd)       # [P1-PLAN-LOTE-816] el día del CICLO, no el de la ventana
         req = single_trip_requirements(fd.get("_plan_policy_effective"), first)
         if not req or not items:
             return list(items or [])
@@ -876,7 +876,7 @@ def _single_trip_durable_filter(items, form_data, days: int) -> list:
     try:
         from pantry_durability import single_trip_requirements, ingredient_issue_beyond_horizon
         fd = form_data if isinstance(form_data, dict) else {}
-        last = int(fd.get("_days_offset") or 0) + max(1, int(days)) - 1
+        last = __import__("dia_del_ciclo").dia(fd) + max(1, int(days)) - 1   # [P1-PLAN-LOTE-816] día del ciclo
         req = single_trip_requirements(fd.get("_plan_policy_effective"), last)
         if not req:
             return list(items)

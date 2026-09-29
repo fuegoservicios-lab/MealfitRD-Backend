@@ -30481,6 +30481,7 @@ __PLAN_MODE_GATE__
                     # Construir form_data para el pipeline con el offset correcto
                     # form_data fue inicializado arriba
                     form_data["_days_offset"] = days_offset
+                    __import__("dia_del_ciclo").sellar(form_data, prior_plan_data, days_offset)  # [P1-PLAN-LOTE-816] día del ciclo
                     form_data["_days_to_generate"] = days_count
                     # Platos de TODOS los dias previos (no solo semana 1) para anti-repeticion real
                     form_data["_chunk_prior_meals"] = prior_meals
@@ -32748,6 +32749,7 @@ __PLAN_MODE_GATE__
                                         "main_goal": plan_data.get("main_goal"),
                                         "grocery_start_date": plan_data.get("grocery_start_date"),
                                     }
+                                    _chain_view_ck["_days_offset"] = __import__("dia_del_ciclo").indice_del_chain(form_data, _first_new_idx_ck)  # [P1-PLAN-LOTE-816]
                                     # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] El contexto clínico va
                                     # como ARGUMENTO de la llamada, NO como clave del view: el
                                     # adapter lo pone en el dict `data` del shield (que es donde
