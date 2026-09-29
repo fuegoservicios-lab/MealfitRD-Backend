@@ -5233,6 +5233,7 @@ def _lbs_to_market_fraction(lbs: float) -> "tuple[int, str]":
 # [P1-PLAN-LOTE-790 · 2026-09-28] El rótulo del envase habla el sistema del PAÍS de la lista (ES/MX/CO en g/kg/ml, DO/US/PR como
 # siempre, decimales bajo 1 g) y el país viaja por contexto desde el sello del plan. Vive en `envase_pais.py` (tope de líneas).
 from envase_pais import etiqueta_envase as _sku_size_label, con_pais_del_plan as _con_pais_del_plan, sellar_catalogo_de_otro_pais as _sellar_catalogo_de_otro_pais, tope_de_comida as _tope_de_comida  # noqa: E402
+from lista_sin_super_rd import super_rd_en_la_lista as _super_rd_en_la_lista, sanear_lista_beta as _sanear_lista_beta  # noqa: E402  [P1-PLAN-LOTE-852] lista beta sin súper de RD
 
 
 # [P1-COHERENCE-BASE-QTY · 2026-07-26] Cantidad en unidad BASE del item de la lista, en el
@@ -13568,6 +13569,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if isinstance(_it, dict):
                 _it["pantry_deduction_applied"] = bool(_pantry_deduction_effective)
         _sellar_catalogo_de_otro_pais(results)  # [P1-PLAN-LOTE-790] catálogo de OTRO país: se queda, sellado (envase_pais.py)
+        _sanear_lista_beta(results)  # [P1-PLAN-LOTE-852] país beta: sin brand_product_id/market_pkg_price_rd; talla del envase en su sistema (lista_sin_super_rd.py)
 
     results.sort(key=lambda x: x["display_string"] if structured else x)
     
@@ -13842,7 +13844,7 @@ def get_shopping_list_delta(
     # generación, recalc, chat, crons — pasan por este cuello). Guests/errores →
     # None (fail-open, costeo estándar). Knob: MEALFIT_BRAND_PREF_COSTING.
     brand_prefs = None
-    if _brand_pref_costing_enabled():
+    if _brand_pref_costing_enabled() and _super_rd_en_la_lista():  # [P1-PLAN-LOTE-852] país beta: sin marcas del súper de RD
         try:
             brand_prefs = fetch_brand_pref_packages(user_id) or None
         except Exception as _bp_exc:
@@ -13852,7 +13854,7 @@ def get_shopping_list_delta(
     # ítems sin preferencia manual — la lista/PDF enseñan marca en cada alimento
     # con productos del súper. Global + cacheado (TTL 10 min). Fail-open: None.
     brand_defaults = None
-    if _brand_default_packages_enabled():
+    if _brand_default_packages_enabled() and _super_rd_en_la_lista():  # [P1-PLAN-LOTE-852] país beta: sin marcas del súper de RD
         try:
             brand_defaults = fetch_brand_default_packages() or None
         except Exception as _bd_exc:
