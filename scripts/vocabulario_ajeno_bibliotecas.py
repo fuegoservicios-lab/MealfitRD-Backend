@@ -87,8 +87,8 @@ NATIVO_FUERA_DE_RD: dict[str, frozenset] = {
     "arepita": frozenset({"CO"}),
     "fusion criolla": frozenset({"PR"}),         # técnica asignada dominicana
     "ropa vieja": frozenset({"ES", "PR", "US"}),     # Canarias; cubana en PR/US; MX salpicón, CO desmechada
-    # envase y marcas de RD (salen en la lista de compras)
-    "funda": frozenset({"PR"}),
+    # marcas de RD (salen en la lista de compras). «funda» (el envase) NO entra: choca con el verbo — «para que el
+    # queso funda» (G24 CO, D1 cena) —; los envases de RD ya los mide la lista (C5/C6 de la batería).
     "sosua": frozenset(),
 }
 

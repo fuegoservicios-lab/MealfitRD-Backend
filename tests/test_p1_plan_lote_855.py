@@ -150,6 +150,7 @@ def test_vocabulario_ajeno_por_pais():
     assert va.palabras_ajenas("Batata asada", "MX") == ["batata"]       # camote
     assert va.palabras_ajenas("Queso fresco con pollo", "ES") == []
     assert va.palabras_ajenas("Guineo con habichuelas y auyama", "DO") == []   # control: RD nunca es ajeno
+    assert va.palabras_ajenas("Devuélvelas al sartén para que el queso funda", "CO") == []   # el verbo, no el envase
 
 
 def test_la_medicion_de_bibliotecas_es_coherente():
