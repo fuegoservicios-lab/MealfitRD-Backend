@@ -2047,13 +2047,21 @@ _COCCION_PREVIA_375 = (
     ("gandul", "hierve los {n} secos 40-60 min hasta que estén tiernos, y escúrrelos"),
     ("guandul", "hierve los {n} secos 40-60 min hasta que estén tiernos, y escúrrelos"),
     ("haba", "remoja las {n} secas 8-12 h y hiérvelas 60-90 min hasta que estén tiernas, y escúrrelas"),
+    # [P1-PLAN-LOTE-931] el guisante seco (partido): hierve sin remojo; entero, con él
+    ("guisante", "hierve los {n} secos 40-60 min hasta que estén tiernos (si son enteros, remójalos antes 8-12 h), "
+                 "y escúrrelos"),
+    ("arveja", "hierve las {n} secas 40-60 min hasta que estén tiernas (si son enteras, remójalas antes 8-12 h), "
+               "y escúrrelas"),
+    ("chicharo", "hierve los {n} secos 40-60 min hasta que estén tiernos (si son enteros, remójalos antes 8-12 h), "
+                 "y escúrrelos"),
     ("arroz integral", "enjuaga el {n} crudo y cuécelo en agua 35-45 min hasta que esté tierno"),
     ("arroz", "enjuaga el {n} crudo y cuécelo en agua 15-20 min hasta que esté tierno"),
     ("quinoa", "enjuaga la {n} cruda y cuécela en agua 12-15 min hasta que esté tierna, y escúrrela"),
     ("bulgur", "hidrata el {n} en agua caliente 10-15 min (o cuécelo 10-12 min), y escúrrelo"),
     ("cebada", "cuece la {n} cruda en agua 30-40 min hasta que esté tierna, y escúrrela"),
 )
-_LEGUMBRE_375 = ("lenteja", "garbanzo", "habichuela", "frijol", "gandul", "guandul", "haba")
+_LEGUMBRE_375 = ("lenteja", "garbanzo", "habichuela", "frijol", "gandul", "guandul", "haba", "guisante", "arveja",
+                 "chicharo")
 
 
 def coccion_previa(meal, index=None) -> int:

@@ -20405,7 +20405,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _pool = _pool_no_second_main
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
-        _pool = __import__("topes_por_linea").caben(meal, _pool, db, CLOSER_COOKABLE_MIN_G)  # [P1-PLAN-LOTE-889] tope por alimento
+        _pool = __import__("seco_al_final").ordenar(__import__("topes_por_linea").caben(meal, _pool, db, CLOSER_COOKABLE_MIN_G))  # [P1-PLAN-LOTE-889] tope por alimento · [P1-PLAN-LOTE-931]
         # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
         # INGREDIENTES del estado FINAL → una proteína que el closer INTRODUCE aquí y que otra comida
         # del día ya usa se convierte en rechazo del reviewer (medido en vivo corr=2451c8ac: el _alt

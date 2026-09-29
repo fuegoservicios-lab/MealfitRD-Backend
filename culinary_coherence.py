@@ -1544,8 +1544,10 @@ _V7_COCCION_RE = re.compile(r"\bremoj|\bhierv|\bhervi|\bcoce|\bcocin|\bcuece|\bh
 # El estado declarado, que es señal en la dirección CONTRARIA: si aparece sin una acción, refuerza.
 _V7_ESTADO_COCIDO_RE = re.compile(r"\bcocid[oa]s?\b", re.IGNORECASE)
 # Solo lo que CAMBIA de peso y de comestibilidad al cocerse. Una lechuga «seca» no es esto.
+# [P1-PLAN-LOTE-931] …y el guisante (arveja, chícharo): «40 g de guisantes secos cocidos» con «Acompaña con guisantes
+# secos» como único paso pasaba sin que nadie lo viera.
 _V7_SECABLES_RE = re.compile(
-    r"\b(habichuela|frijol|lenteja|garbanzo|guandul|gandul|haba|soya|arroz|quinoa|cebada|"
+    r"\b(habichuela|frijol|lenteja|garbanzo|guandul|gandul|haba|guisante|arveja|chicharo|soya|arroz|quinoa|cebada|"
     r"bulgur|avena|pasta|espagueti|fideo|codito|macarr)", re.IGNORECASE)
 
 
