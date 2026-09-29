@@ -9,7 +9,7 @@ Spec: docs/superpowers/specs/2026-09-25-suplementos-alacena-design.md. tooltip-a
 from __future__ import annotations
 
 UNIDADES = ("scoop", "capsula", "porcion", "g")
-FUENTES = ("foto", "marca", "estimado")
+FUENTES = ("foto", "marca", "estimado", "frente", "web")   # [P1-PLAN-LOTE-767] + el frente del envase y la web
 _CAMPOS = ("kcal", "protein_g", "carbs_g", "fats_g")
 
 # Estimados genéricos POR PORCIÓN (unidad típica del producto). Claves = constants.SUPPLEMENT_NAMES.
@@ -126,6 +126,34 @@ def _upsert(user_id, nombre, marca, porciones, unidad, etiqueta, fuente):
     )
 
 
+# [P1-PLAN-LOTE-767 · 2026-09-29] El FRENTE de un envase trae kcal y proteína por porción (a veces los gramos), casi
+# nunca carbohidratos ni grasa. Se completan AQUÍ —nunca el modelo—: la grasa, un 6 % de las kcal (un ganador de peso
+# anda en un 3-5 %, una whey en un 10 %) y los carbohidratos, lo que queda (Atwater). Con `fuente='frente'` la Alacena
+# dice «carbohidratos y grasa estimados», y la foto de la tabla los deja exactos.
+_GRASA_DEL_FRENTE = 0.06
+
+
+def completar_desde_el_frente(etiqueta):
+    """La etiqueta del frente con carbohidratos y grasa estimados (si no venían, o venían en 0 sin cuadrar con las kcal).
+    Sin kcal o sin proteína, tal cual: no hay de dónde estimar."""
+    if not isinstance(etiqueta, dict):
+        return etiqueta
+    completa = etiqueta_valida(etiqueta)
+    if completa is not None and (completa["carbs_g"] or completa["fats_g"]):
+        return etiqueta
+    kcal, prot = _num(etiqueta.get("kcal")), _num(etiqueta.get("protein_g"))
+    if not kcal or prot is None:
+        return etiqueta
+    grasa = round(kcal * _GRASA_DEL_FRENTE / 9, 1)
+    carbs = round(max(0.0, (kcal - 4 * prot - 9 * grasa) / 4), 1)
+    out = {**etiqueta, "carbs_g": carbs, "fats_g": grasa}
+    # Sin los gramos de la porción, `etiqueta_valida` no deja pasar más de 600 kcal (una lectura rota), y un ganador
+    # de peso los pasa de sobra: se estiman por lo que pesan sus macros (+5 % de agua y minerales).
+    if not _num(out.get("gramos_porcion")):
+        out["gramos_porcion"] = round((prot + carbs + grasa) * 1.05)
+    return out
+
+
 def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiqueta=None, fuente="estimado",
             clave=None, forzar_nevera=False, usar_estimado=True) -> dict:
     """Guarda (o actualiza) el pote. Pasa antes por la regla de la Nevera: si la apagó el usuario, no escribe y
@@ -145,6 +173,8 @@ def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiquet
     if _existente:
         nombre = _existente.get("ingredient_name") or nombre
         unidad = _existente.get("serving_unit") or unidad
+    if fuente == "frente":   # [P1-PLAN-LOTE-767]
+        etiqueta = completar_desde_el_frente(etiqueta)
     e = etiqueta_valida(etiqueta)
     if e is None or fuente not in FUENTES:
         fuente = "estimado"
@@ -176,7 +206,9 @@ BLOQUE_CONOCIMIENTO = (
     "regla T); el colágeno NO cuenta como proteína completa para su meta. Para registrar una toma de algo de su "
     "Alacena usa log_consumed_meal con suplemento=<nombre> y porciones=<n>: las macros salen de la etiqueta del pote. "
     "Para guardar un pote nuevo, guardar_suplemento: cuando lo pide o cuando manda la foto del pote o de su "
-    "etiqueta, aunque no diga nada (la foto ES decir que lo tiene; P1-PLAN-LOTE-765).")
+    "etiqueta, aunque no diga nada (la foto ES decir que lo tiene; P1-PLAN-LOTE-765). Sin su tabla, las cifras del "
+    "frente del envase o buscar_etiqueta_en_internet con la marca y el producto, antes de pedirle la foto "
+    "(P1-PLAN-LOTE-767).")
 
 
 def _potes(user_id):

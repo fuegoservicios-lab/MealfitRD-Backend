@@ -432,27 +432,45 @@ def _stub_update_form_field(**kw):
 
 
 def _stub_guardar_suplemento(**kw):
-    """[P1-PLAN-LOTE-765] Como `tools.guardar_suplemento` pero SIN escribir: el mismo texto de éxito (con la Nevera
-    encendida), con la etiqueta validada igual que `suplementos.guardar` (inverosímil o ausente ⇒ estimado de la clave, o
-    sin etiqueta)."""
+    """[P1-PLAN-LOTE-765 → 767] La tool REAL (su validación, su «frente», sus textos) con las dos escrituras
+    anuladas: la fila de la Alacena (`suplementos._upsert`) y el encendido de la Nevera (`encender_por_uso`)."""
     import suplementos
-    nombre, marca, unidad = kw.get("nombre") or "", kw.get("marca"), kw.get("unidad") or "scoop"
-    fuente = kw.get("fuente") or "estimado"
-    e = suplementos.etiqueta_valida(kw.get("etiqueta"))
-    if e is None or fuente not in suplementos.FUENTES:
-        fuente = "estimado"
-        base = suplementos.ESTIMADOS.get(kw.get("clave") or "")
-        e = suplementos.etiqueta_valida(base) if base else None
-    txt = f"Guardado en su Alacena: {nombre}" + (f" ({marca})" if marca else "")
-    if e:
-        txt += f" — 1 {unidad}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g de proteína"
-    if fuente == "estimado":
-        txt += (" (Para el asistente: la etiqueta es un ESTIMADO genérico" if e else " (Para el asistente: SIN etiqueta")
-        txt += "; díselo y que la ajuste mandando una foto de la tabla nutricional del pote.)"
-    return txt + " [UI_ACTION: REFRESH_INVENTORY]"
+    import nevera_opcional
+    reales = (suplementos._upsert, nevera_opcional.encender_por_uso)
+    suplementos._upsert = lambda *a, **k: None
+    nevera_opcional.encender_por_uso = lambda *a, **k: "activa"
+    try:
+        return _GUARDAR_SUPLEMENTO_REAL(user_id=CTX["uid"], **{k: v for k, v in kw.items() if k != "user_id"})
+    finally:
+        suplementos._upsert, nevera_opcional.encender_por_uso = reales
+
+
+# la función REAL de la tool, antes de que el bucle de abajo la envuelva (el stub la llama con la búsqueda simulada)
+_BUSCAR_ETIQUETA_REAL = tools.buscar_etiqueta_en_internet.func
+_GUARDAR_SUPLEMENTO_REAL = tools.guardar_suplemento.func
+
+
+def _stub_buscar_etiqueta_en_internet(**kw):
+    """[P1-PLAN-LOTE-767] Sin gastar búsquedas: lo que la API real contestó el 29-sep (el Gold Standard de Optimum sí
+    está publicado; el Atlas Gainer de Patriot Nutrition no), con el mismo texto que la tool."""
+    producto = str(kw.get("producto") or "").lower()
+    if "gold standard" in producto:
+        hallazgo = {"estado": "encontrada", "etiqueta": {"gramos_porcion": 31.0, "kcal": 120.0, "protein_g": 24.0,
+                                                        "carbs_g": 3.0, "fats_g": 1.5},
+                    "porciones": 74.0, "porcion_texto": "1 scoop (31 g)", "fuente": "optimumnutrition.com"}
+    else:
+        hallazgo = {"estado": "no_encontrada"}
+    import etiqueta_web as _ew
+    real = _ew.buscar
+    _ew.buscar = lambda *a, **k: hallazgo
+    try:
+        return _BUSCAR_ETIQUETA_REAL(user_id=CTX["uid"], **{k: v for k, v in kw.items() if k != "user_id"})
+    finally:
+        _ew.buscar = real
 
 
 _STUBS = {
+    "buscar_etiqueta_en_internet": _stub_buscar_etiqueta_en_internet,   # [P1-PLAN-LOTE-767] búsquedas de pago
     "guardar_suplemento": _stub_guardar_suplemento,   # [P1-PLAN-LOTE-765] escribía en la Alacena real
     "log_consumed_meal": _stub_log_consumed_meal,
     "correct_consumed_meal": _stub_correct_consumed_meal,

@@ -97,7 +97,11 @@ _VISION_SEAM_MARKER = "[P1-VISION-GEMINI-FLASH]"
 # coach ya escribió — no razona, no aconseja, no ve historial ni perfil —, así que el veto al cerebro del coach
 # sigue intacto: `build_chat_llm` no conoce `gemini` y el test de abajo lo sigue exigiendo.
 _VOICE_SEAM_MARKER = "[P1-PLAN-LOTE-685-VOZ]"
-_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER)
+# [P1-PLAN-LOTE-767 · 2026-09-29] Tercera costura, pedida por el dueño («¿el agente no puede investigar la tabla
+# nutricional de esa proteína?»): `etiqueta_web.py` BUSCA en Google la etiqueta de UN producto (Gemini 3.8 Flash con
+# la búsqueda, por REST, sin SDK). No razona por el coach ni ve historial o perfil: el veto al cerebro sigue intacto.
+_ETIQUETA_WEB_SEAM_MARKER = "[P1-PLAN-LOTE-767-ETIQUETA-WEB]"
+_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER, _ETIQUETA_WEB_SEAM_MARKER)
 
 
 def test_a_blanket_no_gemini_in_prod_code():

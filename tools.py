@@ -5407,7 +5407,9 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
     no diga nada: la foto de un pote de varias porciones ES decir que lo tiene [P1-PLAN-LOTE-765]. Funciona aunque su
     Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
     - etiqueta: {"gramos_porcion","kcal","protein_g","carbs_g","fats_g"} POR PORCIÓN, tal como la lee la foto o la dice él.
-    - fuente: 'foto' | 'marca' | 'estimado'. Sin etiqueta, fuente='estimado' y `clave` del tipo: whey_protein,
+    - fuente: 'foto' (tabla leída) | 'frente' (kcal y proteína del frente del envase: el sistema estima
+      carbohidratos y grasa) | 'web' (buscar_etiqueta_en_internet) | 'marca' | 'estimado'. Sin etiqueta,
+      fuente='estimado' y `clave` del tipo: whey_protein,
       vegan_protein, creatine, collagen, multivitamin, omega3, magnesium, probiotics, electrolytes, bcaa,
       pre_workout, fat_burner. Un ganador de peso no está en la lista: sin `clave` (como whey le pondría ~120 kcal
       a lo que trae varias veces más).
@@ -5433,6 +5435,12 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
         if r["fuente"] == "estimado":
             txt += (" (Para el asistente: la etiqueta es un ESTIMADO genérico" if e else " (Para el asistente: SIN etiqueta")
             txt += "; díselo y que la ajuste mandando una foto de la tabla nutricional del pote.)"
+        elif r["fuente"] == "frente" and e:   # [P1-PLAN-LOTE-767]
+            txt += (" (Para el asistente: kcal y proteína del FRENTE del envase; carbohidratos y grasa ESTIMADOS: díselo "
+                    "en una frase y que mande la foto de la tabla para dejarlos exactos.)")
+        elif r["fuente"] == "web" and e:   # [P1-PLAN-LOTE-767]
+            txt += (" (Para el asistente: cifras de INTERNET: díselo en una frase y que, si su pote dice otra cosa, "
+                    "mande la foto de la tabla.)")
         if r["estado_nevera"] == "encendida":
             txt += " (Para el asistente: su Nevera estaba apagada y se ENCENDIÓ para guardarlo; díselo en una frase.)"
         return txt + " [UI_ACTION: REFRESH_INVENTORY]"
@@ -5441,7 +5449,47 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
         return "No pude guardar el suplemento (error interno). NO digas que quedó guardado."
 
 
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, guardar_suplemento]
+@tool
+def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: str = None) -> str:
+    """
+    Busca en internet la tabla nutricional (POR PORCIÓN) de UN suplemento por su marca y su nombre, cuando no tienes su
+    tabla: la foto muestra el pote sin la tabla ni cifras en el frente, o el usuario te dice la marca y el producto.
+    Úsala UNA vez por producto y ANTES de pedirle la foto de la tabla. Con lo que encuentre, guarda el pote con
+    guardar_suplemento fuente='web'. Si no la encuentra, no vuelvas a buscarla: guárdalo sin etiqueta y pide la foto.
+    - marca: tal como se lee (ej. 'Optimum Nutrition').
+    - producto: el nombre del producto (ej. 'Gold Standard 100% Whey').
+    - sabor: si se lee (cambia las cifras).
+    """
+    # [P1-PLAN-LOTE-767 · 2026-09-29] tooltip-anchor: P1-PLAN-LOTE-767-BUSCAR (motor: etiqueta_web.py)
+    if not user_id or str(user_id).strip().lower().startswith("guest"):
+        return ("Para buscar etiquetas en internet hace falta iniciar sesión. (Para el asistente: pídele la foto de la "
+                "tabla nutricional; no digas que buscaste.)")
+    try:
+        import etiqueta_web
+        r = etiqueta_web.buscar(user_id, marca, producto, sabor)
+    except Exception:
+        logger.exception("❌ [P1-PLAN-LOTE-767] buscar_etiqueta_en_internet falló")
+        r = {"estado": "error"}
+    if r.get("estado") == "encontrada":
+        e = r["etiqueta"]
+        porcion = r.get("porcion_texto") or (f"{e['gramos_porcion']:g} g" if e.get("gramos_porcion") else "1 porción")
+        txt = (f"Encontré su tabla en internet. Por porción ({porcion}): {int(round(e['kcal']))} kcal, "
+               f"{e['protein_g']:g} g de proteína, {e['carbs_g']:g} g de carbohidratos y {e['fats_g']:g} g de grasa")
+        if r.get("porciones"):
+            txt += f"; {int(r['porciones'])} porciones por envase"
+        if r.get("fuente"):
+            txt += f" (fuente: {r['fuente']})"
+        return txt + (". (Para el asistente: guárdalo con guardar_suplemento fuente='web' y estas cifras en `etiqueta`, "
+                      "con gramos_porcion y las porciones; dile en una frase que salieron de internet y que, si su "
+                      "pote dice otra cosa, te mande la foto de la tabla.)")
+    if r.get("estado") == "no_encontrada":
+        return ("No encontré su tabla en internet. (Para el asistente: guárdalo SIN etiqueta y pídele UNA foto de la "
+                "tabla nutricional; no vuelvas a buscarlo.)")
+    return ("Ahora no pude buscar en internet. (Para el asistente: guárdalo SIN etiqueta y pídele UNA foto de la tabla "
+            "nutricional; no digas que buscaste.)")
+
+
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, guardar_suplemento, buscar_etiqueta_en_internet]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

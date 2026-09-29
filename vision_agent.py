@@ -251,6 +251,13 @@ _MEAL_VISION_PROMPT = (
     "marca; producto; tamano de la porcion TAL COMO lo dice la etiqueta (ej: '1 scoop (31 g)'); porciones por envase "
     "si se lee; y los valores por porcion. Si la tabla nutricional NO se ve o no se puede leer (solo el frente del "
     "pote), deja los numeros en 0 y dilo en 'description': 'no se lee la tabla nutricional'. "
+    # [P1-PLAN-LOTE-767 · 2026-09-29] El frente de un pote suele IMPRIMIR sus cifras grandes (kcal y proteina por
+    # porcion, gramos, porciones por envase): el Atlas Gainer del dueno las traia y el escaner solo dijo «no se lee la
+    # tabla». Van en 'description' con su base TAL CUAL (el coach las pasa a una porcion); los numeros siguen en 0: el
+    # registro del escaner no puede tomar un frente por una tabla.
+    "Aun sin la tabla, si el FRENTE del envase imprime cifras (kcal, proteina, gramos por porcion, porciones por "
+    "envase), copialas en 'description' TAL CUAL con su base, precedidas de 'del frente:' (ej: 'del frente: 1250 kcal "
+    "en 2 porciones; 50 g de proteina por porcion; 56 porciones'). "
     "SI ES 'otro': is_food=false, macros en 0, meal_name vacio, items vacio. "
     # [P1-VISION-PLATO-ITEMS · 2026-08-07] Antes decia "deja items vacio" para
     # 'plato', asi que escanear comida NUNCA podia descontar la Nevera: el

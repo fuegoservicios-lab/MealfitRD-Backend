@@ -50,9 +50,23 @@ compra, `_POTE_EN_LA_COMPRA`). Sin tabla legible va SIN etiqueta —un ganador d
 completarlo; con el pote guardado no se pregunta si se lo tomó. Una barra o una batida lista (UNA porción) siguen el
 camino de siempre. Las frases no nombran la Nevera: la tool decide sola si está apagada.
 
+## Sin la tabla: el frente del envase y, si no, internet (P1-PLAN-LOTE-767)
+
+El dueño: «¿el agente no puede investigar la tabla nutricional de esa proteína?». Orden del coach cuando la foto de un
+pote no deja leer su tabla: 1) las cifras que el FRENTE imprime (el escáner las copia en la descripción con `del
+frente:` y su base tal cual; los números del escáner siguen en 0) → `guardar_suplemento(fuente='frente')`, y
+`suplementos.completar_desde_el_frente` estima carbohidratos, grasa (6 % de las kcal) y, si faltan, los gramos;
+2) `buscar_etiqueta_en_internet` → `etiqueta_web.py`: Gemini 3.8 Flash con la búsqueda de Google por
+`/v1beta/interactions` (por `generateContent` contestaba sin buscar), «COMO MÁXIMO 3 búsquedas» (sin tope hizo 43),
+caché por PRODUCTO en `app_kv_store` (90 días; «no encontrado», 14), topes por usuario y globales al día, gasto en
+`llm_usage_events` (`node='etiqueta_web'`); 3) sin etiqueta y la foto de la tabla. Probado contra la API real el
+29-sep: el Atlas Gainer de Patriot Nutrition NO está publicado; el Gold Standard de Optimum sí. Tercera costura del
+blanket anti-Gemini (`[P1-PLAN-LOTE-767-ETIQUETA-WEB]`). Knobs `MEALFIT_ETIQUETA_WEB*`.
+
 ## Pruebas
 
 Backend: `test_p1_plan_lote_690.py`, `_692`, `_693`, `_694`. Frontend: `lote690.test.jsx`, `lote691.test.js`,
 `lote695.test.jsx`. Batería real en seco (`scripts/coach_battery`, casos P1-P5): rótulo, dudas contestadas, pregunta,
 «todavía no me lo como», respuesta escrita. Casos P6-P8 (765): pote sin tabla, pote con tabla + «me tomé 2 scoops», barra.
-`test_p1_plan_lote_765.py`; la batería simula `guardar_suplemento` (antes escribía en la Alacena real).
+`test_p1_plan_lote_765.py`; la batería simula `guardar_suplemento` (antes escribía en la Alacena real). Casos P9-P10 (767): cifras del frente,
+encontrada en internet; `test_p1_plan_lote_767.py`.
