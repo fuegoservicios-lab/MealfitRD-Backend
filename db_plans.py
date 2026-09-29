@@ -203,6 +203,10 @@ def upsert_guest_plan(session_id: str, plan_data: dict) -> bool:
         return False
     try:
         import json as _json
+        # [P1-PLAN-LOTE-818 · 2026-09-29] Sin la huella del 813: este camino guarda el `result` crudo del pipeline, sin
+        # pasar por el postprocess. Copia superficial: el dict del llamador no cambia.
+        plan_data = dict(plan_data)
+        __import__("mutadores_de_contenido").retirar_claves_privadas(plan_data)
         execute_sql_write(
             """
             INSERT INTO app_kv_store (key, value, updated_at)
@@ -1771,6 +1775,9 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False,
                     "entrada para que la herencia use el cursor óptimo."
                 )
 
+    # [P1-PLAN-LOTE-818 · 2026-09-29] La fila es lo que lee la caché semántica (`match_similar_plan`): la huella del 813
+    # no llega aunque el llamador salte el escudo (`skip_plan_data_finalize`). No-op si el escudo ya la retiró.
+    __import__("mutadores_de_contenido").retirar_claves_privadas(data.get("plan_data"))
     cols = list(data.keys())
     vals = []
     for col, v in zip(cols, data.values()):
@@ -1941,6 +1948,7 @@ def fill_placeholder_meal_plan_atomic(plan_id: str, user_id: str, insert_data: d
         return None
     # [P0-FILL-FENCED] El token sale del plan ANTES de escribir: es de transporte, no del contenido.
     _fence = pd_new.pop("_chunk_fence", None)
+    __import__("mutadores_de_contenido").retirar_claves_privadas(pd_new)  # [P1-PLAN-LOTE-818] ni la huella del 813
     _fence = _fence if isinstance(_fence, dict) and _fence.get("task_id") is not None else None
     _PRESERVE = ("_run_id", "_lifetime_lessons_history", "_lifetime_lessons_summary",
                  "_lifetime_lessons_inherited_from", "_placeholder_created_at")

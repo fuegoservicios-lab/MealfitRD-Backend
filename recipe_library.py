@@ -532,10 +532,20 @@ def _dish_provenance_v2(days, country: str, idx_reg: dict) -> dict:
 def dish_provenance(days, country: str = "DO") -> dict:
     """Cuántos platos servidos vienen del catálogo. Fail-open: ante cualquier fallo, ceros y `None`.
 
-    `tasa` es `aplicables / total` —el rendimiento real de la costura—, no `del_registry / total`:
-    prometer el número optimista es cómo un informe acaba afirmando algo que no ocurrió.
-    [P1-PLAN-LOTE-814] Con `MEALFIT_REGISTRY_PROVENANCE_V2` resuelve por id declarado y lee con el lector
-    tolerante del medidor (`_dish_provenance_v2`); apagado, el camino de abajo, byte a byte.
+    Tres cuentas que NO son la misma: `del_registry` (PROCEDENCIA: el plato salió del catálogo), `con_receta` (su
+    plantilla tiene pasos escritos) y `aplicables` (además trae los alimentos de su plantilla). `tasa` es
+    `aplicables / total`, nunca `del_registry / total`.
+
+    [P1-PLAN-LOTE-818 · 2026-09-29] Qué mide `aplicables` depende del knob `MEALFIT_REGISTRY_PROVENANCE_V2`:
+      · apagado (v1, el camino de abajo, byte a byte): nombre exacto y `_foods_de_comida`, el MISMO comparador que
+        `apply_library_recipe`, así que `tasa` predice lo que la costura sustituiría (contrato en
+        test_p1_fidelidad_plato_del_registry::test_el_medidor_predice_a_la_costura).
+      · encendido (v2, default; `_dish_provenance_v2`, P1-PLAN-LOTE-814): resuelve por id declarado
+        (`_template_id`), así que cuenta también el plato RENOMBRADO, y lee las líneas con el lector tolerante del
+        medidor. `aplicables` ⊇ lo que la costura aceptaría: `tasa` es fidelidad a la plantilla, ya no el
+        rendimiento de la costura (que además no tiene llamadores en producción).
+    La pregunta de flota («¿se usa el catálogo?») la contesta la PROCEDENCIA, `del_registry / total`: es la tasa
+    que juzga la alerta `registry_dishes_unused` en v2 (`registry_dish_alert`), no esta `tasa`.
     """
     vacio = {"total": 0, "del_registry": 0, "con_receta": 0, "aplicables": 0, "tasa": None}
     try:

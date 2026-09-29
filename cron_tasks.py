@@ -6365,8 +6365,9 @@ def _review_failed_delivered_rate_alert_job():
 def _registry_dish_rate_alert_job():
     """[P1-FIDELIDAD-PLATO-DEL-REGISTRY · 2026-09-09] ¿El catálogo de platos se está USANDO?
 
-    El informe de fidelidad ya publica `registry_dish_rate` (fracción de platos servidos que la
-    costura sustituiría de verdad). Este cron lo vigila a nivel flota.
+    El informe de fidelidad publica `registry_dish_rate` (= `dish_provenance.tasa`, aplicables/total).
+    Este cron lo vigila a nivel flota. [P1-PLAN-LOTE-818] Con v2 el `registry_dish_rate` del TICK es la
+    PROCEDENCIA (del catálogo/total, por entregas), no esa tasa: lo dice `registry_dish_rate_basis`.
 
     **Sólo corre con `MEALFIT_RECIPE_LIBRARY_SELECT` encendido, a propósito.** Con el knob apagado
     el prompt dice «o una variante equivalente» y una tasa de 0 es el comportamiento PEDIDO —
@@ -6482,6 +6483,8 @@ def _registry_dish_rate_alert_job():
                 """,
                 (_rate if _rate is not None else -1.0,
                  json.dumps({"n_runs": _n, "registry_dish_rate": _rate, "alert_emitted": _alert_emitted,
+                             # [P1-PLAN-LOTE-818] misma clave, dos significados: v2 procedencia, v1 aplicables.
+                             "registry_dish_rate_basis": "provenance" if _v2 else "applicable",
                              "skip_reason": _skip, "floor": floor, "lookback_h": lookback_h, **_tick_v2},
                             ensure_ascii=False)),
             )

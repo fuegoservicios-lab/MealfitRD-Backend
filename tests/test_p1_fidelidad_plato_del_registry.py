@@ -43,7 +43,6 @@ acaba afirmando algo que no ocurrió — el defecto que `P1-REVIEW-KIND-HONEST` 
    dos funciones reales en vez de confiar en que sigan pareciéndose.
 """
 import json
-import os
 
 import pytest
 
@@ -135,7 +134,7 @@ def test_el_nombre_casa_pero_la_comida_es_otra():
     assert p["tasa"] == 0.0, "la tasa publica el número pesimista, no el halagüeño"
 
 
-def test_el_medidor_predice_a_la_costura():
+def test_el_medidor_predice_a_la_costura(monkeypatch):
     """El contrato entero: `aplicables` == cuántas veces `apply_library_recipe` diría que sí.
 
     Si alguien cambia una de las dos normalizaciones, esta prueba cae antes de que producción
@@ -143,25 +142,22 @@ def test_el_medidor_predice_a_la_costura():
     """
     # [P1-PLAN-LOTE-814] Contrato EXACTO del medidor v1. El v2 lee con su propio lector tolerante y cuenta
     # ⊇ la costura (test_p1_plan_lote_814::test_v2_nunca_cuenta_menos_aplicables_que_la_costura).
-    os.environ["MEALFIT_REGISTRY_PROVENANCE_V2"] = "0"
+    # [P1-PLAN-LOTE-818] Con monkeypatch: si `_plantillas_reales` lanzaba, el knob se quedaba en "0" para los
+    # tests siguientes (el `os.environ` iba fuera del try).
+    monkeypatch.setenv("MEALFIT_REGISTRY_PROVENANCE_V2", "0")
     platos = _plantillas_reales(5)
     if not platos:
-        os.environ.pop("MEALFIT_REGISTRY_PROVENANCE_V2", None)
         pytest.skip("el registry no está en el árbol")
     impostor = {"name": platos[0]["name"], "ingredients": ["200 g de Piedras"]}
     ajeno = {"name": "Plato que no existe en ningún catálogo", "ingredients": []}
     comidas = [dict(m) for m in platos] + [impostor, ajeno]
 
-    try:
-        medido = rl.dish_provenance([{"meals": comidas}])["aplicables"]
-    finally:
-        os.environ.pop("MEALFIT_REGISTRY_PROVENANCE_V2", None)
+    medido = rl.dish_provenance([{"meals": comidas}])["aplicables"]
+    monkeypatch.delenv("MEALFIT_REGISTRY_PROVENANCE_V2")
 
-    os.environ["MEALFIT_RECIPE_LIBRARY_SELECT"] = "1"
-    try:
-        sustituidas = sum(1 for m in comidas if rl.apply_library_recipe(dict(m)))
-    finally:
-        os.environ.pop("MEALFIT_RECIPE_LIBRARY_SELECT", None)
+    monkeypatch.setenv("MEALFIT_RECIPE_LIBRARY_SELECT", "1")
+    sustituidas = sum(1 for m in comidas if rl.apply_library_recipe(dict(m)))
+    monkeypatch.delenv("MEALFIT_RECIPE_LIBRARY_SELECT")
 
     assert medido == sustituidas, (
         f"el medidor dice {medido} y la costura sustituye {sustituidas}: el informe estaría "

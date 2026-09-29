@@ -78,6 +78,9 @@ def aplicar(result, ck=None) -> None:
     if not isinstance(result, dict):
         return
     log = go.logger
+    # [P1-PLAN-LOTE-818 · 2026-09-29] La telemetría de duplicados se ACUMULA dentro de una corrida (antes y detrás de la
+    # cadena), no entre corridas: una re-entrada sobre el mismo dict heredaba las fusiones de la anterior.
+    result.pop("_duplicate_food_lines_merged", None)
 
     # [P1-PHANTOM-INGREDIENT · 2026-07-24] Dirección INVERSA del validador de coherencia.
     # DEBE correr antes de construir la lista de compras (la línea insertada tiene que llegar a la lista) y antes del
@@ -160,9 +163,26 @@ _SUPERFICIES_DE_GENERACION = frozenset({"assemble-tail", "assemble-budget-conver
                                         "post-review-patch"})
 _CLAVE_SALIDA = "_cadena_salida_813"   # {"h", "surface"} de la última cadena de generación; el pre-INSERT la RETIRA
 _CLAVE_CTX = "_cadena_ctx_813"         # contexto de la corrida en curso; `salida_cadena` lo retira siempre
+# [P1-PLAN-LOTE-818 · 2026-09-29] Las claves de ESTE instrumento no salen de la generación. El pre-INSERT trabaja sobre
+# una COPIA, así que el `result` original las llevaba al cliente (SSE/sync), a la KV del invitado y, de vuelta, a la fila
+# por `restore-local` (la fila es lo que lee la caché semántica). Lista y helper únicos; los puntos de salida los llaman
+# DESPUÉS de persistir: antes, el pre-INSERT no vería la huella y `input_equals_chain_out` quedaría en None.
+# tooltip-anchor: P1-PLAN-LOTE-818-HUELLA-FUERA
+CLAVES_PRIVADAS = (_CLAVE_SALIDA, _CLAVE_CTX)
 # Lo que la cadena puede cambiar de una comida. Fuera a propósito: `date`/`day_name` y `_display`, que se estampan
 # entre la generación y el guardado y harían «distinto» un plato idéntico.
 _CAMPOS = ("meal", "name", "ingredients", "ingredients_raw", "recipe", "cals", "protein", "carbs", "fats")
+
+
+def retirar_claves_privadas(plan_data) -> int:
+    """[P1-PLAN-LOTE-818] Quita de `plan_data`, en su sitio, las claves de `CLAVES_PRIVADAS`. Devuelve cuántas quitó
+    (0 si no es dict). Fail-safe."""
+    if not isinstance(plan_data, dict):
+        return 0
+    quitadas = [k for k in CLAVES_PRIVADAS if k in plan_data]
+    for k in quitadas:
+        plan_data.pop(k, None)
+    return len(quitadas)
 
 
 def huella_days(days):
