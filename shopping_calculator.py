@@ -3553,6 +3553,12 @@ UNIT_PLURALS = {
     'ud.': 'Uds.',
 }
 
+#: [P1-PLAN-LOTE-882] piezas naturales que se compran enteras: (singular, plural)
+_PIEZAS_ENTERAS_882 = {u: (s, p) for s, p in (("tallo", "tallos"), ("hoja", "hojas"), ("rama", "ramas"),
+                                              ("ramita", "ramitas"), ("pieza", "piezas"), ("diente", "dientes"))
+                       for u in (s, p)}
+
+
 def get_plural_unit(num, u):
     if num <= 1 or not u: return u
     # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidades con sufijo parentético, p.ej.
@@ -5753,6 +5759,11 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         if raw_qty > 0:
             if unit_str in ['unidad', 'unidades', 'paquete', 'paquetes', 'lata', 'latas', 'sobre', 'sobres', 'frasco', 'pote', 'potes', 'cartón', 'carton', 'botella', 'botellas', 'envase', 'envases', 'funda', 'fundas', 'fundita', 'funditas', 'mazo', 'mazos', 'cabeza', 'cabezas']:
                 q_rounded = f"{math.ceil(raw_qty)}"
+            elif unit_str in _PIEZAS_ENTERAS_882:
+                # [P1-PLAN-LOTE-882] «1.17 tallo de Apio», «3.5 hojas de Repollo»: una pieza natural se compra entera
+                # (62 y 14 de 825 listas del corpus); el plural sigue al número redondeado
+                q_rounded = f"{max(1, math.ceil(raw_qty - 1e-9))}"
+                unit_str = _PIEZAS_ENTERAS_882[unit_str][0 if q_rounded == "1" else 1]
             else:
                 q_rounded = f"{raw_qty:.2f}".rstrip('0').rstrip('.')
             if q_rounded == "": q_rounded = "1"
