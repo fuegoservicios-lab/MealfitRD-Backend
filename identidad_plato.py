@@ -307,6 +307,9 @@ def objetivos_de(plan_data) -> Optional[dict]:
     techo = __import__("recorte_renal").techo_renal(plan_data)
     if techo > 0:
         out["proteina_techo"] = techo
+    _conds = __import__("tope_clinico").condiciones_de(plan_data)   # [P1-PLAN-LOTE-915] sin la clave = no se sabe
+    if _conds is not None:
+        out["condiciones"] = _conds
     return out
 
 
@@ -320,7 +323,8 @@ def _margen_del_dia(meals, objetivos) -> Optional[dict]:
     techo_p = float(objetivos.get("proteina_techo") or 0)
     prot = sum(_num(m.get("protein")) for m in meals if isinstance(m, dict))
     return {"kcal": float(objetivos["kcal"]) * t_k - kcal, "grasa": float(objetivos["grasa"]) * t_g - grasa,
-            "proteina": (techo_p - prot) if techo_p > 0 else float("inf")}   # [P1-PLAN-LOTE-257]
+            "proteina": (techo_p - prot) if techo_p > 0 else float("inf"),   # [P1-PLAN-LOTE-257]
+            "condiciones": objetivos.get("condiciones")}                     # [P1-PLAN-LOTE-915]
 
 
 def _lineas_de(lineas, canon, index) -> tuple:
@@ -335,6 +339,25 @@ def _lineas_de(lineas, canon, index) -> tuple:
             idx.append(i)
             gramos += sum(v for k, v in c.items() if k[0] == canon and k[1] == "g")
     return idx, gramos
+
+
+def _con_tope(piso, linea, condiciones) -> int:
+    """[P1-PLAN-LOTE-915] El piso de identidad, sin pasar del tope clínico de la línea (`tope_clinico`)."""
+    tope = __import__("tope_clinico").tope_de_linea(linea, condiciones)
+    return int(piso) if tope is None else min(int(piso), int(tope))
+
+
+def _traza(margen=None) -> float:
+    """Gramos de grasa o de proteína por debajo de los cuales una subida no gasta techo; -1 (nada es inapreciable) con
+    el knob apagado, si no se sabe qué condiciones tiene el plan o si tiene enfermedad renal (potasio y fósforo)."""
+    try:
+        from knobs import _env_bool
+        conds = (margen or {}).get("condiciones")
+        if conds is None or __import__("tope_clinico").es_renal(conds):
+            return -1.0
+        return _INAPRECIABLE_G if _env_bool("MEALFIT_IDENTITY_RAISE_TRACE_FAT", True) else -1.0
+    except Exception:                                                          # noqa: BLE001
+        return -1.0
 
 
 def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
@@ -359,24 +382,33 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
     _huevo = _hu.tipo(canon)
     if _huevo:
         piso = _hu.piso_en_gramos(canon, piso, db)
+    # [P1-PLAN-LOTE-915] la subida no deshace un tope clínico: «↑50→100 g de Guineo» en bariátrica (tope 50 g)
+    piso = _con_tope(piso, ings[i_d[0]], margen.get("condiciones"))
     if g_cur <= 0 or g_cur >= piso - (0.5 if _huevo else 0.0):
         return None                      # sin gramos legibles no se toca; y nunca se baja
     mac = db.macros_from_ingredient_string(f"{piso - g_cur:.0f} g de {canon}") or {}
     dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
     dp, m_p = float(mac.get("protein") or 0), margen.get("proteina", float("inf"))   # [P1-PLAN-LOTE-257]
     objetivo = piso
-    if dk > 0 and (dk > margen["kcal"] or dg > margen["grasa"] or dp > m_p):
+    # [P1-PLAN-LOTE-915 · 2026-09-29] Lo inapreciable no gasta techo: «Nabo crujiente…» con 30 g de nabo no subía a
+    # sus 100 g porque el día estaba una décima sobre su grasa, y 70 g de nabo traen 0,07 g. Es la regla del 584 (lo
+    # que FALTA en la lista) para lo PRESENTE bajo su piso. Lo que trae grasa de verdad (15 g de avena = 1 g) sigue
+    # esperando su sitio. Knob `MEALFIT_IDENTITY_RAISE_TRACE_FAT` (True). tooltip-anchor: P1-PLAN-LOTE-915
+    _tz = _traza(margen)
+    if dk > 0 and (dk > margen["kcal"] or _tz < dg > margen["grasa"] or _tz < dp > m_p):
         # [P1-PLAN-LOTE-178] lo que quepa, si con eso el plato sale de las migajas (≥ la mitad del piso): «5 g de aguacate»
         # → 30 g cuando no caben los 60. tooltip-anchor: P1-PLAN-LOTE-178-SUBIDA-PARCIAL
-        frac = min(margen["kcal"] / dk, (margen["grasa"] / dg) if dg > 0 else 1.0, (m_p / dp) if dp > 0 else 1.0)
+        frac = min(margen["kcal"] / dk, (margen["grasa"] / dg) if dg > max(0.0, _tz) else 1.0,
+                   (m_p / dp) if dp > max(0.0, _tz) else 1.0)
         objetivo = int(g_cur + (piso - g_cur) * max(0.0, frac))
-        if objetivo >= piso * 0.5 and objetivo > g_cur + 1:
+        # [P1-PLAN-LOTE-915] …y si la subida se nota: «60→66 g de yuca» no le cambia el plato a nadie
+        if objetivo >= piso * 0.5 and objetivo > g_cur + 1 and (_tz < 0 or objetivo - g_cur >= 0.25 * (piso - g_cur)):
             mac = db.macros_from_ingredient_string(f"{objetivo - g_cur:.0f} g de {canon}") or {}
             dk, dg = float(mac.get("kcal") or 0), float(mac.get("fats") or 0)
             dp = float(mac.get("protein") or 0)
         else:
             dk = -1.0
-    if dk <= 0 or dk > margen["kcal"] + 0.5 or dg > margen["grasa"] + 0.05 or dp > m_p + 0.5:
+    if dk <= 0 or dk > margen["kcal"] + 0.5 or _tz < dg > margen["grasa"] + 0.05 or _tz < dp > m_p + 0.5:
         logger.info(f"🧩 [P1-PLAN-LOTE-49] «{str(meal.get('name'))[:40]}»: {canon} en {g_cur:.0f} g (piso {piso}) y el día "
                     f"no tiene sitio (quedan {margen['kcal']:.0f} kcal y {margen['grasa']:.1f} g de grasa"
                     + (f"; {m_p:.1f} g de proteína bajo el techo renal)" if m_p != float("inf") else ")"))
@@ -538,7 +570,7 @@ def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional
     alimento = alimento.strip()
     if _choca_alergia(alimento, allergies):
         return None
-    piso = _piso_de(alimento, db)
+    piso = _con_tope(_piso_de(alimento, db), alimento, (margen or {}).get("condiciones"))   # [P1-PLAN-LOTE-915]
     if not piso:
         return None
     nueva = f"{piso} g de {alimento}"
@@ -637,7 +669,7 @@ def _anadir_faltantes(meal: dict, index: dict, db, allergies, margen, fase) -> l
             continue                     # la especie del paso es la proteína genérica de la lista
         if fase is not None and _es_proteico(canon, db) != (fase == "proteina"):
             continue
-        piso = _piso_de(canon, db)
+        piso = _con_tope(_piso_de(canon, db), canon, margen.get("condiciones"))   # [P1-PLAN-LOTE-915]
         if not piso:
             continue
         if allergies:
@@ -905,7 +937,7 @@ def compensar_dia(meals, index, db, allergies=None, objetivos=None) -> int:
             canon = str(claves[0][0])
             if _choca_alergia(canon, allergies) or __import__("huevo_en_unidades").tipo(canon):
                 continue                 # [P1-PLAN-LOTE-801] el huevo no es migaja que se pague en gramos
-            piso = _piso_de(canon, db)
+            piso = _con_tope(_piso_de(canon, db), linea, (objetivos or {}).get("condiciones"))   # [P1-PLAN-LOTE-915]
             try:
                 g = float(db.grams_from_ingredient_string(linea) or 0)
             except Exception:                                                  # noqa: BLE001
@@ -955,7 +987,8 @@ def compensar_dia(meals, index, db, allergies=None, objetivos=None) -> int:
                 pass
             m2.pop("_display", None)
             _delta(m2, l2, nueva, db)
-        sub = _subir_linea(m, canon, objetivo, index, db, {"kcal": dk + 1.0, "grasa": 1e9})
+        sub = _subir_linea(m, canon, objetivo, index, db, {"kcal": dk + 1.0, "grasa": 1e9,
+                                                         "condiciones": (objetivos or {}).get("condiciones")})
         if sub:
             m.pop("_display", None)
             _delta(m, vieja, f"{objetivo} g de {canon}", db)
