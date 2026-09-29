@@ -583,6 +583,7 @@ from prompts.chat_agent import (
     build_vision_context,
     CHAT_AGENT_INLINE_PROMPT,
     CHAT_VOICE_MODE_PROMPT,
+    CHAT_VOICE_MODE_RECORDATORIO,
     CHAT_STREAM_INLINE_PROMPT,
     build_temporal_context,
     build_circadian_context,
@@ -4288,6 +4289,10 @@ class ChatState(MessagesState):
     # de su reintento (`nudge_photo_to_log`). Declaradas por lo mismo que las de arriba: fuera del schema se pierden.
     turn_photo_to_log: bool
     photo_log_retried: bool
+    # [P1-PLAN-LOTE-686 · 2026-09-28] Turno del MODO VOZ: `call_model` apaga el razonamiento del proveedor (el alterno
+    # razonaba ~1.000 tokens invisibles antes de anotar: 7,8 s en la prueba del dueño). Del TURNO: los dos `inputs` lo
+    # fijan siempre (sin reducer, un valor viejo del checkpoint se heredaría en el turno siguiente).
+    modo_voz: bool
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -4390,6 +4395,20 @@ def _is_client_request_error(exc: BaseException) -> bool:
     return 400 <= status < 500 and status not in (408, 429)
 
 
+def _kwargs_de_razonamiento_modo_voz(state) -> dict:
+    """[P1-PLAN-LOTE-686 · 2026-09-28] En el MODO VOZ, sin razonamiento del proveedor: con el proveedor alterno (el del
+    coach hoy, `MEALFIT_LLM_PROVIDER`) el razonamiento va encendido por defecto y, en la prueba del dueño, pensó ~1.000
+    tokens invisibles antes de anotar «plátano con cuatro huevos» (7,8 s de 10,3). En voz manda la rapidez y las
+    tareas son cortas (anotar, contestar). `thinking.type=disabled` es seguro con los tres: el alterno lo apaga, GLM lo
+    traduce a esfuerzo `low` (no se puede apagar) y OpenAI lo quita (ver `llm_provider`). Knob
+    `MEALFIT_COACH_VOZ_SIN_RAZONAMIENTO` (default True) para revertir."""
+    if not (state or {}).get("modo_voz"):
+        return {}
+    if not _env_bool("MEALFIT_COACH_VOZ_SIN_RAZONAMIENTO", True):
+        return {}
+    return {"extra_body": {"thinking": {"type": "disabled"}}}
+
+
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
@@ -4405,6 +4424,7 @@ def call_model(state: ChatState):
         model=_chat_agent_model_name(_model_uid),
         temperature=0.7,
         timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+        **_kwargs_de_razonamiento_modo_voz(state),
     )
     llm_with_tools = chat_llm.bind_tools(agent_tools)
 
@@ -7187,6 +7207,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # hilo seguirían en el checkpoint y el guard de la foto dispararía sobre un turno sin foto.
         "turn_plate_photos": [],
         "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
+        "modo_voz": False,            # [P1-PLAN-LOTE-686] el chat sin stream nunca es modo voz
         "photo_log_retried": False,
         "plate_photo_retried": False,
     }
@@ -7508,8 +7529,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                                          contador_sin_plan=_contador_sin_plan)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
@@ -7520,8 +7539,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         system_prompt = _base_inline
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
@@ -7770,6 +7787,15 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # P1-CHAT-PAUSED-PROMPT-BLOCKS): la directiva de idioma repetida como ÚLTIMO
     # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
     # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
+    # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+    # [P1-PLAN-LOTE-687 · 2026-09-28] …y va al FINAL, UNA vez para las dos ramas: a mitad del prompt (posición 25.595
+    # de 36.550, con el diario, el plan y los días anteriores detrás) el modelo no la vio y contestó «No me llegó el
+    # detalle de esa foto» a una foto de plato perfectamente analizada.
+    system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
+    # [P1-PLAN-LOTE-686 · 2026-09-28] Modo voz: el recordatorio de las reglas V al FINAL, detrás de todos los bloques de
+    # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
+    if is_call_mode:
+        system_prompt += CHAT_VOICE_MODE_RECORDATORIO
     try:
         # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
         system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
@@ -7823,6 +7849,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "plate_photo_retried": False,
         # [P1-PLAN-LOTE-694] ¿este turno es anotar la foto? (dudas contestadas o texto-rótulo)
         "turn_photo_to_log": _foto_para_anotar(vision, prompt),
+        "modo_voz": bool(is_call_mode),   # [P1-PLAN-LOTE-686]
         "photo_log_retried": False,
     }
 

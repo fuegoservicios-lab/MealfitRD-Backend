@@ -36,7 +36,7 @@ def test_lleva_los_tres_bloques_compartidos_y_no_el_formato_visual():
 def test_las_reglas_de_voz_van_al_final_y_mandan():
     assert CHAT_VOICE_MODE_PROMPT.endswith(_CHAT_CALL_MODE_RULES)
     assert "MANDA SOBRE LOS TOPES DE LONGITUD Y EL FORMATO DE ARRIBA" in _CHAT_CALL_MODE_RULES
-    for regla in ("V1. SIN FORMATO", "V2. MUY BREVE", "V3. CIFRAS PARA EL OÍDO", "V4. LO QUE LLEGA VIENE DEL RECONOCIMIENTO",
+    for regla in ("V1. SIN FORMATO", "V2. MUY BREVE", "V3. SIN CIFRAS SALVO QUE LAS PIDA", "V4. LO QUE LLEGA VIENE DEL RECONOCIMIENTO",
                   "V5. REGISTRAR HABLANDO", "V6. UNA sola pregunta", "V7. TEMAS DE RIESGO"):
         assert regla in _CHAT_CALL_MODE_RULES, regla
 

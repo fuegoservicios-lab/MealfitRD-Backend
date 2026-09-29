@@ -249,7 +249,8 @@ def test_los_dos_caminos_del_chat_no_leen_el_inventario_apagado():
         assert cuerpo.count("_nevera_on = _nevera_activa_para_chat(user_id)") == 1, fn
         assert cuerpo.index("_nevera_on = _nevera_activa_para_chat(user_id)") < cuerpo.index("system_prompt ="), fn
     stream = src[src.index("def chat_with_agent_stream("):]
-    assert stream.count("system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)") == 2
+    # [P1-PLAN-LOTE-687] UN bloque al final, común a las dos ramas (a mitad del prompt el modelo no lo veía)
+    assert stream.count("system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)") == 1
 
 
 def test_las_tools_de_nevera_responden_desactivada():

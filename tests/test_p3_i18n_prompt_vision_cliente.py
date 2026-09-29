@@ -58,8 +58,11 @@ def test_el_bloque_va_al_system_prompt_en_las_dos_ramas():
     assert "vision: Optional[dict] = None" in src.split("def chat_with_agent_stream", 1)[1][:600]
     cuerpo = src.split("def chat_with_agent_stream", 1)[1]
     # [P1-NEVERA-OPCIONAL · 2026-09-23] sin el paréntesis de cierre: el estado de la Nevera viaja como kwarg
-    assert cuerpo.count("system_prompt += build_vision_context(vision") == 2, (
-        f"el bloque de la foto tiene que ir en la rama static-prefix Y en la legacy [{_MARKER}]")
+    # [P1-PLAN-LOTE-687] UN bloque al FINAL, común a la rama static-prefix Y a la legacy: a mitad del prompt el modelo
+    # no lo veía. Sigue en el SYSTEM prompt (el turno del usuario no lleva instrucciones).
+    assert cuerpo.count("system_prompt += build_vision_context(vision") == 1, (
+        f"el bloque de la foto va una vez, tras las dos ramas [{_MARKER}]")
+    assert cuerpo.index("system_prompt += build_vision_context(vision") > cuerpo.index("DIARIO DE HOY")
     router = (_BACKEND / "routers" / "chat.py").read_text(encoding="utf-8")
     assert 'data.get("vision")' in router and "vision=vision," in router
 

@@ -182,13 +182,23 @@ _CHAT_CALL_MODE_RULES = """
 
 MODO VOZ (MANDA SOBRE LOS TOPES DE LONGITUD Y EL FORMATO DE ARRIBA): el usuario te HABLA con su voz y ESCUCHA tu respuesta en voz alta; no la lee.
 V1. SIN FORMATO: nada de negritas, viñetas, listas, tablas, encabezados, enlaces ni emojis. Frases corridas que suenen naturales dichas en voz alta.
-V2. MUY BREVE: de una a tres frases cortas, como mucho unas 45 palabras. Si pide una receta, un menú o una lista, di lo esencial en dos frases y ofrécele dejárselo escrito en el chat.
-V3. CIFRAS PARA EL OÍDO: redondea y di la unidad completa ("unas 650 calorías", "unos 30 gramos de proteína"); nunca abreviaturas (kcal, g, ml) ni símbolos (~, %, /). Di "unas" o "aproximadamente" en lugar del "~".
-V4. LO QUE LLEGA VIENE DEL RECONOCIMIENTO DE VOZ y puede traer palabras mal escritas: interprétalo con sentido común (un plato conocido mal transcrito es ese plato). Si el alimento o la cantidad que vas a registrar siguen sin estar claros, pregunta en una frase antes de registrar.
-V5. REGISTRAR HABLANDO: si cuenta algo que YA comió, regístralo como siempre (regla 4 de brevedad) y confírmale en una frase qué anotaste y cuánto suma. Si habla de algo que VA a comer, pregunta una sola vez si se lo anotas cuando lo coma.
-V6. UNA sola pregunta, al final, y solo si hace falta para seguir. Sin saludos ni despedidas.
+V2. MUY BREVE: una o dos frases cortas, como mucho unas 25 palabras. Si pide una receta, un menú o una lista, di lo esencial en una frase y ofrécele dejárselo escrito en el chat.
+V3. SIN CIFRAS SALVO QUE LAS PIDA: no digas calorías, gramos, macros, totales del día ni lo que le falta, aunque las reglas de arriba (la 5 de brevedad, la P, la R) o los bloques de contexto los traigan. Solo si el usuario lo pide en ESTE mensaje, di la cifra que pidió, redondeada y con la unidad completa ("unas 650 calorías"), nunca abreviaturas ni símbolos.
+V4. LO QUE LLEGA VIENE DEL RECONOCIMIENTO DE VOZ y puede traer palabras mal escritas: interprétalo con sentido común (un plato conocido mal transcrito es ese plato). Si no sabes QUÉ comió, pregunta en una frase antes de registrar; la cantidad que no dijo NO se pregunta: usa la porción típica.
+V5. REGISTRAR HABLANDO: si cuenta algo que YA comió, llama a la herramienta de registro DE INMEDIATO, sin escribir ni razonar nada antes (regla 3 de brevedad). Después, UNA frase con lo que anotaste, solo los nombres y sin cifras ("Listo, anoté tu cena: plátano maduro con cuatro huevos revueltos."). Si habla de algo que VA a comer, pregunta una sola vez si se lo anotas cuando lo coma.
+V6. UNA sola pregunta, al final, y solo si una duda cambia el registro o hace falta para seguir. Sin saludos ni despedidas.
 V7. TEMAS DE RIESGO (síntomas, medicamentos, alergias, embarazo, ayunos): aplica las reglas I y L en su versión más corta y dile que en el chat le queda escrito.
+V8. SIN CONSEJOS QUE NO PIDIÓ: no comentes cómo va su día, si se pasó de algo ni qué le conviene comer, salvo que te lo pregunte o sea un riesgo (V7).
 """
+
+# [P1-PLAN-LOTE-686 · 2026-09-28] El mismo mandato, al FINAL del prompt (justo antes del refuerzo de idioma, que sigue
+# siendo lo último). Las reglas V viven en medio de ~20.000 tokens y, detrás de ellas, bloques de contexto con cifras
+# («LO QUE LE FALTA HOY», totales del diario): en la prueba del dueño (28-sep) el modelo respondió en voz con negritas,
+# cuatro cifras de macros y el total del día. El dueño: «debe apuntar veloz, responder conciso y, si necesita algo,
+# preguntar las dudas; no explica calorías ni macros a menos que el usuario lo pida».
+CHAT_VOICE_MODE_RECORDATORIO = """
+
+RECORDATORIO FINAL — MODO VOZ (manda sobre TODO lo anterior): una o dos frases cortas, sin formato ni emojis y SIN CIFRAS (calorías, gramos, macros, totales, lo que le falta) salvo que las pida en este mensaje. Si cuenta algo que ya comió, llama a la herramienta de registro de inmediato, sin razonar por escrito, y confirma en una frase solo lo que anotaste. Pregunta únicamente si no sabes qué comió o si una duda cambia el registro: una pregunta corta al final. Nada de consejos que no pidió."""
 
 # El prompt del stream MENOS su bloque de formato visual: la cabeza (persona y contexto clínico) y la cola compartida
 # (los tres bloques) salen del mismo texto, así que lo que se le añada al stream lo hereda la voz. Los tests de los
@@ -1060,11 +1070,14 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         return ""
     _etiqueta = _ETIQUETA_INSTRUCCION if nevera_activa else _ETIQUETA_INSTRUCCION_SIN_NEVERA
     # [P1-PLAN-LOTE-690] las dudas ya contestadas: fuera de la descripción, ajuste aplicado y la regla de registrar
-    from respuestas_de_la_foto import preparar_vision, instruccion as _instruccion_respuestas, instruccion_rotulo
+    from respuestas_de_la_foto import (preparar_vision, instruccion as _instruccion_respuestas, instruccion_rotulo,
+                                       instruccion_solo_foto)
     vision = preparar_vision(vision)
     _respuestas = _instruccion_respuestas(vision)
     # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto es el RÓTULO del plato (lo marca agent.py con `marcar_rotulo`)
     _respuestas += instruccion_rotulo(vision.get("rotulo") if "rotulo" in vision else None)
+    # [P1-PLAN-LOTE-687] la foto SOLA de un plato claro: se registra (también lo marca `marcar_rotulo`)
+    _respuestas += instruccion_solo_foto(vision)
     kind = str(vision.get("kind"))
     if kind == "multi":
         raw_items = vision.get("items") if isinstance(vision.get("items"), list) else []
