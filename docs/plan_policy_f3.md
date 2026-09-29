@@ -64,6 +64,8 @@ FROM pipeline_metrics WHERE node = 'plan_policy_fidelity' AND created_at > NOW()
 GROUP BY 1, 2;
 ```
 
+**[P1-PLAN-LOTE-815 · 2026-09-29] Tiempo de cocina medido por los pasos y `score_v2`.** La dimensión `prep_time` lee el `prep_time` DECLARADO: en el día determinista es el de la receta (`_prep_time_source`=`receta`/`tecnica`), en el camino del modelo lo escribe el modelo (ahora sellado `llm` en `assemble_plan_node`). Para que esa dimensión pueda fallar donde sirve a todos, el informe lleva `prep_time_steps` —las comidas del modelo con los minutos explícitos de sus pasos (`tiempo_pasos.minutos_de_fuego`, conservador) contra el mismo tope ×1,25: `prep_time_measured`, `prep_time_over`, `over_by_declared`, `understated`, `by_source` (`llm` / `sin_sello`) e `items`— y `score_v2` (media por dimensión; la del tiempo es `1 − fuera/medidas` sobre lo declarado). Ninguno entra en `score` ni en `issues`: el criterio «`score ≥ 0.9` sostenido» sigue leyéndose con el `score` de siempre, y `score_v2` va al lado para decidir si se cambia de vara. `pipeline_metrics.metadata` los lleva aplanados (`score_v2`, `prep_time_llm_meals`, `prep_time_measured`, `prep_time_over`, `prep_time_over_declared`, `prep_time_understated`). Knob `MEALFIT_FIDELITY_PREP_TIME_MEASURED`. Fuera de alcance: el camino que borra las marcas (plan d8b10b05); sus comidas salen como `sin_sello`.
+
 ## Gate de la fase y canary
 
 1. Deploy en `shadow` + `MEALFIT_FIDELITY_GATE=warn`: cada run nace con blueprint, cada chunk con rebanada; la métrica mide sin influir.
