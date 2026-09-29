@@ -25,6 +25,7 @@ puede reproducir, y ningún cambio en él pasa por revisión.
 | `nginx/snippets/bioboros-v2-security.conf` | `/etc/nginx/snippets/bioboros-v2-security.conf` |
 | `systemd/mealfit-backend.service` | `/etc/systemd/system/mealfit-backend.service` |
 | `scripts/publish-marker.sh` | `/opt/mealfit/publish-marker.sh` |
+| `letsencrypt/renewal-hooks/deploy/reload-nginx.sh` | `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` (0755, root; P1-PLAN-LOTE-797: sin él, certbot renueva y nginx sigue sirviendo el certificado viejo) |
 
 ## Qué NO hay aquí, y no por olvido
 
