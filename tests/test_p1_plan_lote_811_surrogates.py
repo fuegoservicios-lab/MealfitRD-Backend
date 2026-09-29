@@ -12,13 +12,16 @@ import ast
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
-_EXCLUIR = {"node_modules", ".venv", "venv", "__pycache__", "tests"}
+_EXCLUIR = {"node_modules", ".venv", "venv", "__pycache__", "tests", "site-packages"}
 
 
 def _constantes_con_surrogates():
     malos = []
     for p in _BACKEND.rglob("*.py"):
-        if _EXCLUIR.intersection(p.relative_to(_BACKEND).parts):
+        partes = p.relative_to(_BACKEND).parts
+        # [P1-PLAN-LOTE-765] y cualquier entorno virtual local (`test_venv/`, `venv-test/`, ignorados por git): en el
+        # árbol principal traen pygments/fontTools con rangos de surrogates en sus regex y tumbaban el gate de 765.
+        if _EXCLUIR.intersection(partes) or any("venv" in x.lower() for x in partes[:-1]):
             continue
         try:
             arbol = ast.parse(p.read_text(encoding="utf-8"))
