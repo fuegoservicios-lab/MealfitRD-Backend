@@ -26,6 +26,10 @@ INTENSITY_WEIGHT = {"ocasional": 0.15, "frecuente": 0.30, "predominante": 0.45}
 MAX_SECONDARY = 2
 MIN_MAIN_WEIGHT = 0.5
 
+# [P1-PLAN-LOTE-748 · 2026-09-28] `slot_affinity["desayuno"]` es la etiqueta A del desayuno beta que VE el modelo
+# (`prompts/asignacion_pais.etiqueta_desayuno`) y pasa por la puerta de alergias: va con el nombre CALIFICADO
+# («tortilla de maíz», «arepa de maíz»). «tortilla» a secas es la de HUEVO (categoría E, `GLOBAL_REVERSE_MAP`) y
+# el vocabulario de alergias no ve el maíz en «arepa»: un alérgico al maíz leía «OBLIGATORIO … (arepa)».
 # Presets: identidad estable (`profile_id`) → datos. `library` = biblioteca de plantillas / registry
 # (`dish_registry.LIBRARIES`), `market_default` = país cuya cocina representa (para el legado y los copys).
 PROFILES: dict[str, dict] = {
@@ -54,7 +58,7 @@ PROFILES: dict[str, dict] = {
         "dish_families": ["tacos", "guisados", "caldos", "enfrijoladas", "chilaquiles", "pozole"],
         "techniques": ["guisado", "asado", "comal", "hervido", "horneado"],
         "flavor_base": ["chile", "cebolla", "ajo", "cilantro", "comino", "epazote", "limón"],
-        "slot_affinity": {"desayuno": ["huevo", "frijoles", "tortilla", "avena"], "almuerzo": ["guisado + arroz + tortilla"], "cena": ["ligero", "sopa"], "merienda": ["fruta", "yogur"]},
+        "slot_affinity": {"desayuno": ["huevo", "frijoles", "tortilla de maíz", "avena"], "almuerzo": ["guisado + arroz + tortilla"], "cena": ["ligero", "sopa"], "merienda": ["fruta", "yogur"]},
         "main_meal": "almuerzo",
     },
     "colombia_casera": {
@@ -63,7 +67,7 @@ PROFILES: dict[str, dict] = {
         "dish_families": ["bandeja", "sancocho", "ajiaco", "arepa", "sudado", "lentejas"],
         "techniques": ["sudado", "guisado", "asado", "hervido", "plancha"],
         "flavor_base": ["hogao", "cebolla", "ajo", "comino", "cilantro", "guascas"],
-        "slot_affinity": {"desayuno": ["arepa", "huevo", "caldo", "avena"], "almuerzo": ["sopa + seco"], "cena": ["ligero"], "merienda": ["fruta", "arepa"]},
+        "slot_affinity": {"desayuno": ["arepa de maíz", "huevo", "caldo", "avena"], "almuerzo": ["sopa + seco"], "cena": ["ligero"], "merienda": ["fruta", "arepa"]},
         "main_meal": "almuerzo",
     },
     "spain_mediterranea": {

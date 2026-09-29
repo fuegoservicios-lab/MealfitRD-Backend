@@ -871,6 +871,14 @@ _S15D_CARB_ROTATION_BETA = (
     "Rota a otro carbohidrato del pool asignado distinto del arroz (NUNCA arroz)."
 )
 
+# [P1-PLAN-LOTE-748 · 2026-09-28] (G24) El MOTIVO del «arroz de noche», no la regla: la prohibición se queda en los seis
+# países; en beta la regla de horario es blanda (`constants.slot_rules_for_country`) y sólo avisa, así que «no se
+# acostumbra en la cena dominicana y el gate lo rechaza» era falso dos veces. Textos en `prompts/asignacion_pais.py`.
+from prompts.asignacion_pais import (  # noqa: E402
+    ARROZ_NOCHE_MOTIVO_DO as _S15D_ARROZ_NOCHE_MOTIVO_DO,
+    ARROZ_NOCHE_MOTIVO_BETA as _S15D_ARROZ_NOCHE_MOTIVO_BETA,
+)
+
 # (target_por_dieta, beta_repl_por_dieta) — mismo shape de fila que _DIET_FRAGMENT_TABLE, pero
 # cada valor es un dict {"balanced"|"vegetarian"|"vegan": fragmento}. `build_day_generator_
 # system_prompt` aplica CADA fila con la columna de dieta activa (`beta_key`, colapsa
@@ -909,6 +917,7 @@ _BETA_FRAGMENT_TABLE = [
     # ── Fase 2, Task 9 (F5): sobrevivientes casabe medidos con el token-set ampliado ─────────
     (_diet_invariant(_S15C_MERIENDA_CASABE_BULLET_DO), _diet_invariant(_S15C_MERIENDA_CASABE_BULLET_BETA)),  # F5a
     (_diet_invariant(_S15D_CARB_ROTATION_DO), _diet_invariant(_S15D_CARB_ROTATION_BETA)),                    # F5b
+    (_diet_invariant(_S15D_ARROZ_NOCHE_MOTIVO_DO), _diet_invariant(_S15D_ARROZ_NOCHE_MOTIVO_BETA)),          # P1-PLAN-LOTE-748
     # ── Task 4 (F1-T4): §16 CONTRATO EXACTO DEL VALIDADOR DE HORARIO ────────
     # Target = _SLOT_SSOT_RULES_BLOCK, el MISMO bloque que el splice de import-time (arriba)
     # appendea a DAY_GENERATOR_SYSTEM_PROMPT — diet-invariante (SLOT_INAPPROPRIATE_FOODS/
@@ -1402,8 +1411,11 @@ def _lacteo_vetado(vetos) -> bool:
     return any(_vetado(x, vetos) for x in ("leche", "yogur", "queso"))
 
 
-def allergy_hard_line(allergies) -> str:
-    """La línea dura de la asignación del día. Vacía sin alergias declaradas."""
+def allergy_hard_line(allergies, country=None) -> str:
+    """La línea dura de la asignación del día. Vacía sin alergias declaradas.
+
+    [P1-PLAN-LOTE-748] `country` (None ⇒ DO, byte-idéntico) es el MERCADO (lo que se compra): en beta las meriendas
+    sin lácteos no ofrecen lo que el catálogo beta no vende (el casabe)."""
     alg = _declarados(allergies)
     if not alg:
         return ""
@@ -1414,8 +1426,9 @@ def allergy_hard_line(allergies) -> str:
     incl = f" (incluye: {', '.join(terms)})" if terms else ""
     alternativas = ""
     if _lacteo_vetado(alg):                                            # [P1-PLAN-LOTE-183]
-        _meriendas = _sin_vetados(["fruta con maní", "casabe con aguacate", "tostada integral con aguacate",
-                                   "frutos secos con fruta"], alg) or ["fruta fresca"]   # [P1-PLAN-LOTE-184] sin huevo
+        from prompts.asignacion_pais import es_do as _es_do, sin_exclusivos_do as _sin_excl_do   # [P1-PLAN-LOTE-748]
+        _meriendas = _sin_vetados(_sin_excl_do(["fruta con maní", "casabe con aguacate", "tostada integral con aguacate",
+                                                "frutos secos con fruta"], _es_do(country)), alg) or ["fruta fresca"]   # [P1-PLAN-LOTE-184] sin huevo
         _liquidos = "agua o hielo" if _vetado("leche de coco", alg) else "agua, hielo o leche de coco"
         alternativas = (f" Sin lácteos: los batidos van con {_liquidos} (NUNCA yogurt ni leche de vaca), "
                         f"y las meriendas y desayunos con {', '.join(_meriendas)}.")
@@ -1428,8 +1441,13 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
                                  daily_targets: dict = None, user_staples: list = None,
                                  small_universe: bool = False, diet_type=None, country=None,
                                  culture_weights=None, goal=None, kitchen_equipment=None,
-                                 allergies=None, dislikes=None) -> str:
+                                 allergies=None, dislikes=None, mercado=None, pais_gate=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
+
+    [P1-PLAN-LOTE-748 · 2026-09-28 · ronda 1] (I16) Tres países, tres preguntas: `country` = la COCINA de este día
+    (gentilicio, etiqueta A del desayuno); `mercado` (`country_for_form_data`) = lo que se COMPRA (casabe, «Salami
+    dominicano», «habichuelas»); `pais_gate` (`cultural_country_for_form_data` sin día, el `_rpn_country` del revisor)
+    = con qué dureza se rechaza. None ⇒ `country` (la conducta de antes). Cada uno se canoniza UNA vez por render.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
     `health_profile.staple_foods`) inyecta la directiva "úsalos como ancla, varía la técnica si se
@@ -1494,15 +1512,25 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         prohibited_labels.append(label)
         seen_labels.add(label)
 
+    # [P1-PLAN-LOTE-748 · 2026-09-28] (G24) Ramas por país del bloque dinámico: DO conserva cada literal (huellas en
+    # tests/test_p1_plan_lote_748.py); beta no nombra el casabe (fuera de su catálogo), ni «Salami dominicano», ni la
+    # «mesa dominicana», y la categoría A del desayuno sale de su desayuno típico. SSOT en prompts/asignacion_pais.py.
+    # [ronda 1] UNA derivación por país y por render (P2-COUNTRY-HOUSEKEEPING: con un país corrupto avisaba ~20 veces).
+    from prompts import asignacion_pais as _ap
+    from constants import canonicalize_country as _cc_bdac
+    _pais_cocina = _cc_bdac(country)
+    _pais_mercado = _pais_cocina if mercado is None else _cc_bdac(mercado)
+    _cocina_do, _mercado_do = _pais_cocina == "DO", _pais_mercado == "DO"
+    _gate_do = _cocina_do if pais_gate is None else _cc_bdac(pais_gate) == "DO"
     _vetos = _declarados(allergies) + _declarados(dislikes)          # [P1-PLAN-LOTE-182]
     _ok_siempre = _sin_vetados(["huevos", "claras", "queso fresco", "yogurt", "frutos secos",
-                                "mantequilla de maní"], _vetos) or ["fruta", "casabe", "aguacate"]
+                                "mantequilla de maní"], _vetos) or _ap.sin_exclusivos_do(["fruta", "casabe", "aguacate"], _mercado_do)
     prohibited_block = ""
     if prohibited_labels:
         prohibited_block = (
             f"\n⛔ PROHIBIDO ABSOLUTO EN ESTE DÍA — estas proteínas NO están en tu pool y NO debes usarlas "
             f"en NINGUNA comida (ni meriendas, ni complementos, ni trazas):\n"
-            f"   → {', '.join(prohibited_labels)}\n"
+            f"   → {', '.join(_ap.etiqueta_proteina(_l, _mercado_do) for _l in prohibited_labels)}\n"
             f"   ⚠️ El planificador eligió DELIBERADAMENTE las proteínas del pool para garantizar variedad "
             f"entre los días del plan. Si añades una carne distinta como 'complemento' (ej: cerdo en una "
             f"merienda cuando el pool dice Lentejas, o res en un desayuno cuando el pool dice Pollo), "
@@ -1512,8 +1540,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"(estas son OK siempre, no cuentan como 'otra carne')."
         )
 
-    from constants import canonicalize_country as _cc_bdac
-    _cultura_txt = ("según la cultura dominicana" if _cc_bdac(country) == "DO"
+    _cultura_txt = ("según la cultura dominicana" if _cocina_do
                     else "según la cultura local del usuario")
     day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día {_cultura_txt}. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""
 
@@ -1524,17 +1551,29 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     # el brief anti-repetición cross-day). Lo que se traduce es SOLO la LABEL mostrada al LLM en
     # este bloque, reusando el `country` que la función YA recibe (T4) — nunca una 2ª derivación.
     # DO ⇒ byte-idéntico (label + advertencia intactas).
-    _bdac_beta = _cc_bdac(country) != "DO"
-    _breakfast_cat_label = (
-        "Tubérculos/plátano (preparación local)"
-        if _bdac_beta and breakfast_cat == "Mangú/Tubérculos"
-        else breakfast_cat
-    )
-    _breakfast_cat_warn = "tubérculo/plátano" if _bdac_beta else "mangú/tubérculos"
+    _bdac_beta = not _cocina_do
+    # [P1-PLAN-LOTE-748] Beta: la categoría A ya no es «Tubérculos/plátano» (a una española «plátano» es la banana:
+    # empujaba «tortilla… con guineo» y el aviso le vetaba el guineo los otros días) sino el desayuno típico de su
+    # cocina, de `cultural_profiles.PROFILES`. El enum del esquema no se toca. [ronda 1] Sin lo que es base de otra
+    # categoría, sin sopas y sin lo que la alergia o la dieta vetan: la A es el refugio de `desayuno_por_alergia`.
+    # [P1-PLAN-LOTE-748 · ronda 4] Memo por render: las 7 etiquetas (la de hoy + el brief) preguntan por los MISMOS
+    # nombres y cada pregunta es un escaneo (~150 por render, síncronos antes de la llamada al modelo). Los vetos son
+    # fijos en el render.
+    _vetado_memo = {}
+
+    def _vetado_dia(_i):
+        _k = str(_i)
+        if _k not in _vetado_memo:
+            _vetado_memo[_k] = _vetado(_i, _vetos)
+        return _vetado_memo[_k]
+    _breakfast_cat_label = _ap.etiqueta_desayuno(breakfast_cat, _pais_cocina, vetado=_vetado_dia, dieta=diet_type,
+                                                 declarados=_vetos)
+    _breakfast_cat_aviso = (_ap.AVISO_DESAYUNO_BETA if _bdac_beta
+                            else "NO uses mangú/tubérculos si la categoría asignada es otra")
     breakfast_block = (
         f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {_breakfast_cat_label}\n"
         f"  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. "
-        f"NO uses {_breakfast_cat_warn} si la categoría asignada es otra)."
+        f"{_breakfast_cat_aviso})."
     ) if breakfast_cat else ""
 
     # [P1-PRECISION-LEVERS · 2026-07-04] (lever 2) Anti-repetición ENTRE DÍAS: los días se generan
@@ -1548,7 +1587,10 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         _others = []
         for _od in (skeleton_day.get("_other_days_brief") or []):
             _t = str((_od or {}).get("technique") or "").strip()
-            _b = str((_od or {}).get("breakfast") or "").strip()
+            # [ronda 1] con la cocina de ESE día (`country` del brief, graph_orchestrator), no la de este
+            _b = _ap.etiqueta_desayuno(str((_od or {}).get("breakfast") or "").strip(),
+                                       (_od or {}).get("country") or _pais_cocina, detalle=False,
+                                       vetado=_vetado_dia, dieta=diet_type, declarados=_vetos)
             if _t or _b:
                 _others.append((_t or "libre") + (f" (desayuno: {_b})" if _b else ""))
         if _others:
@@ -1663,10 +1705,10 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         _carbs_asignados = _carbs_fuertes
     carb_no_repeat_block = ""
     if _carbs_desayuno:
+        _cierre_avena = _ap.cierre_avena(_cocina_do, _gate_do)               # [P1-PLAN-LOTE-748]
         carb_no_repeat_block += (
             f"\n• ⛔ {', '.join(_carbs_desayuno)} es base de DESAYUNO o MERIENDA, nunca el plato principal del "
-            f"almuerzo ni de la cena. Nada de tortitas, arepitas, bowls salados ni «avena al caldo» en las "
-            f"comidas fuertes: en la mesa dominicana eso no es un almuerzo ni una cena, y el plan se rechaza."
+            f"almuerzo ni de la cena. {_cierre_avena}"
         )
     if len(_carbs_fuertes) == 1 and _carbs_desayuno:
         # [P1-OATS-NOT-A-DINNER] Con UNA sola base fuerte, la regla de «dos bases distintas» acabaría
@@ -1689,8 +1731,9 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         )
     # [P2-LIGHT-BASE-NO-REPEAT · 2026-09-05] La regla de arriba solo mira almuerzo↔cena: el plan vivo 82d6f2a5 llevaba
     # 80 g de avena en el desayuno Y 65 g en la merienda del mismo día (dos comidas ligeras con la MISMA base).
-    _alts_ligeras = [a for a in _sin_vetados(["fruta con lácteo", "pan integral", "casabe", "tostada de maíz",
-                                              "frutos secos", "yogur"], _vetos)
+    _alts_ligeras = [a for a in _sin_vetados(_ap.sin_exclusivos_do(["fruta con lácteo", "pan integral", "casabe",
+                                                                     "tostada de maíz", "frutos secos", "yogur"],
+                                                                    _mercado_do), _vetos)   # [P1-PLAN-LOTE-748]
                      if not (a == "fruta con lácteo" and _lacteo_vetado(_vetos))] or ["fruta"]   # [P1-PLAN-LOTE-182]
     _alts_txt = (", ".join(_alts_ligeras[:-1]) + " o " + _alts_ligeras[-1]) if len(_alts_ligeras) > 1 else _alts_ligeras[0]
     carb_no_repeat_block += (
@@ -1731,14 +1774,14 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     if _protein_diversity_on and _diet_canon_ctx == "vegan":
         protein_diversity_block = (
             "\n• ⚠️ DIVERSIDAD DE PROTEÍNA (dieta vegana): varía la fuente proteica entre las "
-            f"comidas del día ({_dps('vegan')}). Evita que 2+ comidas del mismo día dependan de la "
+            f"comidas del día ({_ap.legumbres_del_mercado(_dps('vegan'), _pais_mercado)}). Evita que 2+ comidas del mismo día dependan de la "
             "MISMA fuente (ej. maní en desayuno Y merienda): rota leguminosa ↔ semillas ↔ edamame."
         )
     elif _protein_diversity_on and _diet_canon_ctx == "vegetarian":
         protein_diversity_block = (
             "\n• ⚠️ DIVERSIDAD DE PROTEÍNA (dieta vegetariana): el queso (de freír, cottage, crema, "
             "blanco) es ALTO EN SODIO — úsalo como proteína PRINCIPAL en máximo 1 comida del día, NO "
-            f"en varias. Para el resto de las comidas rota entre las fuentes aptas ({_dps('vegetarian')}). "
+            f"en varias. Para el resto de las comidas rota entre las fuentes aptas ({_ap.legumbres_del_mercado(_dps('vegetarian'), _pais_mercado)}). "
             "Evita que 2+ comidas del mismo día dependan del queso para su proteína: aporta menos "
             "variedad y dispara el sodio del día."
         )
@@ -1831,7 +1874,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
         equipment_block = ""
 
     return f"""
---- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}{allergy_hard_line(allergies)}
+--- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---{diet_hard_line}{allergy_hard_line(allergies, _pais_mercado)}
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}
