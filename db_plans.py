@@ -1526,6 +1526,15 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
                     _pl_tail.pulir_plan(_pd)
                 except Exception as _pl_e:
                     logger.debug(f"[P1-PLAN-LOTE-181] pulido de líneas (cola) no-op: {type(_pl_e).__name__}: {_pl_e}")
+                # [P1-PLAN-LOTE-854 · 2026-09-29] La ficha (`desc`) dice lo que el plato ES: sin el metalenguaje del prompt
+                # («con identidad propia», «de categoría Avena/Cereales», «distinta al almuerzo») y sin nombrar lo que esta
+                # cola ya cambió (G24: «pechuga de pollo» con pavo, «manzana» con lechosa, «cocida en leche» en agua). Tras
+                # el pulido, cuando ya no se mueve ningún ingrediente. Sólo beta (DO con su knob propio). Fail-open.
+                # tooltip-anchor: P1-PLAN-LOTE-854-FICHA-VERAZ
+                try:
+                    __import__("descripcion_veraz").aplicar_plan(_pd)
+                except Exception as _dv_e:
+                    logger.debug(f"[P1-PLAN-LOTE-854] ficha veraz (cola) no-op: {type(_dv_e).__name__}: {_dv_e}")
                 if _rsd_ctx is not None:
                     try:
                         _rsd.finish(_rsd_ctx, _pd)                        # [P1-PLAN-LOTE-27] foto de salida + informe
