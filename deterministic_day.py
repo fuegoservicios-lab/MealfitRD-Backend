@@ -1626,16 +1626,20 @@ def _plato_de_familia(familia) -> Optional[dict]:
 
 
 def _pesadas_de(comida) -> set:
-    """Las proteínas pesadas de un plato con el criterio de `_count_cross_day_heavy_protein_repetition`: subcadena sin
-    acentos de `_MAIN_PROTEIN_ALIASES` sobre nombre + ingredientes."""
+    """Las proteínas pesadas de un plato con el criterio de `_count_cross_day_heavy_protein_repetition`: alias sin
+    acentos de `_MAIN_PROTEIN_ALIASES` sobre nombre + ingredientes. [P1-PLAN-LOTE-855 · 2026-09-29] con el MISMO
+    resolvedor que el contador (`proteina_por_token`, frontera de palabra): la subcadena vetaba la res de un día por
+    el «queso fresco» de otros dos. tooltip-anchor: P1-PLAN-LOTE-855"""
     go = _go()
     if go is None or not isinstance(comida, dict):
         return set()
     try:
+        import proteina_por_token
         blob = _sin_acentos(" " + str(comida.get("name") or "") + " "
                             + " ".join(str(i) for i in (comida.get("ingredients") or [])))
-        return {lbl for lbl in go._HEAVY_PROTEIN_LABELS
-                if any(_sin_acentos(a) in blob for a in go._MAIN_PROTEIN_ALIASES.get(lbl, ()))}
+        return proteina_por_token.etiquetas_en_texto(
+            blob, {lbl: [_sin_acentos(a) for a in go._MAIN_PROTEIN_ALIASES.get(lbl, ())]
+                   for lbl in go._HEAVY_PROTEIN_LABELS})
     except Exception:                                                  # noqa: BLE001
         return set()
 

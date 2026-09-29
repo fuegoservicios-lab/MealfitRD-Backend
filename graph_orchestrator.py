@@ -9364,10 +9364,10 @@ def _count_cross_day_heavy_protein_repetition(days: list, min_days: int = 3) -> 
             text_blob += " " + meal.get("name", "")
             for ing in meal.get("ingredients", []) or []:
                 text_blob += " " + str(ing)
-        text_norm = _norm(text_blob)
-        for label, alias_list in aliases_norm.items():
-            if any(a in text_norm for a in alias_list):
-                day_counts[label] = day_counts.get(label, 0) + 1
+        # [P1-PLAN-LOTE-855 · 2026-09-29] frontera de palabra (SSOT del gate same-day), no subcadena: «res» ⊂ «queso
+        # fresco» daba `res: 3` en PR y CO (G24) y «pollo» ⊂ «repollo». tooltip-anchor: P1-PLAN-LOTE-855
+        for label in __import__("proteina_por_token").etiquetas_en_texto(_norm(text_blob), aliases_norm):
+            day_counts[label] = day_counts.get(label, 0) + 1
     return {k: v for k, v in day_counts.items() if v >= min_days}
 
 
