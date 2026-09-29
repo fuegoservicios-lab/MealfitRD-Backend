@@ -17,7 +17,10 @@ Contrato (el endpoint es `POST /api/auth/email-otp/verify`, `routers/auth_sessio
   - La sesión la emite el endpoint con `set_session_cookie`, la misma que emiten el OTP y «Continuar con Apple».
   - Cada uso deja rastro: un `logger.warning` con el marcador y la alerta `review_login_used:<user_id>` en
     `system_alerts` (una fila por cuenta, `metadata.uses` cuenta los usos y cada uso la reabre).
-  - El límite de ritmo es el del endpoint (`_OTP_VERIFY_LIMITER`, 10/60 s por IP); aquí no hay otro.
+  - El límite de ritmo es el del endpoint (`_OTP_VERIFY_LIMITER`, 10/60 s por IP).
+  - [ronda 1] Además, los fallos con EL correo de demostración se cuentan por hora (Redis o memoria): a los 10,
+    alerta `review_login_failed_burst`; a los 30 la rama del código fijo queda inerte hasta que la ventana se vacíe.
+    Una cuenta de administración nunca recibe sesión por aquí (`review_login_account_privileged`).
 
 SECRETOS, NO KNOBS. Las dos variables se leen con `os.environ`, a propósito, y no con `knobs._env_str`: el registro de
 knobs se publica SIN autenticación en `/admin/knobs` (entero) y en `/health/version` (`knobs_diff`). El sha256 de un
@@ -38,6 +41,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -79,18 +84,136 @@ def _avisar_config_invalida() -> None:
 
 
 def coincide(email: str, codigo: str) -> bool:
-    """True solo si el acceso está configurado, el correo es EL de la demostración y el código es el fijo.
+    """True solo si el acceso está configurado, el correo es EL de la demostración, el código es el fijo y la rama no
+    está bloqueada por fallos.
 
-    El hash se compara con `hmac.compare_digest` (tiempo constante), nunca con `==`.
-    tooltip-anchor: P1-PLAN-LOTE-845-COMPARE"""
+    El hash se calcula SIEMPRE, antes de mirar el correo, y se compara con `hmac.compare_digest` (tiempo constante),
+    nunca con `==`. Hace I/O (Redis y, al cruzar un umbral, `system_alerts`) solo cuando el correo es el de la
+    demostración: el que llama lo corre en un hilo. tooltip-anchor: P1-PLAN-LOTE-845-COMPARE"""
+    digest = hashlib.sha256(str(codigo or "").encode("utf-8")).hexdigest()
     config = configuracion()
     if config is None:
         return False
     correo, esperado = config
     if str(email or "").strip().lower() != correo:
         return False
-    digest = hashlib.sha256(str(codigo or "").encode("utf-8")).hexdigest()
-    return hmac.compare_digest(digest, esperado)
+    acierto = hmac.compare_digest(digest, esperado)
+    if fallos_en_ventana() >= UMBRAL_BLOQUEO:
+        # Bloqueada: la rama del código fijo es inerte hasta que la ventana se vacíe. Ni el acierto vale ni el intento
+        # cuenta (un intento que no se evalúa no prueba nada; contarlo solo prolongaría el bloqueo).
+        _avisar_bloqueo()
+        return False
+    if not acierto:
+        _anotar_fallo()
+    return acierto
+
+
+# ─────────────────────── [ronda 1] intentos fallidos contra el correo de demostración ───────────────────────
+# Un código fijo de 6 cifras sin caducidad se adivina: el límite por IP del endpoint no para a quien rota IPs. Aquí se
+# cuentan los fallos con EL correo de demostración en una ventana deslizante de una hora (Redis si hay, si no en
+# memoria de este proceso): a los 10 salta `review_login_failed_burst`; a los 30 la rama del código fijo queda inerte
+# hasta que la ventana se vacíe. El camino normal hacia Neon no cambia y la respuesta tampoco: el que llama sigue a Neon
+# igual que con un código equivocado, así que no hay oráculo. Riesgo aceptado (ruling del controlador): quien conozca el
+# correo puede dejar al revisor sin entrar mientras siga fallando; a cambio, adivinar el código pasa de horas a años.
+VENTANA_S = 3600
+UMBRAL_ALERTA = 10
+UMBRAL_BLOQUEO = 30
+_CLAVE_REDIS = "review_login:fallos"
+_fallos_locales: list = []
+_cerrojo = threading.Lock()
+_bloqueo_avisado_hasta = 0.0
+
+
+def _redis():
+    try:
+        from cache_manager import redis_client
+        return redis_client
+    except Exception:
+        return None
+
+
+def _local_purgar(ahora: float) -> None:
+    _fallos_locales[:] = [t for t in _fallos_locales if ahora - t < VENTANA_S]
+
+
+def fallos_en_ventana() -> int:
+    """Fallos con el correo de demostración en la última hora."""
+    ahora = time.time()
+    r = _redis()
+    if r is not None:
+        try:
+            r.zremrangebyscore(_CLAVE_REDIS, 0, ahora - VENTANA_S)
+            return int(r.zcard(_CLAVE_REDIS))
+        except Exception as e:
+            logger.warning(f"⚠️ [P1-PLAN-LOTE-845] Redis falló contando fallos de revisión; memoria local: {e}")
+    with _cerrojo:
+        _local_purgar(ahora)
+        return len(_fallos_locales)
+
+
+def _anotar_fallo() -> None:
+    ahora = time.time()
+    total = None
+    r = _redis()
+    if r is not None:
+        try:
+            pipe = r.pipeline()
+            pipe.zadd(_CLAVE_REDIS, {f"{ahora:.6f}:{os.getpid()}:{id(pipe)}": ahora})
+            pipe.zremrangebyscore(_CLAVE_REDIS, 0, ahora - VENTANA_S)
+            pipe.zcard(_CLAVE_REDIS)
+            pipe.expire(_CLAVE_REDIS, VENTANA_S)
+            total = int(pipe.execute()[2])
+        except Exception as e:
+            logger.warning(f"⚠️ [P1-PLAN-LOTE-845] Redis falló anotando un fallo de revisión; memoria local: {e}")
+            total = None
+    if total is None:
+        with _cerrojo:
+            _local_purgar(ahora)
+            _fallos_locales.append(ahora)
+            total = len(_fallos_locales)
+    # Una alerta al cruzar cada umbral (no en cada fallo): al pasar de 10 y al llegar a 30, que es cuando bloquea.
+    if total == UMBRAL_ALERTA + 1:
+        _alerta_fallos(total, bloqueado=False)
+    elif total == UMBRAL_BLOQUEO:
+        _alerta_fallos(total, bloqueado=True)
+
+
+def _avisar_bloqueo() -> None:
+    """Un warning por ventana, no por intento."""
+    global _bloqueo_avisado_hasta
+    ahora = time.time()
+    if ahora < _bloqueo_avisado_hasta:
+        return
+    _bloqueo_avisado_hasta = ahora + VENTANA_S
+    logger.warning(f"🛡 [P1-PLAN-LOTE-845] Acceso de App Review BLOQUEADO: {UMBRAL_BLOQUEO}+ fallos en una hora con el "
+                   "correo de demostración; el código fijo no vale hasta que la ventana se vacíe.")
+
+
+def _alerta_fallos(total: int, bloqueado: bool) -> None:
+    alert_key = "review_login_failed_burst"
+    severidad = "critical" if bloqueado else "warning"
+    message = (
+        f"{total} intentos fallidos en una hora con el correo de demostración de App Review. "
+        + ("El código fijo queda BLOQUEADO hasta que la ventana se vacíe (el revisor tampoco puede entrar). "
+           if bloqueado else "")
+        + f"Si no es un revisor equivocándose, alguien prueba códigos: rota {ENV_HASH} y valora cambiar el correo."
+    )
+    logger.warning(f"🛡 [P1-PLAN-LOTE-845] {total} fallos/hora con el correo de App Review (bloqueado={bloqueado}).")
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids, triggered_at, resolved_at)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, '[]'::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET severity = EXCLUDED.severity, title = EXCLUDED.title, message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata, triggered_at = EXCLUDED.triggered_at, resolved_at = NULL
+            """,
+            (alert_key, "review_login_failed_burst", severidad, "Intentos fallidos contra el acceso de App Review",
+             message, json.dumps({"failures_last_hour": total, "locked": bloqueado}, ensure_ascii=False)),
+        )
+    except Exception as e:
+        logger.error(f"❌ [P1-PLAN-LOTE-845] No se pudo persistir la alerta {alert_key}: {type(e).__name__}: {e}")
 
 
 def cuenta_existente(correo: str) -> Optional[dict]:
@@ -171,6 +294,48 @@ def anotar_cuenta_ausente() -> None:
             """,
             (alert_key, "review_login_account_missing", "Cuenta de App Review inexistente", message,
              json.dumps({"last_attempt_at": ahora}, ensure_ascii=False)),
+        )
+    except Exception as e:
+        logger.error(f"❌ [P1-PLAN-LOTE-845] No se pudo persistir la alerta {alert_key}: {type(e).__name__}: {e}")
+
+
+def cuenta_privilegiada(user_id: str) -> bool:
+    """[ronda 1] La cuenta de demostración NO puede ser una cuenta con privilegios: un código fijo de 6 cifras abriría el
+    panel de administración. Cuenta como privilegiada si `admin_acceso.es_admin` la reconoce O si está en la lista de
+    admins aunque el panel esté apagado hoy (la sesión dura 30 días y el panel se puede encender mañana). Si no se puede
+    comprobar, se trata como privilegiada (fail-secure)."""
+    try:
+        import admin_acceso
+        uid = str(user_id or "").strip().lower()
+        return bool(admin_acceso.es_admin(uid) or uid in admin_acceso.admin_ids())
+    except Exception as e:
+        logger.error(f"❌ [P1-PLAN-LOTE-845] no se pudo comprobar si la cuenta de revisión es admin: {type(e).__name__}")
+        return True
+
+
+def anotar_cuenta_privilegiada(user_id: str) -> None:
+    """El código fijo llevaba a una cuenta de administración: no se emite sesión (401 como un código inválido)."""
+    uid = str(user_id)
+    logger.error(f"🛑 [P1-PLAN-LOTE-845] El correo de App Review es de una cuenta ADMIN (uid={uid[:8]}…): sin sesión.")
+    alert_key = "review_login_account_privileged"
+    message = (
+        f"El correo configurado en {ENV_CORREO} es de una cuenta de administración ({uid[:8]}). El código fijo NO abre "
+        "sesiones de admin: usa una cuenta de demostración sin privilegios, o quita esa cuenta de MEALFIT_ADMIN_USER_IDS."
+    )
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids, triggered_at, resolved_at)
+            VALUES (%s, %s, 'critical', %s, %s, %s::jsonb, %s::jsonb, NOW(), NULL)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET severity = EXCLUDED.severity, title = EXCLUDED.title, message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata, affected_user_ids = EXCLUDED.affected_user_ids,
+                triggered_at = EXCLUDED.triggered_at, resolved_at = NULL
+            """,
+            (alert_key, "review_login_account_privileged", "El acceso de App Review apunta a una cuenta admin", message,
+             json.dumps({"user_id": uid, "last_attempt_at": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False),
+             json.dumps([uid])),
         )
     except Exception as e:
         logger.error(f"❌ [P1-PLAN-LOTE-845] No se pudo persistir la alerta {alert_key}: {type(e).__name__}: {e}")

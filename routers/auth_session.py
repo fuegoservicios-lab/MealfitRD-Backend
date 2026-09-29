@@ -169,7 +169,8 @@ async def email_otp_verify(
     # [P1-PLAN-LOTE-845] El revisor de Apple no puede leer el buzón de la cuenta de demostración: con SU correo y el
     # código fijo se emite la sesión aquí mismo. Cualquier otro correo o código sigue hacia Neon como siempre (misma
     # respuesta, mismo camino). Inerte sin las dos variables de `review_login`. Va DETRÁS de `_OTP_VERIFY_LIMITER`.
-    if review_login.coincide(email, otp):
+    # En un hilo: con el correo de demostración cuenta fallos en Redis y puede escribir una alerta (ronda 1).
+    if await asyncio.to_thread(review_login.coincide, email, otp):
         return await _sesion_de_revision(response, email)
     if not NEON_AUTH_BASE_URL:
         logger.error("[P1-OTP-FIRST-PARTY] NEON_AUTH_BASE_URL ausente — no se puede verificar OTP.")
@@ -226,7 +227,7 @@ async def _sesion_de_revision(response: Response, email: str):
 
     Solo se llega aquí con el correo y el código fijo ya comprobados (`review_login.coincide`). La cuenta se resuelve
     por correo y tiene que EXISTIR: si no está (o está vetada) no se crea y la respuesta es el 401 de un código
-    inválido. La sesión es la misma first-party del OTP y de Apple (`set_session_cookie`) con la misma forma de
+    inválido. Si es una cuenta de administración, tampoco: 401 y alerta (ronda 1). La sesión es la misma first-party del OTP y de Apple (`set_session_cookie`) con la misma forma de
     respuesta, y cada uso deja rastro (`review_login.anotar_uso`). tooltip-anchor: P1-PLAN-LOTE-845-SESION"""
     if not session_cookies_enabled():
         logger.error("[P1-PLAN-LOTE-845] session_cookies deshabilitadas — el acceso de App Review requiere la feature.")
@@ -242,6 +243,10 @@ async def _sesion_de_revision(response: Response, email: str):
         await asyncio.to_thread(review_login.anotar_cuenta_ausente)
         return Response(status_code=401)
     uid = str(cuenta["id"])
+    # [ronda 1] Una cuenta de administración JAMÁS entra con el código fijo: abriría el panel /admin con 6 cifras.
+    if await asyncio.to_thread(review_login.cuenta_privilegiada, uid):
+        await asyncio.to_thread(review_login.anotar_cuenta_privilegiada, uid)
+        return Response(status_code=401)
     try:
         await asyncio.to_thread(ensure_user_profile_exists, uid, cuenta.get("email") or correo, cuenta.get("name"))
     except Exception as _ens_e:

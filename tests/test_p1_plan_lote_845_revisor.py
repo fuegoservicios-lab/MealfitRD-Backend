@@ -40,6 +40,21 @@ HASH = hashlib.sha256(CODIGO.encode("utf-8")).hexdigest()
 UID = "0a1b2c3d-0000-4000-8000-000000000845"
 
 
+#: la de verdad, antes de que el fixture autouse la sustituya
+_ALERTA_FALLOS_REAL = review_login._alerta_fallos
+
+
+@pytest.fixture(autouse=True)
+def contador_limpio(monkeypatch):
+    """[ronda 1] Cada test empieza con la ventana de fallos vacía y sin Redis (memoria del proceso)."""
+    monkeypatch.setattr(review_login, "_redis", lambda: None)
+    monkeypatch.setattr(review_login, "_fallos_locales", [])
+    monkeypatch.setattr(review_login, "_bloqueo_avisado_hasta", 0.0)
+    alertas = []
+    monkeypatch.setattr(review_login, "_alerta_fallos", lambda total, bloqueado: alertas.append((total, bloqueado)))
+    return alertas
+
+
 @pytest.fixture
 def con_acceso(monkeypatch):
     monkeypatch.setenv(review_login.ENV_CORREO, CORREO)
@@ -172,7 +187,7 @@ def cliente(monkeypatch):
     monkeypatch.setattr(auth_session, "session_cookies_enabled", lambda: True)
     monkeypatch.setattr(auth_session, "set_session_cookie", lambda resp, uid, iat=None: f"mf-token-{uid}")
     monkeypatch.setattr(auth_session, "derive_form_key", lambda uid: f"fk-{uid}")
-    estado = {"cuentas": [], "perfiles": [], "usos": [], "ausentes": 0,
+    estado = {"cuentas": [], "perfiles": [], "usos": [], "ausentes": 0, "admin": False, "privilegiadas": [],
               "cuenta": {"id": UID, "email": CORREO.lower(), "name": "Demo", "banned": None}}
 
     def _cuenta(correo):
@@ -183,6 +198,8 @@ def cliente(monkeypatch):
         estado["ausentes"] += 1
 
     monkeypatch.setattr(review_login, "cuenta_existente", _cuenta)
+    monkeypatch.setattr(review_login, "cuenta_privilegiada", lambda uid: estado["admin"])
+    monkeypatch.setattr(review_login, "anotar_cuenta_privilegiada", lambda uid: estado["privilegiadas"].append(uid))
     monkeypatch.setattr(review_login, "anotar_uso", lambda uid: estado["usos"].append(uid))
     monkeypatch.setattr(review_login, "anotar_cuenta_ausente", _ausente)
     monkeypatch.setattr(auth_session, "ensure_user_profile_exists",
@@ -298,7 +315,7 @@ def test_el_limite_de_ritmo_va_antes_que_el_codigo_de_revision(con_acceso, clien
 
 def test_el_endpoint_decide_antes_de_ir_a_neon_y_solo_con_coincide():
     src = inspect.getsource(auth_session.email_otp_verify)
-    i_coincide = src.index("review_login.coincide(email, otp)")
+    i_coincide = src.index("asyncio.to_thread(review_login.coincide, email, otp)")
     assert i_coincide < src.index("httpx.AsyncClient"), "el acceso de revisión se decide antes de llamar a Neon"
     assert i_coincide > src.index("4 <= len(otp) <= 12"), "y después de validar la forma del cuerpo, como siempre"
     sesion = inspect.getsource(auth_session._sesion_de_revision)
@@ -378,3 +395,147 @@ def test_env_example_documenta_las_variables_sin_valor():
     env = (_BACKEND / ".env.example").read_text(encoding="utf-8")
     assert re.search(r"^# MEALFIT_REVIEW_LOGIN_EMAIL=$", env, re.M)
     assert re.search(r"^# MEALFIT_REVIEW_LOGIN_CODE_SHA256=$", env, re.M)
+
+
+# ─────────────────────────── 5. [ronda 1] cuenta admin, fallos y bloqueo ───────────────────────────
+
+def test_una_cuenta_admin_no_recibe_sesion(con_acceso, cliente):
+    c, estado, _ = cliente
+    estado["admin"] = True
+    r = _verify(c, CORREO, CODIGO)
+    assert r.status_code == 401 and r.content == b"", "la misma respuesta que un código inválido"
+    assert estado["privilegiadas"] == [UID] and estado["usos"] == [] and estado["perfiles"] == []
+    assert _FakeNeon.llamadas == []
+    sesion = inspect.getsource(auth_session._sesion_de_revision)
+    assert sesion.index("review_login.cuenta_privilegiada") < sesion.index("set_session_cookie(response, uid)")
+
+
+def test_cuenta_privilegiada_mira_la_lista_aunque_el_panel_este_apagado(monkeypatch):
+    import admin_acceso
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", f"otro-id,{UID.upper()}")
+    monkeypatch.setenv("MEALFIT_ADMIN_PANEL", "false")
+    assert admin_acceso.es_admin(UID) is False
+    assert review_login.cuenta_privilegiada(UID) is True
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", "otro-id")
+    assert review_login.cuenta_privilegiada(UID) is False
+
+    def _revienta():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(admin_acceso, "admin_ids", _revienta)
+    assert review_login.cuenta_privilegiada(UID) is True, "sin poder comprobarlo, fail-secure"
+
+
+def test_anotar_cuenta_privilegiada_escribe_su_alerta(monkeypatch):
+    escritas = []
+    monkeypatch.setattr(review_login, "execute_sql_write", lambda sql, params=None, **k: escritas.append((sql, params)))
+    review_login.anotar_cuenta_privilegiada(UID)
+    sql, params = escritas[0]
+    assert "INSERT INTO system_alerts" in sql and "'critical'" in sql
+    assert params[0] == params[1] == "review_login_account_privileged"
+
+
+def test_la_alerta_de_fallos_escribe_severidad_y_bloqueo(monkeypatch):
+    escritas = []
+    monkeypatch.setattr(review_login, "execute_sql_write", lambda sql, params=None, **k: escritas.append((sql, params)))
+    _ALERTA_FALLOS_REAL(30, bloqueado=True)
+    sql, params = escritas[0]
+    assert params[0] == params[1] == "review_login_failed_burst" and params[2] == "critical"
+    assert json.loads(params[5]) == {"failures_last_hour": 30, "locked": True}
+
+
+def test_el_sha256_se_calcula_antes_de_mirar_el_correo():
+    src = inspect.getsource(review_login.coincide)
+    assert src.index("hashlib.sha256(") < src.index("configuracion()") < src.index("!= correo")
+
+
+def test_los_fallos_con_el_correo_de_demo_se_cuentan_y_los_demas_no(con_acceso, contador_limpio):
+    assert review_login.coincide(CORREO, "000000") is False
+    assert review_login.coincide("otra@example.com", "000000") is False, "otro correo no cuenta"
+    assert review_login.coincide(CORREO, CODIGO) is True, "un acierto no cuenta"
+    assert review_login.fallos_en_ventana() == 1
+
+
+def test_al_pasar_de_10_fallos_salta_la_alerta_una_vez(con_acceso, contador_limpio):
+    for _ in range(review_login.UMBRAL_ALERTA):
+        review_login.coincide(CORREO, "000000")
+    assert contador_limpio == []
+    review_login.coincide(CORREO, "000000")
+    review_login.coincide(CORREO, "000000")
+    assert contador_limpio == [(review_login.UMBRAL_ALERTA + 1, False)], "una vez al cruzar, no en cada fallo"
+
+
+def test_a_los_30_la_rama_queda_inerte_y_la_respuesta_no_cambia(con_acceso, cliente, contador_limpio):
+    c, estado, _ = cliente
+    respuestas = set()
+    for _ in range(review_login.UMBRAL_BLOQUEO):
+        r = _verify(c, CORREO, "000000")
+        respuestas.add((r.status_code, r.content))
+    assert contador_limpio[-1] == (review_login.UMBRAL_BLOQUEO, True)
+    llamadas_antes = len(_FakeNeon.llamadas)
+    r = _verify(c, CORREO, CODIGO)
+    respuestas.add((r.status_code, r.content))
+    assert respuestas == {(401, b"")}, "bloqueado, el código correcto responde EXACTAMENTE como uno equivocado"
+    assert len(_FakeNeon.llamadas) == llamadas_antes + 1, "y sigue el camino normal hacia Neon"
+    assert estado["cuentas"] == [] and estado["usos"] == []
+    assert review_login.fallos_en_ventana() == review_login.UMBRAL_BLOQUEO, "bloqueado, el intento no cuenta"
+
+
+def test_el_bloqueo_se_levanta_al_vaciarse_la_ventana(con_acceso, contador_limpio, monkeypatch):
+    ahora = [1_000_000.0]
+    monkeypatch.setattr(review_login.time, "time", lambda: ahora[0])
+    for _ in range(review_login.UMBRAL_BLOQUEO):
+        review_login.coincide(CORREO, "000000")
+    assert review_login.coincide(CORREO, CODIGO) is False
+    ahora[0] += review_login.VENTANA_S + 1
+    assert review_login.coincide(CORREO, CODIGO) is True
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.z = {}
+
+    def zremrangebyscore(self, k, lo, hi):
+        self.z = {m: v for m, v in self.z.items() if not (lo <= v <= hi)}
+
+    def zcard(self, k):
+        return len(self.z)
+
+    def pipeline(self):
+        return _FakePipe(self)
+
+
+class _FakePipe:
+    def __init__(self, r):
+        self.r, self.ops = r, []
+
+    def zadd(self, k, mapping):
+        self.ops.append(lambda: self.r.z.update(mapping) or len(mapping))
+
+    def zremrangebyscore(self, k, lo, hi):
+        self.ops.append(lambda: self.r.zremrangebyscore(k, lo, hi))
+
+    def zcard(self, k):
+        self.ops.append(lambda: self.r.zcard(k))
+
+    def expire(self, k, secs):
+        self.ops.append(lambda: True)
+
+    def execute(self):
+        return [op() for op in self.ops]
+
+
+def test_con_redis_el_contador_es_compartido(con_acceso, contador_limpio, monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(review_login, "_redis", lambda: fake)
+    for _ in range(3):
+        review_login.coincide(CORREO, "000000")
+    assert fake.zcard("x") == 3 and review_login._fallos_locales == [], "con Redis no se usa la memoria local"
+    assert review_login.fallos_en_ventana() == 3
+
+
+def test_las_dos_alertas_de_la_ronda_1_estan_documentadas():
+    tabla = (_BACKEND / "docs" / "system_alerts_resolution_table.md").read_text(encoding="utf-8")
+    assert "| `review_login_account_privileged` |" in tabla and "| `review_login_failed_burst` |" in tabla
+    fila = next(linea for linea in tabla.splitlines() if linea.startswith("| `review_login_account_missing` |"))
+    assert "si no fue Apple, rota el hash antes de recrear la cuenta" in fila

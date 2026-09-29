@@ -192,6 +192,9 @@ _LINEAS_APP = {
         "3. NO das consejo médico ni nutricional personalizado; recomienda el Agente y, para "
         "temas de salud, consultar a un profesional (el Aviso médico está en el menú de la app, "
         "en «Más información»).",
+    "- Inicio de sesión: con un código que llega al correo (sin contraseña) o con Google.":
+        "- Inicio de sesión: con un código que llega al correo (sin contraseña), con Google o con Sign in with "
+        "Apple.",
     "4. Problemas de cuenta, pagos o errores que no puedas resolver: indica escribir a "
     "**bioboros.support@gmail.com**.":
         "4. Problemas de cuenta o errores que no puedas resolver: indica escribir a "
