@@ -11,8 +11,9 @@ Qué estaba roto (medido el 28-sep, sólo SELECT):
   además usaba el `day` de la ventana renumerada) y la sustitución de frescos del merge del bloque
   (`graph_orchestrator._single_trip_fresh_substitute` vía el `_days_offset` del view del chain).
   Plan vivo 6594aae1 (30 días, sin congelador): el bloque 4 pendiente lleva columna 5 y rebanada 11; los bloques 2 y 3
-  corrieron con columna 1 (rebanadas 3 y 7). Con columna 1 `single_trip_requirements(…, 1)` no exige nada (los 3 días
-  libres sin congelador): la Nevera propagada podía ofrecer un filete de pescado fresco el día 8 del ciclo.
+  corrieron con columna 1 (rebanadas 3 y 7 INFERIDAS: su snapshot está nulo en DB). Con columna 1
+  `single_trip_requirements(…, 1)` no exige nada (los 3 días libres sin congelador): el plan lleva pescado fresco los
+  días 7 y 8 del ciclo (09-29 y 09-30, contando desde la compra del 09-23).
 
 Qué NO cambia: el significado de `days_offset` para la ventana y las fechas (P1-CHUNK-OFFSET-REBASE,
 P1-CHUNK-EXECUTE-CEILING, la numeración `day = days_offset + i + 1`, `_plan_start_date`). Sólo el ÍNDICE que reciben los
@@ -30,10 +31,14 @@ reloj dice 10 (09-23 → 10-03) y la rebanada 11: la línea de tiempo perdió un
 pausado días y reanclado cubre fechas POSTERIORES a su rebanada, y ahí la rebanada se queda corta. Para «¿aguanta hasta
 ese día lo comprado el día 1?» el error caro es quedarse corto.
 
-La Nevera virtual (`compra_unica.nevera_virtual`) conserva su puerta `_days_offset > 0`: en el worker corre ANTES de que
-se fije `_days_offset` y ningún snapshot lo lleva (0 de 109 filas en prod, 0 logs «compra única sin Nevera real» desde
-el 12-jun), así que hoy no se activa nunca. Encenderla es otra decisión (fuera de este lote): aquí sólo cambia el día
-con el que filtra cuando se activa.
+La Nevera virtual (`compra_unica.nevera_virtual`) conserva su puerta `_days_offset > 0` y se evalúa DOS veces en la rama
+LLM del worker: en el 1.er refresco de la Nevera (cron_tasks `_refresh_chunk_pantry` antes del desvío degradado/LLM)
+`_days_offset` aún no está y la puerta queda cerrada; en el 2.º (tras `form_data["_days_offset"] = days_offset` y
+`sellar`, ya con el perfil vivo fusionado — `_merge_chunk_live_profile` conserva las claves `_`) la puerta está ABIERTA
+y filtra con el día sellado. Así que este lote cambia en vivo lo que recibe cualquier usuario de compra única con la
+Nevera vacía o apagada. Hoy no aparece en prod porque el único plan vivo de compra única (6594aae1, usuario 4da5c079)
+tiene Nevera real (36 alimentos, SELECT del 29-sep) y `real and not _nevera_apagada` devuelve antes del filtro. (Corregido en la ronda del revisor: la
+versión anterior de este párrafo la daba por dormida.)
 
 Knob `MEALFIT_SINGLE_TRIP_CYCLE_DAY_TRUE` (True). False ⇒ la columna, byte a byte como antes.
 Test: tests/test_p1_plan_lote_816.py. tooltip-anchor: P1-PLAN-LOTE-816

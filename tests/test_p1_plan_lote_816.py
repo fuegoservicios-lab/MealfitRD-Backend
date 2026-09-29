@@ -3,8 +3,9 @@
 
 `constants.rebase_pending_chunk_offsets` reescribe el `days_offset` de la cola contra el ancla móvil (el shift la lleva a
 hoy), y los filtros de durabilidad lo leían como el día desde la compra. Plan vivo 6594aae1 (30 días, sin congelador):
-bloque 4 con columna 5 y rebanada 11; los bloques 2 y 3 corrieron con columna 1 (rebanadas 3 y 7) — con columna 1 la
-Nevera envejecida no exige nada y un filete de pescado fresco pasa el día 8.
+bloque 4 con columna 5 y rebanada 11; los bloques 2 y 3 corrieron con columna 1 (rebanadas 3 y 7 inferidas: su snapshot
+está nulo en DB) — con columna 1 la Nevera envejecida no exige nada y el plan lleva pescado fresco los días 7 y 8 del
+ciclo (09-29 y 09-30, desde la compra del 09-23).
 """
 from __future__ import annotations
 
@@ -60,15 +61,23 @@ def test_6594aae1_bloque_4_los_filtros_ven_el_dia_11():
 
 
 def test_un_pescado_fresco_sin_congelador_no_pasa_el_dia_11():
-    fd = _fd(5, 11)
+    """Columna 1 (así corrieron los bloques 2 y 3 de 6594aae1) y rebanada 11. Con la columna los tres filtros quedan
+    dentro de los 3 días libres sin congelador y NO exigen nada: el pescado pasaba. Cada assert es rojo sin el 816
+    (verificado contra 349ccf30: con `_fd(5, 11)` la columna 5 ya bastaba para echar al pescado y el test no probaba
+    nada — ronda de corrección del revisor)."""
+    fd = _fd(1, 11)
     pool = ["Filete de pescado fresco", "Camarones", "Huevo", "Arroz blanco"]
-    assert ah._single_trip_durable_filter(pool, fd, 4) == ["Huevo", "Arroz blanco"]
+    # sembrador, bloque de 2 días: con la columna el último día es el 2 (sin exigencia); con el ciclo, el 12
+    assert ah._single_trip_durable_filter(pool, fd, 2) == ["Huevo", "Arroz blanco"]
+    # Nevera envejecida: primer día 1 con la columna (sin exigencia); 11 con el ciclo
     assert ah._age_pantry_for_block(pool, fd, 4) == ["Huevo", "Arroz blanco"]
-    assert cu.candidatos_del_dia(["filete de pescado", "atun en agua"], {"day": 6}, fd) == ["atun en agua"]
+    # cerrador: el día 2 de la ventana es el índice 1 con la columna (< 3, devuelve todo); 11 con el ciclo
+    assert cu.candidatos_del_dia(["filete de pescado", "atun en agua"], {"day": 2}, fd) == ["atun en agua"]
 
 
 def test_bloque_3_con_columna_1_el_pescado_ya_no_entra_el_dia_8():
-    """Así corrió el bloque 3 de 6594aae1 el 28-sep: columna 1 ⇒ `single_trip_requirements(…, 1)` = None."""
+    """Así corrió el bloque 3 de 6594aae1 el 28-sep: columna 1 ⇒ `single_trip_requirements(…, 1)` = None. La rebanada 7
+    es inferida (el snapshot de ese bloque está nulo en DB); el 8 del nombre es su primer día, 1-based."""
     fd = _fd(1, 7)
     assert ah._age_pantry_for_block(["Filete de pescado fresco", "Arroz blanco", "Huevo"], fd, 4) == [
         "Arroz blanco", "Huevo"]
@@ -157,6 +166,37 @@ def test_el_merge_del_bloque_sustituye_con_el_dia_del_ciclo(monkeypatch):
     assert go._single_trip_fresh_substitute(bloque, db=_NoopDB(), effective=SINGLE, diet="balanced", days_offset=5) == 0
     assert go._single_trip_fresh_substitute(bloque, db=_NoopDB(), effective=SINGLE, diet="balanced", days_offset=off) == 1
     assert bloque[0]["meals"][0]["ingredients"] == ["2 tazas de repollo"]
+
+
+# ─────────────────────────────────────────────── la Nevera virtual NO está dormida (ronda del revisor)
+
+def test_la_nevera_virtual_filtra_con_el_dia_sellado_en_el_2o_refresco():
+    """En la rama LLM del worker el sello va ANTES del 2.º `_refresh_chunk_pantry` (el que termina en `nevera_virtual`
+    con la puerta `_days_offset > 0` ya abierta). Entre ambos: sin desindentación por debajo del sello y la única
+    reasignación de `form_data` es `_merge_chunk_live_profile`, que conserva las claves `_`. La versión anterior del
+    docstring de `dia_del_ciclo` la daba por dormida; lo estaba sólo el 1.er refresco."""
+    import re
+    src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    sello = src.index('__import__("dia_del_ciclo").sellar(form_data, prior_plan_data, days_offset)')
+    llamada = "form_data = _refresh_chunk_pantry(user_id, form_data, snapshot_form_data, task_id=task_id, week_number=week_number)"
+    refresco = src.index(llamada, sello)
+    ini = src.rfind("\n", 0, sello) + 1
+    sangria = len(src[ini:sello]) - len(src[ini:sello].lstrip(" "))
+    for linea in src[ini:refresco].splitlines():
+        if linea.strip() and not linea.lstrip().startswith("#"):
+            assert len(linea) - len(linea.lstrip(" ")) >= sangria, linea
+    asignaciones = set(re.findall(r"^\s*form_data = (\w+)\(", src[sello:refresco], flags=re.M))
+    assert asignaciones == {"_merge_chunk_live_profile"}, asignaciones
+    import cron_tasks as ct
+    fd = _fd(1, None, **{"_single_trip_cycle_day": 11})
+    fd = ct._merge_chunk_live_profile(fd, {"goal": "lose_fat", "_single_trip_cycle_day": 0, "_days_offset": 0})
+    assert fd["_single_trip_cycle_day"] == 11 and fd["_days_offset"] == 1
+    # Nevera real vacía (o apagada): la compra del ciclo llega filtrada con el día sellado, sin rebanada
+    nv = _nevera_virtual(fd, ["Atún en agua", "Huevo", "Arroz blanco", "Lechuga", "Filete de pescado fresco", "Casabe"])
+    assert nv["_nevera_virtual"] is True
+    assert "Lechuga" not in nv["current_pantry_ingredients"]
+    assert "Filete de pescado fresco" not in nv["current_pantry_ingredients"]
+    assert {"Atún en agua", "Huevo", "Arroz blanco", "Casabe"} <= set(nv["current_pantry_ingredients"])
 
 
 # ─────────────────────────────────────────────── anclas
