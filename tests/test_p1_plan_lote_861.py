@@ -52,7 +52,10 @@ def test_en_una_avena_no_sale_tomate():
                         "Montaje: sirve la avena con el aguacate y acompaña con el huevo bien cocido."]}
     assert sf.elegir(avena, ["Aguacate", "Tomate", "Batata"]) == "Aguacate", "la conducta de siempre"
     n, m = _autofix(avena)
-    assert n == 1 and not any("tomate" in x.lower() for x in m["ingredients"]), m["ingredients"]
+    # [P1-PLAN-LOTE-918 · 2026-09-29] en una base dulce con el huevo al lado la fruta ya no se cambia: ni tomate ni un
+    # segundo aguacate. Con el knob apagado vuelve el aguacate doble de antes (lo cubre test_p1_plan_lote_918).
+    assert n == 0 and "85 g de mango" in m["ingredients"], m["ingredients"]
+    assert not any("tomate" in x.lower() for x in m["ingredients"]), m["ingredients"]
 
 
 def test_elegir():

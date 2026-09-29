@@ -599,9 +599,10 @@ def _meal_has_sweet_savory_clash(meal: dict) -> bool:
             return False
         if context_enabled() and _SEPARATE_COMPONENT_RE.search(name_low):
             return False
-        if (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
-                and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS)):
-            return True
+        _salados = [tok for tok in _SAVORY_CLASH_TOKENS if _name_has_token(tok, name_low)]
+        if _salados and any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS):
+            if not __import__("base_dulce").fruta_en_su_sitio(name_low, _salados):  # [P1-PLAN-LOTE-918] la fruta de la avena, con el huevo al lado
+                return True
         return (any(_name_has_token(fr, name_low) for fr in _WATER_SWEET_FRUITS)
                 and any(_name_has_token(tok, name_low) for tok in _MEAT_MAIN_CLASH_TOKENS))
     except Exception:
