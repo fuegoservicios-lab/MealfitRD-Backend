@@ -13,7 +13,9 @@ y el coach leen `issues`).
 
   · `sellar_llm` — en `assemble_plan_node`, lo que el modelo declaró queda `_prep_time_source="llm"`. Lo vacío sigue
     yendo a `recipe_library.fill_prep_time` (registry/unknown) y lo que ya trae fuente (receta/técnica) no se toca.
-    `horizon._prep_minutes` mide `llm` igual que antes medía la ausencia de marca.
+    `horizon._prep_minutes` mide `llm` igual que antes medía la ausencia de marca. El día de contingencia
+    (`_day_fallback`, `_build_fallback_day` en `generate_days_parallel`) NO se sella: su «15 min» es un relleno de
+    plantilla (P1-AUDITORIA-ARQ-VERIFICADA), no la palabra del modelo; tampoco se contrasta (`fallback_meals` lo cuenta).
   · `contraste_por_pasos` — los minutos EXPLÍCITOS de los pasos (`tiempo_pasos.minutos_de_fuego`, el SSOT del lote 323:
     extremo BAJO de los rangos, «por lado» ×2, lo que va «mientras / a la vez / aparte» en paralelo, sin tiempos pasivos
     ni mise en place) contra el mismo tope del formulario y la misma tolerancia (×1,25) que la auditoría ⇒
@@ -27,9 +29,13 @@ y el coach leen `issues`).
 
 Knob `MEALFIT_FIDELITY_PREP_TIME_MEASURED` (True): False ⇒ ni sello ni campos nuevos, lo de antes byte a byte.
 
-Fuera de alcance: el camino que BORRA las marcas (`_day_source`, `_prep_time_source`, `_candidate_source`; plan
-d8b10b05, tras P6-SURGICAL-PROMOTE). Una comida con minutos y SIN marca se contrasta igual y se cuenta aparte
-(`by_source.sin_sello`), para que ese camino se vea en la métrica en vez de desaparecer.
+`by_source.sin_sello` solo aparece al medir fuera del pipeline (replay de `plan_data` guardado antes del lote, o de
+un plan que perdió sus marcas después): dentro del pipeline toda comida pasa por `assemble_plan_node` antes de
+`review_fidelity_gate`, y assemble sella `llm` todo lo que trae minutos sin fuente. Por eso un camino que pierde la
+marca ANTES de assemble (p. ej. surgical regen → assemble) sale `llm`, no `sin_sello`: si esa comida era una receta
+que el corrector no restauró (`reeleccion_dia.restaurar_procedencia` devuelve la marca a las que dejó iguales), queda
+mal etiquetada. Fuera de alcance: el camino que BORRA las marcas del plan guardado (`_day_source`, `_prep_time_source`,
+`_candidate_source`; plan d8b10b05, apuntado a P6-SURGICAL-PROMOTE sin aislar); en un replay sus comidas son `sin_sello`.
 tooltip-anchor: P1-PLAN-LOTE-815
 """
 from __future__ import annotations
@@ -66,9 +72,17 @@ def activo() -> bool:
         return True
 
 
-def sellar_llm(meal) -> None:
-    """`_prep_time_source="llm"` en la comida cuyo `prep_time` declaró el modelo (tiene minutos y ninguna fuente)."""
+def es_contingencia(day) -> bool:
+    """El día de plantilla matemática (`_day_fallback`): su «15 min» lo puso `_build_fallback_day`, no el modelo."""
+    return isinstance(day, dict) and bool(day.get("_day_fallback"))
+
+
+def sellar_llm(meal, day=None) -> None:
+    """`_prep_time_source="llm"` en la comida cuyo `prep_time` declaró el modelo (tiene minutos y ninguna fuente).
+    Con el `day` al lado, la contingencia (`_day_fallback`) no se sella."""
     try:
+        if es_contingencia(day):
+            return
         if isinstance(meal, dict) and meal.get("prep_time") and not meal.get("_prep_time_source") and activo():
             meal["_prep_time_source"] = FUENTE_LLM
     except Exception:                                                          # noqa: BLE001
@@ -91,12 +105,15 @@ def contraste_por_pasos(days, form_data) -> dict:
     budget = _presupuesto(form_data)
     techo = budget * _TOLERANCIA if budget else None
     por_fuente = {"llm": 0, "sin_sello": 0}
-    comidas = medidas = fuera = fuera_declarado = subdeclaradas = 0
+    comidas = medidas = fuera = fuera_declarado = subdeclaradas = contingencia = 0
     items: list = []
     for i, d in enumerate(days or []):
         for m in ((d.get("meals") or []) if isinstance(d, dict) else []):
             if not isinstance(m, dict):
                 continue
+            if es_contingencia(d):
+                contingencia += 1 if m.get("prep_time") else 0
+                continue                      # plantilla, no palabra del modelo
             fuente = _CONTRASTADAS.get(str(m.get("_prep_time_source") or ""))
             declarado = _prep_minutes(m) if fuente else None
             if declarado is None:
@@ -118,7 +135,8 @@ def contraste_por_pasos(days, form_data) -> dict:
                               "prep_time_over": over})
     return {"version": 1, "budget": budget, "tolerance": _TOLERANCIA, "tanda_581": bool(_tanda_581(form_data)),
             "meals": comidas, "by_source": por_fuente, "prep_time_measured": medidas, "prep_time_over": fuera,
-            "over_by_declared": fuera_declarado, "understated": subdeclaradas, "items": items}
+            "over_by_declared": fuera_declarado, "understated": subdeclaradas, "fallback_meals": contingencia,
+            "items": items}
 
 
 def score_v2(report: dict, days, form_data, effective, sl=None) -> tuple[Optional[float], dict]:
@@ -190,4 +208,4 @@ def metadata_plana(report: dict) -> dict:
         return {}
 
 
-__all__ = ["FUENTE_LLM", "activo", "sellar_llm", "contraste_por_pasos", "score_v2", "telemetria", "metadata_plana"]
+__all__ = ["FUENTE_LLM", "activo", "es_contingencia", "sellar_llm", "contraste_por_pasos", "score_v2", "telemetria", "metadata_plana"]

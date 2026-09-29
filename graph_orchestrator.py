@@ -38518,8 +38518,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # Auto-fill missing required keys to pass Pydantic Validation & Frontend
             if "meal" not in m: m["meal"] = m.get("name", "Comida").split(" ")[0] if " " in m.get("name", "") else m.get("name", "Comida")
             if not m.get("time"): m["time"] = "Flexible"  # [Z3] Optional emite None → guard .get()
-            # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «15 min» era un relleno con pinta de dato: del registry si lo sabe (receta/técnica, P1-MINUTOS-DE-LA-RECETA); si no, vacío + `_prep_time_source="unknown"` (el frontend oculta el chip si está vacío). [P1-PLAN-LOTE-815] Lo que el modelo SÍ declaró queda `_prep_time_source="llm"`: la fidelidad lo contrasta con sus pasos
-            __import__("recipe_library").fill_prep_time(m, form_data) if not m.get("prep_time") else __import__("fidelidad_tiempo").sellar_llm(m)
+            # [P1-AUDITORIA-ARQ-VERIFICADA · 2026-09-11] «15 min» era un relleno con pinta de dato: del registry si lo sabe (receta/técnica, P1-MINUTOS-DE-LA-RECETA); si no, vacío + `_prep_time_source="unknown"` (el frontend oculta el chip si está vacío). [P1-PLAN-LOTE-815] Lo que el modelo SÍ declaró queda `_prep_time_source="llm"` (la contingencia `_day_fallback`, no): la fidelidad lo contrasta con sus pasos
+            __import__("recipe_library").fill_prep_time(m, form_data) if not m.get("prep_time") else __import__("fidelidad_tiempo").sellar_llm(m, d)
             # [P0-MEAL-MACRO-RECOVERY · 2026-06-13] Recupera el breakdown de macros
             # del meal (estima desde cals + split si vienen en 0) — antes shippeaba
             # protein=0 + placeholder "Plan Matemático" y el usuario veía 0g.

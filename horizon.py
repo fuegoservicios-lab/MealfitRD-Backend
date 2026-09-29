@@ -2219,7 +2219,10 @@ def emit_fidelity_metric(user_id: Optional[str], plan_id: Optional[str], report:
             "unmeasured": [u.get("check") for u in (report.get("unmeasured") or []) if isinstance(u, dict)],
             "computation_hash": (report.get("computation") or {}).get("computation_hash"),
         }
-        meta.update(__import__("fidelidad_tiempo").metadata_plana(report))   # [P1-PLAN-LOTE-815] score_v2 + prep_time_*
+        try:   # [P1-PLAN-LOTE-815] score_v2 + prep_time_*; si el instrumento no importa, la fila de siempre sale igual
+            meta.update(__import__("fidelidad_tiempo").metadata_plana(report))
+        except Exception as e:                                                 # noqa: BLE001
+            logger.debug(f"[P1-PLAN-LOTE-815] telemetría de tiempo fuera de la métrica (fail-open): {e!r}")
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
             "tokens_estimated, confidence, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
