@@ -27126,16 +27126,14 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                             break
                     _core = " ".join(_words[:_k]) if _k else str(mm.group("food"))
                     _tail = (" " + " ".join(_words[_k:])) if _k < len(_words) else ""
-                    _art = "la" if (_sa(_core.split()[0].lower()).endswith("a")
-                                    and not _sa(_core.lower()).startswith("agua")) else "el"
-                    return f"{_art} {_core} restante{_tail}"
+                    return __import__("restante_sin_choque").resto(mm, _core, _tail)  # [P1-PLAN-LOTE-920] sin «los el… restante restante»
 
                 _rw2 = []
                 for _st in recipe_work:
                     if not isinstance(_st, str) or _is_recipe_safety_note_step(_st):
                         _rw2.append(_st)
                         continue
-                    _new_st = _STEP_QTY_MENTION_RE.sub(_sub_rest, _st)
+                    _new_st = __import__("restante_sin_choque").patron(_STEP_QTY_MENTION_RE).sub(_sub_rest, _st)  # [P1-PLAN-LOTE-920]
                     if _new_st != _st:
                         fixed += 1
                     _rw2.append(_new_st)
