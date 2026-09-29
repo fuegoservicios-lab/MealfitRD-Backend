@@ -158,7 +158,9 @@ SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "d
                # el SHA-256 de este texto (`lote844.textos.test.js`): no se puede redactar sin el nombre.
                "docs/consentimientos/ia/ia-2026-10/es-DO.md", "docs/consentimientos/ia/ia-2026-10/en-US.md",
                "docs/consentimientos/ia/ia-2026-10/pt-BR.md", "docs/consentimientos/ia/ia-2026-10/fr-FR.md",
-               "docs/consentimientos/ia/ia-2026-10/it-IT.md"}
+               "docs/consentimientos/ia/ia-2026-10/it-IT.md",
+               # [P1-PLAN-LOTE-849] lo abierto al dueño: la transferencia a China de datos de la UE (con un abogado)
+               "docs/app_store_legal.md"}
 
 
 def _menciones(token: str) -> set:
