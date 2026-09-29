@@ -84,7 +84,7 @@ def test_los_casos_compartidos_con_el_frontend():
     for c in casos:
         f = {"texto": lx.texto_para_leer, "lista": lx.nombre_de_lista_para_leer,
              "envase": lx.envase_para_leer}[c["funcion"]]
-        got = f(c["entrada"], c["pais"])
+        got = f(c["entrada"], c["pais"], *([c["siguientes"]] if "siguientes" in c else []))
         if got != c["lectura"]:
             fallos.append((c["pais"], c["entrada"], got, c["lectura"]))
     assert not fallos, fallos
@@ -201,3 +201,25 @@ def test_la_comida_para_leer_es_una_copia():
     # lo que no se pinta (y lo que el motor lee) no se toca
     assert leida["ingredients_raw"] == ["1 guineo", "½ lechosa"]
     assert lx.comida_para_leer(meal, "DO") is meal
+
+
+def test_los_pasos_se_leen_con_los_siguientes():
+    """[ronda 1 del revisor] Un paso nombra las habichuelas y el SIGUIENTE vuelve sobre ellas («Májalas»): leerlo
+    solo sustituía y dejaba «Escurre los frijoles» + «Májalas». Los pasos se leen con los que vienen detrás, hasta
+    que vuelven a nombrarlas (desde ahí el pronombre es de esa mención)."""
+    lx = _lx()
+    meal = {"name": "Habichuelas majadas", "recipe": ["Escurre las habichuelas rojas.", "Májalas con un tenedor."],
+            "ingredients": ["1 taza de habichuelas rojas", "2 cucharadas de agua"]}
+    leida = lx.comida_para_leer(meal, "MX")
+    assert leida["recipe"] == ["Escurre las habichuelas rojas (frijoles rojos).", "Májalas con un tenedor."]
+    # los ingredientes son renglones sueltos: cada uno se lee solo
+    assert leida["ingredients"] == ["1 taza de frijoles rojos", "2 cucharadas de agua"]
+    assert leida["name"] == "Frijoles majados"
+
+
+def test_la_doc_no_promete_lo_que_la_heuristica_no_cumple():
+    """[ronda 1 del revisor] «Ante la duda glosa, el peor caso es la conducta del 649» era falso: la concordancia es
+    una heurística. La doc dice sus límites medidos en vez de prometer."""
+    doc = (_BACKEND / "docs" / "lexico_vista_pais.md").read_text(encoding="utf-8")
+    assert "peor caso es la conducta del 649" not in doc
+    assert "Límites conocidos" in doc
