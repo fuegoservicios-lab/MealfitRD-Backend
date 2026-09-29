@@ -49298,8 +49298,12 @@ def ensure_protein_step_parity(plan_data: dict, db=None) -> int:
                     # su dedup (a), que es match EXACTO de string. Acá el blob SÍ incluye 💪 (queremos
                     # exactamente lo contrario: nunca dos pasos 💪 para el mismo alimento).
                     _toks = [t for t in _re.split(r"[^a-z]+", _sa_psp(str(_nm).lower())) if len(t) >= 4]
+                    # [P1-PLAN-LOTE-869] la nota de seguridad no sirve el plato — salvo el huevo: su nota la repone el 863
+                    # con el paso que cuaja huevos Y claras (uno de paridad sólo para las claras se lo impediría)
+                    _huevo_869 = bool(_re.search(r"\b(?:huevos?|claras?|yemas?)\b", _sa_psp(str(_nm).lower())))
                     _blob = _sa_psp(" ".join(
-                        str(s) for s in (_m.get("recipe") or []) if isinstance(s, str)).lower())
+                        str(s) for s in (_m.get("recipe") or [])
+                        if isinstance(s, str) and (_huevo_869 or not _is_recipe_safety_note_step(s))).lower())
                     # [P1-MENU-COHERENCE-1 · 2026-07-29] nombre CORTO sin tokens ≥4 chars ("Sal",
                     # "Res") → el dedup por token jamás se activaba y cada re-corrida del chain
                     # añadía OTRA copia del paso (el triple "Añade Sal al guiso" vivo: 2 fusionadas
