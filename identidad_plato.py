@@ -341,10 +341,13 @@ def _lineas_de(lineas, canon, index) -> tuple:
     return idx, gramos
 
 
-def _con_tope(piso, linea, condiciones) -> int:
-    """[P1-PLAN-LOTE-915] El piso de identidad, sin pasar del tope clínico de la línea (`tope_clinico`)."""
-    tope = __import__("tope_clinico").tope_de_linea(linea, condiciones)
-    return int(piso) if tope is None else min(int(piso), int(tope))
+def _con_tope(piso, linea, condiciones, meal=None, db=None) -> int:
+    """[P1-PLAN-LOTE-915] El piso de identidad, sin pasar del tope clínico de la línea ni, en cirugía bariátrica, del
+    volumen de la comida (`tope_clinico`)."""
+    tc = __import__("tope_clinico")
+    topes = [t for t in (tc.tope_de_linea(linea, condiciones), tc.tope_por_volumen(meal, linea, condiciones, db))
+             if t is not None]
+    return int(piso) if not topes else min(int(piso), int(min(topes)))
 
 
 def _traza(margen=None) -> float:
@@ -383,7 +386,7 @@ def _subir_linea(meal, canon, piso, index, db, margen) -> Optional[str]:
     if _huevo:
         piso = _hu.piso_en_gramos(canon, piso, db)
     # [P1-PLAN-LOTE-915] la subida no deshace un tope clínico: «↑50→100 g de Guineo» en bariátrica (tope 50 g)
-    piso = _con_tope(piso, ings[i_d[0]], margen.get("condiciones"))
+    piso = _con_tope(piso, ings[i_d[0]], margen.get("condiciones"), meal, db)
     if g_cur <= 0 or g_cur >= piso - (0.5 if _huevo else 0.0):
         return None                      # sin gramos legibles no se toca; y nunca se baja
     mac = db.macros_from_ingredient_string(f"{piso - g_cur:.0f} g de {canon}") or {}
@@ -576,7 +579,7 @@ def _rescatar_cero(meal: dict, alimento: str, db, margen, allergies) -> Optional
     alimento = alimento.strip()
     if _choca_alergia(alimento, allergies):
         return None
-    piso = _con_tope(_piso_de(alimento, db), alimento, (margen or {}).get("condiciones"))   # [P1-PLAN-LOTE-915]
+    piso = _con_tope(_piso_de(alimento, db), alimento, (margen or {}).get("condiciones"), meal, db)   # [P1-PLAN-LOTE-915]
     if not piso:
         return None
     nueva = f"{piso} g de {alimento}"
@@ -675,7 +678,7 @@ def _anadir_faltantes(meal: dict, index: dict, db, allergies, margen, fase) -> l
             continue                     # la especie del paso es la proteína genérica de la lista
         if fase is not None and _es_proteico(canon, db) != (fase == "proteina"):
             continue
-        piso = _con_tope(_piso_de(canon, db), canon, margen.get("condiciones"))   # [P1-PLAN-LOTE-915]
+        piso = _con_tope(_piso_de(canon, db), canon, margen.get("condiciones"), meal, db)   # [P1-PLAN-LOTE-915]
         if not piso:
             continue
         if allergies:
@@ -944,7 +947,7 @@ def compensar_dia(meals, index, db, allergies=None, objetivos=None) -> int:
             canon = str(claves[0][0])
             if _choca_alergia(canon, allergies) or __import__("huevo_en_unidades").tipo(canon):
                 continue                 # [P1-PLAN-LOTE-801] el huevo no es migaja que se pague en gramos
-            piso = _con_tope(_piso_de(canon, db), linea, (objetivos or {}).get("condiciones"))   # [P1-PLAN-LOTE-915]
+            piso = _con_tope(_piso_de(canon, db), linea, (objetivos or {}).get("condiciones"), m, db)   # [P1-PLAN-LOTE-915]
             try:
                 g = float(db.grams_from_ingredient_string(linea) or 0)
             except Exception:                                                  # noqa: BLE001

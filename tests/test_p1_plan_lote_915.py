@@ -156,6 +156,25 @@ def test_en_bariatrica_la_fruta_no_pasa_de_su_tope():
     assert _subir(m, _margen(grasa=5.0)) == ["↑64→100 g de Lechosa"], "sin condición, su ración"
 
 
+def test_en_bariatrica_la_subida_no_pasa_el_volumen_de_la_comida():
+    """`cap_bariatric_portions` deja la comida en 300 g de sólidos (200 g la merienda) y corre ANTES de esta cola."""
+    m = {"meal": "Cena", "name": "Nabo crujiente al horno con pollo", "cals": 300, "protein": 30, "carbs": 10, "fats": 8,
+         "ingredients": ["30 g de nabo", "90 g de pollo", "160 g de yuca"],
+         "ingredients_raw": ["30 g de nabo", "90 g de pollo", "160 g de yuca"]}
+    assert _subir(m, _margen(grasa=5.0, condiciones=_BARIATRICA)) == ["↑30→50 g de Nabo"], m["ingredients"]
+    m["meal"], m["ingredients"] = "Merienda", ["30 g de nabo", "90 g de pollo", "80 g de yuca"]
+    m["ingredients_raw"] = list(m["ingredients"])
+    assert _subir(m, _margen(grasa=5.0, condiciones=_BARIATRICA)) == [], "la merienda, 200 g: ya los tiene"
+    lleno = {"meal": "Cena", "name": "Nabo crujiente al horno con pollo", "cals": 300, "protein": 30, "carbs": 10, "fats": 8,
+             "ingredients": ["30 g de nabo", "90 g de pollo", "200 g de yuca"],
+             "ingredients_raw": ["30 g de nabo", "90 g de pollo", "200 g de yuca"]}
+    assert _subir(lleno, _margen(grasa=5.0, condiciones=_BARIATRICA)) == [], "320 g: ya pasa, no se sube nada"
+    sin = {"meal": "Cena", "name": "Nabo crujiente al horno con pollo", "cals": 300, "protein": 30, "carbs": 10, "fats": 8,
+           "ingredients": ["30 g de nabo", "90 g de pollo", "200 g de yuca"],
+           "ingredients_raw": ["30 g de nabo", "90 g de pollo", "200 g de yuca"]}
+    assert _subir(sin, _margen(grasa=5.0)) == ["↑30→100 g de Nabo"], "sin condición no hay volumen que guardar"
+
+
 def test_en_diabetes_el_vivere_y_la_fruta_dulce_tienen_su_tope(monkeypatch):
     m = _plato("Yuca guisada con queso blanco", "60 g de yuca")
     assert _subir(m, _margen(condiciones=["Diabetes T2"])) == ["↑60→100 g de Yuca"], "el tope (100) es su ración"

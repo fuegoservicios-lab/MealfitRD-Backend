@@ -12,6 +12,7 @@ topes (no hay una tabla nueva):
   · cirugía bariátrica: queso, yogurt, fruta de alto índice glucémico, fruta, aguacate y frutos secos;
   · diabetes: víveres de alto índice glucémico y fruta dulce;
   · embarazo y lactancia: el pescado y el marisco no suben (0: el total de la semana es del lote 187).
+Y en cirugía bariátrica la comida no pasa su VOLUMEN (`tope_por_volumen`: 300 g de sólidos, 200 g la merienda).
 `identidad_plato._subir_linea` sube hasta el menor de los dos, su piso o su tope. Sin condiciones conocidas no hay tope
 (la conducta de siempre). Knob `MEALFIT_IDENTITY_RAISE_CLINICAL_CAP` (True). tooltip-anchor: P1-PLAN-LOTE-915-TOPE-CLINICO
 """
@@ -92,4 +93,31 @@ def tope_de_linea(linea, condiciones) -> Optional[float]:
         return None
 
 
-__all__ = ["activo", "condiciones_de", "es_renal", "tope_de_linea"]
+def tope_por_volumen(meal, linea, condiciones, db) -> Optional[float]:
+    """En cirugía bariátrica, los gramos hasta los que `linea` puede subir sin que la comida pase su volumen (los
+    sólidos que la base mide: 300 g, 200 g la merienda — `cap_bariatric_portions`, 2.ª pasada). `None` = sin tope."""
+    try:
+        if not condiciones or db is None or not isinstance(meal, dict) or not activo():
+            return None
+        from micronutrients import _has_condition
+        from constants import BARIATRIC_CONDITION_TERMS
+        import graph_orchestrator as go
+        if not go.BARIATRIC_VOLUME_CAP_ENABLED or not _has_condition([str(c) for c in condiciones], BARIATRIC_CONDITION_TERMS):
+            return None
+        franja = go._norm_text(str(meal.get("meal") or meal.get("slot") or meal.get("name") or ""))
+        tope = go.BARIATRIC_SNACK_VOLUME_G if ("merienda" in franja or "snack" in franja) else go.BARIATRIC_MEAL_VOLUME_G
+        total, suya, vista = 0.0, 0.0, False
+        for x in meal.get("ingredients") or []:
+            if not isinstance(x, str):
+                continue
+            g = float((db.macros_from_ingredient_string(x) or {}).get("grams") or 0)
+            total += g
+            if not vista and x == linea:
+                suya, vista = g, True
+        return max(0.0, float(tope) - (total - suya))
+    except Exception as e:                                                     # noqa: BLE001
+        logger.debug(f"[P1-PLAN-LOTE-915] tope de volumen no-op: {type(e).__name__}: {e}")
+        return None
+
+
+__all__ = ["activo", "condiciones_de", "es_renal", "tope_de_linea", "tope_por_volumen"]
