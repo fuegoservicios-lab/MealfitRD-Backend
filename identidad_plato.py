@@ -352,11 +352,11 @@ def _con_tope(piso, linea, condiciones, meal=None, db=None) -> int:
 
 def _traza(margen=None) -> float:
     """Gramos de grasa o de proteína por debajo de los cuales una subida no gasta techo; -1 (nada es inapreciable) con
-    el knob apagado, si no se sabe qué condiciones tiene el plan o si tiene enfermedad renal (potasio y fósforo)."""
+    el knob apagado, si no se sabe qué condiciones tiene el plan o si es renal, de diabetes, de SOP o bariátrico."""
     try:
         from knobs import _env_bool
         conds = (margen or {}).get("condiciones")
-        if conds is None or __import__("tope_clinico").es_renal(conds):
+        if conds is None or __import__("tope_clinico").sin_subida_extra(conds):
             return -1.0
         return _INAPRECIABLE_G if _env_bool("MEALFIT_IDENTITY_RAISE_TRACE_FAT", True) else -1.0
     except Exception:                                                          # noqa: BLE001

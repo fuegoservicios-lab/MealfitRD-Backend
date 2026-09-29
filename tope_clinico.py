@@ -12,7 +12,8 @@ topes (no hay una tabla nueva):
   · cirugía bariátrica: queso, yogurt, fruta de alto índice glucémico, fruta, aguacate y frutos secos;
   · diabetes: víveres de alto índice glucémico y fruta dulce;
   · embarazo y lactancia: el pescado y el marisco no suben (0: el total de la semana es del lote 187).
-Y en cirugía bariátrica la comida no pasa su VOLUMEN (`tope_por_volumen`: 300 g de sólidos, 200 g la merienda).
+El VOLUMEN de la comida bariátrica (`tope_por_volumen`: 300 g de sólidos, 200 g la merienda) es opt-in
+(`MEALFIT_IDENTITY_RAISE_VOLUME_CAP`, False): medido, dejaba el plato sin lo que nombra y la comida seguía por encima.
 `identidad_plato._subir_linea` sube hasta el menor de los dos, su piso o su tope. Sin condiciones conocidas no hay tope
 (la conducta de siempre). Knob `MEALFIT_IDENTITY_RAISE_CLINICAL_CAP` (True). tooltip-anchor: P1-PLAN-LOTE-915-TOPE-CLINICO
 """
@@ -50,6 +51,23 @@ def es_renal(condiciones) -> bool:
         return bool(condiciones) and bool(_has_condition(list(condiciones), go._RENAL_CONDITION_TERMS))
     except Exception:                                                          # noqa: BLE001
         return bool(condiciones)             # sin poder comprobarlo, como si lo fuera
+
+
+def sin_subida_extra(condiciones) -> bool:
+    """¿Un plan en el que lo que no tenía sitio sigue sin tenerlo? Donde cuentan el potasio y el fósforo (renal), la
+    carga de carbohidrato (diabetes, prediabetes, resistencia a la insulina, SOP) o el volumen (cirugía bariátrica).
+    A/B del escudo sobre 92 planes: la regla de lo inapreciable subía mango, mandarina y plátano en un plan de diabetes
+    con insulina, dentro de su tope por línea pero 12 g de carbohidrato más al día. Sin poder comprobarlo, sí."""
+    try:
+        if not condiciones:
+            return False
+        from micronutrients import _has_condition
+        from constants import BARIATRIC_CONDITION_TERMS, DIABETES_CONDITION_TERMS, PCOS_CONDITION_TERMS
+        conds = [str(c) for c in condiciones]
+        return es_renal(conds) or any(_has_condition(conds, t) for t in (
+            BARIATRIC_CONDITION_TERMS, DIABETES_CONDITION_TERMS, PCOS_CONDITION_TERMS))
+    except Exception:                                                          # noqa: BLE001
+        return True
 
 
 def tope_de_linea(linea, condiciones) -> Optional[float]:
@@ -93,11 +111,23 @@ def tope_de_linea(linea, condiciones) -> Optional[float]:
         return None
 
 
+def volumen_activo() -> bool:
+    """Opt-in. A/B del escudo sobre 92 planes: con el volumen frenando la subida, «Canoas de Plátano Verde» salía con
+    25 g de plátano y la comida seguía en 374 g (14 de 53 comidas bariátricas por encima de su volumen, contra 15): el
+    recorte de volumen cae entero en las líneas en gramos, que suelen ser lo que el plato nombra. Hasta que ese recorte
+    elija qué recortar, la identidad manda sobre el volumen, como en producción."""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_IDENTITY_RAISE_VOLUME_CAP", False)
+    except Exception:                                                          # noqa: BLE001
+        return False
+
+
 def tope_por_volumen(meal, linea, condiciones, db) -> Optional[float]:
     """En cirugía bariátrica, los gramos hasta los que `linea` puede subir sin que la comida pase su volumen (los
     sólidos que la base mide: 300 g, 200 g la merienda — `cap_bariatric_portions`, 2.ª pasada). `None` = sin tope."""
     try:
-        if not condiciones or db is None or not isinstance(meal, dict) or not activo():
+        if not condiciones or db is None or not isinstance(meal, dict) or not activo() or not volumen_activo():
             return None
         from micronutrients import _has_condition
         from constants import BARIATRIC_CONDITION_TERMS
@@ -120,4 +150,5 @@ def tope_por_volumen(meal, linea, condiciones, db) -> Optional[float]:
         return None
 
 
-__all__ = ["activo", "condiciones_de", "es_renal", "tope_de_linea", "tope_por_volumen"]
+__all__ = ["activo", "volumen_activo", "condiciones_de", "es_renal", "sin_subida_extra", "tope_de_linea",
+           "tope_por_volumen"]

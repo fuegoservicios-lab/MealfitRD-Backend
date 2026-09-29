@@ -156,8 +156,20 @@ def test_en_bariatrica_la_fruta_no_pasa_de_su_tope():
     assert _subir(m, _margen(grasa=5.0)) == ["↑64→100 g de Lechosa"], "sin condición, su ración"
 
 
-def test_en_bariatrica_la_subida_no_pasa_el_volumen_de_la_comida():
-    """`cap_bariatric_portions` deja la comida en 300 g de sólidos (200 g la merienda) y corre ANTES de esta cola."""
+def test_en_bariatrica_el_volumen_no_frena_la_subida_si_no_se_pide():
+    """A/B del escudo (92 planes): con el volumen frenando la subida, «Canoas de Plátano Verde» se entregaba con 25 g de
+    plátano y la comida seguía en 374 g (el tope es 300): el plato perdía lo que su nombre promete y el volumen no se
+    arreglaba (14 de 53 comidas bariátricas por encima, contra 15). El tope por LÍNEA sí se guarda."""
+    m = {"meal": "Cena", "name": "Nabo crujiente al horno con pollo", "cals": 300, "protein": 30, "carbs": 10, "fats": 8,
+         "ingredients": ["30 g de nabo", "90 g de pollo", "200 g de yuca"],
+         "ingredients_raw": ["30 g de nabo", "90 g de pollo", "200 g de yuca"]}
+    assert _subir(m, _margen(grasa=5.0, condiciones=_BARIATRICA)) == ["↑30→100 g de Nabo"], m["ingredients"]
+
+
+def test_en_bariatrica_la_subida_no_pasa_el_volumen_de_la_comida(monkeypatch):
+    """`cap_bariatric_portions` deja la comida en 300 g de sólidos (200 g la merienda) y corre ANTES de esta cola.
+    Opt-in: `MEALFIT_IDENTITY_RAISE_VOLUME_CAP`."""
+    monkeypatch.setenv("MEALFIT_IDENTITY_RAISE_VOLUME_CAP", "true")
     m = {"meal": "Cena", "name": "Nabo crujiente al horno con pollo", "cals": 300, "protein": 30, "carbs": 10, "fats": 8,
          "ingredients": ["30 g de nabo", "90 g de pollo", "160 g de yuca"],
          "ingredients_raw": ["30 g de nabo", "90 g de pollo", "160 g de yuca"]}
@@ -177,7 +189,7 @@ def test_en_bariatrica_la_subida_no_pasa_el_volumen_de_la_comida():
 
 def test_en_diabetes_el_vivere_y_la_fruta_dulce_tienen_su_tope(monkeypatch):
     m = _plato("Yuca guisada con queso blanco", "60 g de yuca")
-    assert _subir(m, _margen(condiciones=["Diabetes T2"])) == ["↑60→100 g de Yuca"], "el tope (100) es su ración"
+    assert _subir(m, _margen(grasa=5.0, condiciones=["Diabetes T2"])) == ["↑60→100 g de Yuca"], "el tope (100) es su ración"
     monkeypatch.setenv("MEALFIT_DM2_HIGH_GI_CAP_G", "80")
     import importlib
     import tope_clinico as tc
@@ -198,6 +210,15 @@ def test_en_embarazo_y_lactancia_el_pescado_no_sube():
 
 
 def test_con_enfermedad_renal_o_sin_saber_las_condiciones_lo_inapreciable_no_abre_nada():
+    """A/B del escudo sobre 92 planes: la regla subía mango, mandarina y plátano en un plan de diabetes con insulina
+    (dentro de su tope por línea, pero son 12 g de carbohidrato más al día) y fruta en bariátrica. Donde la carga de
+    carbohidrato, el volumen o el potasio cuentan, lo que no tenía sitio sigue sin tenerlo."""
+    for cond in (["Enfermedad Renal"], ["Diabetes T2"], ["Cirugía Bariátrica"], ["SOP (PCOS)"], ["Prediabetes"]):
+        m = _plato("Yuca guisada con queso blanco", "60 g de yuca")
+        assert _subir(m, _margen(condiciones=cond)) == [], cond
+    for cond in (["Embarazo"], ["Hipertensión"], ["Hipotiroidismo"], []):
+        m = _plato("Nabo crujiente al horno con queso blanco", "30 g de nabo")
+        assert _subir(m, _margen(condiciones=cond)) == ["↑30→100 g de Nabo"], cond
     m = _plato("Nabo crujiente al horno con queso blanco", "30 g de nabo")
     assert _subir(m, _margen(condiciones=["Enfermedad Renal"])) == []
     m = _plato("Nabo crujiente al horno con queso blanco", "30 g de nabo")
