@@ -162,6 +162,9 @@ def test_el_knob_apagado_devuelve_la_conducta_anterior(sc, monkeypatch):
     items = _lista(sc, "ES")
     assert items["Arroz blanco"].get("brand_product_id") == "sp-arroz-selecto", items["Arroz blanco"]
     assert "market_pkg_price_rd" in items["Arroz blanco"]
+    # Ronda 1: también el rótulo del producto real, sin reescribir su talla (P1-UNIT-SYSTEM-BY-COUNTRY).
+    assert "Selecto 1 Lb" in items["Arroz blanco"]["sku_size_label"], items["Arroz blanco"]
+    assert "Selecto 1 Lb" in items["Arroz blanco"]["display_string"], items["Arroz blanco"]
 
 
 def test_sin_pais_en_contexto_el_agregador_no_cambia(sc):
@@ -238,11 +241,124 @@ def test_la_talla_se_convierte_token_a_token():
     assert l.talla_en_metrico("lata 15 oz", "lata") == "lata 425 g"
     assert l.talla_en_metrico("32 oz", "carton") == "946 ml"
     assert l.talla_en_metrico("16 Oz", "botella") == "473 ml"
-    assert l.talla_en_metrico("35.2 oz", "paquete") == "998 g"
+    assert l.talla_en_metrico("35.2 oz", "paquete") == "1 kg", "997,9 g: a ≤0,5 % del kilo, se redondea"
     assert l.talla_en_metrico("Amarilla 3 Lb", "funda") == "Amarilla 1,4 kg"
     assert l.talla_en_metrico("80/20 Lb", "paquete") == "80/20 Lb", "proporción magro/grasa, no un peso"
     assert l.talla_en_metrico("4×150 g", "paquete") == "4×150 g"
     assert l.talla_en_metrico("", "paquete") == ""
+
+
+# ── F. Ronda 1 de revisión ─────────────────────────────────────────────────────────────────────
+# (1) Con `MEALFIT_BETA_NO_DO_SUPERMARKET_PRODUCTS=false` el lote entero se apaga: también la talla.
+# Antes, la palanca de tallas seguía activa y reescribía el rótulo de un PRODUCTO real del súper
+# («Selecto 1 Lb» → «Selecto 454 g»), lo que P1-UNIT-SYSTEM-BY-COUNTRY prohíbe (falsear una etiqueta).
+
+_LINEAS_RONDA1 = ["300 g de arroz blanco", "400 g de yogurt", "1 cdta de sal", "700 ml de leche de soya",
+                  "250 g de garbanzos secos", "600 g de manzana"]
+
+
+def _lista_lineas(sc, pais, lineas, uid="u-852"):
+    plan = {"_country": pais, "days": [{"day": 1, "meals": [
+        {"meal": "Almuerzo", "name": "Plato", "ingredients": list(lineas)}]}]}
+    if pais != "DO":
+        plan["_pricing_mode"] = "beta_no_prices"
+    res = sc.get_shopping_list_delta(uid, plan, True, False, True, 1.0,
+                                     inventory_override=[], consumed_override=[])
+    return {it["name"]: it for it in res if isinstance(it, dict)}
+
+
+@pytest.mark.parametrize("pais", ("ES", "MX", "CO"))
+def test_con_la_palanca_apagada_la_lista_es_la_de_antes_byte_a_byte(sc, monkeypatch, pais):
+    monkeypatch.setenv("MEALFIT_BETA_NO_DO_SUPERMARKET_PRODUCTS", "false")
+    apagada = _lista_lineas(sc, pais, _LINEAS_RONDA1)
+    # «Antes» = el agregador sin este lote: sin el saneo final y consultando el súper siempre.
+    monkeypatch.setattr(sc, "_sanear_lista_beta", lambda items: 0)
+    monkeypatch.setattr(sc, "_super_rd_en_la_lista", lambda: True)
+    antes = _lista_lineas(sc, pais, _LINEAS_RONDA1)
+    assert set(apagada) == set(antes)
+    for nombre in antes:
+        for campo in ("display_string", "display_qty", "sku_size_label", "brand_product_id", "package_grams"):
+            assert apagada[nombre].get(campo) == antes[nombre].get(campo), (pais, nombre, campo)
+    assert "Selecto 1 Lb" in apagada["Arroz blanco"]["sku_size_label"], apagada["Arroz blanco"]
+    assert "Selecto 1 Lb" in apagada["Arroz blanco"]["display_string"], apagada["Arroz blanco"]
+    assert "(32 oz)" in apagada["Leche de soya"]["display_string"], apagada["Leche de soya"]
+
+
+def test_la_talla_nunca_toca_un_producto_del_super():
+    """Defensivo: un ítem con `brand_product_id` es un producto real; su rótulo no se reescribe."""
+    import envase_pais
+    import lista_sin_super_rd as l
+    it = {"name": "Arroz blanco", "brand_product_id": "sp-arroz-selecto", "sku_size_label": "Selecto 1 Lb",
+          "market_unit": "funda", "package_grams": 453.6,
+          "display_string": "1 funda (Selecto 1 Lb) de Arroz blanco", "display_qty": "1 funda (Selecto 1 Lb)"}
+    antes = dict(it)
+    with envase_pais.lista_de_pais("ES"):
+        assert l.talla_del_catalogo_en_su_sistema([it]) == 0
+    assert it == antes
+
+
+# (2) La talla sale del `package_grams` del envase elegido (lo que guarda la Nevera) cuando una talla del
+# rótulo lo describe: el factor que cuadra (±3 %) decide g o ml. Si no cuadra ninguno (la legumbre
+# «1 lb seco» pesa 1135 g cocida), el número del rótulo.
+
+@pytest.mark.parametrize("rotulo,unidad,gramos,esperado", [
+    ("3 Oz", "botella", 85.05, "85 g"),          # Ajo en polvo: un polvo no va en ml
+    ("8 oz", "botella", 227, "227 g"),           # Mostaza: package_grams 227, no 237 ml
+    ("10 oz", "frasco", 295, "295 ml"),          # Salsa de soya: 10 oz fluidas = 295 ml, no 283 g
+    ("35.2 oz", "paquete", 998, "1 kg"),         # a ≤0,5 % del kilo
+    ("32 oz", "carton", 946, "946 ml"),
+    ("lata 15 oz", "lata", 425, "lata 425 g"),
+    ("1 lb seco", "paquete", 1135, "454 g seco"),  # no cuadra: el número del rótulo
+    ("48 oz", "botella", 1300, "1,4 L"),           # no cuadra (±3 %): líquido por el envase
+    ("Amarilla 3 Lb", "funda", 1360.78, "Amarilla 1,4 kg"),
+    ("Petite 1 Lb", "malla", 453.59, "Petite 454 g"),
+    ("14.1 oz", "lata", 400, "400 g"),
+])
+def test_la_talla_sale_de_los_gramos_del_envase(rotulo, unidad, gramos, esperado):
+    import lista_sin_super_rd as l
+    assert l.talla_en_metrico(rotulo, unidad, gramos) == esperado
+
+
+_FILAS_RONDA1 = [
+    _fila("Mostaza", "Despensa", "botella", price_per_unit=90.0, market_container="botella", container_weight_g=227,
+          market_packages=[{"unit": "botella", "grams": 227, "label": "8 oz", "price": 90}]),
+    _fila("Salsa de soya", "Despensa", "frasco", price_per_unit=120.0, market_container="frasco",
+          container_weight_g=295, market_packages=[{"unit": "frasco", "grams": 295, "label": "10 oz", "price": 120}]),
+    _fila("Harina de maíz precocida", "Despensa", "paquete", price_per_unit=120.0, market_container="paquete",
+          container_weight_g=998, market_packages=[{"unit": "paquete", "grams": 998, "label": "35.2 oz",
+                                                    "price": 120}]),
+    _fila("Chicharrón", "Carnes", "libra", price_per_lb=250.0, market_container="libra", container_weight_g=453.6,
+          market_packages=[{"unit": "libra", "grams": 453.6, "label": "1 lb", "price": 250}], shelf_life_days=5),
+]
+
+
+@pytest.mark.parametrize("pais", ("ES", "MX", "CO"))
+def test_la_lista_metrica_pinta_la_talla_desde_los_gramos_del_envase(sc, monkeypatch, pais):
+    monkeypatch.setattr(sc, "_master_cache", [dict(r) for r in _CATALOGO + _FILAS_RONDA1])
+    lineas = ["100 g de mostaza", "200 ml de salsa de soya", "500 g de harina de maíz precocida"]
+    items = _lista_lineas(sc, pais, lineas)
+    rd = _lista_lineas(sc, "DO", lineas)
+    assert "(227 g" in items["Mostaza"]["display_string"], items["Mostaza"]
+    assert "(295 ml" in items["Salsa de soya"]["display_string"], items["Salsa de soya"]
+    assert "(1 kg" in items["Harina de maíz precocida"]["display_string"], items["Harina de maíz precocida"]
+    for nombre in items:
+        assert items[nombre]["package_grams"] == rd[nombre]["package_grams"], nombre
+        assert items[nombre]["market_qty"] == rd[nombre]["market_qty"], nombre
+
+
+# (3) Un envase que ES una unidad de peso («1 lb» vendido por libra: Chicharrón, Pernil, Tocineta, Gallina
+# criolla) no repite la talla: tras la proyección de P1-UNIT-SYSTEM-BY-COUNTRY la línea decía
+# «5 kg (454 g c/u)» o «454 g (454 g)».
+
+@pytest.mark.parametrize("pais", ("ES", "MX", "CO"))
+def test_el_envase_por_libra_no_repite_la_talla(sc, monkeypatch, pais):
+    monkeypatch.setattr(sc, "_master_cache", [dict(r) for r in _CATALOGO + _FILAS_RONDA1])
+    it = _lista_lineas(sc, pais, ["700 g de chicharrón"])["Chicharrón"]
+    assert "(" not in it["display_string"].split(" de Chicharrón")[0], it["display_string"]
+    assert not re.search(r"\d\s*(?:oz|lbs?|libras?)\b", it["display_string"], re.IGNORECASE), it["display_string"]
+    rd = _lista_lineas(sc, "DO", ["700 g de chicharrón"])["Chicharrón"]
+    assert "(1 lb" in rd["display_string"], rd["display_string"]
+    assert it["market_qty"] == rd["market_qty"]
 
 
 # ── E. Anclas ───────────────────────────────────────────────────────────────────────────────────
