@@ -42,6 +42,13 @@ _MEZCLA_RE = re.compile(r"\b(?:mezcl\w*|integr(?!al)\w*|incorpor\w*|combin\w*|am
                         r"tortitas?|arepitas?|croquetas?|bollitos?|empanad\w*)")
 
 
+#: [P1-PLAN-LOTE-866] «No calientes el queso blanco fresco pasteurizado» (segunda batería real de embarazo del 29-sep,
+#: cena D1): una orden de NO calentar no es calentarlo — y en el embarazo contradice la nota «caliéntalo hasta que humee».
+_NEGADO_RE = re.compile(r"\b(?:no|nunca|sin)\s+(?:\w+\s+){0,2}?(?:calient|calentar|dor|fund|cocin|gratin|tuest|asa\b|asar)\w*")
+_NO_CALENTAR_RE = re.compile(r"\s*\b(?:No|Nunca)\s+(?:lo\s+|la\s+)?(?:calientes|dores|cocines|fundas|gratines|tuestes)\b"
+                             r"[^.;]*?\bqueso\b[^.;]*[.;]?", re.IGNORECASE)
+
+
 def _calentado(pasos: list) -> bool:
     en_mezcla = False
     for p in pasos:
@@ -49,7 +56,7 @@ def _calentado(pasos: list) -> bool:
             continue
         for cl in re.split(r"(?<=[.;])\s+", _sa(p)):   # [P1-PLAN-LOTE-52] con espacio: no corta «1.5 tazas»
             queso = bool(_QUESO_RE.search(cl))
-            if (queso or en_mezcla) and _CALOR_RE.search(cl):
+            if (queso or en_mezcla) and _CALOR_RE.search(_NEGADO_RE.sub(" ", cl)):   # [P1-PLAN-LOTE-866] la negación no calienta
                 return True
             if queso and _MEZCLA_RE.search(cl):
                 en_mezcla = True
@@ -66,13 +73,22 @@ def insertar_paso(meal: dict) -> bool:
             return False
         lista = " ; ".join(_sa(x) for x in (meal.get("ingredients") or []) if isinstance(x, str))
         m = _DORABLE_RE.search(lista)
-        if not m or _calentado(pasos):
+        if not m:
             return False
+        # [P1-PLAN-LOTE-866] la orden de NO calentar el queso se va (en el embarazo, lo manda la seguridad)
+        sin_no = [_NO_CALENTAR_RE.sub("", x).rstrip() if isinstance(x, str) and not _NOTA_RE.search(x) else x
+                  for x in pasos]
+        if _calentado(sin_no):
+            return False
+        pasos = sin_no
         if "mozzarella" in m.group(0):
             frase = ("Calienta la mozzarella pasteurizada sobre el pan caliente o en la sartén hasta que se derrita y humee "
                      "(74 °C por dentro).")
         else:
-            nombre = "el queso de hoja pasteurizado" if "de hoja" in m.group(0) else "el queso blanco pasteurizado"
+            # [P1-PLAN-LOTE-866] el queso de la LISTA («queso fresco» no es «queso blanco» para quien lee)
+            nombre = ("el queso de hoja pasteurizado" if "de hoja" in m.group(0) else
+                      "el queso fresco pasteurizado" if m.group(0).endswith("fresco") else
+                      "el queso de freír" if "freir" in m.group(0) else "el queso blanco pasteurizado")
             frase = (f"Dora {nombre} en la sartén caliente, 1-2 minutos por lado, hasta que humee y esté bien caliente "
                      f"por dentro (74 °C).")
         meal["recipe"] = __import__("paso_de_seguridad").poner(pasos, frase)   # [P1-PLAN-LOTE-863] dentro del Toque de Fuego
