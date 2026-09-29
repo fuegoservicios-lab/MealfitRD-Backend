@@ -63,6 +63,11 @@ def _del_paso(rec, unidad: str, resto: str):
     return next(iter(vistas)) if len(vistas) == 1 else None
 
 
+def _misma_sin_cifra(linea, unidad: str, resto: str) -> bool:
+    m = _SIN_RE.match(linea) if isinstance(linea, str) else None
+    return bool(m and m.group("u").lower() == unidad and _sa(m.group("resto")) == _sa(resto))
+
+
 def restaurar(meal) -> int:
     """Nº de líneas que recuperaron su cifra; 0 si no había nada que hacer o ante cualquier error."""
     try:
@@ -93,10 +98,8 @@ def restaurar(meal) -> int:
             nueva = f"{cifra} {unidad} de {resto}"
             ings[i] = nueva
             if isinstance(raw, list):
-                for j, r in enumerate(raw):
-                    mr = _SIN_RE.match(r) if isinstance(r, str) else None
-                    if mr and mr.group("u").lower() == unidad and _sa(mr.group("resto")) == _sa(resto):
-                        raw[j] = nueva
+                # por ALIMENTO, nunca por índice: la línea del motor que es de este alimento y tampoco trae cifra
+                raw = meal["ingredients_raw"] = [nueva if _misma_sin_cifra(r, unidad, resto) else r for r in raw]
             n += 1
         if n:
             meal.pop("_display", None)
