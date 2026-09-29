@@ -946,3 +946,26 @@ def test_r4_la_puerta_se_memoriza_dentro_del_render(vocab_real, monkeypatch, cc)
     monkeypatch.setattr(go, "_allergen_pool_item_banned", original)
     assert _bdac(_brief_a(cc), 1, day_name="Lunes", country=cc, allergies=["gluten", "huevo"],
                  dislikes=["cebolla"]) == t, "memorizar no cambia el texto"
+
+
+# [ronda 5] La declaración de la CLASE, más específica que el ítem: «legumbres secas», «alergia a legumbres»,
+# «leguminosas y derivados» no caben en «frijoles», y la A de México imponía frijoles contra la línea de alergias del
+# MISMO prompt. La raíz «legumbre»/«leguminosa» cierra la puerta del frijol desde la declaración cruda.
+@pytest.mark.parametrize("campo", ("allergies", "dislikes"))
+@pytest.mark.parametrize("decl", ("legumbres secas", "todas las legumbres", "alergia a legumbres",
+                                  "leguminosas y derivados", "no me gustan las legumbres", "Legumbres",
+                                  "leguminosa"))
+def test_r5_la_clase_legumbre_no_impone_frijoles(vocab_real, campo, decl):
+    kw = {campo: [decl]}
+    linea = _linea_a(_bdac(_esqueleto(), 1, day_name="Lunes", country="MX", **kw))
+    assert not _tiene("frijol", linea), (campo, decl, linea)
+    assert "tortilla de maíz" in linea, ("la tortilla de maíz no es una legumbre", campo, decl, linea)
+
+
+@pytest.mark.parametrize("campo", ("allergies", "dislikes"))
+@pytest.mark.parametrize("decl", ("lentejas", "garbanzos", "soya", "maní", "cacahuate", "arvejas"))
+def test_r5_otra_legumbre_concreta_no_veta_los_frijoles(vocab_real, campo, decl):
+    """Nombrar UNA legumbre concreta no es declarar la clase: la A sigue con sus frijoles."""
+    kw = {campo: [decl]}
+    linea = _linea_a(_bdac(_esqueleto(), 1, day_name="Lunes", country="MX", **kw))
+    assert "frijoles, tortilla de maíz" in linea, (campo, decl, linea)

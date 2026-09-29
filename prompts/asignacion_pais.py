@@ -119,7 +119,8 @@ _FAMILIAS_PUERTA = (
 _RAICES_SOLO_DECLARADAS = {
     "maiz": ("maseca", "masarepa", "polenta", "nixtamal", "nixtamalizado", "nixtamalizada", "cornmeal", "cornstarch",
              "corn", "maize"),
-    "frijol": ("bean",),
+    # [ronda 5] La CLASE: «legumbres secas», «alergia a legumbres», «leguminosas y derivados» no caben en «frijoles».
+    "frijol": ("bean", "legumbre", "leguminosa"),
 }
 
 # ─── (c) el respaldo y la neutra ─────────────────────────────────────────────────────────────────────────────────────
