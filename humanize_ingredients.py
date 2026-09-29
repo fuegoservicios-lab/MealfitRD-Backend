@@ -26,10 +26,47 @@ def _collapse_double_fraction(ing) -> str:
         s = str(ing).strip()
         m = _LEAD_PLUS_INNER_RE.match(s)
         if m and _INNER_QTY_NOUN_RE.search(m.group(1)):
+            if _se_mide(m.group(1)):
+                return ing
             return m.group(1)  # conserva el nombre con su fracción legítima; quita la líder espuria
         return ing
     except Exception:
         return ing
+
+
+# [P1-PLAN-LOTE-930 · 2026-09-29] La cantidad de una línea que se MIDE no es espuria. La regla de arriba le quitaba la cifra
+# a «264.35 g de nabo pelado y cortado en rodajas de 1 cm» (batería real de embarazo rdv864: la lista decía «g de nabo…»):
+# le basta un «de 1 …» más adelante, y «de 1 cm» es una medida de corte. La cifra se queda si lo que sigue a la cantidad
+# es una unidad («250 g de…», «1 cda de jugo de 1 limón») o si lo que viene tras «de <número>» son sólo medidas («en
+# cubos de 2 cm», «filetes de 150 g»). «½ jugo de ½ limón» sigue saliendo «jugo de ½ limón». Knob
+# `MEALFIT_DOUBLE_FRACTION_KEEPS_MEASURED` (True). tooltip-anchor: P1-PLAN-LOTE-930
+_UNIDAD_930 = frozenset((
+    "g", "gr", "grs", "gramo", "gramos", "kg", "kilo", "kilos", "ml", "cc", "l", "lt", "litro", "litros", "oz", "onza",
+    "onzas", "lb", "lbs", "libra", "libras", "taza", "tazas", "cda", "cdas", "cdta", "cdtas", "cucharada", "cucharadas",
+    "cucharadita", "cucharaditas", "lata", "latas", "vaso", "vasos", "sobre", "sobres", "paquete", "paquetes", "pote",
+    "potes", "botella", "botellas", "funda", "fundas", "unidad", "unidades", "lonja", "lonjas", "rebanada", "rebanadas",
+    "rodaja", "rodajas", "pizca", "pizcas", "punado", "punados", "diente", "dientes", "cm", "mm", "pulgada", "pulgadas",
+    "minuto", "minutos", "min"))
+_INNER_NOMBRE_930 = re.compile(r'\bde\s+(?:\d+(?:[.,]\d+)?|½|¼|¾)\s+(\w+)', re.IGNORECASE)
+
+
+def _sin_tilde_930(palabra) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(palabra or "")) if not unicodedata.combining(c)).lower()
+
+
+def _se_mide(resto) -> bool:
+    """`resto`: la línea sin su cantidad líder. True si esa cantidad mide algo y no es un prepend espurio."""
+    try:
+        if not _env_bool("MEALFIT_DOUBLE_FRACTION_KEEPS_MEASURED", True):
+            return False
+        primera = re.match(r"\s*(\w+)", str(resto))
+        if primera and _sin_tilde_930(primera.group(1)) in _UNIDAD_930:
+            return True
+        nombres = [_sin_tilde_930(n) for n in _INNER_NOMBRE_930.findall(str(resto))]
+        return bool(nombres) and all(n in _UNIDAD_930 for n in nombres)
+    except Exception:
+        return False
 
 # Diccionario de equivalencias para medidas caseras dominicanas
 # key: string base simplificado
