@@ -1115,7 +1115,7 @@ def _shopping_coherence_alert_job():
         persisted_count = 0
         persist_errors = 0
 
-        for plan_record in plans:
+        for plan_record in __import__("consentimientos").por_usuario(plans, donde="coherencia_diaria"):  # [P1-PLAN-LOTE-843] marca por usuario
             plan_data = plan_record.get("plan_data") or {}
             if isinstance(plan_data, str):
                 try:
@@ -2393,7 +2393,7 @@ def _process_failed_inventory_deductions_queue() -> None:
     still_failed = 0
     dead_lettered = 0
 
-    for row in rows:
+    for row in __import__("consentimientos").por_usuario(rows, donde="descuentos_fallidos"):  # [P1-PLAN-LOTE-843] marca por usuario
         row_id = row.get("id")
         user_id = row.get("user_id")
         items_jsonb = row.get("ingredients") or []
@@ -19918,7 +19918,7 @@ def _process_pending_shopping_lists():
             
         logger.info(f" [GAP F] Procesando shopping lists pendientes para {len(plans)} planes...")
         
-        for p in plans:
+        for p in __import__("consentimientos").por_usuario(plans, donde="listas_pendientes"):  # [P1-PLAN-LOTE-843] marca por usuario
             meal_plan_id = p.get('id', 'unknown')
             try:
                 # [P0-5] Skip rows missing user_id instead of KeyError-ing the whole loop.
@@ -26326,6 +26326,8 @@ def _detect_and_escalate_stuck_chunks():
                             url="/dashboard",
                         )
 
+            # [P1-PLAN-LOTE-843] Solo los que el SELECT eligió (`id = ANY`): el UPDATE masivo escalaba también los que
+            # esperan el permiso para la IA (o la pausa), y con el sello puesto acababan en la rama terminal.
             execute_sql_write("""
                 UPDATE plan_chunk_queue
                 SET escalated_at = NOW(),
@@ -26337,7 +26339,8 @@ def _detect_and_escalate_stuck_chunks():
                         EXTRACT(EPOCH FROM (NOW() - execute_after))::int - COALESCE(expected_preemption_seconds, 0)
                       ) > 86400
                   AND (escalated_at IS NULL OR escalated_at < NOW() - INTERVAL '30 minutes')
-            """)
+                  AND id = ANY(%s::uuid[])
+            """, ([str(r["id"]) for r in stuck_rows],))
 
         # 2. Detectar stuck terminal (>72h y ya intentado 3+ veces) → dead-letter + notify
         terminal = execute_sql_query(
@@ -26347,8 +26350,12 @@ def _detect_and_escalate_stuck_chunks():
             WHERE status IN ('pending', 'stale')
               AND escalated_at < NOW() - INTERVAL '72 hours'
               AND COALESCE(attempts, 0) >= 3
+              -- [P1-PLAN-LOTE-843] El que espera el permiso para la IA no se da por perdido: no se recoge A PROPÓSITO.
+              __AI_CONSENT_GATE__
             LIMIT 50
-            """, fetch_all=True
+            """.replace("__AI_CONSENT_GATE__",
+                        __import__("consentimientos").fragmento_sql_permiso("plan_chunk_queue.user_id")),
+            fetch_all=True
         ) or []
 
         if terminal:

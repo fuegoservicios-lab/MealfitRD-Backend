@@ -285,12 +285,15 @@ def test_version_vieja_o_retirado_428(app_ia, modo, lectura, fila):
 
 
 def test_modo_log_solo_anota_la_falta_de_permiso(app_ia, modo, lectura, caplog):
+    """Anotado en `info`, no en `warning`: en `log` saldría en CADA petición durante el despliegue (ronda de arreglo 1)."""
     cliente, _ = app_ia
     modo("log")
     lectura["fila"] = _fila(at=False, cn=False, version=None)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         assert cliente.post("/ia").status_code == 200
-    assert any("P1-PLAN-LOTE-843" in r.getMessage() and "modo log" in r.getMessage() for r in caplog.records)
+        assert cliente.post("/suave").json() == {"permiso": True}
+    nuestros = [r for r in caplog.records if "P1-PLAN-LOTE-843" in r.getMessage() and "modo log" in r.getMessage()]
+    assert len(nuestros) == 2 and all(r.levelname == "INFO" for r in nuestros)
 
 
 def test_modo_log_respeta_la_retirada_explicita(app_ia, modo, lectura):
@@ -383,22 +386,33 @@ def test_el_fragmento_sql_es_constante_y_depende_del_modo(modo):
 
 
 # ═════════════════════════════════════════════ 5. registrar, retirar y reanudar
+@pytest.fixture(autouse=True)
+def _interruptor_del_plan(monkeypatch):
+    """El interruptor de P1-PLAN-MODE encendido (su default), fijado para que ningún entorno lo cambie."""
+    import plan_mode
+    monkeypatch.setattr(plan_mode, "PLAN_MODE_SWITCH_ENABLED", True)
+
+
 def test_registrar_escribe_registro_y_estado_en_una_transaccion(pool, monkeypatch):
-    p = pool([("FOR UPDATE", [{"plan_mode": "plan", "plan_mode_changed_at": None, "ai_consent_revoked_at": None}], 1),
+    p = pool([("FOR UPDATE", [{"plan_mode": "plan", "plan_mode_changed_at": None, "ai_consent_paused_at": None}], 1),
               ("RETURNING ai_consent_version", [_fila(analytics=True)], 1)])
     monkeypatch.setattr("plan_mode.resume_plan_generation", lambda uid: pytest.fail("no había pausa que deshacer"))
     out = cs.registrar(UID, ia=True, analytics=True, locale="es-DO", platform="ios", app_build="106",
                        text_sha256="a" * 64)
     assert [e[0] for e in p.log][0] == "begin" and p.log[-1] == ("commit",)
+    assert "SELECT plan_mode, plan_mode_changed_at, ai_consent_paused_at FROM user_profiles" in p.execs()[0][0]
     inserts = [(q, par) for q, par in p.execs() if q.startswith("INSERT INTO public.user_consents")]
     assert [(par[2], par[4]) for _, par in inserts] == [("ai_processing", True), ("ai_transfer_cn", True),
                                                         ("analytics", True)]
-    assert all(par[0] == UID and par[1] is None and par[3] == "ia-2026-10" and par[5] == "a" * 64 for _, par in inserts)
+    assert all(par[0] == UID and par[1] is None and par[3] == "ia-2026-10" and par[5] == "a" * 64
+               and par[9] == "cuenta" for _, par in inserts)
+    assert all(", origen) VALUES " in q for q, _ in inserts)
     update = next(q for q, _ in p.execs() if q.startswith("UPDATE user_profiles SET"))
     for trozo in ("ai_consent_version = %s", "ai_consent_at = now()", "ai_cn_transfer_at = now()",
-                  "ai_consent_revoked_at = NULL", "analytics_consent = %s"):
+                  "ai_consent_revoked_at = NULL", "ai_consent_paused_at = NULL", "analytics_consent = %s"):
         assert trozo in update
-    assert out["vigente"] is True and out["analytics"] is True and out["plan_reanudado"] is False
+    assert out["vigente"] is True and out["analytics"] is True
+    assert out["plan_reanudado"] is False and out["plan_expired"] is False
 
 
 def test_registrar_solo_la_analitica_no_toca_la_ia(pool):
@@ -408,6 +422,7 @@ def test_registrar_solo_la_analitica_no_toca_la_ia(pool):
     assert [(par[2], par[4]) for par in inserts] == [("analytics", False)]
     update = next(q for q, _ in p.execs() if q.startswith("UPDATE user_profiles SET"))
     assert "ai_consent_version" not in update.split("RETURNING")[0] and "analytics_consent = %s" in update
+    assert "ai_consent_paused_at" not in update, "solo conceder la IA cierra la pausa de la retirada"
 
 
 def test_registrar_sin_perfil_hace_rollback(pool):
@@ -417,8 +432,8 @@ def test_registrar_sin_perfil_hace_rollback(pool):
     assert p.log[-1] == ("rollback",)
 
 
-def test_retirar_pone_la_bandera_primero_y_luego_pausa_la_cola(pool, monkeypatch):
-    p = pool([("SELECT ai_consent_revoked_at", [{"ai_consent_revoked_at": None}], 1),
+def test_retirar_apaga_el_generador_en_la_misma_transaccion_y_luego_la_cola(pool, monkeypatch):
+    p = pool([("SELECT ai_consent_revoked_at, plan_mode", [{"ai_consent_revoked_at": None, "plan_mode": "plan"}], 1),
               ("SELECT ai_consent_version", [_fila(revocado=True)], 1)])
     llamadas = []
 
@@ -430,48 +445,177 @@ def test_retirar_pone_la_bandera_primero_y_luego_pausa_la_cola(pool, monkeypatch
     out = cs.retirar(UID, platform="web")
     assert len(llamadas) == 1
     log_al_pausar = llamadas[0][1]
-    assert log_al_pausar[-1] == ("commit",), "la bandera se confirma ANTES de tocar la cola"
+    assert log_al_pausar[-1] == ("commit",), "la bandera y el modo se confirman ANTES de tocar la cola"
     sqls = [e[1] for e in log_al_pausar if e[0] == "exec"]
-    assert any(q == "UPDATE user_profiles SET ai_consent_revoked_at = now() WHERE id = %s" for q in sqls)
+    assert "UPDATE user_profiles SET ai_consent_revoked_at = now() WHERE id = %s" in sqls
+    assert ("UPDATE user_profiles SET plan_mode = 'tracking', plan_mode_changed_at = now(), "
+            "ai_consent_paused_at = now() WHERE id = %s") in sqls, "el mismo now() en las dos columnas"
     inserts = [e[2] for e in log_al_pausar if e[0] == "exec" and e[1].startswith("INSERT INTO public.user_consents")]
-    assert [(par[2], par[4]) for par in inserts] == [("ai_processing", False), ("ai_transfer_cn", False)]
+    assert [(par[2], par[4], par[9]) for par in inserts] == [("ai_processing", False, "cuenta"),
+                                                             ("ai_transfer_cn", False, "cuenta")]
     assert out["vigente"] is False and out["ai_consent_revoked_at"] and out["plan_pausado"] is True
 
 
 def test_retirar_dos_veces_conserva_la_primera_fecha_y_no_escribe(pool, monkeypatch):
-    p = pool([("SELECT ai_consent_revoked_at", [{"ai_consent_revoked_at": T0}], 1),
+    p = pool([("SELECT ai_consent_revoked_at, plan_mode", [{"ai_consent_revoked_at": T0, "plan_mode": "tracking"}], 1),
               ("SELECT ai_consent_version", [_fila(revocado=True)], 1)])
     monkeypatch.setattr("plan_mode.pause_plan_generation", lambda uid: {"plan_mode": "tracking", "chunks_cancelled": 0})
-    cs.retirar(UID)
+    out = cs.retirar(UID)
     sqls = [q for q, _ in p.execs()]
     assert not any(q.startswith("UPDATE") or q.startswith("INSERT") for q in sqls)
+    assert out["plan_pausado"] is False
 
 
-def test_si_la_pausa_falla_la_retirada_queda_y_no_revienta(pool, monkeypatch):
-    pool([("SELECT ai_consent_revoked_at", [{"ai_consent_revoked_at": None}], 1),
+def test_quien_ya_estaba_en_seguimiento_no_se_re_estampa_ni_cuenta_como_pausado(pool, monkeypatch):
+    p = pool([("SELECT ai_consent_revoked_at, plan_mode", [{"ai_consent_revoked_at": None, "plan_mode": "tracking"}], 1),
+              ("SELECT ai_consent_version", [_fila(revocado=True)], 1)])
+    cancelada = []
+    monkeypatch.setattr("plan_mode.pause_plan_generation",
+                        lambda uid: cancelada.append(uid) or {"plan_mode": "tracking", "chunks_cancelled": 0})
+    out = cs.retirar(UID)
+    assert not any("plan_mode = 'tracking'" in q for q, _ in p.execs())
+    assert out["plan_pausado"] is False, "plan_pausado sale del modo ANTERIOR a la retirada"
+    assert cancelada == [UID], "la cola se cancela igual (restos de una carrera)"
+
+
+def test_si_la_cola_falla_la_retirada_y_la_pausa_quedan(pool, monkeypatch):
+    pool([("SELECT ai_consent_revoked_at, plan_mode", [{"ai_consent_revoked_at": None, "plan_mode": "plan"}], 1),
           ("SELECT ai_consent_version", [_fila(revocado=True)], 1)])
 
     def _boom(uid):
         raise RuntimeError("cola caída")
 
     monkeypatch.setattr("plan_mode.pause_plan_generation", _boom)
-    assert cs.retirar(UID)["plan_pausado"] is False
+    out = cs.retirar(UID)
+    assert out["vigente"] is False and out["plan_pausado"] is True, "el modo ya cambió en la transacción"
 
 
-@pytest.mark.parametrize("plan_mode, cambio, reanuda", [
-    ("tracking", T0 + timedelta(seconds=1), True),     # la pausa la puso la retirada
-    ("tracking", T0 - timedelta(days=3), False),        # ya estaba en modo contador antes de retirar
-    ("tracking", T0 + timedelta(hours=2), False),       # pausó a mano después: su pausa manda
-    ("plan", T0 + timedelta(seconds=1), False),         # el generador ya estaba encendido
+def test_con_el_interruptor_del_plan_apagado_la_retirada_no_toca_el_modo(pool, monkeypatch):
+    import plan_mode
+    monkeypatch.setattr(plan_mode, "PLAN_MODE_SWITCH_ENABLED", False)
+    p = pool([("SELECT ai_consent_revoked_at, plan_mode", [{"ai_consent_revoked_at": None, "plan_mode": "plan"}], 1),
+              ("SELECT ai_consent_version", [_fila(revocado=True)], 1)])
+    monkeypatch.setattr("plan_mode.pause_plan_generation", lambda uid: pytest.fail("sin interruptor no hay pausa"))
+    out = cs.retirar(UID)
+    assert not any("plan_mode = 'tracking'" in q for q, _ in p.execs()) and out["plan_pausado"] is False
+
+
+@pytest.mark.parametrize("plan_mode, cambio, pausa, reanuda", [
+    ("tracking", T0, T0, True),                                  # la pausa vigente es la de la retirada
+    ("tracking", T0 + timedelta(hours=2), T0, False),            # apagó a mano después: su pausa manda
+    ("tracking", T0 - timedelta(days=3), None, False),           # ya estaba en seguimiento: sin marca
+    ("plan", T0, T0, False),                                     # el generador ya estaba encendido
 ])
-def test_volver_a_conceder_reanuda_solo_la_pausa_de_la_retirada(pool, monkeypatch, plan_mode, cambio, reanuda):
-    pool([("FOR UPDATE", [{"plan_mode": plan_mode, "plan_mode_changed_at": cambio, "ai_consent_revoked_at": T0}], 1),
+def test_volver_a_conceder_reanuda_solo_la_pausa_de_la_retirada(pool, monkeypatch, plan_mode, cambio, pausa, reanuda):
+    pool([("FOR UPDATE", [{"plan_mode": plan_mode, "plan_mode_changed_at": cambio, "ai_consent_paused_at": pausa}], 1),
           ("RETURNING ai_consent_version", [_fila()], 1)])
     llamadas = []
     monkeypatch.setattr("plan_mode.resume_plan_generation",
                         lambda uid: llamadas.append(uid) or {"plan_mode": "plan", "chunks_revived": 3})
     out = cs.registrar(UID, ia=True)
     assert (llamadas == [UID]) is reanuda and out["plan_reanudado"] is reanuda
+
+
+@pytest.mark.parametrize("vencido", [True, False])
+def test_conceder_propaga_plan_expired(pool, monkeypatch, vencido):
+    pool([("FOR UPDATE", [{"plan_mode": "tracking", "plan_mode_changed_at": T0, "ai_consent_paused_at": T0}], 1),
+          ("RETURNING ai_consent_version", [_fila()], 1)])
+    monkeypatch.setattr("plan_mode.resume_plan_generation",
+                        lambda uid: {"plan_mode": "plan", "paused_days": 40 if vencido else 2, "plan_expired": vencido})
+    out = cs.registrar(UID, ia=True)
+    assert out["plan_reanudado"] is True and out["plan_expired"] is vencido
+
+
+# ─────────── las tres secuencias de la revisión, con un perfil que cambia de verdad entre pasos
+class _Perfil:
+    """Una fila de `user_profiles` y un reloj: cada transacción ve su propio `now()`. Interpreta SOLO las sentencias de
+    `registrar`/`retirar` (la base de verdad la validó el script de la ronda de arreglo 1 sobre tablas temporales) y la
+    bandera de `plan_mode.pause/resume_plan_generation` (su CASE: solo cambia la hora si cambia el modo)."""
+
+    def __init__(self, plan_mode="plan"):
+        self.t = T0
+        self.f = {"plan_mode": plan_mode, "plan_mode_changed_at": T0 - timedelta(days=10),
+                  "ai_consent_paused_at": None, "ai_consent_revoked_at": None, "ai_consent_version": None,
+                  "ai_consent_at": None, "ai_cn_transfer_at": None, "analytics_consent": None}
+        self.reanudadas = 0
+
+    def tic(self):
+        self.t += timedelta(minutes=7)
+        return self.t
+
+    def respond(self, q, params):
+        f, now = self.f, self.t
+        if q.startswith("SELECT") and "FOR UPDATE" in q or q.startswith("SELECT ai_consent_version"):
+            return [dict(f)], 1
+        if q == "UPDATE user_profiles SET ai_consent_revoked_at = now() WHERE id = %s":
+            f["ai_consent_revoked_at"] = now
+        elif q.startswith("UPDATE user_profiles SET plan_mode = 'tracking'"):
+            f.update(plan_mode="tracking", plan_mode_changed_at=now, ai_consent_paused_at=now)
+        elif q.startswith("UPDATE user_profiles SET ai_consent_version"):
+            f.update(ai_consent_version=cs.AI_CONSENT_VERSION, ai_consent_at=now, ai_cn_transfer_at=now,
+                     ai_consent_revoked_at=None, ai_consent_paused_at=None)
+            return [dict(f)], 1
+        return [], 1
+
+    def a_modo(self, modo):
+        self.tic()
+        if self.f["plan_mode"] != modo:
+            self.f.update(plan_mode=modo, plan_mode_changed_at=self.t)
+        return {"plan_mode": modo}
+
+
+@pytest.fixture
+def perfil(pool, monkeypatch):
+    def _crear(plan_mode="plan"):
+        pf = _Perfil(plan_mode)
+        p = pool()
+        p.respond = pf.respond
+        monkeypatch.setattr("plan_mode.pause_plan_generation", lambda uid: pf.a_modo("tracking"))
+
+        def _reanuda(uid):
+            pf.reanudadas += 1
+            return pf.a_modo("plan")
+
+        monkeypatch.setattr("plan_mode.resume_plan_generation", _reanuda)
+        return pf
+    return _crear
+
+
+def _paso(pf, fn, *a, **k):
+    pf.tic()
+    return fn(*a, **k)
+
+
+def test_secuencia_retirar_encender_apagar_conceder_no_reanuda(perfil):
+    import plan_mode
+    pf = perfil()
+    assert _paso(pf, cs.retirar, UID)["plan_pausado"] is True
+    plan_mode.resume_plan_generation(UID)      # encender a mano (Configuración)
+    plan_mode.pause_plan_generation(UID)       # apagar a mano
+    pf.reanudadas = 0
+    out = _paso(pf, cs.registrar, UID, ia=True)
+    assert out["plan_reanudado"] is False and pf.reanudadas == 0 and pf.f["plan_mode"] == "tracking"
+    assert pf.f["ai_consent_paused_at"] is None, "conceder limpia la marca"
+
+
+def test_secuencia_retirar_encender_retirar_conceder_si_reanuda(perfil):
+    import plan_mode
+    pf = perfil()
+    _paso(pf, cs.retirar, UID)
+    plan_mode.resume_plan_generation(UID)      # encender a mano
+    assert _paso(pf, cs.retirar, UID)["plan_pausado"] is True, "la segunda retirada vuelve a pausar"
+    pf.reanudadas = 0
+    out = _paso(pf, cs.registrar, UID, ia=True)
+    assert out["plan_reanudado"] is True and pf.reanudadas == 1 and pf.f["plan_mode"] == "plan"
+
+
+def test_secuencia_ya_en_seguimiento_retirar_conceder_no_reanuda(perfil):
+    pf = perfil("tracking")
+    antes = pf.f["plan_mode_changed_at"]
+    assert _paso(pf, cs.retirar, UID)["plan_pausado"] is False
+    assert pf.f["plan_mode_changed_at"] == antes and pf.f["ai_consent_paused_at"] is None
+    out = _paso(pf, cs.registrar, UID, ia=True)
+    assert out["plan_reanudado"] is False and pf.reanudadas == 0 and pf.f["plan_mode"] == "tracking"
 
 
 # ═════════════════════════════════════════════ 6. el invitado y la adopción
@@ -485,6 +629,7 @@ def test_el_invitado_se_guarda_con_el_hash_y_nunca_con_el_id(monkeypatch):
     assert _norm(q).startswith("INSERT INTO public.user_consents (user_id, guest_hash,") and q.count("(%s") == 3
     assert SESION not in [str(x) for x in params], "el session_id crudo no se guarda"
     assert params[0] is None and params[1] == h and params[2] == "ai_processing"
+    assert ", origen) VALUES " in q and params[9::10] == ("invitado", "invitado", "invitado"), "origen = invitado"
     with pytest.raises(ValueError):
         cs.registrar_invitado("corto", ia=True)
 
@@ -506,6 +651,7 @@ def test_adoptar_copia_con_la_fecha_original_y_sin_duplicar(pool):
     for q, par in [e for e in execs if e[0].startswith("INSERT INTO public.user_consents")]:
         assert par[0] == UID and par[8] == T0, "la FECHA del invitado, no la de hoy"
         assert "WHERE NOT EXISTS" in q
+        assert "created_at, origen) SELECT" in q and "%s::timestamptz, 'adopcion'" in q, "origen = adopcion"
     upd = next((q, par) for q, par in execs if q.startswith("UPDATE user_profiles SET ai_consent_version"))
     assert upd[1][:3] == ("ia-2026-10", T0, T0)
     assert "(ai_consent_at IS NULL OR ai_consent_at < %s)" in upd[0], "no pisa una decisión propia más reciente"
@@ -612,9 +758,17 @@ def test_migracion_forma_e_idempotencia():
     assert sql.count("CREATE INDEX IF NOT EXISTS") == 2
     assert "REVOKE ALL ON public.user_consents FROM PUBLIC;" in sql
     for col in ("ai_consent_version TEXT", "ai_consent_at TIMESTAMPTZ", "ai_consent_revoked_at TIMESTAMPTZ",
-                "ai_cn_transfer_at TIMESTAMPTZ", "analytics_consent BOOLEAN"):
+                "ai_cn_transfer_at TIMESTAMPTZ", "analytics_consent BOOLEAN", "ai_consent_paused_at TIMESTAMPTZ"):
         assert f"ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS {col};" in sql
+    # [ronda de arreglo 1] origen de cada fila, en la MISMA migración (aún sin aplicar)
+    assert "origen TEXT NOT NULL DEFAULT 'cuenta'," in sql
+    assert "ALTER TABLE public.user_consents ADD COLUMN IF NOT EXISTS origen TEXT NOT NULL DEFAULT 'cuenta';" in sql
+    assert "CHECK (origen IN ('cuenta', 'invitado', 'adopcion'))" in sql
+    assert "CHECK ((origen = 'invitado') = (guest_hash IS NOT NULL))" in sql
+    assert set(cs.ORIGENES) == {"cuenta", "invitado", "adopcion"}
     assert "DO $$" in sql and "RAISE EXCEPTION" in sql
+    assert "'ai_cn_transfer_at', 'analytics_consent', 'ai_consent_paused_at')) <> 6" in sql
+    assert "user_consents_origen_titular_chk') THEN" in sql
     assert (_BACKEND.parent / "migrations" / _MIG).read_text(encoding="utf-8") == sql, "copia SSOT de la raíz"
 
 
@@ -631,7 +785,7 @@ def test_nadie_edita_ni_borra_el_registro():
 def test_las_columnas_del_permiso_no_se_escriben_por_patch_profile():
     from routers.user_data import _PROFILE_SCALAR_WHITELIST
     assert not (_PROFILE_SCALAR_WHITELIST & {"ai_consent_version", "ai_consent_at", "ai_consent_revoked_at",
-                                             "ai_cn_transfer_at", "analytics_consent"})
+                                             "ai_cn_transfer_at", "analytics_consent", "ai_consent_paused_at"})
 
 
 # ═════════════════════════════════════════════ 9. exportación, CORS, perfil y paridad con el frontend

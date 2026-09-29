@@ -101,6 +101,30 @@ def test_el_escalado_y_la_alerta_de_zombies_saltan_a_quien_espera_el_permiso(mon
     assert all("__AI_CONSENT_GATE__" not in q for q in vistas)
 
 
+def test_el_update_del_escalado_y_la_rama_terminal_tambien_saltan_a_quien_espera(monkeypatch):
+    """[ronda de arreglo 1] El UPDATE era masivo (escalaba también a los que el SELECT saltó) y la rama terminal no
+    miraba el permiso: un bloque que espera a que la persona acepte acababa dado por perdido."""
+    import cron_tasks as ct
+    monkeypatch.setenv("MEALFIT_AI_CONSENT_GATE", "block")
+    atascado = {"id": "44444444-5555-4666-8777-888888888888", "user_id": UID, "meal_plan_id": "p", "week_number": 2,
+                "attempts": 0, "lag_seconds": 90000, "effective_lag_seconds": 90000, "escalated_at": None}
+    lecturas, escrituras = [], []
+
+    def _q(q, *a, **k):
+        lecturas.append(_norm(q))
+        return [atascado] if "escalated_at IS NULL OR escalated_at" in q else []
+
+    monkeypatch.setattr(ct, "execute_sql_query", _q)
+    monkeypatch.setattr(ct, "execute_sql_write", lambda q, params=None, **k: escrituras.append((_norm(q), params)))
+    monkeypatch.setattr(ct, "_dispatch_push_notification", lambda **k: None)
+    ct._detect_and_escalate_stuck_chunks()
+    update, params = next((q, p) for q, p in escrituras if q.startswith("UPDATE plan_chunk_queue SET escalated_at"))
+    assert "AND id = ANY(%s::uuid[])" in update and params == ([atascado["id"]],), "solo los que el SELECT eligió"
+    terminal = next(q for q in lecturas if "escalated_at < NOW() - INTERVAL '72 hours'" in q)
+    assert "upc.id = plan_chunk_queue.user_id" in terminal and "upc.ai_consent_revoked_at IS NULL" in terminal
+    assert "__AI_CONSENT_GATE__" not in terminal
+
+
 # ═════════════════════════════════════════════ 3. la traducción del plan (plan_jobs + motor)
 def test_el_claim_de_plan_jobs_deja_en_cola_la_traduccion_sin_permiso(monkeypatch):
     import db
@@ -180,6 +204,21 @@ def test_el_coach_proactivo_sin_permiso_manda_el_aviso_fijo():
     fijo = cuerpo.index("if not session_id or not _ia_ok:")
     assert fijo < cuerpo.index("chat_llm = ChatGLM(") < cuerpo.index("response = chat_llm.invoke(prompt)")
     assert cuerpo.index('_ia_ok = permite_ia(user_id, "coach_proactivo")') < cuerpo.index("get_embedding(")
+
+
+def test_el_coach_proactivo_lee_el_permiso_despues_del_tope_diario():
+    """[ronda de arreglo 1] La lectura va junto al embedding y al prompt, después de los `continue` del tope diario y de
+    los demás filtros; hasta entonces `_ia_ok` es False (fail-closed). Las dos ramas que escriben un aviso la hacen."""
+    src = _src("proactive_agent.py")
+    cuerpo = src[src.index("def run_proactive_checks("):]
+    lectura = '_ia_ok = permite_ia(user_id, "coach_proactivo")'
+    assert cuerpo.count(lectura) == 2
+    tope = cuerpo.index("if daily_nudges >= _tope_diario:")
+    assert cuerpo.index("_ia_ok = False") < tope < cuerpo.index(lectura)
+    resumen = cuerpo.index("no registró NADA. Generando nudge indulgente")
+    comida = cuerpo.index("no registró {meal_to_check}. Generando mensaje")
+    segunda = cuerpo.index(lectura, cuerpo.index(lectura) + 1)
+    assert resumen < cuerpo.index(lectura) < comida < segunda < cuerpo.index("get_embedding(context_summary)")
 
 
 def test_la_generacion_jit_muerta_no_revive_sin_permiso(monkeypatch, sin_permiso):

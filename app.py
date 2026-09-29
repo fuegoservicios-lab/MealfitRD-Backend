@@ -4043,6 +4043,7 @@ def api_migrate_guest(
     data: dict = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
     _rl: Optional[str] = Depends(_AUTH_MIGRATE_LIMITER),
+    _emb: None = Depends(_consentimientos.embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """
     Endpoint invocado post-registro para migrar la metadata acumulada por un 'guest' a su nuevo UUID.

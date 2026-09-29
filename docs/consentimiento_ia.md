@@ -69,12 +69,15 @@ la fila que ya lee (cero consultas extra). No hace falta una llamada nueva al ar
   `locale`, `app_build` > 64, `text_sha256` que no es hex de 64): 422 `ai_consent_invalid_field`.
 - `text_sha256`: el SHA-256 (hex en minúsculas) del texto EXACTO que se mostró, calculado por el cliente.
 - Respuesta 200: el objeto de `GET /api/consents` más `"plan_reanudado": true|false` (si la retirada había pausado el
-  generador, conceder lo reanuda; ver abajo).
+  generador y sigue en esa pausa, conceder lo reanuda; ver abajo) y `"plan_expired": true|false` (el de
+  `resume_plan_generation`: la pausa duró más que la ventana de reanudación, `MEALFIT_PLAN_PAUSE_MAX_RESUME_DAYS`, y el
+  plan hay que renovarlo; siempre `false` si no se reanudó nada).
 
 ### `POST /api/consents/withdraw` (cuenta)
 
 Cuerpo opcional `{"locale", "platform", "app_build"}`. Respuesta 200: el objeto de `GET /api/consents` (con
-`ai_consent_revoked_at`) más `"plan_pausado": true|false`. Retirar dos veces no escribe filas nuevas.
+`ai_consent_revoked_at`) más `"plan_pausado": true|false`: `true` solo si ESTA retirada apagó el generador (quien ya estaba
+en modo seguimiento no tenía nada que pausar: `false`). Retirar dos veces no escribe filas nuevas.
 
 ### `POST /api/consents/guest` (invitado, sin sesión)
 
@@ -103,10 +106,14 @@ hoja).
 
 ### La cabecera del invitado
 
-`X-Bioboros-AI-Consent: ia-2026-10` en **cada** llamada a la IA. Para el invitado es obligatoria (sin ella, o con una
-versión vieja, 428). Con sesión se ignora (manda la base), pero conviene mandarla siempre que haya permiso local: si la
-sesión caducó, la petición llega sin identidad y con la cabecera recibe el 401 de siempre en vez de un 428. Está en
-`allow_headers` del CORS (en nativo toda llamada es cross-origin).
+`X-Bioboros-AI-Consent: ia-2026-10` en **cada** llamada a la IA **del invitado**. Para el invitado es obligatoria (sin
+ella, o con una versión vieja, 428). Está en `allow_headers` del CORS (en nativo toda llamada es cross-origin).
+
+**Regla para las cuentas (la cumple el frontend, Task 844):** una cuenta con sesión **nunca** manda la cabecera sacada de
+`localStorage`, y el cliente la **borra** en cuanto `vigente` es `false` (retirada, versión nueva). Motivo: el backend
+decide por la base cuando hay identidad, pero un token inválido o caducado llega SIN identidad y se trata como invitado
+(`_decidir_peticion`); una cabecera guardada dejaría pasar como invitado a una cuenta que retiró el permiso. No se cambia
+el backend para esto: la cabecera es del invitado y solo el cliente sabe si la persona tiene cuenta.
 
 ### Adopción del plan del invitado
 
@@ -160,7 +167,63 @@ Notas: `/api/chat/message` no llama a la IA por sí mismo, pero un mensaje de ro
 pendiente (`handle_nudge_response` → IA); no tiene llamadores en el frontend. `/retry-chunk`, `/regenerate-simplified` y
 `/regen-degraded` solo reencolan (la recogida ya los frenaría), pero así la persona ve la hoja en vez de un plan que no
 avanza. `/swap-meal/persist` y los paneles de Configuración no son endpoints de IA: su efecto de IA (traducir, extraer
-hechos) se frena dentro, en segundo plano.
+hechos) se frena dentro, en segundo plano, y los nombres de alimentos que normalizan llevan la marca de abajo.
+
+## Embeddings desde caminos sin IA (la marca)
+
+`shopping_calculator.normalize_name` resuelve el nombre de un alimento contra el catálogo en seis intentos; el sexto
+(«Intento 6», búsqueda semántica) manda el nombre a **Cohere** (`embed_query`). Se llega a él desde caminos que NO son
+endpoints de IA —la lista de compras, la Nevera, el diario y sus crons—, así que el 428 no lo cubre. (Ronda de arreglo 1:
+el inventario del lote había dado ese sitio por «sin datos de usuarios»; lo que vectoriza sin datos de nadie es el
+catálogo, `get_semantic_cache`, no el intento 6.)
+
+- **La marca** (`consentimientos.py`): un `ContextVar` con el titular del trabajo en curso. `embeddings_de_usuario(user_id)`
+  es el context manager; `por_usuario(filas)` lo pone por usuario en cada vuelta del bucle de un cron sin reindentarlo;
+  `embeddings_de_la_peticion` es la dependencia (async) de los endpoints: marca la petición entera, también sus tareas de
+  fondo y lo que corre en `asyncio.to_thread`. La decisión es la del 428 (cuenta ⇒ la base; invitado ⇒ la cabecera),
+  se toma la primera vez que el intento 6 la pide y se recuerda: una lectura por clave primaria como mucho.
+- **`normalize_name`** salta el intento 6 cuando la marca dice que no: quedan los intentos 1-5 y el nombre limpio. **Sin
+  marca = permitido**: el pipeline y el chunk worker ya van filtrados antes (428 y la recogida con SQL).
+- Un hilo nuevo (`threading.Thread`, `run_in_executor`) NO hereda la marca: si un camino marcado lanza uno que normaliza
+  nombres, la marca se pone dentro del hilo.
+
+Endpoints marcados (`tests/test_p1_plan_lote_843_embeddings.py` compara esta tabla con las rutas reales de la app, en
+las dos direcciones):
+
+| Método | Ruta | Fichero | Función | Sin permiso |
+|---|---|---|---|---|
+| POST | /api/plans/recalculate-shopping-list | routers/plans.py | api_recalculate_shopping_list | marca |
+| POST | /api/plans/restock | routers/plans.py | api_restock | marca |
+| POST | /api/plans/{plan_id}/swap-meal/persist | routers/plans.py | api_swap_meal_persist | marca |
+| POST | /api/plans/adopt-guest-plan | routers/plans.py | api_adopt_guest_plan | marca |
+| POST | /api/diary/consumed | routers/diary.py | api_log_consumed_meal | marca |
+| POST | /api/diary/consumed/manual | routers/diary.py | api_log_manual_meal | marca |
+| POST | /api/diary/consumed/repeat | routers/diary.py | api_repeat_consumed_meal | marca |
+| POST | /api/diary/consumed-from-plan | routers/diary.py | api_log_consumed_meal_from_plan | marca |
+| POST | /api/diary/consumed-from-plan/preview | routers/diary.py | api_preview_consumed_meal_from_plan | marca |
+| GET | /api/diary/consumed/{user_id} | routers/diary.py | api_get_consumed_today | marca |
+| GET | /api/diary/meal/{meal_id} | routers/diary.py | api_get_consumed_meal_detail | marca |
+| POST | /api/auth/migrate | app.py | api_migrate_guest | marca |
+
+Por qué cada uno: la lista de compras y la Nevera parsean los nombres (`/restock` con cadenas que manda el cliente); los
+registros del diario descuentan de la Nevera (`deduct_consumed_meal_from_inventory`); los GET del diario calculan
+micros y la ficha del plato con `IngredientNutritionDB.lookup`, cuyo tier 3 es `normalize_name`; `/swap-meal/persist`
+cierra los huecos de micros y recalcula las listas; la adopción y la migración del invitado guardan un plan
+(`_finalize_plan_data_for_insert` → macros por nombre).
+
+Segundo plano, por usuario dentro del bucle (`por_usuario`) o por trabajo:
+
+| Dónde | Marca |
+|---|---|
+| `cron_tasks._process_pending_shopping_lists` (recupera las listas de los planes `partial_no_shopping`) | `por_usuario(plans)` |
+| `cron_tasks._shopping_coherence_alert_job` (coherencia diaria) | `por_usuario(plans)` |
+| `cron_tasks._process_failed_inventory_deductions_queue` (reintento de descuentos) | `por_usuario(rows)` |
+| Worker de `plan_jobs` (la proyección de compras normaliza nombres) | `embeddings_de_usuario(job.user_id)` alrededor de cada consumidor |
+
+Sin marca, a propósito: `restock_cycle.py` (`purchase_item_name`) solo lo llama la tool del coach
+`mark_shopping_list_purchased`, dentro del turno del chat (428; un test vigila que no nazca otro llamador); lo que el
+chunk worker normaliza (reservas, deriva de la Nevera, días degradados) va detrás de la recogida con SQL; y los caminos
+de `get_nutrition_targets` resuelven nombres FIJOS del catálogo («1 huevo») que los intentos 1-5 encuentran.
 
 ## Segundo plano (sin petición delante)
 
@@ -179,17 +242,24 @@ Con `block`, nada de esto llama a un proveedor para una cuenta sin permiso vigen
 | Aprendizaje del bloque (`cron_tasks._check_chunk_learning_ready`, también desde el cron de recuperación de la Nevera) | nombres de lo que anotó (Cohere) | `usar_embeddings=permite_ia(...)` |
 | Título del plan (`services._titulo_del_plan`: guardado, parcial y diferido) | objetivo, calorías y platos | `permite_ia` → el título determinista |
 | JIT de semana 2 (`proactive_agent._trigger_week2_background_generation`, código muerto) | el perfil | `permite_ia` por si alguien lo revive |
+| Nombres de alimentos desde la lista de compras, la Nevera, el diario y sus crons (`normalize_name`, intento 6) | el nombre (Cohere) | la marca de la sección anterior |
 
 Y dos crons que no llaman a la IA pero hablaban de esa cola: el escalado de bloques atascados
 (`_detect_and_escalate_stuck_chunks`, que mandaba «Optimizando tu plan… estará listo en breve») y la alerta de zombies
-(`_alert_stuck_chunks`) saltan los bloques que esperan el permiso, con el mismo fragmento SQL.
+(`_alert_stuck_chunks`) saltan los bloques que esperan el permiso, con el mismo fragmento SQL. En el escalado lo saltan
+las tres sentencias: el SELECT, el UPDATE (solo los ids que el SELECT eligió, `id = ANY(%s::uuid[])`; antes era masivo y
+escalaba también a los que esperan) y la rama terminal (el fragmento, para no dar por perdido un bloque que no se
+recoge a propósito).
+
+En el coach proactivo la lectura del permiso va junto al embedding y al prompt, después de los `continue` del tope diario
+y de los demás filtros: quien no recibe nada ese tick no cuesta una lectura.
 
 ## Knob `MEALFIT_AI_CONSENT_GATE`
 
 | Valor | Peticiones | Segundo plano |
 |---|---|---|
 | `block` (default) | 428 sin permiso vigente | nada sin permiso vigente (SQL + `permite_ia`) |
-| `log` | la falta de permiso solo se anota (warning); **una retirada explícita se respeta igual** (428) | igual: solo frena la retirada explícita |
+| `log` | la falta de permiso solo se anota (`info`: en `warning` sería ruido en cada petición durante el despliegue); **una retirada explícita se respeta igual** (428) | igual: solo frena la retirada explícita |
 | `off` | nada | nada |
 
 `log` es el modo del despliegue gradual: lo que decide es que a la persona aún no se le preguntó. Una retirada es una
@@ -198,25 +268,37 @@ interruptor de emergencia. La suite de tests corre con `off` (`tests/conftest.py
 
 ## Retirar y volver a conceder
 
-1. **La bandera primero**: `ai_consent_revoked_at = now()` y dos filas `granted=false` en la MISMA transacción. Desde ese
-   COMMIT la recogida y los crons ya dicen que no.
-2. **Después la cola**: `plan_mode.pause_plan_generation` (el patrón de P1-PLAN-MODE): `plan_mode='tracking'`, cancela la
-   cola con su firma, suelta los locks y sella el plan `paused_by_user` (silencia los crons del plan). No borra datos:
-   borrar sigue siendo «Eliminar cuenta».
+1. **Una transacción**: `ai_consent_revoked_at = now()` (solo la primera vez), dos filas `granted=false` y, si el generador
+   estaba encendido, `plan_mode='tracking'`, `plan_mode_changed_at = now()` y `ai_consent_paused_at = now()` (el MISMO
+   instante: es la marca de «esta pausa la puso la retirada»). Quien ya estaba en seguimiento no se re-estampa y no
+   recibe marca. Desde ese COMMIT la recogida y los crons ya dicen que no.
+2. **Después la cola**: `plan_mode.pause_plan_generation` (el patrón de P1-PLAN-MODE) cancela la cola con su firma, suelta
+   los locks y sella el plan `paused_by_user` (silencia los crons del plan); su UPDATE de la bandera ya no cambia nada. No
+   borra datos: borrar sigue siendo «Eliminar cuenta». Con `MEALFIT_PLAN_MODE_SWITCH` apagado el modo del plan no
+   existe: la retirada no lo toca (la recogida la frena igual).
 3. Un bloque que YA estaba dentro del LLM termina esa generación (como en la pausa del modo plan); la validación previa al
-   LLM (`_validate_chunk_pre_llm`) ve la fila cancelada y aborta los que aún no empezaron.
-4. **Volver a conceder** reanuda (`resume_plan_generation`, que revive la cola firmada) solo si la pausa la puso la
-   retirada: `plan_mode='tracking'` con `plan_mode_changed_at` dentro de los 5 minutos siguientes a la retirada. Quien ya
-   estaba en modo contador sigue en modo contador.
+   LLM (`_validate_chunk_pre_llm`) ve la fila cancelada y aborta los que aún no empezaron. Los reintentos de ese bloque
+   en vuelo siguen como están: es la conducta de P1-PLAN-MODE y el reintento vive en `graph_orchestrator.py`, que no puede
+   crecer.
+4. **Volver a conceder** reanuda (`resume_plan_generation`, que revive la cola firmada) SOLO si
+   `plan_mode='tracking' AND plan_mode_changed_at = ai_consent_paused_at`, y conceder la IA limpia siempre
+   `ai_consent_paused_at`. Determinista, sin ventanas de tiempo:
+   - retirar → encender a mano → apagar a mano → conceder: **no** reanuda (la pausa vigente es la de la persona);
+   - retirar → encender → retirar otra vez → conceder: **sí** reanuda (la segunda retirada volvió a pausar);
+   - ya en seguimiento → retirar → conceder: **no** reanuda (sigue en modo contador).
 
 ## Datos
 
 - `public.user_consents`: solo inserción (solo `consentimientos.py` escribe; un test vigila que nadie haga `UPDATE` ni
   `DELETE` sobre ella). Titular: `user_id` (FK a `user_profiles`, `ON DELETE CASCADE`) o `guest_hash`, exactamente uno.
-  Índices `(user_id, consent_key, created_at DESC)` y `(guest_hash, created_at DESC)`. `REVOKE ALL FROM PUBLIC`.
+  `origen` (`NOT NULL DEFAULT 'cuenta'`, CHECK en `cuenta | invitado | adopcion`, y `invitado` ⇔ lleva `guest_hash`):
+  `cuenta` la decidió la cuenta, `invitado` el invitado, `adopcion` es la del invitado copiada a su cuenta al adoptar el
+  plan (con su `created_at` original). Índices `(user_id, consent_key, created_at DESC)` y `(guest_hash, created_at
+  DESC)`. `REVOKE ALL FROM PUBLIC`.
 - `user_profiles`: `ai_consent_version`, `ai_consent_at`, `ai_cn_transfer_at`, `ai_consent_revoked_at`,
-  `analytics_consent` (NULL = no preguntado). Se escriben en la misma transacción que las filas. No están en
-  `_PROFILE_SCALAR_WHITELIST`: `PATCH /api/profile` no puede tocarlas.
+  `analytics_consent` (NULL = no preguntado) y `ai_consent_paused_at` (la hora de la pausa que puso la retirada; ver
+  arriba). Se escriben en la misma transacción que las filas. No están en `_PROFILE_SCALAR_WHITELIST`: `PATCH
+  /api/profile` no puede tocarlas.
 - **Exportación** (`GET /api/account/export`): `user_consents` de la cuenta, sin `guest_hash`; las columnas nuevas salen
   con `user_profiles`.
 - **Borrado de cuenta**: el CASCADE del perfil se lleva las filas. La purga administrativa que conserva la cuenta

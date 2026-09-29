@@ -690,7 +690,10 @@ def process_plan_jobs() -> dict:
             t0 = time.monotonic()
             consumer = CONSUMERS.get(str(job.get("job_type")))
             try:
-                status, error_code, result = consumer(job) if consumer else ("dead", "no_consumer", {})
+                # [P1-PLAN-LOTE-843] La proyección de compras normaliza nombres (intento 6 = Cohere): el trabajo lleva
+                # la marca de SU dueño y sin su permiso para la IA los nombres no salen.
+                with __import__("consentimientos").embeddings_de_usuario(job.get("user_id"), "plan_jobs"):
+                    status, error_code, result = consumer(job) if consumer else ("dead", "no_consumer", {})
             except Exception as e:  # el consumidor es fail-open; esto es el cinturón
                 status, error_code, result = "failed", f"exception:{type(e).__name__}", {"error": str(e)[:200]}
             duration_ms = int((time.monotonic() - t0) * 1000)

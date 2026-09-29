@@ -2922,9 +2922,13 @@ def normalize_name(orig_name: str) -> str:
                 logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
                 return _fuzz_name
 
+    # [P1-PLAN-LOTE-843] El intento 6 manda el nombre a Cohere: sin el permiso de ESA persona para la IA de terceros
+    # (marca `consentimientos.embeddings_de_usuario`; sin marca = pipeline y worker, ya filtrados antes) se salta y
+    # quedan los intentos 1-5. Sin el módulo cargado no puede haber marca.
+    _cs843 = __import__("sys").modules.get("consentimientos")
     # Intento 6: Búsqueda de Similitud Semántica Vectorial (Cohere v4, Fallback Local)
     # Solo vale la pena gastar un request si la palabra no fue encontrada en absoluto y tiene suficiente longitud
-    if len(n) > 3:
+    if len(n) > 3 and (_cs843 is None or _cs843.embeddings_permitidos()):
         cache = get_semantic_cache()
         if cache:
             try:

@@ -63,7 +63,7 @@ from db_inventory import restock_inventory, consume_inventory_items_completely
 from rate_limiter import RateLimiter
 from perfil_servidor import perfil_manda_al_generar, reescritura_tras_generar  # [P1-PLAN-LOTE-717] dueños del perfil
 from schemas import PUBLIC_SSE_EVENTS  # [P1-11] contrato público de eventos SSE
-from consentimientos import requiere_consentimiento_ia, hay_permiso_ia, adoptar_de_invitado  # [P1-PLAN-LOTE-843]
+from consentimientos import requiere_consentimiento_ia, hay_permiso_ia, adoptar_de_invitado, embeddings_de_la_peticion  # [P1-PLAN-LOTE-843]
 
 logger = logging.getLogger(__name__)
 
@@ -7583,6 +7583,7 @@ def api_swap_meal_persist(
     plan_id: str,
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P0-NEW-A · 2026-05-11 | P1-SWAP-PERSIST-ATOMIC · 2026-05-22]
     Persistencia atómica de un meal swap.
@@ -11005,7 +11006,7 @@ async def api_delete_depleted_item(
 
 
 @router.post("/restock")
-def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RESTOCK_LIMITER)):  # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] inventario, cero costo LLM → NO paywall (RateLimiter anti-spam)
+def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RESTOCK_LIMITER), _emb: None = Depends(embeddings_de_la_peticion)):  # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] inventario, cero costo LLM → NO paywall (RateLimiter anti-spam)
     try:
         user_id = data.get("user_id")
         plan_id = data.get("plan_id")
@@ -12009,7 +12010,7 @@ def api_set_water_intake(
 
 
 @router.post("/recalculate-shopping-list")
-def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RECALC_LIMITER)):
+def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RECALC_LIMITER), _emb: None = Depends(embeddings_de_la_peticion)):  # [P1-PLAN-LOTE-843] marca de embeddings
     """
     Recalcula la lista de compras CANÓNICA escalando las recetas por el
     householdSize + grocery_duration.
@@ -13866,6 +13867,7 @@ def api_guest_display(data: dict = Body(...), verified_user_id: Optional[str] = 
 def api_adopt_guest_plan(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P1-GUEST-ADOPT-1 · 2026-06-21] Adopta el plan generado por un INVITADO
     (vive en localStorage; los invitados no persisten a la DB) hacia su cuenta

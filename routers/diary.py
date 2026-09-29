@@ -15,7 +15,7 @@ from db_core import _storage_client
 # el libro de cuota de planes — ver el gate `log_llm_usage_event` más abajo.
 from auth import get_verified_user_id
 # [P1-PLAN-LOTE-843] Permiso para la IA de terceros: 428 `ai_consent_required` sin él (SSOT consentimientos.py).
-from consentimientos import requiere_consentimiento_ia
+from consentimientos import requiere_consentimiento_ia, embeddings_de_la_peticion
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 # [P3-DB-IMPORTS-FACADE · boy scout] `get_user_profile`/`log_llm_usage_event`
@@ -1069,6 +1069,7 @@ def api_log_consumed_meal(
     # (omisión histórica). `RateLimiter.__call__` envuelve `get_verified_user_id` y
     # devuelve el user_id autenticado — mismo patrón que los vecinos.
     verified_user_id: Optional[str] = Depends(_CONSUMED_WRITE_LIMITER),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """Registra una comida consumida manualmente desde el frontend.
 
@@ -1291,6 +1292,7 @@ def api_log_manual_meal(
     payload: ManualMealRequest,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     verified_user_id: Optional[str] = Depends(_MANUAL_MEAL_LIMITER),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P1-MANUAL-FOOD-LOG · 2026-08-11] El componedor: buscar → apilar líneas →
     registrar, sin foto, sin chat y sin gastar un crédito.
@@ -1387,6 +1389,7 @@ def api_repeat_consumed_meal(
     payload: RepeatMealRequest,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     verified_user_id: Optional[str] = Depends(_REPEAT_MEAL_LIMITER),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P1-MANUAL-FOOD-LOG · 2026-08-11] «Lo mismo de ayer»: re-registra una fila
     PROPIA por su id. Coordenadas, no contenido. La lectura filtra por dueño y el 404
@@ -1435,6 +1438,7 @@ def api_log_consumed_meal_from_plan(
     # devuelve el user_id autenticado — no hace falta un segundo Depends
     # (mismo patrón que `api_delete_consumed_meal` / `api_restock`).
     verified_user_id: Optional[str] = Depends(_PLAN_MEAL_LIMITER),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P1-EAT-PLAN-MEAL · 2026-08-07] "Me comí este plato del plan".
 
@@ -1594,6 +1598,7 @@ def api_log_consumed_meal_from_plan(
 def api_preview_consumed_meal_from_plan(
     payload: ConsumedFromPlanRequest,
     verified_user_id: Optional[str] = Depends(_PLAN_MEAL_PREVIEW_LIMITER),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P1-EAT-PLAN-MEAL-TRUTH · 2026-09-04] ¿La Nevera explica este plato? Misma lectura
     server-side del plato (coordenadas + `AND user_id = %s`, I2) y la MISMA resolución de
@@ -1726,7 +1731,7 @@ def api_plan_meal_deviation(
 
 
 @router.get("/consumed/{user_id}")
-def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: Optional[int] = None, verified_user_id: str = Depends(get_verified_user_id)):
+def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: Optional[int] = None, verified_user_id: str = Depends(get_verified_user_id), _emb: None = Depends(embeddings_de_la_peticion)):  # [P1-PLAN-LOTE-843] marca de embeddings
     """Obtiene las métricas agregadas de las comidas registradas en el día por la IA."""
     try:
         # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
@@ -1792,6 +1797,7 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
 def api_get_consumed_meal_detail(
     meal_id: str,
     verified_user_id: Optional[str] = Depends(_MEAL_DETAIL_LIMITER),
+    _emb: None = Depends(embeddings_de_la_peticion),  # [P1-PLAN-LOTE-843] marca de embeddings
 ):
     """[P1-PLAN-LOTE-720 · 2026-09-28] La ficha de UN plato registrado: sus ingredientes (con kcal por renglón solo si
     cuadran con la comida) y de dónde vino. La lista del día no los trae —son la materia prima de los micros, no la

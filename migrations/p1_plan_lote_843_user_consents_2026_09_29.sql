@@ -21,8 +21,24 @@ CREATE TABLE IF NOT EXISTS public.user_consents (
     locale TEXT,
     platform TEXT,
     app_build TEXT,
+    origen TEXT NOT NULL DEFAULT 'cuenta',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- De dónde sale cada fila: 'cuenta' (la decidió la cuenta), 'invitado' (el invitado, con su guest_hash) o 'adopcion'
+-- (la del invitado copiada a su cuenta al adoptar el plan, con su fecha original). El ADD COLUMN y el UPDATE solo
+-- hacen algo en una base que aplicó la primera versión de esta migración (con la tabla nueva no hay filas).
+ALTER TABLE public.user_consents ADD COLUMN IF NOT EXISTS origen TEXT NOT NULL DEFAULT 'cuenta';
+UPDATE public.user_consents SET origen = 'invitado' WHERE guest_hash IS NOT NULL AND origen <> 'invitado';
+
+ALTER TABLE public.user_consents DROP CONSTRAINT IF EXISTS user_consents_origen_chk;
+ALTER TABLE public.user_consents ADD CONSTRAINT user_consents_origen_chk
+    CHECK (origen IN ('cuenta', 'invitado', 'adopcion'));
+
+-- Una fila de invitado es la que lleva guest_hash, y ninguna otra.
+ALTER TABLE public.user_consents DROP CONSTRAINT IF EXISTS user_consents_origen_titular_chk;
+ALTER TABLE public.user_consents ADD CONSTRAINT user_consents_origen_titular_chk
+    CHECK ((origen = 'invitado') = (guest_hash IS NOT NULL));
 
 -- Exactamente un titular: la cuenta O el invitado, nunca los dos ni ninguno.
 ALTER TABLE public.user_consents DROP CONSTRAINT IF EXISTS user_consents_titular_chk;
@@ -69,6 +85,10 @@ ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS ai_consent_at TIMESTAM
 ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS ai_consent_revoked_at TIMESTAMPTZ;
 ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS ai_cn_transfer_at TIMESTAMPTZ;
 ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS analytics_consent BOOLEAN;
+-- La hora de la pausa del generador que puso la retirada: el MISMO now() que estampó en plan_mode_changed_at. Volver a
+-- conceder reanuda solo si el plan sigue en 'tracking' desde esa hora exacta; un encendido o apagado a mano después la
+-- deja atrás. NULL = la retirada no pausó nada (ya estaba en seguimiento) o ya se concedió otra vez.
+ALTER TABLE public.user_profiles ADD COLUMN IF NOT EXISTS ai_consent_paused_at TIMESTAMPTZ;
 
 DO $$
 BEGIN
@@ -79,11 +99,19 @@ BEGIN
     IF (SELECT count(*) FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'user_profiles'
           AND column_name IN ('ai_consent_version', 'ai_consent_at', 'ai_consent_revoked_at',
-                              'ai_cn_transfer_at', 'analytics_consent')) <> 5 THEN
+                              'ai_cn_transfer_at', 'analytics_consent', 'ai_consent_paused_at')) <> 6 THEN
         RAISE EXCEPTION 'p1_plan_lote_843: faltan columnas del permiso en user_profiles';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = 'public' AND table_name = 'user_consents' AND column_name = 'origen'
+                     AND is_nullable = 'NO') THEN
+        RAISE EXCEPTION 'p1_plan_lote_843: falta user_consents.origen';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_consents_titular_chk') THEN
         RAISE EXCEPTION 'p1_plan_lote_843: falta el CHECK de un solo titular';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_consents_origen_titular_chk') THEN
+        RAISE EXCEPTION 'p1_plan_lote_843: falta el CHECK del origen';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_indexes
                    WHERE schemaname = 'public' AND indexname = 'user_consents_user_key_idx') THEN

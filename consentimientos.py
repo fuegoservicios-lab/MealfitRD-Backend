@@ -24,19 +24,27 @@ CÓMO SE HACE CUMPLIR (no basta con la interfaz)
       cabecera `X-Bioboros-AI-Consent: <versión>`; el registro de su permiso lo guarda `registrar_invitado`.
     - Segundo plano: `condicion_sql_permiso` en la recogida del chunk worker (y en lo que avisa de esa cola) y
       `permite_ia(user_id, donde)` antes de cada llamada al proveedor de los crons y de los hilos de fondo.
+    - Embeddings desde caminos SIN IA (lista de compras, Nevera, diario): `shopping_calculator.normalize_name` manda el
+      nombre de un alimento a Cohere en su intento 6. Esos caminos llevan la MARCA del usuario
+      (`embeddings_de_usuario`, `por_usuario` en los bucles de los crons, `embeddings_de_la_peticion` en los
+      endpoints) y el intento 6 se salta sin su permiso. Sin marca = permitido: el pipeline y el worker ya van
+      filtrados antes (428 / SQL).
     - Knob `MEALFIT_AI_CONSENT_GATE` (`off|log|block`, default `block`), ver `modo()`.
 
 RETIRAR
-    Bandera primero (`ai_consent_revoked_at`: desde ese COMMIT el gate ya dice que no), después la pausa del generador
-    (`plan_mode.pause_plan_generation`: cancela la cola con su firma, suelta los locks y sella el plan). No borra datos:
-    eso sigue siendo «Eliminar cuenta». Volver a conceder reanuda lo que la retirada pausó, y nada más.
+    Bandera primero (`ai_consent_revoked_at`) y, en la MISMA transacción, el generador a 'tracking' con la hora de esa
+    pausa en `ai_consent_paused_at`; después `plan_mode.pause_plan_generation` (cancela la cola con su firma, suelta
+    los locks y sella el plan). No borra datos: eso sigue siendo «Eliminar cuenta». Volver a conceder reanuda SOLO si
+    el plan sigue en 'tracking' desde esa hora exacta (un encendido o apagado a mano después la deja atrás).
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -67,9 +75,9 @@ MENSAJE_REQUERIDO = (
 )
 MENSAJE_NO_DISPONIBLE = "No pudimos comprobar tu permiso para usar la IA. Inténtalo de nuevo en unos segundos."
 
-#: La pausa que hizo la retirada cae dentro de esta ventana tras la bandera (se escriben con milisegundos de
-#: diferencia). Solo esa pausa se deshace al volver a conceder: la que la persona hizo a mano, no.
-_VENTANA_DE_LA_PAUSA = timedelta(minutes=5)
+#: De dónde sale cada fila del registro (`user_consents.origen`): la decisión de la cuenta, la del invitado (con su
+#: `guest_hash`) o la del invitado copiada a su cuenta al adoptar el plan, con su fecha original.
+ORIGENES = ("cuenta", "invitado", "adopcion")
 
 _RE_VERSION = re.compile(r"^[a-z0-9][a-z0-9.-]{0,31}$")
 _RE_HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -83,9 +91,9 @@ _PASAN = frozenset({"vigente", "invitado_con_cabecera"})
 _COLUMNAS = "ai_consent_version, ai_consent_at, ai_consent_revoked_at, ai_cn_transfer_at, analytics_consent"
 _INSERTAR_EN = (
     "INSERT INTO public.user_consents (user_id, guest_hash, consent_key, version, granted, text_sha256, locale, "
-    "platform, app_build) VALUES "
+    "platform, app_build, origen) VALUES "
 )
-_FILA = "(%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+_FILA = "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
 _INSERTAR = _INSERTAR_EN + _FILA
 
 
@@ -224,6 +232,74 @@ def permite_ia(user_id, donde: str = "") -> bool:
     return True
 
 
+# ───────────────────────────────────────────────────────────────── embeddings desde caminos sin IA
+class _MarcaEmbeddings:
+    """De quién es el trabajo en curso. La decisión se toma la PRIMERA vez que alguien la pide (el intento 6 de
+    `normalize_name` es raro: la mayoría de las peticiones nunca lo alcanzan) y se recuerda para el resto: una lectura
+    por clave primaria como mucho, por petición o por vuelta del bucle."""
+
+    __slots__ = ("user_id", "cabecera", "donde", "_permite")
+
+    def __init__(self, user_id, cabecera=None, donde: str = ""):
+        self.user_id, self.cabecera, self.donde, self._permite = user_id, cabecera, donde, None
+
+    def permite(self) -> bool:
+        if self._permite is None:
+            self._permite = _permite_mandar_texto(self.user_id, self.cabecera, self.donde)
+        return self._permite
+
+
+#: La marca del usuario del trabajo en curso; None = sin marca (el pipeline y el worker, ya filtrados por el 428 y la
+#: recogida): permitido. La leen los que mandan texto a un proveedor desde caminos que NO son de IA.
+_EMBEDDINGS_DE: ContextVar = ContextVar("p1_plan_lote_843_embeddings_de", default=None)
+
+
+def _permite_mandar_texto(user_id, cabecera, donde) -> bool:
+    """La misma decisión que el 428 y `hay_permiso_ia` (cuenta ⇒ la base; invitado ⇒ la cabecera), sin error ni ruido.
+    Nunca lanza: base ilegible ⇒ no en `block`, sí en `log`."""
+    m = modo()
+    if m == "off":
+        return True
+    try:
+        motivo = _decidir_peticion(user_id, cabecera)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-843] {donde}: permiso de IA ilegible para los embeddings ({e!r})")
+        return m != "block"
+    if _bloquea(m, motivo):
+        logger.info(f"⏭️ [P1-PLAN-LOTE-843] {donde}: sin permiso de IA ({motivo}); los nombres no van a Cohere")
+        return False
+    return True
+
+
+@contextmanager
+def embeddings_de_usuario(user_id, donde: str = ""):
+    """Marca el trabajo de `user_id` mientras dura el bloque: `embeddings_permitidos()` responde por ÉL. Es lo que
+    envuelve cada punto de entrada que llega a los embeddings sin pasar por un endpoint de IA (en los crons, por
+    usuario dentro del bucle: `por_usuario`)."""
+    token = _EMBEDDINGS_DE.set(_MarcaEmbeddings(user_id, None, donde))
+    try:
+        yield
+    finally:
+        try:
+            _EMBEDDINGS_DE.reset(token)
+        except ValueError:  # cerrado desde otro contexto (un generador recogido fuera): no hay nada que restaurar
+            pass
+
+
+def por_usuario(filas, clave: str = "user_id", donde: str = ""):
+    """Recorre `filas` con la marca del `clave` de CADA fila puesta durante su vuelta del bucle. Es la forma de
+    envolver por usuario el cuerpo de un bucle de cron sin reindentarlo: `for fila in por_usuario(filas):`."""
+    for fila in filas or ():
+        with embeddings_de_usuario(fila.get(clave) if isinstance(fila, dict) else None, donde):
+            yield fila
+
+
+def embeddings_permitidos() -> bool:
+    """¿Puede el trabajo en curso mandar texto a un proveedor de embeddings? Sin marca, sí (ver `_EMBEDDINGS_DE`)."""
+    marca = _EMBEDDINGS_DE.get()
+    return True if marca is None else marca.permite()
+
+
 # ───────────────────────────────────────────────────────────────── SQL de los gates de la cola
 def condicion_sql_permiso(columna_usuario: str) -> str:
     """Expresión SQL «la cuenta de `columna_usuario` puede usar la IA», según el modo; '' con `off`. CONSTANTE: la
@@ -320,35 +396,32 @@ def _decisiones(ia: bool, analytics) -> list:
         [("analytics", bool(analytics))] if analytics is not None else [])
 
 
-def _como_fecha(valor) -> Optional[datetime]:
-    if valor is None:
-        return None
-    if isinstance(valor, datetime):
-        d = valor
-    else:
-        try:
-            d = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
-
-
 def _pausa_de_la_retirada(fila) -> bool:
-    """¿La pausa vigente del generador la puso la retirada del permiso? Solo si `plan_mode` pasó a 'tracking' justo
-    después de la bandera. Quien ya estaba en modo contador (o pausó a mano antes) no cumple: su pausa es suya."""
+    """¿La pausa vigente del generador la puso la retirada del permiso? Solo si el plan SIGUE en 'tracking' desde esa
+    retirada: `plan_mode_changed_at` es exactamente la hora que la retirada estampó en `ai_consent_paused_at` (las dos
+    con el mismo `now()` de su transacción). Un encendido o un apagado a mano después cambian `plan_mode_changed_at`;
+    quien ya estaba en seguimiento al retirar no tiene marca. Determinista: sin ventanas de tiempo."""
     fila = fila or {}
-    if fila.get("plan_mode") != "tracking":
+    pausa = fila.get("ai_consent_paused_at")
+    return fila.get("plan_mode") == "tracking" and pausa is not None and fila.get("plan_mode_changed_at") == pausa
+
+
+def _interruptor_del_plan() -> bool:
+    """`MEALFIT_PLAN_MODE_SWITCH`: con el interruptor apagado el modo del plan no existe y la retirada no lo toca."""
+    try:
+        from plan_mode import PLAN_MODE_SWITCH_ENABLED
+        return bool(PLAN_MODE_SWITCH_ENABLED)
+    except Exception:  # noqa: BLE001
         return False
-    retirada = _como_fecha(fila.get("ai_consent_revoked_at"))
-    cambio = _como_fecha(fila.get("plan_mode_changed_at"))
-    return bool(retirada and cambio and retirada <= cambio <= retirada + _VENTANA_DE_LA_PAUSA)
 
 
 def registrar(user_id, *, ia: bool, analytics: Optional[bool] = None, locale: Optional[str] = None,
               platform: Optional[str] = None, app_build: Optional[str] = None,
               text_sha256: Optional[str] = None) -> dict:
     """Anota la decisión de la cuenta (ya validada por `validar_peticion`) y deriva su estado, en UNA transacción. Si
-    la retirada había pausado el generador, conceder lo reanuda. Devuelve el estado + `plan_reanudado`."""
+    la retirada había pausado el generador y sigue en esa pausa, conceder lo reanuda; conceder la IA limpia siempre la
+    marca de la pausa. Devuelve el estado + `plan_reanudado` + `plan_expired` (el de `resume_plan_generation`: la pausa
+    duró más que la ventana de reanudación y el plan hay que renovarlo)."""
     uid = _uid(user_id)
     if uid is None:
         raise ValueError("user_id no es un UUID")
@@ -357,18 +430,18 @@ def registrar(user_id, *, ia: bool, analytics: Optional[bool] = None, locale: Op
         raise ValueError("nada que registrar")
 
     def _tx(cur):
-        cur.execute("SELECT plan_mode, plan_mode_changed_at, ai_consent_revoked_at FROM user_profiles "
+        cur.execute("SELECT plan_mode, plan_mode_changed_at, ai_consent_paused_at FROM user_profiles "
                     "WHERE id = %s FOR UPDATE", (uid,))
         antes = cur.fetchone()
         if not antes:
             raise PerfilInexistente(uid)
         for clave, concedido in decisiones:
             cur.execute(_INSERTAR, (uid, None, clave, AI_CONSENT_VERSION, concedido, text_sha256, locale, platform,
-                                    app_build))
+                                    app_build, "cuenta"))
         sets, params = [], []
         if ia:
             sets += ["ai_consent_version = %s", "ai_consent_at = now()", "ai_cn_transfer_at = now()",
-                     "ai_consent_revoked_at = NULL"]
+                     "ai_consent_revoked_at = NULL", "ai_consent_paused_at = NULL"]
             params.append(AI_CONSENT_VERSION)
         if analytics is not None:
             sets.append("analytics_consent = %s")
@@ -378,33 +451,39 @@ def registrar(user_id, *, ia: bool, analytics: Optional[bool] = None, locale: Op
         return antes, cur.fetchone()
 
     antes, despues = _en_transaccion(_tx)
-    reanudado = False
+    reanudado = expirado = False
     if ia and _pausa_de_la_retirada(antes):
         try:
             from plan_mode import resume_plan_generation
             r = resume_plan_generation(uid) or {}
             reanudado = r.get("plan_mode") == "plan" and not r.get("skipped")
+            expirado = bool(reanudado and r.get("plan_expired"))
         except Exception as e:  # noqa: BLE001
             logger.error(f"❌ [P1-PLAN-LOTE-843] {uid[:8]}: permiso concedido pero el plan NO se reanudó ({e!r}); "
                          f"queda en pausa y se reanuda a mano desde Configuración.")
     logger.info(f"✅ [P1-PLAN-LOTE-843] {uid[:8]}: permiso anotado (ia={ia}, analytics={analytics}, "
-                f"plan_reanudado={reanudado})")
+                f"plan_reanudado={reanudado}, plan_expired={expirado})")
     out = estado_de_fila(despues)
     out["plan_reanudado"] = reanudado
+    out["plan_expired"] = expirado
     return out
 
 
 def retirar(user_id, *, locale: Optional[str] = None, platform: Optional[str] = None,
             app_build: Optional[str] = None) -> dict:
-    """Retira el permiso de IA. LA BANDERA PRIMERO (en su transacción, con las filas del registro): desde ese COMMIT la
-    recogida de bloques y los crons ya dicen que no. Después la cola, con la pausa de P1-PLAN-MODE. Retirar dos veces
-    conserva la fecha de la primera y no escribe filas nuevas. No borra datos. Devuelve el estado + `plan_pausado`."""
+    """Retira el permiso de IA. En UNA transacción: la bandera (con las filas del registro) y, si el generador estaba
+    encendido, su paso a 'tracking' con la hora de esa pausa en `ai_consent_paused_at` (el mismo `now()` que
+    `plan_mode_changed_at`). Desde ese COMMIT la recogida de bloques y los crons ya dicen que no. Después, la cola, los
+    locks y el sello con `pause_plan_generation` (su UPDATE de la bandera ya no cambia nada). Retirar dos veces conserva
+    la fecha de la primera y no escribe filas nuevas. No borra datos. Devuelve el estado + `plan_pausado`: true solo si
+    ESTA retirada apagó el generador (quien ya estaba en seguimiento no tenía nada que pausar)."""
     uid = _uid(user_id)
     if uid is None:
         raise ValueError("user_id no es un UUID")
+    interruptor = _interruptor_del_plan()
 
     def _tx(cur):
-        cur.execute("SELECT ai_consent_revoked_at FROM user_profiles WHERE id = %s FOR UPDATE", (uid,))
+        cur.execute("SELECT ai_consent_revoked_at, plan_mode FROM user_profiles WHERE id = %s FOR UPDATE", (uid,))
         antes = cur.fetchone()
         if not antes:
             raise PerfilInexistente(uid)
@@ -412,22 +491,25 @@ def retirar(user_id, *, locale: Optional[str] = None, platform: Optional[str] = 
             cur.execute("UPDATE user_profiles SET ai_consent_revoked_at = now() WHERE id = %s", (uid,))
             for clave in CLAVES_IA:
                 cur.execute(_INSERTAR, (uid, None, clave, AI_CONSENT_VERSION, False, None, locale, platform,
-                                        app_build))
+                                        app_build, "cuenta"))
+        apaga = interruptor and antes.get("plan_mode") != "tracking"
+        if apaga:
+            cur.execute("UPDATE user_profiles SET plan_mode = 'tracking', plan_mode_changed_at = now(), "
+                        "ai_consent_paused_at = now() WHERE id = %s", (uid,))
         cur.execute(f"SELECT {_COLUMNAS} FROM user_profiles WHERE id = %s", (uid,))
-        return cur.fetchone()
+        return cur.fetchone(), apaga
 
-    fila = _en_transaccion(_tx)
-    pausa: dict = {}
-    try:
-        from plan_mode import pause_plan_generation
-        pausa = pause_plan_generation(uid) or {}
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"❌ [P1-PLAN-LOTE-843] {uid[:8]}: permiso retirado pero la cola NO se pausó ({e!r}); "
-                     f"el gate de la recogida la frena igual.")
-    plan_pausado = pausa.get("plan_mode") == "tracking" and not pausa.get("skipped")
+    fila, plan_pausado = _en_transaccion(_tx)
+    if interruptor:
+        try:
+            from plan_mode import pause_plan_generation
+            pause_plan_generation(uid)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"❌ [P1-PLAN-LOTE-843] {uid[:8]}: permiso retirado pero la cola NO se canceló ({e!r}); "
+                         f"el gate de la recogida y el de plan_mode la frenan igual.")
     logger.info(f"⏸ [P1-PLAN-LOTE-843] {uid[:8]}: permiso de IA retirado (plan_pausado={plan_pausado})")
     out = estado_de_fila(fila)
-    out["plan_pausado"] = plan_pausado
+    out["plan_pausado"] = bool(plan_pausado)
     return out
 
 
@@ -452,17 +534,17 @@ def registrar_invitado(session_id, *, ia: bool, analytics: Optional[bool] = None
         raise ValueError("nada que registrar")
     params: list = []
     for clave, concedido in decisiones:
-        params += [None, h, clave, AI_CONSENT_VERSION, concedido, text_sha256, locale, platform, app_build]
+        params += [None, h, clave, AI_CONSENT_VERSION, concedido, text_sha256, locale, platform, app_build, "invitado"]
     execute_sql_write(_INSERTAR_EN + ", ".join([_FILA] * len(decisiones)), tuple(params))
     logger.info(f"✅ [P1-PLAN-LOTE-843] invitado {h[:8]}: permiso anotado (ia={ia}, analytics={analytics})")
     return {"ok": True, "version": AI_CONSENT_VERSION, "header": CABECERA_INVITADO, "ai": ia, "analytics": analytics}
 
 
 def adoptar_de_invitado(session_id, user_id) -> dict:
-    """Al adoptar el plan del invitado en su cuenta, su permiso pasa con la FECHA original (`created_at` copiado) y
-    sin duplicarse si se llama dos veces. El estado de la cuenta se toma del invitado solo si su permiso de IA es de
-    la versión actual y la cuenta no tiene una decisión propia MÁS RECIENTE; la analítica, solo si nunca se preguntó.
-    Nunca lanza: adoptar el plan no puede caerse por esto."""
+    """Al adoptar el plan del invitado en su cuenta, su permiso pasa con la FECHA original (`created_at` copiado),
+    marcado `origen = 'adopcion'` y sin duplicarse si se llama dos veces. El estado de la cuenta se toma del invitado
+    solo si su permiso de IA es de la versión actual y la cuenta no tiene una decisión propia MÁS RECIENTE; la
+    analítica, solo si nunca se preguntó. Nunca lanza: adoptar el plan no puede caerse por esto."""
     vacio = {"adoptadas": 0, "estado_actualizado": False}
     uid, h = _uid(user_id), hash_de_sesion(session_id)
     if uid is None or h is None:
@@ -476,7 +558,8 @@ def adoptar_de_invitado(session_id, user_id) -> dict:
         for f in filas:
             cur.execute(
                 "INSERT INTO public.user_consents (user_id, consent_key, version, granted, text_sha256, locale, "
-                "platform, app_build, created_at) SELECT %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::timestamptz "
+                "platform, app_build, created_at, origen) SELECT %s::uuid, %s, %s, %s, %s, %s, %s, %s, "
+                "%s::timestamptz, 'adopcion' "
                 "WHERE NOT EXISTS (SELECT 1 FROM public.user_consents WHERE user_id = %s::uuid AND consent_key = %s "
                 "AND version = %s AND created_at = %s::timestamptz)",
                 (uid, f["consent_key"], f["version"], f["granted"], f.get("text_sha256"), f.get("locale"),
@@ -551,8 +634,8 @@ def requiere_consentimiento_ia(
             raise ErrorDeConsentimiento(503, "ai_consent_unavailable", MENSAJE_NO_DISPONIBLE)
         return None
     if not _bloquea(m, motivo):
-        if motivo not in _PASAN:
-            logger.warning(f"⚠️ [P1-PLAN-LOTE-843] {_ruta(request)}: sin permiso de IA ({motivo}); modo log, pasa")
+        if motivo not in _PASAN:  # `info`, no `warning`: en `log` saldría en cada petición durante el despliegue
+            logger.info(f"📝 [P1-PLAN-LOTE-843] {_ruta(request)}: sin permiso de IA ({motivo}); modo log, pasa")
         return None
     logger.info(f"⛔ [P1-PLAN-LOTE-843] {_ruta(request)}: 428 ({motivo})")
     raise ErrorDeConsentimiento(428, ERROR_REQUERIDO, MENSAJE_REQUERIDO)
@@ -577,15 +660,29 @@ def hay_permiso_ia(
     if _bloquea(m, motivo):
         logger.info(f"⏭️ [P1-PLAN-LOTE-843] {_ruta(request)}: sin permiso de IA ({motivo}); se atiende sin la IA")
         return False
-    if motivo not in _PASAN:
-        logger.warning(f"⚠️ [P1-PLAN-LOTE-843] {_ruta(request)}: sin permiso de IA ({motivo}); modo log, pasa")
+    if motivo not in _PASAN:  # `info`, no `warning` (ver `requiere_consentimiento_ia`)
+        logger.info(f"📝 [P1-PLAN-LOTE-843] {_ruta(request)}: sin permiso de IA ({motivo}); modo log, pasa")
     return True
 
 
+async def embeddings_de_la_peticion(
+    request: Request,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    x_bioboros_ai_consent: Optional[str] = Header(None, alias=CABECERA_INVITADO),
+) -> None:
+    """Dependencia de los endpoints SIN IA que llegan a los embeddings (lista de compras, Nevera, diario): marca la
+    petición entera con su titular (cuenta ⇒ su permiso en la base; invitado ⇒ su cabecera). No lee nada al entrar: la
+    decisión se toma la primera vez que el intento 6 de `normalize_name` la pide. `async` a propósito: la marca se pone
+    en el contexto de la petición y FastAPI lo copia al hilo de un endpoint síncrono (una dependencia síncrona la
+    pondría en un hilo aparte y se perdería). Sin reset: el contexto muere con la petición."""
+    _EMBEDDINGS_DE.set(_MarcaEmbeddings(verified_user_id, x_bioboros_ai_consent, _ruta(request)))
+
+
 __all__ = [
-    "AI_CONSENT_VERSION", "CLAVES", "CLAVES_IA", "PLATAFORMAS", "MODOS", "CABECERA_INVITADO", "ERROR_REQUERIDO",
-    "MENSAJE_REQUERIDO", "modo", "ErrorDeConsentimiento", "PerfilInexistente", "cuerpo_del_error", "instalar",
-    "estado_de_fila", "estado", "vigente", "permite_ia", "condicion_sql_permiso", "fragmento_sql_permiso",
+    "AI_CONSENT_VERSION", "CLAVES", "CLAVES_IA", "PLATAFORMAS", "MODOS", "ORIGENES", "CABECERA_INVITADO",
+    "ERROR_REQUERIDO", "MENSAJE_REQUERIDO", "modo", "ErrorDeConsentimiento", "PerfilInexistente", "cuerpo_del_error",
+    "instalar", "estado_de_fila", "estado", "vigente", "permite_ia", "condicion_sql_permiso", "fragmento_sql_permiso",
+    "embeddings_de_usuario", "por_usuario", "embeddings_permitidos", "embeddings_de_la_peticion",
     "validar_peticion", "validar_contexto", "registrar", "retirar", "hash_de_sesion", "registrar_invitado",
     "adoptar_de_invitado",
     "requiere_consentimiento_ia", "hay_permiso_ia",

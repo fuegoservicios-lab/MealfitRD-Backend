@@ -123,7 +123,11 @@ def test_consents_esta_montado_y_exento_de_cuota(rutas):
 
 # ═════════════════════════════════════════════ 3. el cerco: quién llama a un proveedor
 _PROVEEDOR_RE = re.compile(r"ChatGLM\(|build_chat_llm\(|ChatOpenAI\(|cohere\.ClientV2\(|OpenAIEmbeddings\(|"
-                           r"generativelanguage\.googleapis\.com")
+                           r"generativelanguage\.googleapis\.com|"
+                           # [ronda de arreglo 1] los embeddings también son un proveedor: quien pide el cliente o un
+                           # vector con texto de alguien necesita su puerta o su fila justificada abajo.
+                           r"get_embeddings_client\(|embed_query\(|get_embedding\(|get_text_embedding\(|"
+                           r"get_multimodal_embedding\(")
 
 #: Cada módulo que construye un cliente de IA (o llama a la API de Google) y por dónde pasa el permiso. El inventario
 #: línea a línea está en el informe del lote; aquí se vigila que no aparezca uno nuevo SIN clasificar.
@@ -132,7 +136,12 @@ _CERCO = {
     "ai_helpers.py": "/recipe/expand (428); título (services._titulo_del_plan); retrospectiva (permite_ia)",
     "ajuste_de_duda.py": "/api/diary/scan/ajuste-duda (428)",
     "coach_voz.py": "/api/chat/voz (428)",
-    "cron_tasks.py": "sonda «ping» del worker: sin datos, y tras la recogida con permiso",
+    "constants.py": "get_embedding (el helper cacheado): lo llaman sitios ya protegidos; su uso propio, "
+                    "validate_ingredients_against_pantry, va dentro del pipeline, el swap, el worker y las tools "
+                    "(428 / SQL), y las sondas de los cerradores pasan probe_only (sin vector)",
+    "cron_tasks.py": "sonda «ping» del worker: sin datos, y tras la recogida con permiso; embeddings del aprendizaje "
+                     "del bloque (usar_embeddings=permite_ia)",
+    "db_chat.py": "search_deep_memory: tool del coach, dentro del turno del chat (428)",
     "dreaming.py": "consolidate_user (permite_ia)",
     "embeddings_provider.py": "cliente de Cohere: lo usan sitios ya protegidos (chat, hechos, Dreaming, proactivo…)",
     "etiqueta_web.py": "tool del coach (main, lote 767): dentro del turno del chat (428)",
@@ -147,6 +156,9 @@ _CERCO = {
     "routers/diary.py": "/api/diary/consumed/estimate-macros (428)",
     "routers/help_chat.py": "/api/help/chat (428)",
     "sentiment_classifier.py": "turno del chat (428)",
+    "shopping_calculator.py": "get_semantic_cache vectoriza el CATÁLOGO (sin datos de nadie); el intento 6 de "
+                              "normalize_name (embed_query con el nombre) consulta la marca "
+                              "consentimientos.embeddings_permitidos()",
     "tools.py": "tools del coach: dentro del turno del chat (428)",
     "tools_medical.py": "revisor clínico dentro del pipeline del plan",
     "traduccion_para_mostrar.py": "/i18n/textos (suave), /diary/upload y /regenerate-day (428)",
@@ -177,8 +189,11 @@ def test_los_sitios_de_segundo_plano_consultan_el_permiso():
         "services.py": ['permite_ia(user_id, "titulo_del_plan")'],
         "cron_tasks.py": ['fragmento_sql_permiso("q1.user_id")', 'fragmento_sql_permiso("plan_chunk_queue.user_id")',
                           'fragmento_sql_permiso("q.user_id")', 'permite_ia(user_id, "retrospectiva_semanal")',
-                          'permite_ia(user_id, "aprendizaje_del_bloque")'],
-        "plan_jobs.py": ['condicion_sql_permiso("j.user_id")'],
+                          'permite_ia(user_id, "aprendizaje_del_bloque")', 'por_usuario(plans, donde="listas_pendientes")',
+                          'por_usuario(plans, donde="coherencia_diaria")', 'por_usuario(rows, donde="descuentos_fallidos")'],
+        "plan_jobs.py": ['condicion_sql_permiso("j.user_id")',
+                         'embeddings_de_usuario(job.get("user_id"), "plan_jobs")'],
+        "shopping_calculator.py": ["_cs843.embeddings_permitidos()"],
     }
     for fichero, trozos in anclas.items():
         src = (_BACKEND / fichero).read_text(encoding="utf-8")

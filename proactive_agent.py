@@ -908,9 +908,11 @@ def run_proactive_checks():
         session_id = str(s.get("id")) if s.get("id") else None   # [P1-PLAN-LOTE-133] None = suscriptor sin chat reciente
         user_id = str(s.get("user_id"))
         # [P1-PLAN-LOTE-843 · 2026-09-29] Sin permiso para la IA de terceros, ni embedding (Cohere) ni aviso escrito por
-        # la IA: le llega el aviso FIJO de su idioma, el mismo del suscriptor sin chat (recordar no es IA).
+        # la IA: le llega el aviso FIJO de su idioma, el mismo del suscriptor sin chat (recordar no es IA). La lectura
+        # del permiso va JUNTO al embedding y al prompt (más abajo), después de los `continue` del tope diario y de
+        # los demás filtros: quien no recibe nada hoy no cuesta una lectura. Hasta entonces, «no» (fail-closed).
         from consentimientos import permite_ia
-        _ia_ok = permite_ia(user_id, "coach_proactivo")
+        _ia_ok = False
         # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El reloj, DENTRO del bucle. `user_tz_offset_min` ya
         # estaba importado en este mismo archivo y se usaba 100 líneas más arriba: la maquinaria
         # existía y este call site no la llamaba. El knob global queda sólo de fallback.
@@ -1162,6 +1164,7 @@ def run_proactive_checks():
                 else:
                     # Enviar mensaje especial: No comió nada
                     logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró NADA. Generando nudge indulgente...")
+                    _ia_ok = permite_ia(user_id, "coach_proactivo")  # [P1-PLAN-LOTE-843] junto al prompt
                     # [P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] Este era el UNICO camino del
                     # coach que no pasa por `_plan_context_for_chat`, y su oferta —«restamos
                     # lo de hoy de tu nevera como si lo hubieras cocinado»— presupone un plan
@@ -1205,6 +1208,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
 
                 # ESTADO: olvido registrar. Generar mensaje proactivo.
                 logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
+                _ia_ok = permite_ia(user_id, "coach_proactivo")  # [P1-PLAN-LOTE-843] junto al embedding y al prompt
                 
                 # [P1-PLAN-LOTE-161] Dieta, objetivo y restricciones REALES del perfil (ver `contexto_del_aviso`).
                 _ctx_aviso = contexto_del_aviso(health)
