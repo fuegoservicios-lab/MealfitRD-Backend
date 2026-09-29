@@ -99,11 +99,12 @@ def _pool_con(cur):
     return pool
 
 
-def _shift_http(plan_data, vivos):
+def _shift_http(plan_data, vivos, inventario=None):
     from routers.plans import api_shift_plan
     cur = _cursor_despachador(plan_data, vivos)
     with patch("cron_tasks._enqueue_plan_chunk") as enq, patch("db_core.connection_pool", _pool_con(cur)), \
-            patch("routers.plans.update_user_health_profile_atomic", create=True):
+            patch("routers.plans.update_user_health_profile_atomic", create=True), \
+            patch("db_inventory.get_user_inventory_net", return_value=inventario):
         r = api_shift_plan(Response(), {"user_id": "user-811", "tzOffset": 0}, verified_user_id="user-811")
     return r, enq
 
@@ -221,6 +222,58 @@ def test_http_plan_15d_catchup_tambien_lleva_la_politica_y_las_marcas():
     assert fd["_is_continuation"] is True and fd["_plan_policy_effective"]["policy_hash"] == "hash-del-plan-811"
 
 
+def test_http_plan_15d_con_bloques_vivos_no_encola():
+    """Como el cron: con un bloque vivo no se rellena encima (antes el HTTP generaba los mismos días dos veces)."""
+    _, enq = _shift_http(_plan(total=15, n_dias=2), vivos=1)
+    enq.assert_not_called()
+
+
+def test_http_knob_apagado_plan_15d_con_bloques_vivos_encola_como_antes(monkeypatch):
+    """`MEALFIT_7D_ORPHAN_GAP_HTTP_REFILL=false` ⇒ el HTTP de antes, entero: los planes de 15/30 días NO miran los
+    bloques vivos (encola igual) y el snapshot va sin marcas de continuación ni `_triggered_by`."""
+    monkeypatch.setenv("MEALFIT_7D_ORPHAN_GAP_HTTP_REFILL", "false")
+    _, enq = _shift_http(_plan(total=15, n_dias=2), vivos=1)
+    assert enq.call_count >= 1
+    for i in range(enq.call_count):
+        s = _snapshot(enq, i)
+        assert "_is_continuation" not in s["form_data"] and "_continuation_anchor_iso" not in s["form_data"]
+        assert "_triggered_by" not in s
+
+
+def _plan_expirado_15d():
+    return _plan(total=15, n_dias=2, ancla=(datetime.now(timezone.utc) - timedelta(days=15)).date().isoformat())
+
+
+def test_http_renovacion_semanal_lleva_politica_marcas_y_triggered_by():
+    """La renovación P0-1 por `/shift-plan` (plan expirado, 0 bloques vivos): gemela de la del cron."""
+    from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS
+    inv = [f"Alimento {i}" for i in range(CHUNK_MIN_FRESH_PANTRY_ITEMS + 2)]
+    r, enq = _shift_http(_plan_expirado_15d(), vivos=0, inventario=inv)
+    assert r["success"] is True and enq.call_count >= 1
+    for i in range(enq.call_count):
+        s = _snapshot(enq, i)
+        fd = s["form_data"]
+        assert s["_is_weekly_renewal"] is True and s["_triggered_by"] == "shift_plan_http"
+        assert fd["_is_continuation"] is True and fd["_continuation_anchor_iso"] == fd["_plan_start_date"]
+        assert fd["_plan_policy_effective"]["policy_hash"] == "hash-del-plan-811"
+        assert fd["current_pantry_ingredients"] == inv
+        assert enq.call_args_list[i].kwargs.get("chunk_kind") == "rolling_refill"
+
+
+def test_http_renovacion_semanal_con_el_knob_del_gap_apagado_va_sin_marcas_pero_con_politica(monkeypatch):
+    """Los dos knobs son independientes: apagar el del gap devuelve el snapshot HTTP de antes (sin marcas ni
+    `_triggered_by`); la política la gobierna `MEALFIT_REFILL_CARRIES_POLICY`."""
+    monkeypatch.setenv("MEALFIT_7D_ORPHAN_GAP_HTTP_REFILL", "false")
+    from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS
+    inv = [f"Alimento {i}" for i in range(CHUNK_MIN_FRESH_PANTRY_ITEMS + 2)]
+    _, enq = _shift_http(_plan_expirado_15d(), vivos=0, inventario=inv)
+    assert enq.call_count >= 1
+    s = _snapshot(enq)
+    assert s["_is_weekly_renewal"] is True and "_triggered_by" not in s
+    assert "_is_continuation" not in s["form_data"]
+    assert s["form_data"]["_plan_policy_effective"]["policy_hash"] == "hash-del-plan-811"
+
+
 # ─────────────── 4. el cron: mismo relleno, la política viaja, el WARNING sólo si encola ───────────────
 def test_cron_relleno_7d_lleva_la_politica_y_las_marcas():
     r, enq = _shift_cron(_plan(), vivos=0)
@@ -281,12 +334,56 @@ def test_alerta_stranded_aclara_la_edad_y_lleva_frozen_at():
     assert meta["_frozen_at"] == "2026-09-17T12:40:00+00:00"
 
 
+def test_alerta_stranded_partial_no_shopping_tambien_aclara_la_edad():
+    """Las dos ramas miden lo mismo (`age_hours` desde `created_at`): la de `partial_no_shopping` decía «lleva Nh en»."""
+    import cron_tasks
+    filas = [{"plan_id": "p-nos", "user_id": "u", "gen_status": "partial_no_shopping", "age_hours": 50.0,
+              "frozen_at": None}]
+    with patch.object(cron_tasks, "execute_sql_query", return_value=filas), \
+            patch.object(cron_tasks, "execute_sql_write") as w:
+        cron_tasks._alert_stranded_partial_plans()
+    insert = [c for c in w.call_args_list if "INSERT INTO system_alerts" in str(c.args[0])][0]
+    msg, meta = insert.args[1][2], json.loads(insert.args[1][3])
+    assert "edad del plan" in msg and "created_at" in msg
+    assert "lleva 50.0h en" not in msg
+    assert "_frozen_at" in meta
+
+
 def test_la_alerta_no_excluye_los_congelados():
     src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
     i = src.index("def _alert_stranded_partial_plans(")
     cuerpo = src[i:src.index("\ndef ", i + 10)]
     assert "_frozen_at" in cuerpo
     assert "NOT (plan_data ? '_frozen_at')" not in cuerpo and "? '_frozen_at')" not in cuerpo.split("WHERE", 1)[1].split("ORDER BY")[0]
+
+
+# ─────────────── 7. la justificación del knob dice lo que el código hace ───────────────
+def test_la_doc_no_promete_que_en_shadow_solo_se_mide():
+    """En `shadow` el bloque 📐 queda vacío, pero los consumidores de compra única leen `_plan_policy_effective` SIN
+    mirar `_policy_enforced`: llevar la política también cambia lo que se genera (sembrador por durabilidad, Nevera
+    virtual). La doc lo tiene que decir con sus nombres."""
+    src = (_BACKEND / "relleno_rolling.py").read_text(encoding="utf-8")
+    assert "sólo se gana la medición" not in src
+    for consumidor in ("nevera_virtual", "candidatos_del_dia", "_single_trip_durable_filter", "_age_pantry_for_block"):
+        assert consumidor in src, consumidor
+    # y los consumidores siguen sin mirar el enforce (si alguien lo añade, la doc queda desfasada: actualizarla)
+    cu = (_BACKEND / "compra_unica.py").read_text(encoding="utf-8")
+    i = cu.index("def nevera_virtual(")
+    j = cu.find("\ndef ", i + 10)
+    assert "_policy_enforced" not in cu[i:(j if j > 0 else len(cu))]
+
+
+def test_la_doc_declara_la_aproximacion_del_dia_del_ciclo_en_el_gap():
+    """Relleno por gap de un plan de 15/30 días con compra única: `_days_offset` cuenta desde el ancla MÓVIL, no desde
+    el día del ciclo ⇒ `nevera_virtual` y los filtros de durabilidad evalúan un día temprano. Aproximación conocida."""
+    src = (_BACKEND / "relleno_rolling.py").read_text(encoding="utf-8")
+    assert "tooltip-anchor: P1-PLAN-LOTE-811-DIA-DEL-CICLO" in src
+    i = src.index("tooltip-anchor: P1-PLAN-LOTE-811-DIA-DEL-CICLO")
+    bloque = src[max(0, i - 1800):i]
+    assert "nevera_virtual" in bloque and "_days_offset" in bloque and "aproximación" in bloque.lower()
+    doc = (_BACKEND / "docs" / "plan_policy_f3.md").read_text(encoding="utf-8")
+    fila = [ln for ln in doc.splitlines() if "relleno_rolling.snapshot_relleno" in ln][0]
+    assert "nevera_virtual" in fila and "aproximación" in fila.lower()
 
 
 def test_marker_y_knobs():

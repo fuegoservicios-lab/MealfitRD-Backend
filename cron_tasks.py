@@ -22782,8 +22782,9 @@ def _alert_stranded_partial_plans() -> None:
         alert_key = f"plan_stranded_partial:{plan_id}"
         if gen_status == "partial_no_shopping":
             _alert_title = "Plan stranded en partial_no_shopping (lista de compras no generada)"
-            _alert_msg = (
-                f"Plan {plan_id} (user {user_id}) lleva {age_hours:.1f}h en "
+            _alert_msg = (   # [P1-PLAN-LOTE-811] misma cifra que la rama `partial`: la EDAD del plan
+                f"Plan {plan_id} (user {user_id}) tiene {age_hours:.1f}h de edad del plan (desde created_at, no el "
+                f"tiempo en este estado) y está en "
                 f"`generation_status='partial_no_shopping'` (umbral {_age_h}h): el "
                 f"plan está generado (days>0) pero el recalc de la lista de compras "
                 f"falla persistentemente. `_process_pending_shopping_lists` reintenta "

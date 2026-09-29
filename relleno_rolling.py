@@ -37,8 +37,29 @@ Knobs:
     True porque (a) es la política con la que NACIÓ el plan y la que el usuario vio en el panel «solicitaste /
     aplicamos»: perderla en la renovación es exactamente la «modificación silenciosa» que F2 prohíbe, y F3 dice que la
     renovación HEREDA la política; (b) no la recompila: si `MEALFIT_PLAN_POLICY_MODE=off`, `effective_policy_for_plan`
-    devuelve None y no viaja nada, igual que en la creación; (c) en `shadow` el bloque 📐 queda vacío
-    (`policy_prompt_block` exige enforce) y sólo se gana la medición. False ⇒ el snapshot de antes, byte a byte.
+    devuelve None y no viaja nada, igual que en la creación; (c) queda gemela de la CREACIÓN también en `shadow`:
+    ahí el bloque 📐 queda vacío (`policy_prompt_block` exige enforce), pero NO es «sólo medición», porque los
+    consumidores de compra única leen `_plan_policy_effective` SIN mirar `_policy_enforced` —
+    `compra_unica.nevera_virtual` (Nevera virtual en los bloques 2+), `compra_unica.candidatos_del_dia` y
+    `ai_helpers._age_pantry_for_block` / `ai_helpers._single_trip_durable_filter` (sembrador filtrado por
+    durabilidad)—, así que llevarla cambia lo que se genera en un plan de compra única. Es lo mismo que ya pasa al
+    crear el plan en `shadow` (`horizon.inject_policy_into_pipeline_data` inyecta la política en todo modo ≠ off).
+    Producción está en `enforce` con gate `warn` (las 8 últimas filas de `plan_policy_fidelity`, 29-sep).
+    False ⇒ el snapshot de antes, byte a byte.
+
+Aproximación conocida — el día del ciclo en el relleno por GAP de un plan de 15/30 días con compra única: el bloque
+lleva `_days_offset = len(días visibles)`, contado desde el ancla MÓVIL (el shift la reescribe a hoy), no desde el día
+del ciclo. `compra_unica.nevera_virtual` (se activa con `_days_offset > 0`) y los filtros de durabilidad
+(`pantry_durability.single_trip_requirements`) evalúan entonces, p. ej., el día 3 cuando el real es el 20: la
+exigencia de durabilidad sale nula o laxa y la Nevera virtual puede ofrecer frescos de la compra del día 1 (yogur,
+pescado sin congelador) que ya no están. Sin la política ese bloque no activaba ninguna de las dos cosas, así que en
+ESTE caso llevarla no es estrictamente mejor que no llevarla; el resto (anclas, banda, presupuesto, bloque 📐) sí es
+correcto. Medido (replay SELECT, 29-sep): 6594aae1 (30 días, sin congelador), si hoy muriera su cola, iría con
+`_days_offset` 5 frente al día real 10 del ciclo y la Nevera virtual ofrecería 13 frescos que no llegan (Plátano,
+Fresas, Aguacate, Leche…). Es raro: exige que hayan muerto todos los bloques pendientes de un plan de 15/30 días de compra única. En la
+renovación semanal (P0-1) el índice es exacto (ancla = hoy; offsets 0, 4, 8… del ciclo nuevo). Arreglo pendiente,
+fuera de este lote: derivar el día del ciclo de `_cycle_started_at` (o del inicio del plan) y pasarlo a esos
+consumidores. tooltip-anchor: P1-PLAN-LOTE-811-DIA-DEL-CICLO
 
 Presupuesto duro y `waiting_user` en una renovación: `budget_below_floor` (`action=waiting_user`) es una relajación que
 el COMPILADOR emite al crear el plan y que sólo consume el formulario (`frontend/src/config/planPolicy.js`,
