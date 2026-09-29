@@ -12,7 +12,8 @@ cuajen»), medido sobre 4.969 veredictos.
 
 Aquí, cuando el detector dice `no_cook` (y no es una masa: panqueques, arepitas…), se comprueba con un criterio ESTRICTO
 si algún paso cocina el huevo de verdad —una cláusula que nombra el huevo con un verbo de cocción, o que lo cuaja— y, si
-ninguno lo hace, se inserta antes del Montaje «💪 Vierte los huevos batidos en la sartén… hasta que cuajen por completo».
+ninguno lo hace, se añade «Vierte los huevos batidos en la sartén… hasta que cuajen por completo» al «El Toque de Fuego»
+(lote 863: dentro de la receta, no como paso «💪» del cerrador, y repuesto por `reasegurar` si algo lo pierde).
 El criterio estricto evita el falso positivo del detector (sobre-detecta a propósito: con una nota daba igual; con un
 paso, duplicaría la cocción). Knob `MEALFIT_RAW_EGG_COOK_STEP` (True). tooltip-anchor: P1-PLAN-LOTE-806
 """
@@ -95,11 +96,32 @@ def paso(meal: dict) -> str:
     pron = ("las" if fem else "los") if plural else ("la" if fem else "lo")
     mise = " ".join(_sa(p) for p in (meal.get("recipe") or []) if isinstance(p, str))
     if re.search(r"\bbat[eiao]\w*", mise):
-        return (f"💪 Vierte {objeto} batid{suf} en la sartén caliente con un poco de aceite y cocína{pron}, removiendo, "
+        return (f"Vierte {objeto} batid{suf} en la sartén caliente con un poco de aceite y cocína{pron}, removiendo, "
                 f"3-4 minutos, hasta que cuajen por completo (sin partes líquidas).")
-    return (f"💪 Bate {objeto}, viérte{pron} en la sartén caliente con un poco de aceite y cocína{pron}, removiendo, "
+    return (f"Bate {objeto}, viérte{pron} en la sartén caliente con un poco de aceite y cocína{pron}, removiendo, "
             f"3-4 minutos, hasta que cuajen por completo (sin partes líquidas).")
 
 
 def necesita_paso(meal: dict) -> bool:
     return on() and isinstance(meal, dict) and not cocido_en_pasos(meal)
+
+
+def reasegurar(plan, nota: str) -> int:
+    """[P1-PLAN-LOTE-863] Repone el paso en las comidas que ya llevan `nota` (la de huevo sin cocción) y en las que ningún
+    paso cuece el huevo: con la nota puesta el detector ya no las marca («cocina el huevo» está en la nota), así que si
+    algo reescribió la comida después, nadie lo reponía. Nº de comidas tocadas; 0 ante cualquier error."""
+    n = 0
+    try:
+        for d in (plan or {}).get("days") or []:
+            for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+                rec = m.get("recipe") if isinstance(m, dict) else None
+                if not isinstance(rec, list) or nota not in rec or not necesita_paso(m):
+                    continue
+                if not any(isinstance(x, str) and _HUEVO_RE.search(_sa(x)) for x in (m.get("ingredients") or [])):
+                    continue
+                m["recipe"] = __import__("paso_de_seguridad").poner(rec, paso(m))
+                m.pop("_display", None)
+                n += 1
+    except Exception:                                                          # noqa: BLE001
+        return n
+    return n

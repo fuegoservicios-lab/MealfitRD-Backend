@@ -30,9 +30,10 @@ def test_la_tortilla_sin_cuajar_recibe_su_paso():
     plan = _plan(_TORTILLA)
     go._apply_food_safety_fixes(plan)
     rec = plan["days"][0]["meals"][0]["recipe"]
-    i = next(i for i, p in enumerate(rec) if p.startswith("💪 "))
-    assert rec[i] == ("💪 Vierte los huevos y la clara batidos en la sartén caliente con un poco de aceite y cocínalos, "
-                      "removiendo, 3-4 minutos, hasta que cuajen por completo (sin partes líquidas)."), rec[i]
+    i = next(i for i, p in enumerate(rec) if p.startswith("El Toque de Fuego"))
+    assert rec[i].endswith("Añade huevos al lado para acompañar. Vierte los huevos y la clara batidos en la sartén caliente "
+                           "con un poco de aceite y cocínalos, removiendo, 3-4 minutos, hasta que cuajen por completo (sin "
+                           "partes líquidas)."), rec[i]   # [P1-PLAN-LOTE-863] dentro del Toque de Fuego, no un paso «💪»
     assert rec[i + 1].startswith("Montaje"), rec
     assert any("Seguridad alimentaria" in p for p in rec), "la nota sigue"
 
@@ -45,7 +46,7 @@ def test_si_un_paso_ya_lo_cocina_solo_la_nota():
     plan = _plan(guiso)
     go._apply_food_safety_fixes(plan)
     rec = plan["days"][0]["meals"][0]["recipe"]
-    assert not any(p.startswith("💪 ") for p in rec), rec
+    assert not any("Vierte los huevos y la clara batidos" in p for p in rec), rec
 
 
 def test_los_falsos_positivos_del_corpus_no_reciben_paso():
@@ -76,4 +77,4 @@ def test_el_criterio_estricto():
     assert hs.cocido_en_pasos({"recipe": ["Hierve los huevos 10 minutos y pélalos."]})
     assert not hs.cocido_en_pasos({"recipe": ["⚠️ Seguridad alimentaria: cocina el huevo por completo."]})
     assert hs.paso({"ingredients": ["2 claras de huevo"], "recipe": []}).startswith(
-        "💪 Bate las claras, viértelas en la sartén caliente con un poco de aceite y cocínalas")
+        "Bate las claras, viértelas en la sartén caliente con un poco de aceite y cocínalas")

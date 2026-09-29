@@ -18156,7 +18156,7 @@ def _apply_food_safety_fixes(plan: dict, form_data=None, allergies=None) -> int:
                     logger.info(f"[P1-PLAN-LOTE-6] _apply_food_safety_fixes: paso tragado sin rastro ({type(_f5e).__name__}: {_f5e})")
             meal["_food_safety_fixed"] = kind
             if kind == "no_cook" and note is _FOOD_SAFETY_NOTE_NOCOOK and __import__("huevo_sin_coccion").necesita_paso(meal):
-                rec = _insert_step_before_montaje(rec, __import__("huevo_sin_coccion").paso(meal))   # [P1-PLAN-LOTE-806]
+                rec = __import__("paso_de_seguridad").poner(rec, __import__("huevo_sin_coccion").paso(meal))   # [P1-PLAN-LOTE-806/863]
         meal["recipe"] = rec + [note]
         fixed += 1
     # [P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Pescado/carne crudos → nota de seguridad

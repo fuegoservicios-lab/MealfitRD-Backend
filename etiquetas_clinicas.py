@@ -283,6 +283,7 @@ def etiquetar(plan: dict, form_data) -> int:
     n += _nota_habichuelas_secas(plan)                      # [P1-PLAN-LOTE-182] ídem
     n += _nota_mariscos_no_pescado(plan, form_data)        # [P1-PLAN-LOTE-210] mariscos ≠ pescado, escrito
     n += _nota_embarazo_recalculada(plan, form_data)       # [P1-PLAN-LOTE-227] la nota describe el plato FINAL
+    n += __import__("huevo_sin_coccion").reasegurar(plan, __import__("graph_orchestrator")._FOOD_SAFETY_NOTE_NOCOOK)  # [P1-PLAN-LOTE-863]
     reglas = _reglas(form_data)
     if not reglas:
         return n
