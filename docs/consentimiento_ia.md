@@ -152,6 +152,7 @@ direcciones, también contra las rutas reales de la app).
 | POST | /api/chat | routers/chat.py | api_chat | 428 |
 | POST | /api/chat/message | routers/chat.py | api_save_chat_message | 428 |
 | POST | /api/chat/voz | routers/chat.py | api_chat_voz | 428 |
+| POST | /api/chat/voz/flujo | routers/chat.py | api_chat_voz_flujo | 428 |
 | POST | /api/diary/upload | routers/diary.py | api_diary_upload | 428 |
 | POST | /api/diary/consumed/estimate-macros | routers/diary.py | api_estimate_macros | 428 |
 | POST | /api/diary/consumed/estimate-plate | routers/diary.py | api_estimate_plate | 428 |

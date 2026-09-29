@@ -664,7 +664,7 @@ async def api_chat_voz(background_tasks: BackgroundTasks, data: dict = Body(...)
 @router.post("/voz/flujo")
 async def api_chat_voz_flujo(data: dict = Body(...),
                              verified_user_id: Optional[str] = Depends(get_verified_user_id),
-                             _rl: None = Depends(_VOZ_LIMITER)):
+                             _rl: None = Depends(_VOZ_LIMITER), _ia: None = Depends(requiere_consentimiento_ia)):
     """[P1-PLAN-LOTE-901 · 2026-09-29] La misma voz que `/voz`, en streaming: PCM 16 bits mono mientras Google lo
     produce (el primer audio a ~0,65 s en vez de ~2-3 s del WAV entero). Mismas reglas: exenta del paywall, tope de
     dinero diario, 204 = «usa la voz del teléfono». `X-Voz-Motivo: flujo_apagado` = el cliente vuelve a `/voz`."""

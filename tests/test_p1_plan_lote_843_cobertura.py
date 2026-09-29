@@ -31,7 +31,7 @@ _AUDITORIA_A1 = {
     ("POST", "/api/plans/{plan_id}/fix-sodium-day"), ("POST", "/api/plans/recipe/expand"),
     ("POST", "/api/plans/{plan_id}/retry-chunk/{chunk_id}"),
     ("POST", "/api/plans/{plan_id}/chunks/{chunk_id}/regenerate-simplified"),
-    ("POST", "/api/chat/stream"), ("POST", "/api/chat"), ("POST", "/api/chat/message"), ("POST", "/api/chat/voz"),
+    ("POST", "/api/chat/stream"), ("POST", "/api/chat"), ("POST", "/api/chat/message"), ("POST", "/api/chat/voz"), ("POST", "/api/chat/voz/flujo"),
     ("POST", "/api/diary/upload"), ("POST", "/api/diary/consumed/estimate-macros"),
     ("POST", "/api/diary/consumed/estimate-plate"), ("POST", "/api/diary/scan/ajuste-duda"),
     ("POST", "/api/diary/scan/ingrediente"), ("POST", "/api/inventory/photo-scan"), ("POST", "/api/help/chat"),
