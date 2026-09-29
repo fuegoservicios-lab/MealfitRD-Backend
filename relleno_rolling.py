@@ -47,18 +47,20 @@ Knobs:
     Producción está en `enforce` con gate `warn` (las 8 últimas filas de `plan_policy_fidelity`, 29-sep).
     False ⇒ el snapshot de antes, byte a byte.
 
-Aproximación conocida — el día del ciclo en el relleno por GAP de un plan de 15/30 días con compra única: el bloque
-lleva `_days_offset = len(días visibles)`, contado desde el ancla MÓVIL (el shift la reescribe a hoy), no desde el día
-del ciclo. `compra_unica.nevera_virtual` (se activa con `_days_offset > 0`) y los filtros de durabilidad
-(`pantry_durability.single_trip_requirements`) evalúan entonces, p. ej., el día 3 cuando el real es el 20: la
-exigencia de durabilidad sale nula o laxa y la Nevera virtual puede ofrecer frescos de la compra del día 1 (yogur,
-pescado sin congelador) que ya no están. Sin la política ese bloque no activaba ninguna de las dos cosas, así que en
-ESTE caso llevarla no es estrictamente mejor que no llevarla; el resto (anclas, banda, presupuesto, bloque 📐) sí es
-correcto. Medido (replay SELECT, 29-sep): 6594aae1 (30 días, sin congelador), si hoy muriera su cola, iría con
-`_days_offset` 5 frente al día real 10 del ciclo y la Nevera virtual ofrecería 13 frescos que no llegan (Plátano,
-Fresas, Aguacate, Leche…). Es raro: exige que hayan muerto todos los bloques pendientes de un plan de 15/30 días de compra única. En la
-renovación semanal (P0-1) el índice es exacto (ancla = hoy; offsets 0, 4, 8… del ciclo nuevo). [P1-PLAN-LOTE-816]
-Cerrada: el worker sella el día del ciclo (`dia_del_ciclo.sellar`: rebanada, calendario y columna, el más exigente)
+Aproximación conocida — el día del ciclo [P1-PLAN-LOTE-817, corregida por el revisor del 811]: el bloque lleva
+`_days_offset` contado desde el ancla MÓVIL, no desde el día del ciclo de compra. El defecto no nace aquí: ya existe en
+todo el sistema, porque el shift re-ancla también la cola pendiente (el rebase de offsets,
+`constants.rebase_pending_chunk_offsets`), así que todo bloque —creación, renovación semanal (P0-1), relleno por gap—
+cuenta desde la ventana viva, desplazado por los días archivados. Llevar la política lo EXTIENDE a las renovaciones y
+rellenos de 15/30 días con compra única, que antes no activaban nada: los filtros de durabilidad
+(`single_trip_requirements` en `_single_trip_durable_filter`, `_age_pantry_for_block`, `candidatos_del_dia`) actúan
+SIEMPRE y evalúan un día temprano (el 3 cuando es el 20: exigencia nula o laxa); `compra_unica.nevera_virtual` sólo con
+la Nevera real vacía o apagada, y entonces ofrece frescos del día 1 que ya no están (replay 29-sep, 6594aae1:
+`_days_offset` 5 frente al día 10, 13 frescos que no llegan). El default True se sostiene: la renovación queda igual
+que la creación (mismos consumidores, mismo índice desplazado); anclas, banda, presupuesto y bloque 📐 sí son
+correctos. Arreglo en el lote 816: el día del ciclo a esos consumidores (`_blueprint_slice.days_offset`, o inicio del
+ciclo + días archivados).
+[P1-PLAN-LOTE-816] Cerrada: el worker sella el día del ciclo (`dia_del_ciclo.sellar`: rebanada, calendario y columna, el más exigente)
 y esos consumidores lo leen. tooltip-anchor: P1-PLAN-LOTE-811-DIA-DEL-CICLO
 
 Presupuesto duro y `waiting_user` en una renovación: `budget_below_floor` (`action=waiting_user`) es una relajación que
@@ -66,12 +68,14 @@ el COMPILADOR emite al crear el plan y que sólo consume el formulario (`fronten
 `relaxationIsBlocking`: CTA antes de gastar el crédito). En el backend nada convierte esa acción en una pausa: el
 estado `pending_user_action` de un bloque lo ponen únicamente las guardas de Nevera. Aquí además no se recompila: el
 relleno lleva la MISMA política (mismo `policy_hash`) con la que ya se generaron los bloques anteriores, con su
-`budget.status` tal cual. Una renovación con la política no puede, por tanto, quedar en `waiting_user` ni pausarse por
+`budget.status` tal cual (salvo las anclas que choquen con el perfil VIGENTE, que se retiran y cambian el hash:
+`anclas_vigentes`, P1-PLAN-LOTE-817). Una renovación con la política no puede, por tanto, quedar en `waiting_user` ni pausarse por
 el presupuesto; lo que cambia es que el precio del registry y el tier (`budget.tier`) vuelven a guiar los candidatos
 como en la creación. Si algún día el backend hiciera cumplir `waiting_user`, este sería el punto a revisar: la
 renovación no pasa por el formulario y el usuario no tendría dónde resolverlo.
 
-Doc: backend/docs/plan_policy_f3.md (sección «Renovación»). Test: tests/test_p1_plan_lote_811.py.
+Doc: backend/docs/plan_policy_f3.md (sección «Renovación»). Tests: tests/test_p1_plan_lote_811.py y
+tests/test_p1_plan_lote_817.py (anclas frente al perfil vigente, `anclas_vigentes`).
 tooltip-anchor: P1-PLAN-LOTE-811
 """
 from __future__ import annotations
@@ -156,6 +160,13 @@ def snapshot_relleno(*, hp: dict, user_id: str, chunk_count: int, ancla_iso: Opt
         for k in ("_blueprint_slice", "_plan_policy_effective", "_policy_enforced", "_policy_day_index"):
             form.pop(k, None)
         eff = politica_del_plan(plan_data)
+        if eff:
+            # [P1-PLAN-LOTE-817 · 2026-09-29] las anclas congeladas frente a las alergias, la dieta y los rechazos
+            # VIGENTES, con la puerta del guard (sin conflicto: el mismo objeto, snapshot idéntico al del 811).
+            # Knob MEALFIT_REFILL_POLICY_ANCHORS_RECHECK. tooltip-anchor: P1-PLAN-LOTE-817
+            from anclas_vigentes import anclas_vigentes, recheck_activo
+            if recheck_activo():
+                eff, _ = anclas_vigentes(eff, hp, user_id=user_id)
         if eff:
             form["_plan_policy_effective"] = eff
             try:
