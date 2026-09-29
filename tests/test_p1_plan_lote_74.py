@@ -151,7 +151,14 @@ def test_marker_doc_and_env_example():
 SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "docs/llm_tier_routing.md",
                "docs/coach_bateria_2026_09_15.md",   # [P1-PLAN-LOTE-77] la batería del coach medida con el proveedor alterno
                # [P1-PLAN-LOTE-654] reconocer su falta de saldo (402 «Insufficient Balance») y documentar su alerta
-               "saldo_proveedor.py", "docs/system_alerts_resolution_table.md"}
+               "saldo_proveedor.py", "docs/system_alerts_resolution_table.md",
+               # [P1-PLAN-LOTE-844 · ronda 1] el texto EXACTO del permiso para la IA, por idioma (art. 7.1 del RGPD: el
+               # consentimiento tiene que poder demostrarse). Nombrarlo es obligatorio: App Review 5.1.2(i) exige
+               # nombrar a cada IA de terceros y el art. 49.1.a del RGPD, la transferencia a China. El frontend fija
+               # el SHA-256 de este texto (`lote844.textos.test.js`): no se puede redactar sin el nombre.
+               "docs/consentimientos/ia/ia-2026-10/es-DO.md", "docs/consentimientos/ia/ia-2026-10/en-US.md",
+               "docs/consentimientos/ia/ia-2026-10/pt-BR.md", "docs/consentimientos/ia/ia-2026-10/fr-FR.md",
+               "docs/consentimientos/ia/ia-2026-10/it-IT.md"}
 
 
 def _menciones(token: str) -> set:
