@@ -296,7 +296,8 @@ def test_los_tres_endpoints_que_reviven_bloques_se_niegan_en_pausa(monkeypatch):
 def test_el_escalado_de_atascados_ignora_a_los_contadores():
     s = _src("cron_tasks.py")
     i = s.index("# 1. Detectar stuck (>24h sin pickup)")
-    sql = s[i:s.index('""", fetch_all=True', i)]
+    # [P1-PLAN-LOTE-843] El SQL ya no cierra en `""", fetch_all=True`: lleva `.replace("__AI_CONSENT_GATE__", …)`.
+    sql = s[i:s.index('ORDER BY execute_after ASC', i)]
     assert "status IN ('pending', 'stale')" in sql and "escalated_at" in sql
     assert "up.plan_mode = 'tracking'" in sql and "NOT EXISTS" in sql
 
