@@ -55,7 +55,7 @@ def test_el_piso_no_dropea_el_cilantro_sin_headroom():
 
 
 def test_las_hierbas_estan_en_los_exentos():
-    for h in ("cilantro", "perejil", "cebollin", "albahaca", "culantro", "hierbabuena", "eneldo", "tomillo"):
+    for h in ("cilantro", "perejil", "cebollin", "albahaca", "tomillo"):
         assert h in go._SHRINK_FLOOR_EXEMPT_TOKENS
 
 

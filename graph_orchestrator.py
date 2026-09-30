@@ -33289,7 +33289,7 @@ _SHRINK_FLOOR_EXEMPT_TOKENS = (
     "limon", "ajo", "jengibre", "especias", "oregano", "canela", "comino", "pimienta", "achiote",
     "vainilla", "cacao", "levadura", "polvo de hornear", "mayonesa", "mostaza", "sazon",
     "semillas", "chia", "linaza", "ajonjoli", "rallado", "parmesano", "sofrito", "caldo", "cubito",
-    "cilantro", "perejil", "cebollin", "albahaca", "culantro", "hierbabuena", "eneldo", "tomillo",  # [P1-PLAN-LOTE-922] hierbas
+    "cilantro", "perejil", "cebollin", "albahaca", "tomillo",  # [P1-PLAN-LOTE-922] hierbas (las que el qty-guard ya sabe sazón)
 )
 # [P3-CANNED-MIN-SERVIBLE · 2026-07-05] (review visual #6: "20g de sardinas en lata") Nadie abre
 # una lata para 20g — la proteína enlatada/pre-cocida bajo el mínimo servible se bumpea a
