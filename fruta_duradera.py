@@ -8,8 +8,8 @@ con casabe, queso blanco y manzana» donde iba aguacate. El dueño (30-sep) apro
 Aquí, la rueda de fruta duradera (manzana 45 días, naranja 30, pera 21 en nevera: `pantry_durability`) gira por día y
 comida como la rueda de proteínas del lote 214: salta lo que no aguanta hasta ese día, lo que no es seguro (alergia,
 rechazo, dieta: el mismo backstop `compra_unica.es_seguro`) y deja para el final lo que el día ya lleva. El aguacate de
-un plato SALADO pasa a aceitunas (despensa; hacen la misma función, grasa) con el peso de la línea, o 30 g si la línea
-no trae peso; en un plato dulce o licuado sigue a la rueda de fruta, como antes.
+un plato SALADO pasa a aceitunas (despensa; hacen la misma función, grasa) con el peso de la línea hasta 40 g (~12
+aceitunas: en aceitunas, 145 g es sal), o 30 g si la línea no trae peso; en un plato dulce o licuado sigue a la rueda de fruta, como antes.
 Knob `MEALFIT_SINGLE_TRIP_FRUIT_WHEEL` (True). tooltip-anchor: P1-PLAN-LOTE-936
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 RUEDA = ("manzana", "naranja", "pera")
 ACEITUNAS = "aceitunas"
 _ACEITUNAS_SIN_PESO_G = 30
+_ACEITUNAS_MAX_G = 40           # ~12 aceitunas: el aguacate de un plato llegaba a 145 g y en aceitunas es sal
 _DULCE = re.compile(r"\b(?:batido|smoothie|licuado|yogur|yogurt|avena|granola|postre|helado|mousse|crema dulce|"
                     r"panqueque|pancake|waffle|overnight|chocolate|cacao|miel)\b", re.IGNORECASE)
 
@@ -74,8 +75,10 @@ def aceitunas_de(texto: str, gramos: Optional[float]) -> str:
     """La línea de aceitunas con el peso de la línea de aguacate; sin peso legible, 30 g."""
     import compra_unica as cu
     prefijo = cu.cantidad_de(texto, gramos)
-    if re.match(r"^\s*\d", prefijo) and re.search(r"\bg\s+de\s*$", prefijo):
-        return f"{prefijo}{ACEITUNAS}"
+    mg = re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*g\s+de\s*$", prefijo)
+    if mg:
+        g = min(_ACEITUNAS_MAX_G, int(round(float(mg.group(1).replace(",", ".")) / 5.0) * 5) or 5)
+        return f"{g} g de {ACEITUNAS}"
     return f"{_ACEITUNAS_SIN_PESO_G} g de {ACEITUNAS}"
 
 

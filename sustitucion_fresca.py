@@ -49,6 +49,11 @@ _DURADERO = {
     "casabe": ("casabe", "m", "s", False),
     "salsa de tomate": ("salsa de tomate", "f", "s", False),     # [P1-PLAN-LOTE-466] el tomate de un guiso
     "claras de huevo": ("claras", "f", "p", False),              # [P1-PLAN-LOTE-495] se cocinan: no vienen listas
+    # [P1-PLAN-LOTE-936] la rueda de fruta duradera y las aceitunas del aguacate: sin fila aquí el plato seguía
+    # nombrando el fresco («…con aguacate fresco» con aceitunas en la lista)
+    "naranja": ("naranja", "f", "s", False),
+    "pera": ("pera", "f", "s", False),
+    "aceitunas": ("aceitunas", "f", "p", True),
 }
 #: [P1-PLAN-LOTE-466] duraderos que se MIDEN, no se cortan: «pica 2 tomates» → «mide 60 g de salsa de tomate»
 # [P1-PLAN-LOTE-490 · 2026-09-27] el orégano SECO tampoco se pica: «pica 2 cdas de cilantro» → «mide 2 cdtas de orégano»,

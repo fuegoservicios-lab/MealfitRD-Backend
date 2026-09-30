@@ -50,8 +50,9 @@ def test_lo_que_no_es_seguro_no_entra():
 
 
 def test_el_aguacate_de_un_plato_salado_pasa_a_aceitunas_con_su_peso():
-    linea, sub, hit = _sub("70 g de aguacate", 7, plato="Sardinas con casabe, queso blanco y aguacate")
-    assert (linea, sub, hit) == ("70 g de aceitunas", "aceitunas", "aguacate")
+    linea, sub, hit = _sub("35 g de aguacate", 7, plato="Sardinas con casabe, queso blanco y aguacate")
+    assert (linea, sub, hit) == ("35 g de aceitunas", "aceitunas", "aguacate")
+    assert _sub("145 g de aguacate", 7, plato="Casabe tostado con queso blanco y aguacate")[0] == "40 g de aceitunas", "tope"
     linea, sub, _ = _sub("½ aguacate", 7, plato="Casabe con sardinas al limón y ensalada")
     assert sub == "aceitunas" and linea.endswith("g de aceitunas") and linea[0].isdigit(), linea
 
@@ -59,6 +60,18 @@ def test_el_aguacate_de_un_plato_salado_pasa_a_aceitunas_con_su_peso():
 def test_el_aguacate_de_un_batido_sigue_a_la_fruta():
     linea, sub, _ = _sub("70 g de aguacate", 7, plato="Batido cremoso de aguacate y avena con yogurt")
     assert sub in ("manzana", "naranja", "pera") and linea == f"70 g de {sub}"
+
+
+def test_el_plato_entero_deja_de_nombrar_el_aguacate():
+    import sustitucion_fresca as sf
+    m = {"meal": "Desayuno", "name": "Revoltillo de coliflor con aguacate fresco", "desc": "Huevos con coliflor y aguacate.",
+         "ingredients": ["2 huevos", "70 g de aguacate"], "ingredients_raw": ["2 huevos", "70 g de aguacate"],
+         "recipe": ["Mise en place: corta 70 g de aguacate en láminas.", "Montaje: sirve con el aguacate."]}
+    sf.sustituir_en_plato(m, 1, "70 g de aguacate", "40 g de aceitunas", "aceitunas")
+    texto = " | ".join([m["name"], m["desc"]] + m["recipe"])
+    assert "aguacate" not in texto.lower() and "aceitunas" in m["name"].lower(), texto
+    for sub in ("naranja", "pera"):
+        assert sub in sf._DURADERO
 
 
 def test_las_frutas_y_las_aceitunas_cuentan_como_presentes_en_el_dia():
