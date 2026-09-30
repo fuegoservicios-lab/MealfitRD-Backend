@@ -152,6 +152,37 @@ _HASTA_COCIDO = re.compile(
     r"(?:\s+(?:f[aá]cilmente|f[aá]cil|con\s+facilidad|con\s+un\s+tenedor|en\s+lascas))?",
     re.IGNORECASE)
 _GROSOR = re.compile(r"\s+seg[uú]n\s+(?:el\s+|su\s+)?grosor", re.IGNORECASE)
+# [P1-PLAN-LOTE-924 · 2026-09-30] La frase de punto del ave que escribe el 888 («hasta que el pollo alcance 74 °C por
+# dentro y dore y esté cocido», con el «hasta que» del modelo fundido tras «y») se va ENTERA: `_TEMP_SEGURA` sólo quitaba
+# la temperatura y el paso del enlatado decía «calienta las sardinas 2-3 minutos por dentro y dore y esté cocido» (batería
+# real rdb932, día 8). La cadena «y dore / y esté… / y las sardinas esté humeante» es del crudo y se va; otro «hasta
+# que» fundido («y el guiso espese») recupera su «hasta que»; una acción («y retira del fuego») se queda; lo que va tras
+# una coma es otra cosa. Knob `MEALFIT_SUBST_POULTRY_DONENESS_TAIL` (True). tooltip-anchor: P1-PLAN-LOTE-924
+_PUNTO_POR_DENTRO = re.compile(
+    r"(?P<lead>,\s*|\s+)hasta\s+(?:que\s+(?:[^,;.()]{0,60}?\s+)?(?:alcancen?|lleguen?\s+a)\s+|(?:alcanzar|llegar\s+a)\s+)?"
+    r"(?:6[0-9]|7[0-9])\s*°\s*C\s+por\s+dentro(?:\s+y\s+(?:(?:el|la|los|las)\s+[^\s,;.()]+\s+)?(?:no\s+)?(?:se\s+)?"
+    r"(?:doren?|est[eé]n?|queden?|vean?|luzcan?|tengan?|suelten?|pierdan?)\b[^,;.()]*)*"
+    r"(?:\s+y\s+(?P<otra>[^,;.()]+))?",
+    re.IGNORECASE)
+
+
+def _sin_punto_por_dentro(cl: str) -> str:
+    def _f(m):
+        otra = m.group("otra")
+        if not otra:
+            return ""
+        if re.match(r"(?:el|la|los|las|un|una|unos|unas)\s", otra, re.IGNORECASE):
+            return m.group("lead") + "hasta que " + otra                        # «y el guiso espese»
+        return " y " + otra                                                    # «y retira del fuego»
+    return _PUNTO_POR_DENTRO.sub(_f, cl)
+
+
+def _punto_por_dentro_on() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_SUBST_POULTRY_DONENESS_TAIL", True)
+    except Exception:                                                          # noqa: BLE001
+        return True
 _VEGETAL = re.compile(r"\b(?:cebollas?|tomates?|repollo|aj[ií]es?|pimientos?|morr[oó]n|vegetales|verduras|espinacas?|"
                       r"br[oó]coli|zanahorias?|berenjenas?|vainitas|molondrones|calabac[ií]n|tayota|auyama|puerros?|"
                       r"apio|coliflor|bok\s+choy|col|chayote|habichuelas|pepino)\b", re.IGNORECASE)
@@ -475,6 +506,8 @@ def _cap_tiempo(cl: str, desde: int, rango: str = "2-3") -> str:
 
 
 def _limpia_coccion(cl: str) -> str:
+    if _punto_por_dentro_on():
+        cl = _sin_punto_por_dentro(cl)                                        # [P1-PLAN-LOTE-924]
     cl = _TEMP_SEGURA.sub("", cl)
     cl = _HASTA_COCIDO.sub("", cl)
     cl = _GROSOR.sub("", cl)
@@ -505,6 +538,8 @@ def _listo_en_paso(texto: str, corto: str, g: str, n: str, viejos: set, rx_otra)
         if not nombra and retoma is None:
             # la temperatura segura de una cláusula sin otra proteína cruda también era del fresco sustituido
             if not (rx_otra and rx_otra.search(_sa(cl))) and _TEMP_SEGURA.search(cl):
+                if _punto_por_dentro_on():
+                    cl = _sin_punto_por_dentro(cl)                            # [P1-PLAN-LOTE-924]
                 cl = _TEMP_SEGURA.sub("", cl)
             partes.append(cl)
             previa = False
