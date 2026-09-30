@@ -54,7 +54,7 @@ escrita ANTES de responder (o de escribir): si no se puede anotar, 503 sin datos
 | `POST /pruebas/lote` (≤ 100 ids) | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `marcar_prueba`, una fila por cuenta marcada |
 | `GET /cuentas/{user_id}/ajustes/historial` (≤ 500 cambios) | `_CUENTAS_LECTURA_LIMITER` (30/60) | `ver_ajustes` `{dias, n}` |
 | `GET /ajustes/resumen` | `_CUENTAS_LECTURA_LIMITER` (30/60) | ninguno: es un agregado, sin cuentas admin |
-| `GET /cuentas/{user_id}/prueba/<sección>` con `formulario` · `comidas` · `planes` · `planes/{plan_id}` · `conversaciones` · `conversaciones/{session_id}` · `adjuntos/{attachment_id}` · `actividad` | `_PRUEBA_DETALLE_LIMITER` (90/60) | `ver_prueba` `{seccion, objeto}` |
+| `GET /cuentas/{user_id}/prueba/<sección>` con `formulario` · `comidas` · `planes` · `planes/{plan_id}` · `conversaciones` · `conversaciones/{session_id}` · `adjuntos/{attachment_id}` · `actividad` | `_PRUEBA_DETALLE_LIMITER` (96/60) | `ver_prueba` `{seccion, objeto}` |
 
 `POST /pruebas/lote` vive FUERA de `/cuentas/…` a propósito: `/cuentas/{user_id}/…` lo capturaría y daría 422. Los pares
 (max, periodo) de los limitadores son únicos en el repo: Redis cuenta por par (`rl:<max>:<periodo>:<uid>`).

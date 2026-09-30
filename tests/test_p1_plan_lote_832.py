@@ -1186,7 +1186,7 @@ def test_el_detalle_son_solo_esas_ocho_rutas_de_lectura():
 def test_el_limitador_del_detalle_tiene_su_par_propio():
     src = (_BACKEND / "routers" / "admin.py").read_text(encoding="utf-8")
     m = re.search(r"_PRUEBA_DETALLE_LIMITER = RateLimiter\(max_calls=(\d+), period_seconds=(\d+)\)", src)
-    assert m and m.groups() == ("90", "60"), "el par del contrato, con sus números a la vista"
+    assert m and m.groups() == ("96", "60"), "su par propio, con sus números a la vista (90/60 es del coach en vivo)"
     assert re.fullmatch(r"_[A-Z_]+_LIMITER", "_PRUEBA_DETALLE_LIMITER"), "el guard de limitadores no admite dígitos"
     pares = []
     for f in [*_BACKEND.glob("*.py"), *(_BACKEND / "routers").glob("*.py")]:

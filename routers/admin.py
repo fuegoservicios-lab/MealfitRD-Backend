@@ -306,8 +306,8 @@ def api_admin_resumen_ajustes(dias: int = Query(default=30, ge=1, le=90), admin_
 # caché (403 `no_es_prueba`, 409 `aviso_pendiente`: ninguno deja rastro) → fila `ver_prueba` {seccion, objeto} (si no
 # se anota, 503 sin datos) → la lectura (`admin_prueba_detalle`; si falla, 503 sin datos). Un plan, un hilo o una foto
 # de OTRA cuenta responde 404 aunque exista: la pertenencia la decide la consulta del módulo, y el intento queda en el
-# rastro. Cupo propio con el par del contrato (90, 60), que no usa nadie más: un hilo con fotos pide cada foto aparte.
-_PRUEBA_DETALLE_LIMITER = RateLimiter(max_calls=90, period_seconds=60)
+# rastro. Cupo propio con un par (96, 60) que no usa nadie más (el 90/60 del contrato lo tomó `_LIVE_NOVEDADES_LIMITER`): un hilo con fotos pide cada foto aparte.
+_PRUEBA_DETALLE_LIMITER = RateLimiter(max_calls=96, period_seconds=60)
 _DETALLE_DE_PRUEBA = [Depends(_exigir_knob_pruebas), Depends(_PRUEBA_DETALLE_LIMITER)]
 
 
