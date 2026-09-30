@@ -74,3 +74,14 @@ def test_la_ruta_existe_sin_permiso_de_ia_ni_cuota():
 
     assert not _usa(ruta.dependant, consentimientos.requiere_consentimiento_ia), "no llama a ninguna IA"
     assert not _usa(ruta.dependant, auth.verify_api_quota)
+
+
+def test_el_limitador_del_diagnostico_tiene_su_propio_par():
+    """La clave de Redis es rl:{max}:{periodo}:{uid}: un par repetido comparte el cupo con otro endpoint."""
+    import re
+    from pathlib import Path
+    raiz = Path(dv.__file__).parent
+    pares = []
+    for f in list(raiz.glob("*.py")) + list((raiz / "routers").glob("*.py")):
+        pares += re.findall(r"RateLimiter\(max_calls=(\d+), *period_seconds=(\d+)\)", f.read_text(encoding="utf-8"))
+    assert pares.count(("32", "60")) == 1

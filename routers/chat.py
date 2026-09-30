@@ -715,7 +715,8 @@ _LIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _LIVE_NOVEDADES_LIMITER = RateLimiter(max_calls=90, period_seconds=60)
 
 
-_VOZ_DIAGNOSTICO_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+# Par propio (32/60): la clave de Redis es `rl:{max}:{periodo}:{uid}` y se COMPARTE entre limitadores con el mismo par.
+_VOZ_DIAGNOSTICO_LIMITER = RateLimiter(max_calls=32, period_seconds=60)
 
 
 @router.post("/diagnostico-voz")
