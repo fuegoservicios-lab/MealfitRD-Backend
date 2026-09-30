@@ -223,6 +223,59 @@ def momento_del_dia(hora: Optional[float], schedule_type=None) -> str:
     return "noche"
 
 
+# [P1-PLAN-LOTE-950 · 2026-09-30] Qué comidas de hoy están anotadas y cuáles ya pasaron. El dueño, 29-sep: a las 20:01,
+# 22:27 y 22:42 (hora de RD) el coach cerró TRES veces con «Cuando almuerces, cuéntame qué comiste» — copiaba la
+# coletilla de su respuesta anterior; el bloque le daba la hora y el déficit, pero no QUÉ comidas faltaban ni cuáles ya
+# habían pasado. El aviso de las 19:00 (otro camino) sí dijo «cena». Lo que el dueño pide: «no me mandaste tu almuerzo
+# de hoy; si comiste, mándame foto y procedo a contabilizar las macros».
+FIN_DE_FRANJA = {"desayuno": 11.0, "almuerzo": 15.5, "merienda": 18.5}   # la cena no «pasa» dentro del día
+_FRANJA_DE = {"desayuno": "desayuno", "breakfast": "desayuno", "almuerzo": "almuerzo", "lunch": "almuerzo",
+              "comida": "almuerzo", "merienda": "merienda", "snack": "merienda", "cena": "cena", "dinner": "cena"}
+
+
+def franjas_anotadas(consumed_today) -> set:
+    anotadas = set()
+    for m in (consumed_today or []):
+        if isinstance(m, dict):
+            f = _FRANJA_DE.get(str(m.get("meal_type") or "").strip().lower())
+            if f:
+                anotadas.add(f)
+    return anotadas
+
+
+def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=None) -> str:
+    """La línea «COMIDAS DE HOY» y la regla del cierre. "" sin hora o con turno nocturno (el reloj va invertido)."""
+    if hora is None or str(schedule_type or "") == "night_shift":
+        return ""
+    h = float(hora) % 24
+    if h < 4.5:
+        return ""   # madrugada: el día que cuenta es el de antes; mejor no afirmar nada
+    anotadas = franjas_anotadas(consumed_today)
+    partes, pasadas = [], []
+    for f in FRANJAS:
+        if f in anotadas:
+            partes.append(f"{f} — anotado")
+        elif f in FIN_DE_FRANJA and h >= FIN_DE_FRANJA[f]:
+            partes.append(f"{f} — SIN anotar y su hora ya pasó")
+            if f != "merienda":
+                pasadas.append(f)
+        else:
+            partes.append(f"{f} — sin anotar, " + ("es la que toca ahora" if f == franja_por_hora(h) else "más tarde"))
+    ahora = franja_por_hora(h)
+    ahora = None if ahora in anotadas else ahora   # la de esta hora ya está: ninguna comida «toca»
+    out = "\n🍽️ COMIDAS DE HOY (según su diario y la hora): " + "; ".join(partes) + "."
+    out += (" CÓMO CIERRAS: " + (f"si tu cierre nombra una comida, que sea la que toca AHORA ({ahora})" if ahora else
+                                  "a esta hora no le toca ninguna comida: no cierres invitándole a comer")
+            + " — nunca «cuando almuerces» si el almuerzo ya pasó, y NUNCA copies el cierre de tu respuesta anterior: "
+            "mira la hora de ESTE mensaje.")
+    if pasadas:
+        p = pasadas[-1]
+        out += (f" Del {p} (ya pasó sin anotar) se habla en PASADO y una sola vez en la conversación, si no se lo dijiste "
+                f"ya: «No me mandaste tu {p} de hoy; si lo comiste, mándame una foto y lo contabilizo». Si ya se lo "
+                "dijiste, no insistas.")
+    return out
+
+
 def _fmt_hora(hora: float) -> str:
     h = float(hora) % 24
     return f"{int(h):02d}:{int(round((h - int(h)) * 60)) % 60:02d}"
@@ -272,6 +325,7 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
             out += f"\n⚖️ {_margen} {REGLA_MARGEN}"
         if hora_local is not None:
             out += f" Son las {_fmt_hora(hora_local)}."
+        out += estado_de_las_comidas(consumed_today, hora_local, schedule_type)   # [P1-PLAN-LOTE-950]
 
         corto = (fk is not None and metas["kcal"] > 0
                  and cons["kcal"] < FRACCION_DIARIO_CORTO * metas["kcal"]
