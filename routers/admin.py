@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import admin_cuentas as ac
 import admin_cuentas_lista as acl
+import admin_prueba_detalle as apd
 import ajustes_cuenta
 import cuentas_prueba as cp
 from admin_acceso import registrar_acceso, require_admin
@@ -275,3 +276,112 @@ def api_admin_resumen_ajustes(dias: int = Query(default=30, ge=1, le=90), admin_
         return ajustes_cuenta.resumen(dias)
     except Exception as e:  # noqa: BLE001
         raise _sin_datos("el resumen de ajustes", e) from e
+
+
+# [P1-PLAN-LOTE-832 · 2026-09-29] El detalle de una cuenta de PRUEBA (spec §4.4, §8 y §13.4; contrato 9): su formulario,
+# sus comidas, sus planes, sus conversaciones con sus fotos y su línea de tiempo. Solo lectura. Cada vista, en este
+# orden: interruptor (404, antes del cupo) → parámetros (422, sin mirar nada) → `exigir_prueba` en CADA petición, sin
+# caché (403 `no_es_prueba`, 409 `aviso_pendiente`: ninguno deja rastro) → fila `ver_prueba` {seccion, objeto} (si no
+# se anota, 503 sin datos) → la lectura (`admin_prueba_detalle`; si falla, 503 sin datos). Un plan, un hilo o una foto
+# de OTRA cuenta responde 404 aunque exista: la pertenencia la decide la consulta del módulo, y el intento queda en el
+# rastro. Cupo propio con el par del contrato (90, 60), que no usa nadie más: un hilo con fotos pide cada foto aparte.
+_PRUEBA_DETALLE_LIMITER = RateLimiter(max_calls=90, period_seconds=60)
+_DETALLE_DE_PRUEBA = [Depends(_exigir_knob_pruebas), Depends(_PRUEBA_DETALLE_LIMITER)]
+
+
+def _abrir_prueba(admin_id: str, user_id: str, seccion: str, objeto: Optional[str] = None) -> None:
+    """La marca viva (sin caché) y, solo entonces, la fila del rastro ANTES de leer nada."""
+    try:
+        cp.exigir_prueba(user_id)
+    except cp.ErrorPrueba as e:
+        raise HTTPException(status_code=e.status, detail=e.detalle)
+    _anotar_vista(admin_id, "ver_prueba", user_id, {"seccion": seccion, "objeto": objeto})
+
+
+def _parametro(validar, *args):
+    try:
+        return validar(*args)
+    except apd.ErrorDetalle as e:
+        raise HTTPException(status_code=e.status, detail=e.detalle)
+
+
+def _leer(que: str, leer, *args):
+    try:
+        return leer(*args)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_datos(que, e) from e
+
+
+@router.get("/cuentas/{user_id}/prueba/formulario", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_formulario(user_id: uuid.UUID, admin_id: str = Depends(require_admin)):
+    uid = str(user_id)
+    _abrir_prueba(admin_id, uid, "formulario")
+    r = _leer("el formulario", apd.formulario, uid)
+    if r is None:
+        raise HTTPException(status_code=404, detail="No existe esa cuenta.")
+    return r
+
+
+@router.get("/cuentas/{user_id}/prueba/comidas", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_comidas(user_id: uuid.UUID, desde: Optional[str] = Query(default=None, max_length=10),
+                             hasta: Optional[str] = Query(default=None, max_length=10),
+                             admin_id: str = Depends(require_admin)):
+    d1, d2 = _parametro(apd.rango_de_comidas, desde, hasta)
+    uid = str(user_id)
+    _abrir_prueba(admin_id, uid, "comidas", apd.objeto_de_comidas(d1, d2))
+    return _leer("las comidas", apd.comidas, uid, d1, d2)
+
+
+@router.get("/cuentas/{user_id}/prueba/planes", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_planes(user_id: uuid.UUID, admin_id: str = Depends(require_admin)):
+    uid = str(user_id)
+    _abrir_prueba(admin_id, uid, "planes")
+    return _leer("los planes", apd.planes, uid)
+
+
+@router.get("/cuentas/{user_id}/prueba/planes/{plan_id}", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_plan(user_id: uuid.UUID, plan_id: uuid.UUID, admin_id: str = Depends(require_admin)):
+    uid, pid = str(user_id), str(plan_id)
+    _abrir_prueba(admin_id, uid, "plan", pid)
+    r = _leer("el plan", apd.plan, uid, pid)
+    if r is None:
+        raise HTTPException(status_code=404, detail="No existe ese plan en esta cuenta.")
+    return r
+
+
+@router.get("/cuentas/{user_id}/prueba/conversaciones", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_conversaciones(user_id: uuid.UUID, admin_id: str = Depends(require_admin)):
+    uid = str(user_id)
+    _abrir_prueba(admin_id, uid, "conversaciones")
+    return _leer("las conversaciones", apd.conversaciones, uid)
+
+
+@router.get("/cuentas/{user_id}/prueba/conversaciones/{session_id}", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_conversacion(user_id: uuid.UUID, session_id: uuid.UUID, admin_id: str = Depends(require_admin)):
+    uid, sid = str(user_id), str(session_id)
+    _abrir_prueba(admin_id, uid, "conversacion", sid)
+    r = _leer("la conversación", apd.conversacion, uid, sid)
+    if r is None:
+        raise HTTPException(status_code=404, detail="No existe esa conversación en esta cuenta.")
+    return r
+
+
+@router.get("/cuentas/{user_id}/prueba/adjuntos/{attachment_id}", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_adjunto(user_id: uuid.UUID, attachment_id: uuid.UUID, admin_id: str = Depends(require_admin)):
+    uid, aid = str(user_id), str(attachment_id)
+    _abrir_prueba(admin_id, uid, "adjunto", aid)
+    r = _leer("la foto", apd.adjunto, uid, aid)
+    if r is None:
+        raise HTTPException(status_code=404, detail="No existe esa foto en esta cuenta.")
+    contenido, tipo = r
+    return Response(content=contenido, media_type=tipo, headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"})
+
+
+@router.get("/cuentas/{user_id}/prueba/actividad", dependencies=_DETALLE_DE_PRUEBA)
+def api_admin_prueba_actividad(user_id: uuid.UUID, dias: int = Query(default=7, ge=1, le=apd.MAX_DIAS_ACTIVIDAD),
+                               tipos: str = Query(default="", max_length=200), admin_id: str = Depends(require_admin)):
+    elegidos = _parametro(apd.tipos_de_actividad, tipos)
+    uid = str(user_id)
+    _abrir_prueba(admin_id, uid, "actividad", apd.objeto_de_actividad(dias, elegidos))
+    return _leer("la actividad", apd.actividad, uid, dias, elegidos)
