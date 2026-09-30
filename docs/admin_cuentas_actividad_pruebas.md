@@ -61,7 +61,8 @@ escrita ANTES de responder (o de escribir): si no se puede anotar, 503 sin datos
 
 Códigos de las marcas (los devuelve el router tal cual): 409 `ya_marcada`, 409 `salio_ella` (la última marca la quitó
 ELLA: hace falta `confirmar_vuelta` y que la persona haya pedido volver), 409 `sin_marca`, 404 `no_existe`, 422
-`motivo` / `demasiadas`. Un fallo inesperado de la base es un 503 «No se pudo completar la acción», no un 500.
+`motivo` / `demasiadas`. Un fallo inesperado de la base al LEER es un 503 «No se pudo completar la acción»; si falla la escritura DESPUÉS de
+anotar el rastro, 500 con su fila `…_fallo` en el registro.
 
 Del lado de la PERSONA (`routers/user_data.py`, sesión verificada, sin cuota):
 
