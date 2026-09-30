@@ -69,7 +69,9 @@ _ROTACION_VEGETAL = ("garbanzos cocidos", "lentejas cocidas")
 PROTEINAS_DURADERAS = frozenset(_ROTACION_OMNIVORA + _RESERVA_OMNIVORA + _ROTACION_VEGETAL)
 # [P1-PLAN-LOTE-216] cómo se reconoce en una línea que el día YA lleva ese duradero
 _CLAVE_ROTACION = {"atun en agua": "atun", "sardinas en lata": "sardina", "garbanzos cocidos": "garbanzo",
-                   "lentejas cocidas": "lenteja", CLARAS: "clara"}
+                   "lentejas cocidas": "lenteja", CLARAS: "clara",
+                   # [P1-PLAN-LOTE-936] la rueda de fruta y las aceitunas también van al final si el día ya las lleva
+                   "manzana": "manzana", "naranja": "naranja", "pera": "pera", "aceitunas": "aceituna"}
 # [P1-PLAN-LOTE-286 · 2026-09-25] Con «Nada» de tiempo la legumbre duradera se compra LISTA. «200 g de garbanzos
 # cocidos» dejaba en la lista del dueño (30 días, sin congelador, «Nada») 1 funda de garbanzos SECOS: remojo de una noche
 # y una hora de olla para quien declaró 5 minutos. La línea dice «de lata, escurridos» y la lista (lote 285) compra la
@@ -112,7 +114,10 @@ SUSTITUTOS = (
     (("tomate cherry", "tomate"), "zanahoria"),
     (("pepino", "calabacin", "zucchini", "brocoli", "coliflor", "vainitas", "habichuelas verdes", "esparrago", "champinon", "hongos", "setas"), "zanahoria"),
     (("cilantro", "perejil", "albahaca", "menta", "cebollin", "cebollino"), "oregano"),
-    (("fresa", "frambuesa", "mora", "arandano", "uva", "lechosa", "papaya", "mango", "pina", "melon", "sandia", "guineo", "banana", "durazno", "melocoton", "pera", "kiwi", "cereza", "mamey", "nispero", "aguacate"), "manzana"),
+    # [P1-PLAN-LOTE-936] «manzana» es el duradero por defecto; con el knob de la rueda, `fruta_duradera.elegir` reparte
+    # entre manzana, naranja y pera, y el aguacate de un plato salado va a aceitunas.
+    (("fresa", "frambuesa", "mora", "arandano", "uva", "lechosa", "papaya", "mango", "pina", "melon", "sandia", "guineo", "banana", "durazno", "melocoton", "pera", "kiwi", "cereza", "mamey", "nispero"), "manzana"),
+    (("aguacate",), "manzana"),
     (("pescado", "tilapia", "salmon", "mero", "chillo", "dorado", "bacalao fresco", "merluza", "camaron", "camarones", "mariscos", "calamar", "pulpo", "cangrejo", "langosta", "lambi"), PROTEINA_TABLA),
     (("pechuga de pollo", "pollo", "muslo", "pavo", "carne de res", "res molida", "res", "bistec", "cerdo", "chuleta", "lomo", "chivo", "conejo", "higado"), PROTEINA_TABLA),
     # lácteos: solo la leche tiene sustituto duradero honesto (UHT, misma unidad de volumen); yogurt, cottage y queso
@@ -500,6 +505,9 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
         sub = PROTEINA_VEGETAL
     if hit in ("tomate", "tomate cherry") and plato and _TOMATE_COCINADO.search(_sa(plato)):   # [P1-PLAN-LOTE-466]
         sub = SALSA_TOMATE
+    if sub == "manzana":                                                                       # [P1-PLAN-LOTE-936]
+        sub = __import__("fruta_duradera").elegir(hit, int(dia_abs), semilla, req, evitar, plato, alergias, dieta,
+                                                  contexto) or sub
     if listo is None:
         listo = sin_tiempo(contexto)
     # [P1-PLAN-LOTE-496 · 2026-09-27] la segunda proteína de un plato recibe el duradero de la primera (`forzar`): antes la
@@ -528,6 +536,8 @@ def sustituir_linea(texto, dia_abs: int, req: Optional[dict], *, vegetal: bool =
         nueva = oregano_seco(text) or nueva
     if sub == CLARAS:                                                                         # [P1-PLAN-LOTE-495]
         nueva = claras_de(text, gramos)
+    if sub == "aceitunas":                                                                     # [P1-PLAN-LOTE-936]
+        nueva = __import__("fruta_duradera").aceitunas_de(text, gramos)
     if sub == SALSA_TOMATE:                                                                    # [P1-PLAN-LOTE-466]
         g = None
         mg = _RX_GRAMOS.search(text)
