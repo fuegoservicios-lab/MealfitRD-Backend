@@ -7,12 +7,13 @@ reconocedor falla (con el código ORIGINAL de Android, que el adaptador traducí
 qué estado está la voz en ese binario (¿trae los plugins? ¿qué motor elige?): eso cubre el caso en que el micrófono ni
 aparece, que no produce ningún fallo.
 
-Qué se guarda: fila en `pipeline_metrics` (node `voz_diagnostico`), SIN `user_id`: el modelo del teléfono y la versión
-de Android salen del user agent; la cuenta, solo como hash corto (correlación, no identidad). Nunca audio ni texto.
+Qué se guarda: fila en `pipeline_metrics` (node `voz_diagnostico`) SIN la cuenta —ni `user_id` ni un hash: un hash del
+id es un seudónimo (revisión legal de e7)—: el modelo del teléfono y la versión de Android salen del user agent. Nunca
+audio ni texto. Se purga con el resto de `pipeline_metrics` (`MEALFIT_PIPELINE_METRICS_RETENTION_DAYS`, 30 días): la
+Política de Privacidad §2 lo declara con ese plazo.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -38,7 +39,7 @@ def _codigo(v) -> Optional[str]:
     return s if s and _CODIGO_RE.match(s) else None
 
 
-def normalizar(datos: dict, user_agent: str = "", user_id: Optional[str] = None) -> Optional[dict]:
+def normalizar(datos: dict, user_agent: str = "") -> Optional[dict]:
     """Solo los campos conocidos, cortos y sin texto libre. `None` si no es un diagnóstico válido."""
     if not isinstance(datos, dict):
         return None
@@ -62,8 +63,6 @@ def normalizar(datos: dict, user_agent: str = "", user_id: Optional[str] = None)
         meta["modelo"] = m.group(2).strip()[:40]
     elif "iPhone" in (user_agent or ""):
         meta["modelo"] = "iPhone"
-    if user_id:
-        meta["cuenta"] = hashlib.sha256(str(user_id).encode()).hexdigest()[:12]
     return {k: v for k, v in meta.items() if v is not None}
 
 

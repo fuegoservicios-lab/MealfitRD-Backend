@@ -18,11 +18,11 @@ _UA_XIAOMI = ("Mozilla/5.0 (Linux; Android 16; 2312DRA50G Build/BP2A.250605.031.
 def test_normaliza_con_el_codigo_original_y_el_telefono_del_user_agent():
     m = dv.normalizar({"donde": "dictado", "codigo": "language-not-supported", "crudo": "UNKNOWN_12",
                        "motor": "plugin_android", "idioma": "es-DO", "plataforma": "android",
-                       "plugin_reconocimiento": True}, _UA_XIAOMI, "61a13831-2a70-4437-a084-0d3e09b653e4")
+                       "plugin_reconocimiento": True}, _UA_XIAOMI)
     assert m["crudo"] == "UNKNOWN_12" and m["codigo"] == "language-not-supported"
     assert m["android"] == "16" and m["modelo"] == "2312DRA50G"
     assert m["plugin_reconocimiento"] is True
-    assert len(m["cuenta"]) == 12 and "61a13831" not in json.dumps(m), "la cuenta solo como hash corto"
+    assert "cuenta" not in m
 
 
 def test_rechaza_lo_que_no_es_un_diagnostico_y_no_guarda_texto_libre():
@@ -53,8 +53,10 @@ def test_endpoint_204_y_400(monkeypatch):
     class _Req:
         headers = {"user-agent": _UA_XIAOMI}
 
-    r = asyncio.run(chat.api_chat_voz_diagnostico(_Req(), {"donde": "estado", "motor": "plugin_android"}, None))
-    assert r.status_code == 204 and guardados[0]["modelo"] == "2312DRA50G" and "cuenta" not in guardados[0]
+    r = asyncio.run(chat.api_chat_voz_diagnostico(_Req(), {"donde": "estado", "motor": "plugin_android"},
+                                                   "61a13831-2a70-4437-a084-0d3e09b653e4"))
+    assert r.status_code == 204 and guardados[0]["modelo"] == "2312DRA50G"
+    assert "61a13831" not in json.dumps(guardados[0]) and "cuenta" not in guardados[0], "ni la cuenta ni un hash"
     with pytest.raises(HTTPException) as e:
         asyncio.run(chat.api_chat_voz_diagnostico(_Req(), {"donde": "x"}, None))
     assert e.value.status_code == 400

@@ -724,7 +724,7 @@ async def api_chat_voz_diagnostico(request: Request, data: dict = Body(...),
     """[P1-PLAN-LOTE-909] El teléfono avisa de un fallo del dictado / modo voz, o del estado de la voz al arrancar.
     Sin IA ni cuota; con o sin sesión. 204 siempre que el cuerpo sea un diagnóstico válido (400 si no)."""
     import diagnostico_voz
-    meta = diagnostico_voz.normalizar(data, request.headers.get("user-agent", ""), verified_user_id)
+    meta = diagnostico_voz.normalizar(data, request.headers.get("user-agent", ""))   # sin la cuenta, a propósito
     if meta is None:
         raise HTTPException(status_code=400, detail="Diagnóstico no válido.")
     await asyncio.to_thread(diagnostico_voz.registrar, meta)
