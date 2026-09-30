@@ -4499,10 +4499,15 @@ def log_water_glass(user_id: str, count_delta: float = 1) -> str:
         elif count_delta < 0 and new_count <= 0:
             boundary = " (minimo de 0 vasos)."
         reached = " ¡Cumplio su meta del dia!" if new_count >= goal else ""
+        # [P1-PLAN-LOTE-907] Con la tarjeta apagada los vasos no se veían: sumar agua la enciende.
+        encendida = ""
+        if count_delta > 0:
+            from ajustes_de_la_app import encender_hidratacion_al_anotar_agua
+            encendida = encender_hidratacion_al_anotar_agua(user_id)
         # `:g` formatea 4.0 → "4" y 4.5 → "4.5" (sin .0 colgante).
         return (
             f"Listo: se {verb} {abs(count_delta):g} vaso(s). "
-            f"El usuario ahora lleva {new_count:g} de {goal} vasos hoy.{reached}{boundary}"
+            f"El usuario ahora lleva {new_count:g} de {goal} vasos hoy.{reached}{boundary}{encendida}"
         )
     except Exception:
         logger.exception("❌ [TOOL] log_water_glass error")  # [P1-CHAT-TOOLS-AUDIT · 2026-09-14]

@@ -162,6 +162,28 @@ def _hidratacion(user_id: str, activar: bool) -> str:
     return _con_marcador(texto, {"hidratacion": activar})
 
 
+def encender_hidratacion_al_anotar_agua(user_id: str) -> str:
+    """[P1-PLAN-LOTE-907 · 2026-09-30] Anotar agua con la tarjeta apagada la enciende. El dueño, en voz: «me bebí 3
+    vasos» → «sumé tus 3 vasos» y la Hidratación seguía apagada: los vasos quedaban donde no se ven. Quien anota agua
+    quiere verla. Devuelve lo que se añade al resultado de `log_water_glass` (con el marcador para la pantalla) o «»."""
+    if _es_invitado(user_id):
+        return ""
+    try:
+        from db_profiles import get_water_tracker_enabled, update_water_tracker_enabled
+        if get_water_tracker_enabled(user_id) or not update_water_tracker_enabled(user_id, True):
+            return ""
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-907] no se pudo encender la Hidratación de {user_id}: {type(e).__name__}: {e}")
+        return ""
+    try:
+        import hydration_reminders
+        hydration_reminders.al_encender(user_id)
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-907] recordatorios al encender la Hidratación: {type(e).__name__}: {e}")
+    return " " + _con_marcador("La tarjeta de Hidratación estaba apagada y la encendí para que vea sus vasos: díselo.",
+                               {"hidratacion": True})
+
+
 def _nevera(user_id: str, activar: bool) -> str:
     import nevera_opcional
     if not nevera_opcional.interruptor_disponible():
