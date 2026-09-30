@@ -1,3 +1,4 @@
+import sys as _sys
 import time as _time
 import math as _math
 from collections import defaultdict as _defaultdict
@@ -28,10 +29,12 @@ class RateLimiter:
     `X-Forwarded-For` que FastAPI/Starlette respeta vía `request.client.host`
     cuando se configura `--proxy-headers`.
     """
-    def __init__(self, max_calls: int = 10, period_seconds: int = 60):
+    def __init__(self, max_calls: int = 10, period_seconds: int = 60, scope: Optional[str] = None):
         self.max_calls = max_calls
         self.period = period_seconds
         self._hits: dict = _defaultdict(list)  # user_id → [timestamps]
+        # [P1-PLAN-LOTE-945] Identidad del limitador en la clave de Redis (ver `_sitio_de_construccion`).
+        self.scope = scope or _sitio_de_construccion()
 
     def __call__(self, request: Request, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
         if verified_user_id:
@@ -46,7 +49,14 @@ class RateLimiter:
         # Opcional: Soporte Redis para Rate Limiting Distribuido (#Mejora 3)
         if redis_client:
             now = _time.time()
-            key = f"rl:{self.max_calls}:{self.period}:{uid}"
+            # [P1-PLAN-LOTE-945] tooltip-anchor: P1-PLAN-LOTE-945 — la clave era rl:{max}:{periodo}:{uid}, así que
+            # los 23 limitadores 30/60 compartían UN cupo por usuario entre endpoints distintos (y los 23 de 10/60, los
+            # 17 de 20/60): la Nevera, las metas del contador y el medidor del coach se gastaban el cupo entre sí. En
+            # memoria nunca pasó (cada instancia tiene su `_hits`); ahora Redis cuenta igual, por limitador.
+            if _clave_por_limitador():
+                key = f"rl:{self.max_calls}:{self.period}:{self.scope}:{uid}"
+            else:
+                key = f"rl:{self.max_calls}:{self.period}:{uid}"
             window_start = now - self.period
             try:
                 # [P1-FORM-5] Añadido `zrange(0, 0, withscores=True)` para
@@ -176,6 +186,25 @@ class RateLimiter:
             )
         self._hits[uid].append(now_mono)
         return verified_user_id
+
+
+def _sitio_de_construccion() -> str:
+    """[P1-PLAN-LOTE-945] Módulo y línea donde se construyó el limitador: igual en todos los workers (mismo código),
+    distinta para cada `RateLimiter(...)` del código. Un mismo objeto usado en varios endpoints sigue compartiendo."""
+    try:
+        f = _sys._getframe(2)  # 0 = aquí, 1 = __init__, 2 = quien escribió RateLimiter(...)
+        return f"{f.f_globals.get('__name__', '?')}:{f.f_lineno}"
+    except Exception:  # noqa: BLE001
+        return "global"
+
+
+def _clave_por_limitador() -> bool:
+    """Knob `MEALFIT_RATE_LIMIT_KEY_PER_LIMITER` (default True); False vuelve a la clave compartida por par."""
+    try:
+        from knobs import _env_bool
+        return bool(_env_bool("MEALFIT_RATE_LIMIT_KEY_PER_LIMITER", True))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 # ---------------------------------------------------------------------------
