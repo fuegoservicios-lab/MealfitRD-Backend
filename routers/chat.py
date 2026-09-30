@@ -927,6 +927,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             form_data
         )
         rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
+        __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
         
         plan_tier = "gratis"
         if user_id and user_id != "guest":
@@ -1259,6 +1260,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             form_data
         )
         rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
+        __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
 
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)

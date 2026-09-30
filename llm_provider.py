@@ -170,6 +170,8 @@ _GLM_TO_DEEPSEEK = {GLM_FLASH: DEEPSEEK_FLASH, GLM_PRO: DEEPSEEK_PRO}
 # feature se traducen a los de OpenAI (flash/pro → `MEALFIT_OPENAI_FLASH_MODEL`/`MEALFIT_OPENAI_PRO_MODEL`, gpt-6-luna
 # por defecto); un ID `deepseek-*` FIJADO sigue yendo a DeepSeek (la red post-fallo en otro proveedor).
 _LLM_PROVIDERS = frozenset({"zai", "deepseek", "openai"})
+# [P1-PLAN-LOTE-937] el proveedor que trata los datos en China: `region_ia` no lo nombra (lote 74), lo lee de aquí.
+PROVEEDOR_EN_CHINA = "deepseek"
 
 
 def provider_razona_largo() -> bool:
@@ -184,7 +186,11 @@ def provider_razona_largo() -> bool:
 
 def llm_provider_name() -> str:
     """Proveedor por defecto del wrapper: `MEALFIT_LLM_PROVIDER` (zai|deepseek|openai). Se lee en cada
-    llamada, no al importar: el rollback es cambiar el knob y reiniciar, sin redeploy."""
+    llamada, no al importar: el rollback es cambiar el knob y reiniciar, sin redeploy.
+    [P1-PLAN-LOTE-937] Un usuario de la UE (país del formulario o del perfil) va a OpenAI, no a DeepSeek."""
+    _forzado = __import__("region_ia").proveedor_forzado()
+    if _forzado in _LLM_PROVIDERS:
+        return _forzado
     return _env_str("MEALFIT_LLM_PROVIDER", "zai", choices=set(_LLM_PROVIDERS)) or "zai"
 
 # [P1-NET-LUNA · P1-REVIEWER-TIER-MODELS · P1-REVIEWER-SOL-HARD · 2026-07-31]
