@@ -64,10 +64,41 @@ def test_los_dos_interruptores_los_leen_las_DOS_vias():
     assert "COALESCE((p.health_profile->>'avisos_agua')::boolean, TRUE) = TRUE" in _src("hydration_reminders.py")
 
 
+# [P1-PLAN-LOTE-831 · 2026-09-29] La intención de la guarda: los avisos NO son una COLUMNA (viven en `health_profile`).
+# Antes prohibía el literal `avisos_comida` en cualquier migración, y la 837 (el trigger del historial de ajustes) lo
+# nombra legítimamente como CLAVE jsonb en su `WHEN` (`health_profile -> 'avisos_comida'`): nombrar la clave no la
+# convierte en columna. Lo que sigue prohibido es AÑADIR una columna `avisos_*`.
+_ANADE_COLUMNA_AVISOS = re.compile(r"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?avisos_", re.IGNORECASE)
+
+
+def _sin_comentarios_sql(texto: str) -> str:
+    return re.sub(r"--[^\n]*", "", texto)
+
+
 def test_sin_columna_nueva_ni_migracion():
-    """Viven en `health_profile`, que ya es jsonb libre y ya tiene su endpoint de merge."""
-    assert "avisos_comida" not in "\n".join(
-        p.read_text(encoding="utf-8", errors="ignore") for p in (_BACKEND / "migrations").glob("*.sql"))
+    """Viven en `health_profile`, que ya es jsonb libre y ya tiene su endpoint de merge: ninguna migración AÑADE una
+    columna `avisos_*` (nombrar la clave jsonb, como el trigger de la 837, no cuenta)."""
+    culpables = [p.name for p in sorted((_BACKEND / "migrations").glob("*.sql"))
+                 if _ANADE_COLUMNA_AVISOS.search(_sin_comentarios_sql(p.read_text(encoding="utf-8", errors="ignore")))]
+    assert not culpables, f"migraciones que añaden una columna avisos_*: {culpables}"
+
+
+def test_la_guarda_de_columnas_avisos_distingue_columna_de_clave():
+    """La guarda no puede pasar por vacía: caza las formas de añadir la columna y deja pasar la clave jsonb."""
+    for anade in ("ALTER TABLE public.user_profiles ADD COLUMN avisos_comida boolean;",
+                  "alter table t add column if not exists avisos_agua boolean default true;",
+                  "ALTER TABLE t\n    ADD COLUMN   IF  NOT  EXISTS\n    avisos_por_comida jsonb;",
+                  "ALTER TABLE t ADD COLUMN AVISOS_X int;"):
+        assert _ANADE_COLUMNA_AVISOS.search(anade), anade
+    for clave in ("OR (OLD.health_profile -> 'avisos_comida') IS DISTINCT FROM (NEW.health_profile -> 'avisos_comida')",
+                  "FOREACH v_clave IN ARRAY ARRAY['avisos_comida', 'avisos_agua']::text[]",
+                  "ALTER TABLE t ADD COLUMN otra_cosa boolean;"):
+        assert not _ANADE_COLUMNA_AVISOS.search(clave), clave
+    # un comentario que hable de la columna prohibida no es una migración que la añada
+    assert not _ANADE_COLUMNA_AVISOS.search(_sin_comentarios_sql("-- nunca ADD COLUMN avisos_comida\nSELECT 1;"))
+    # y la 837 SÍ nombra la clave (es la que motivó afinar la guarda): sigue pasando porque no añade ninguna columna
+    mig = (_BACKEND / "migrations" / "p1_plan_lote_837_ajustes_cambios_2026_09_29.sql").read_text(encoding="utf-8")
+    assert "avisos_comida" in mig and not _ANADE_COLUMNA_AVISOS.search(_sin_comentarios_sql(mig))
 
 
 def test_el_frontend_los_guarda_en_el_perfil_y_reprograma():

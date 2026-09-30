@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -123,6 +124,8 @@ class _BD:
         if "FROM public.app_kv_store WHERE key = ANY(%s::text[])" in q:
             (claves,) = p
             return [{"key": k, "value": v, "updated_at": t} for k, (v, t) in self.kv.items() if k in claves]
+        if q == "SELECT count(*) AS n, max(at) AS ultimo FROM public.ajustes_cambios":     # el canario de la purga
+            return {"n": len(self.cambios), "ultimo": max((c["at"] for c in self.cambios), default=None)}
         if "FROM public.ajustes_cambios" in q and q.endswith("GROUP BY clave, origen"):
             dias, fuera = p
             cuenta: dict = {}
@@ -515,6 +518,33 @@ def test_el_canal_local_caduca_a_las_72_horas(bd):
     assert _por_clave(ac.ajustes_de(UID)["ajustes"])["avisos_locales"]["estado"] == "apagado"
 
 
+def test_el_canal_local_toma_sus_horas_de_hydration_reminders(bd, monkeypatch):
+    """Una sola definición de cuánto vale un teléfono sincronizado: `hydration_reminders.HORAS_DE_ALCANCE_LOCAL`. Antes
+    era una copia a mano de 72 que se habría desfasado en silencio el día que alguien cambiara la del agua."""
+    import hydration_reminders as hr
+    assert hr.HORAS_DE_ALCANCE_LOCAL == 72 and ac._horas_canal_local() == 72
+    assert not hasattr(ac, "_HORAS_CANAL_LOCAL"), "la copia a mano ya no existe"
+    assert "from hydration_reminders import HORAS_DE_ALCANCE_LOCAL" in _src("ajustes_cuenta.py")
+    bd.perfil(UID)
+    bd.kv["avisos_locales:" + UID] = ({"canal": "local"}, datetime.now(timezone.utc) - timedelta(hours=30))
+    assert _por_clave(ac.ajustes_de(UID)["ajustes"])["avisos_locales"]["estado"] == "encendido"     # 30 h < 72 h
+    monkeypatch.setattr(hr, "HORAS_DE_ALCANCE_LOCAL", 24)
+    assert ac._horas_canal_local() == 24
+    assert _por_clave(ac.ajustes_de(UID)["ajustes"])["avisos_locales"]["estado"] == "apagado"        # 30 h > 24 h
+
+
+def test_el_idioma_pedido_al_coach_se_documenta_como_cambio_de_la_app():
+    """El coach solo devuelve el marcador `{"idioma": …}`; lo GUARDA el cliente, así que el historial lo registra como
+    `app` (lo mismo que un cambio de `update_form_field`). Solo `cambiar_ajuste_de_la_app` corre en el bloque `coach`."""
+    doc = " ".join(ac.__doc__.split())
+    assert "Tampoco el IDIOMA que la persona le pide al coach" in doc
+    assert "lo GUARDA el cliente" in doc and "también queda como `app`" in doc
+    assert "update_form_field" in doc, "junto al otro caso conocido"
+    src = _src("ajustes_de_la_app.py")
+    assert src.count('origen_de_ajustes("coach")') == 1, "un único bloque `coach`: el de los ajustes del servidor"
+    assert "_con_marcador(" in _cuerpo(src, "def _cambiar_idioma"), "el idioma va en el marcador, no se escribe aquí"
+
+
 def test_el_permiso_para_la_ia_en_sus_cuatro_estados(bd, monkeypatch):
     import consentimientos
     v = consentimientos.AI_CONSENT_VERSION
@@ -799,6 +829,44 @@ def test_la_purga_usa_el_plazo_del_knob_acotado_y_nunca_lanza(bd, monkeypatch):
         monkeypatch.setenv("MEALFIT_AJUSTES_CAMBIOS_RETENTION_DAYS", crudo)
         assert ac.dias_de_historial() == dias, crudo
     bd.escritura_rota = RuntimeError("sin DB")
+    assert ac.purgar_cambios_antiguos() == 0
+
+
+def test_la_purga_deja_un_canario_diario_con_el_conteo_y_el_ultimo_cambio(bd, caplog):
+    """El trigger que llena la tabla avisa de sus fallos con un WARNING de POSTGRES, que no llega a los logs de la app:
+    una tabla que dejó de llenarse pasaría meses callada. La pasada diaria de la purga deja `count(*)` y `max(at)`."""
+    bd.cambio(UID, "locale", "es-DO", "en-US", "app", T0 - timedelta(days=800))
+    bd.cambio(UID, "locale", "en-US", "es-DO", "app", T0 - timedelta(days=10))
+    bd.cambio(OTRA, "nevera_enabled", None, False, "sistema", T0 - timedelta(days=2))
+    caplog.set_level(logging.INFO, logger="ajustes_cuenta")
+    assert ac.purgar_cambios_antiguos() == 1
+    assert "SELECT count(*) AS n, max(at) AS ultimo FROM public.ajustes_cambios" in [q for q, _ in bd.lecturas]
+    canario = [r.getMessage() for r in caplog.records if "canario" in r.getMessage()]
+    assert len(canario) == 1 and "P1-PLAN-LOTE-837" in canario[0]
+    assert "2 cambios" in canario[0], "el conteo es el de DESPUÉS de purgar"
+    assert (T0 - timedelta(days=2)).isoformat() in canario[0], "y el último es el `max(at)` de lo que queda"
+
+
+def test_el_canario_de_una_tabla_vacia_dice_ninguno(bd, caplog):
+    caplog.set_level(logging.INFO, logger="ajustes_cuenta")
+    assert ac.purgar_cambios_antiguos() == 0
+    canario = [r.getMessage() for r in caplog.records if "canario" in r.getMessage()]
+    assert len(canario) == 1 and "0 cambios" in canario[0] and "ninguno" in canario[0]
+
+
+def test_el_canario_corre_aunque_la_purga_falle_y_nunca_la_rompe(bd, caplog):
+    caplog.set_level(logging.INFO, logger="ajustes_cuenta")
+    bd.escritura_rota = RuntimeError("sin DB")
+    assert ac.purgar_cambios_antiguos() == 0
+    assert any("canario" in r.getMessage() for r in caplog.records), "la purga rota no apaga el canario"
+    # el canario mismo roto (solo él lee `max(at)`): la purga sigue devolviendo lo que borró y no lanza
+    caplog.clear()
+    bd.escritura_rota = None
+    bd.rotas.add("max(at)")
+    bd.cambio(UID, "locale", "es-DO", "en-US", "app", T0 - timedelta(days=800))
+    assert ac.purgar_cambios_antiguos() == 1 and bd.cambios == []
+    assert any("canario" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+    bd.escritura_rota = RuntimeError("sin DB")           # purga Y canario rotos: tampoco lanza
     assert ac.purgar_cambios_antiguos() == 0
 
 

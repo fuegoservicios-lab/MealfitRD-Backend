@@ -61,8 +61,9 @@ def _fila(uid=UID, **k) -> dict:
     base = {"user_id": uid, "email": "ana@correo.com", "nombre": "Ana", "alta": T0 - timedelta(days=20),
             "plan_pagado": "gratis", "plan_mode": "plan", "locale": "es-DO", "pais": "DO",
             "prueba_desde": None, "prueba_aviso_visto_at": None,
-            "comidas_total": 0, "comidas_30d": 0, "comidas_ultima": None, "planes": 0, "planes_ultima": None,
-            "mensajes_coach": 0, "mensajes_ultima": None, "escaneos": 0, "micros_30d": 0, "ia_ultima": None,
+            "comidas_total": 0, "comidas_30d": 0, "comidas_ultima": None, "planes": 0,
+            "mensajes_coach": 0, "mensajes_ultima": None, "escaneos": 0, "micros_30d": 0, "escaneo_ultima": None,
+            "peso_ultima": None, "agua_ultima": None,
             "dias_activos_30d": 0, "ultima": None, "total": 1}
     base.update(k)
     return base
@@ -79,6 +80,7 @@ class _BDLista:
         self.correos: list = []
         self.correos_rotos = False
         self.extras: dict = {}
+        self.extras_rotos = False
         self.consultas: list = []
 
     def query(self, q, p=None, fetch_one=False, fetch_all=False):
@@ -98,6 +100,8 @@ class _BDLista:
                 raise RuntimeError("sin DB")
             return [c for c in self.correos if c["id"] in p[0]]
         if q.startswith("SELECT (SELECT count(*) FROM public.water_intake_log"):
+            if self.extras_rotos:
+                raise RuntimeError("push_subscriptions no existe")
             return dict(self.extras)
         raise AssertionError(f"consulta que el fake no conoce: {q[:140]}")
 
@@ -229,7 +233,7 @@ def test_la_primera_pagina_vacia_es_total_cero_sin_otra_consulta(bd):
 def test_las_definiciones_de_la_actividad_son_las_del_spec(bd):
     """§4.1: comidas = consumed_meals; planes = meal_plans; mensajes = role 'user' en los HILOS de la cuenta (el SSOT,
     que incluye la respuesta del coach con user_id NULL); escaneos = vision_scan; gasto = cost_usd_micros en 30 d;
-    día activo = día UTC con comida o mensaje; última = la más reciente de todo, IA incluida."""
+    día activo = día UTC con comida o mensaje; última = lo más reciente que HIZO la persona (ver el test siguiente)."""
     acl.listar("", "actividad", "todas", 1)
     q = bd.pagina()[0]
     hilos = " ".join(USER_CHAT_THREAD_IDS_SQL.replace("%s", "p.id").split())
@@ -240,10 +244,52 @@ def test_las_definiciones_de_la_actividad_son_las_del_spec(bd):
     assert "count(*) FILTER (WHERE e.node = 'vision_scan') AS escaneos" in q
     assert "sum(e.cost_usd_micros) FILTER (WHERE e.created_at >= now() - interval '30 days')" in q
     assert "(c.consumed_at AT TIME ZONE 'UTC')::date" in q and "(m.created_at AT TIME ZONE 'UTC')::date" in q
-    assert "GREATEST(comidas_ultima, planes_ultima, mensajes_ultima, ia_ultima) AS ultima" in q
+    assert "GREATEST(comidas_ultima, mensajes_ultima, escaneo_ultima, peso_ultima, agua_ultima) AS ultima" in q
     assert "FROM public.cuentas_de_prueba t WHERE t.user_id = p.id AND t.quitada_at IS NULL" in q
     for contenido in ("meal_name", "ingredients", "content", "health_profile ->> 'weight'", "attachments"):
         assert contenido not in q, f"la lista no lee contenido: {contenido}"
+
+
+def test_la_ultima_actividad_es_solo_lo_que_hace_la_persona(bd):
+    """Ruling del controlador (29-sep): «última actividad» = solo acciones de la PERSONA — comidas, sus mensajes al
+    coach, escaneos, peso y agua. El chunk worker atribuye a la cuenta la IA que corre en segundo plano
+    (`llm_usage_events.user_id`): contarla dejaba «activas» a cuentas abandonadas. Es el SQL, y el SQL alimenta a la vez
+    la columna `ultima`, el orden `actividad` y los filtros `activas_7d` / `inactivas_14d`."""
+    acl.listar("", "actividad", "todas", 1)
+    q = bd.pagina()[0]
+    # las cinco fuentes, y solo ellas, en el GREATEST
+    m = re.search(r"GREATEST\(([^)]*)\) AS ultima", q)
+    assert m and [x.strip() for x in m.group(1).split(",")] == [
+        "comidas_ultima", "mensajes_ultima", "escaneo_ultima", "peso_ultima", "agua_ultima"]
+    for fuera in ("ia_ultima", "planes_ultima"):
+        assert fuera not in q, f"{fuera}: no es una acción de la persona"
+    # el escaneo: SOLO `vision_scan`; el resto de `llm_usage_events` no marca actividad…
+    assert "max(e.created_at) FILTER (WHERE e.node = 'vision_scan') AS escaneo_ultima" in q
+    assert q.count("max(e.created_at)") == 1, "ningún `max` sobre TODOS los eventos de IA"
+    # …pero el gasto sigue siendo el de TODOS los eventos (el dinero sale igual)
+    assert ("COALESCE(sum(e.cost_usd_micros) FILTER (WHERE e.created_at >= now() - interval '30 days'), 0) "
+            "AS micros_30d") in q, "el gasto: todos los eventos, sin filtro de `node`"
+    # peso y agua: sus tablas, por cuenta, con su marca de tiempo
+    assert "SELECT max(w.created_at) AS ultima FROM public.weight_log w WHERE w.user_id = p.id" in q
+    assert "SELECT max(a.updated_at) AS ultima FROM public.water_intake_log a WHERE a.user_id = p.id" in q
+    # y la lista, el orden y los filtros hablan de esa `ultima` (no de otra columna)
+    assert "ultima DESC NULLS LAST" in _ORDENES["actividad"]
+    assert "ultima >= now() - interval '7 days'" in _FILTROS["activas_7d"]
+    assert "COALESCE(ultima, alta) < now() - interval '14 days'" in _FILTROS["inactivas_14d"]
+    # la ficha usa la MISMA consulta, así que hereda la misma definición
+    bd.consultas.clear()
+    bd.filas = [_fila()]
+    bd.extras = dict(_EXTRAS)
+    acl.actividad_de(UID)
+    assert "GREATEST(comidas_ultima, mensajes_ultima, escaneo_ultima, peso_ultima, agua_ultima) AS ultima" in bd.pagina()[0]
+
+
+def test_la_ultima_actividad_sale_tal_cual_de_la_consulta(bd):
+    """`ultima` no se recalcula en Python: es la columna del SQL (una cuenta sin acciones suyas queda en None)."""
+    bd.filas = [_fila(ultima=T0 - timedelta(days=3), comidas_ultima=T0 - timedelta(days=3)), _fila(OTRO, ultima=None)]
+    con, sin = acl.listar("", "actividad", "todas", 1)["cuentas"]
+    assert con["actividad"]["ultima"] == (T0 - timedelta(days=3)).isoformat()
+    assert sin["actividad"]["ultima"] is None
 
 
 # ═════════════════════════════════════════════ 3. la fila (FilaCuenta)
@@ -445,6 +491,37 @@ def test_los_extras_de_la_ficha_toman_el_uid_en_cada_parametro_y_los_hilos_del_s
         assert contenido not in q, f"la actividad son números: {contenido}"
 
 
+def test_si_fallan_solo_los_extras_la_actividad_no_se_pierde(bd, caplog):
+    """La consulta de los extras (agua, peso, cola, alertas, tokens…) tiene su propio try: si falla, la ficha conserva
+    los números de la lista y el embudo que sale de ella, y los extras salen en cero / [] / null con su aviso."""
+    bd.filas = [_fila(comidas_total=7, comidas_30d=6, dias_activos_30d=3, planes=2, mensajes_coach=4, escaneos=1,
+                      micros_30d=1500000, ultima=T0, plan_mode="tracking", locale="en-US", pais="US")]
+    bd.extras_rotos = True
+    a = acl.actividad_de(UID)
+    assert set(a) == _CLAVES_ACTIVIDAD_FICHA and set(a["embudo"]) == _CLAVES_EMBUDO
+    assert (a["comidas_total"], a["comidas_30d"], a["planes"], a["mensajes_coach"], a["escaneos"]) == (7, 6, 2, 4, 1)
+    assert (a["gasto_ia_30d_usd"], a["dias_activos_30d"], a["ultima"]) == (1.5, 3, T0.isoformat())
+    assert a["comidas_por_dia_activo"] == 2.0
+    assert (a["dias_con_agua_30d"], a["registros_peso"], a["bloques_fallidos_30d"], a["pulgares_abajo"],
+            a["avisos_abiertos"]) == (0, 0, 0, 0, 0)
+    assert a["plataformas"] == []
+    assert a["embudo"] == {"alta": (T0 - timedelta(days=20)).isoformat(), "formulario": None, "primer_plan": None,
+                           "primera_comida": None, "primer_mensaje": None, "primer_escaneo": None}
+    assert (a["modo"], a["idioma"], a["pais"]) == ("tracking", "en-US", "US")
+    assert any("P1-PLAN-LOTE-831" in r.getMessage() and "push_subscriptions" in r.getMessage() for r in caplog.records)
+    json.dumps(a)
+
+
+def test_si_falla_la_consulta_de_la_fila_la_actividad_si_lanza(bd, monkeypatch):
+    """Lo que no se traga es la consulta PRINCIPAL: sin la fila no hay «base» que enseñar (`ampliar_ficha` la vuelve
+    null y la ficha carga igual)."""
+    def _roto(q, p=None, fetch_one=False, fetch_all=False):
+        raise RuntimeError("sin DB")
+    monkeypatch.setattr(acl, "execute_sql_query", _roto)
+    with pytest.raises(RuntimeError):
+        acl.actividad_de(UID)
+
+
 def test_el_formulario_es_el_primer_envio_o_si_no_el_primer_plan(bd):
     bd.filas = [_fila()]
     bd.extras = {**_EXTRAS, "formulario_enviado": None}
@@ -516,6 +593,37 @@ def test_ampliar_ficha_de_nada_es_nada():
     assert acl.ampliar_ficha(None) is None
 
 
+def test_la_ficha_ampliada_etiqueta_a_los_admin_con_la_misma_regla_que_la_lista(bd, monkeypatch):
+    """La lista dice `es_admin` por el tier `admin` O por la lista del .env del panel; la ficha del 774 solo mira el
+    tier. Ya ampliada, no puede decir otra cosa que la lista sobre la misma cuenta."""
+    monkeypatch.setattr(acl, "actividad_de", lambda uid: None)
+    monkeypatch.setattr(ajustes_cuenta, "ajustes_de", lambda uid: {"ajustes": [], "ajustes_dispositivo": {}})
+    monkeypatch.setattr(acl, "prueba_de", lambda uid: None)
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", f"{ADMIN2.upper()}, {OTRO}")
+    casos = [(ADMIN, "admin"), (ADMIN2, "gratis"), (OTRO, "plus"), (UID, "gratis"), (NADIE, "ultra")]
+    bd.filas = [_fila(uid, plan_pagado=pagado) for uid, pagado in casos]
+    en_la_lista = {c["user_id"]: c["es_admin"] for c in acl.listar("", "actividad", "todas", 1)["cuentas"]}
+    assert en_la_lista == {ADMIN: True, ADMIN2: True, OTRO: True, UID: False, NADIE: False}
+    for uid, pagado in casos:
+        base = {**_base_774(), "user_id": uid, "plan_pagado": pagado}     # el 774: es_admin False salvo el tier
+        ficha = acl.ampliar_ficha(base)
+        assert ficha["es_admin"] is en_la_lista[uid], f"{uid}: la ficha contradice a la lista"
+        assert base["es_admin"] is False, "no muta la ficha que recibe"
+    monkeypatch.delenv("MEALFIT_ADMIN_USER_IDS")
+    assert acl.ampliar_ficha({**_base_774(), "plan_pagado": "admin"})["es_admin"] is True, "el tier basta"
+    assert acl.ampliar_ficha({**_base_774(), "user_id": ADMIN2})["es_admin"] is False, "sin lista, solo el tier"
+
+
+def test_apagado_la_ficha_no_pasa_por_ampliar_y_sigue_siendo_la_del_774(panel, monkeypatch):
+    """Solo el camino con el interruptor encendido recalcula `es_admin` (`ampliar_ficha`): apagado, ni se llama."""
+    monkeypatch.delenv("MEALFIT_ADMIN_TEST_ACCOUNTS", raising=False)
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", f"{ADMIN},{UID}")
+    monkeypatch.setattr(ac, "ficha", lambda uid: _base_774())
+    monkeypatch.setattr(acl, "ampliar_ficha", lambda f: pytest.fail("apagado no se amplía"))
+    r = panel.cliente().get(f"/api/admin/cuentas/{UID}")
+    assert r.status_code == 200 and r.json()["cuenta"]["es_admin"] is False
+
+
 def test_la_prueba_de_la_ficha(bd, monkeypatch):
     marca = {"id": "m2", "marcada_por": ADMIN, "marcada_at": T0, "motivo": MOTIVO, "aviso_visto_at": None}
     historial = [
@@ -538,10 +646,52 @@ def test_la_prueba_de_la_ficha(bd, monkeypatch):
     assert UID not in json.dumps(p) and ADMIN2 not in json.dumps(p), "ni ids del personal ni el de la persona"
 
 
-def test_sin_marca_viva_no_hay_bloque_de_prueba(bd, monkeypatch):
+def test_una_cuenta_que_nunca_fue_de_prueba_no_tiene_bloque(bd, monkeypatch):
+    """`None` SOLO si jamás se marcó: ni marca viva ni historial."""
     monkeypatch.setattr(cp, "marca_viva", lambda uid: None)
-    monkeypatch.setattr(cp, "historial", lambda uid: pytest.fail("sin marca no se lee el historial"))
+    monkeypatch.setattr(cp, "historial", lambda uid: [])
     assert acl.prueba_de(UID) is None
+
+
+@pytest.mark.parametrize("quien", ["admin", "persona"])
+def test_quitada_la_marca_la_ficha_dice_sin_marca_y_trae_el_historial(bd, monkeypatch, quien):
+    """Enmienda del controlador (29-sep): hubo marcas y ninguna vive (la quitó un admin o salió la propia persona) ⇒
+    `estado: "sin_marca"`, `desde`/`motivo`/`marcada_por`/`aviso_visto_at` en null y el `historial` (cuándo y quién)."""
+    quitada = {"id": "m1", "marcada_por": ADMIN, "marcada_at": T0 - timedelta(days=5), "motivo": MOTIVO,
+               "aviso_visto_at": T0 - timedelta(days=4), "quitada_at": T0 - timedelta(days=2),
+               "quitada_por": ADMIN2 if quien == "admin" else UID, "quitada_por_la_persona": quien == "persona",
+               "motivo_quitar": "terminó la ronda" if quien == "admin" else None}
+    monkeypatch.setattr(cp, "marca_viva", lambda uid: None)
+    monkeypatch.setattr(cp, "historial", lambda uid: [dict(quitada)])
+    bd.correos = [{"id": ADMIN, "email": "dueno@bioboros.com"}, {"id": ADMIN2, "email": "otro@bioboros.com"}]
+    p = acl.prueba_de(UID)
+    assert p == {
+        "estado": "sin_marca", "desde": None, "motivo": None, "marcada_por": None, "aviso_visto_at": None,
+        "historial": [{"desde": (T0 - timedelta(days=5)).isoformat(), "hasta": (T0 - timedelta(days=2)).isoformat(),
+                       "motivo": MOTIVO, "motivo_quitar": "terminó la ronda" if quien == "admin" else None,
+                       "quitada_por_la_persona": quien == "persona", "marcada_por": "dueno@bioboros.com"}]}
+    assert set(p) == {"estado", "desde", "motivo", "marcada_por", "aviso_visto_at", "historial"}, "la misma forma"
+    for id_ in (UID, ADMIN, ADMIN2):
+        assert id_ not in json.dumps(p), "ni ids del personal ni el de la persona"
+
+
+def test_la_ficha_ampliada_de_una_cuenta_que_salio_lleva_sin_marca(bd, monkeypatch):
+    monkeypatch.setattr(acl, "actividad_de", lambda uid: None)
+    monkeypatch.setattr(ajustes_cuenta, "ajustes_de", lambda uid: {"ajustes": [], "ajustes_dispositivo": {}})
+    monkeypatch.setattr(cp, "marca_viva", lambda uid: None)
+    monkeypatch.setattr(cp, "historial", lambda uid: [{
+        "id": "m1", "marcada_por": ADMIN, "marcada_at": T0 - timedelta(days=5), "motivo": MOTIVO,
+        "aviso_visto_at": None, "quitada_at": T0, "quitada_por": UID, "quitada_por_la_persona": True,
+        "motivo_quitar": None}])
+    assert acl.ampliar_ficha(_base_774())["prueba"]["estado"] == "sin_marca"
+
+
+def test_la_lista_sigue_con_prueba_null_para_quien_no_tiene_marca_viva(bd, monkeypatch):
+    """Solo la FICHA cuenta el pasado de la marca; la fila de la lista es la marca viva (su filtro «prueba» también) y no
+    lee el historial."""
+    monkeypatch.setattr(cp, "historial", lambda uid: pytest.fail("la lista no lee el historial"))
+    bd.filas = [_fila(prueba_desde=None)]
+    assert acl.listar("", "actividad", "todas", 1)["cuentas"][0]["prueba"] is None
 
 
 def test_si_los_correos_no_se_leen_la_prueba_sale_sin_ellos(bd, monkeypatch):
@@ -672,7 +822,31 @@ def test_la_lista_anota_su_rastro_antes_de_responder(panel, monkeypatch):
     assert llamadas == [("ana", "gasto", "activas_7d", 2)]
     assert panel.orden == ["consulta", "rastro"]
     assert panel.rastro == [("listar_cuentas", None,
-                             {"buscar": "ana", "orden": "gasto", "filtro": "activas_7d", "pagina": 2, "n": 2})]
+                             {"con_busqueda": True, "orden": "gasto", "filtro": "activas_7d", "pagina": 2, "n": 2})]
+    assert "buscar" not in panel.rastro[0][2]
+
+
+def test_el_rastro_de_la_lista_y_del_csv_nunca_guarda_lo_buscado(panel, monkeypatch):
+    """Enmienda del controlador (29-sep): lo buscado puede ser un correo y la política promete que el registro no guarda
+    correos. El rastro dice SI hubo búsqueda (`con_busqueda`), jamás cuál; una búsqueda en blanco no es una búsqueda."""
+    _lista_falsa(panel, monkeypatch)
+    monkeypatch.setattr(acl, "exportar_csv", lambda buscar, orden, filtro: ("﻿x\r\n", 3))
+    c = panel.cliente()
+    secreto = "ana.perez@correo.com"
+    assert c.get("/api/admin/cuentas", params={"buscar": secreto, "filtro": "prueba"}).status_code == 200
+    assert c.get("/api/admin/cuentas.csv", params={"buscar": secreto, "orden": "alta"}).status_code == 200
+    assert c.get("/api/admin/cuentas", params={"buscar": "   "}).status_code == 200
+    assert c.get("/api/admin/cuentas.csv").status_code == 200
+    lista, csv_, lista_en_blanco, csv_sin_busqueda = [(a, d) for a, _, d in panel.rastro]
+    assert lista == ("listar_cuentas", {"con_busqueda": True, "orden": "actividad", "filtro": "prueba", "pagina": 1,
+                                        "n": 2})
+    assert csv_ == ("exportar_cuentas", {"con_busqueda": True, "filtro": "todas", "n": 3})
+    assert lista_en_blanco[1]["con_busqueda"] is False
+    assert csv_sin_busqueda == ("exportar_cuentas", {"con_busqueda": False, "filtro": "todas", "n": 3})
+    for _, _, detalle in panel.rastro:
+        assert "buscar" not in detalle
+        for texto in (secreto, "correo.com", "@"):
+            assert texto not in json.dumps(detalle), f"el rastro guarda lo buscado: {detalle}"
 
 
 def test_la_lista_por_defecto(panel, monkeypatch):
@@ -720,7 +894,8 @@ def test_el_csv_por_http(panel, monkeypatch):
     assert panel.orden == ["consulta", "rastro"]
     accion, objetivo, detalle = panel.rastro[0]
     assert (accion, objetivo) == ("exportar_cuentas", None)
-    assert detalle["filtro"] == "prueba" and detalle["n"] == 1
+    assert detalle == {"con_busqueda": True, "filtro": "prueba", "n": 1}, "y nunca el texto buscado"
+    assert "ana" not in json.dumps(detalle)
 
 
 def test_el_csv_sin_rastro_o_sin_datos_es_503(panel, monkeypatch):
@@ -830,6 +1005,45 @@ def test_si_el_rastro_de_la_marca_falla_503_y_sin_marca(panel, marcas):
     marcas.rastro_roto = True
     r = panel.cliente().post(f"/api/admin/cuentas/{UID}/prueba", json={"motivo": MOTIVO}, headers=H)
     assert r.status_code == 503 and marcas.filas == []
+
+
+@pytest.mark.parametrize("ruta,cuerpo", [
+    (f"/api/admin/cuentas/{UID}/prueba", {"motivo": MOTIVO}),
+    (f"/api/admin/cuentas/{UID}/prueba/quitar", {"motivo": MOTIVO}),
+    ("/api/admin/pruebas/lote", {"user_ids": [UID], "motivo": MOTIVO}),
+])
+def test_un_fallo_inesperado_al_marcar_o_quitar_es_503_y_se_registra(panel, marcas, monkeypatch, caplog, ruta, cuerpo):
+    """Igual que las lecturas (`_sin_datos`): lo que NO es una regla de la marca (`ErrorPrueba`) —la base que no
+    responde— sale como 503 con una frase, sin el error dentro, y el error queda en el log. Antes era un 500 pelado."""
+    def _rota(*a, **k):
+        raise RuntimeError("sin DB: secreto-interno")
+    monkeypatch.setattr(cp, "execute_sql_query", _rota)
+    r = panel.cliente().post(ruta, json=cuerpo, headers=H)
+    assert r.status_code == 503 and "No se pudo completar" in r.json()["detail"]
+    assert "secreto-interno" not in r.text and "RuntimeError" not in r.text, "el error va al log, no a la respuesta"
+    assert marcas.filas == [] and marcas.rastro == [], "nada se escribió ni se anotó"
+    assert any("P1-PLAN-LOTE-831" in rec.getMessage() and "secreto-interno" in rec.getMessage()
+               and rec.levelname == "ERROR" for rec in caplog.records)
+
+
+def test_las_reglas_de_la_marca_siguen_saliendo_con_su_codigo(panel, marcas):
+    """El `except Exception` nuevo va DESPUÉS del de `ErrorPrueba`: 409/404/422 no se vuelven 503."""
+    c = panel.cliente()
+    c.post(f"/api/admin/cuentas/{UID}/prueba", json={"motivo": MOTIVO}, headers=H)
+    r = c.post(f"/api/admin/cuentas/{UID}/prueba", json={"motivo": MOTIVO}, headers=H)
+    assert (r.status_code, r.json()) == (409, {"detail": "ya_marcada"})
+    r = c.post(f"/api/admin/cuentas/{NADIE}/prueba/quitar", json={"motivo": MOTIVO}, headers=H)
+    assert (r.status_code, r.json()) == (409, {"detail": "sin_marca"})
+    r = c.post("/api/admin/pruebas/lote", json={"user_ids": [UID] * 101, "motivo": MOTIVO}, headers=H)
+    assert (r.status_code, r.json()) == (422, {"detail": "demasiadas"})
+
+
+def test_los_marcadores_del_router_llevan_su_fecha():
+    """Convención del repo: los comentarios nuevos llevan `[P1-PLAN-LOTE-8xx · 2026-09-29]` (los mensajes de log, no)."""
+    src = (_BACKEND / "routers" / "admin.py").read_text(encoding="utf-8")
+    sin_fecha = [n for n, linea in enumerate(src.splitlines(), 1)
+                 if "#" in linea and "[P1-PLAN-LOTE-831]" in linea.split("#", 1)[1]]
+    assert not sin_fecha, f"comentarios con el marcador sin fecha en las líneas {sin_fecha}"
 
 
 def test_marcar_varias_por_http(panel, marcas):

@@ -8,8 +8,9 @@ abre el CONTENIDO:
 
   · `formulario`     — `health_profile` presentado por grupos (las claves del asistente y de Configuración; lo que el
                        panel no conoce queda solo en el crudo) y lo que el coach recuerda (`user_facts` activos);
-  · `comidas`        — los registros de `consumed_meals` de un rango de días UTC con los dos extremos incluidos (los 30
-                       últimos, hoy incluido, por defecto; 90 como máximo);
+  · `comidas`        — los registros de `consumed_meals` de un rango de días del calendario del admin con los dos
+                       extremos incluidos (los 30 últimos, hoy incluido, por defecto; 90 como máximo), con un margen
+                       de horas que cubre cualquier huso (`ventana_de_comidas`);
   · `planes`, `plan` — los 20 últimos con sus bloques de `plan_chunk_queue`, y un plan día a día;
   · `conversaciones`, `conversacion` — los 50 hilos más recientes con el coach y uno entero;
   · `adjunto`        — una foto ENVIADA en uno de sus hilos (las del escáner no se guardan: no existen);
@@ -60,6 +61,9 @@ MAX_MEMORIA = 500
 MAX_BLOQUES = 1000
 DIAS_COMIDAS = 30
 MAX_DIAS_COMIDAS = 90
+# La ventana de la consulta de comidas rebasa los días pedidos por estas horas (ver `ventana_de_comidas`).
+MARGEN_ANTES_H = 12
+MARGEN_DESPUES_H = 14
 MAX_DIAS_ACTIVIDAD = 30
 # Solo fotos, y solo los formatos que el chat acepta al subir (`routers/diary.py`, con su sniff de bytes). Sin SVG:
 # abierta directamente en el navegador, una imagen SVG ejecutaría su script en el origen de la API.
@@ -221,11 +225,28 @@ def _fecha(v) -> Optional[date]:
         raise ErrorDetalle(422, "fecha") from e
 
 
+def ventana_de_comidas(desde: date, hasta: date) -> tuple:
+    """`(inicio, fin)` de la consulta de comidas, como instantes UTC con zona (no como `date`: así no dependen de la zona
+    horaria de la sesión de Postgres): `consumed_at >= inicio` y `< fin`.
+
+    [P1-PLAN-LOTE-832 · 2026-09-29] Los días son los del CALENDARIO del admin, pero las filas están en UTC y las personas
+    viven en husos distintos (RD en UTC−4: su cena de las 23:00 del día `hasta` es del día siguiente en UTC; España en
+    UTC+2: su desayuno de la 01:00 del día `desde` es del día anterior). Con la ventana exacta de días UTC, el usuario RD
+    perdía la cena de hoy. Se ensancha para cubrir el día local de cualquiera: `MARGEN_ANTES_H` antes de `desde` 00:00 UTC
+    y hasta las `MARGEN_DESPUES_H` del día siguiente a `hasta`. Puede colarse alguna comida de las horas vecinas; el `at`
+    de cada una sale entero (en UTC) para que el panel la sitúe. Lanza `OverflowError` en el borde del calendario."""
+    inicio = datetime.combine(desde, time(0), tzinfo=timezone.utc) - timedelta(hours=MARGEN_ANTES_H)
+    fin = (datetime.combine(hasta + timedelta(days=1), time(0), tzinfo=timezone.utc)
+           + timedelta(hours=MARGEN_DESPUES_H))
+    return inicio, fin
+
+
 def rango_de_comidas(desde=None, hasta=None, hoy: Optional[date] = None) -> tuple:
-    """`(desde, hasta)` de la sección de comidas: días UTC, los DOS incluidos (el frontend pide `hasta` = hoy y espera
-    las comidas de hoy). Sin fechas: los 30 últimos, hoy incluido; con una sola: 30 días desde ella o hasta ella. Una
-    fecha que no es AAAA-MM-DD (o que no existe) ⇒ 422 `fecha`; `desde` posterior a `hasta` o más de 90 días contando
-    los dos extremos ⇒ 422 `rango`."""
+    """`(desde, hasta)` de la sección de comidas: días del calendario del admin, los DOS incluidos (el frontend pide
+    `hasta` = hoy y espera las comidas de hoy; la consulta los cubre con el margen de `ventana_de_comidas`). Sin fechas:
+    los 30 últimos, hoy (UTC) incluido; con una sola: 30 días desde ella o hasta ella. Una fecha que no es AAAA-MM-DD (o
+    que no existe) ⇒ 422 `fecha`; `desde` posterior a `hasta` o más de 90 días contando los dos extremos ⇒ 422 `rango`
+    (el límite es de las FECHAS: el margen de horas no cuenta)."""
     d1, d2 = _fecha(desde), _fecha(hasta)
     try:
         if d1 is None and d2 is None:
@@ -234,7 +255,7 @@ def rango_de_comidas(desde=None, hasta=None, hoy: Optional[date] = None) -> tupl
             d1 = d2 - timedelta(days=DIAS_COMIDAS - 1)
         elif d2 is None:
             d2 = d1 + timedelta(days=DIAS_COMIDAS - 1)
-        _ = d2 + timedelta(days=1)             # el fin exclusivo de la consulta también tiene que existir
+        ventana_de_comidas(d1, d2)             # la ventana (con su margen) de la consulta también tiene que existir
     except OverflowError as e:                 # 0001-01-01 / 9999-12-31: el borde del calendario, no un 500
         raise ErrorDetalle(422, "fecha") from e
     if d1 > d2 or (d2 - d1).days + 1 > MAX_DIAS_COMIDAS:
@@ -476,16 +497,16 @@ def _comida(f: dict) -> dict:
 
 
 def comidas(user_id, desde=None, hasta=None) -> dict:
-    """Contrato 9 · `comidas`: `{desde, hasta, comidas}`, la más reciente primero: `consumed_at >= desde` y
-    `< hasta + 1 día`, en UTC (una comida de `hasta` a las 23:59 entra). Los límites van como instantes UTC, no como
-    `date`: así no dependen de la zona horaria de la sesión de Postgres. Lanza `ErrorDetalle` si el rango no vale."""
+    """Contrato 9 · `comidas`: `{desde, hasta, comidas}`, la más reciente primero. `desde`/`hasta` son las fechas pedidas
+    (las del calendario del admin, ambas incluidas); la consulta lee la ventana ancha de `ventana_de_comidas`
+    (`desde` 00:00 UTC − 12 h ≤ `consumed_at` < `hasta` + 1 día 00:00 UTC + 14 h), de modo que la comida de las 23:00 de
+    un usuario en UTC−4 (las 03:00 UTC del día siguiente) entra. Lanza `ErrorDetalle` si el rango no vale."""
     d1, d2 = rango_de_comidas(desde, hasta)
     salida = {"desde": d1.isoformat(), "hasta": d2.isoformat(), "comidas": []}
     uid = _uuid(user_id)
     if not uid:
         return salida
-    inicio = datetime.combine(d1, time(0), tzinfo=timezone.utc)
-    fin = datetime.combine(d2 + timedelta(days=1), time(0), tzinfo=timezone.utc)
+    inicio, fin = ventana_de_comidas(d1, d2)
     filas = execute_sql_query(_SQL_COMIDAS, (uid, inicio, fin, MAX_COMIDAS), fetch_all=True) or []
     salida["comidas"] = [_comida(f) for f in filas]
     return salida

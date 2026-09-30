@@ -105,7 +105,8 @@ def api_admin_buscar_cuenta(body: _Busqueda, admin_id: str = Depends(require_adm
     uid = ac.buscar_por_correo(body.email)
     _anotar_vista(admin_id, "buscar_cuenta", uid, {"encontrada": bool(uid)})
     cuenta = ac.ficha(uid) if uid else None
-    if cuenta and cp.activo():           # [P1-PLAN-LOTE-831] la ficha ampliada, solo con el interruptor maestro
+    # [P1-PLAN-LOTE-831 · 2026-09-29] la ficha ampliada, solo con el interruptor maestro
+    if cuenta and cp.activo():
         cuenta = acl.ampliar_ficha(cuenta)
     return {"cuenta": cuenta}
 
@@ -115,7 +116,8 @@ def api_admin_ver_cuenta(user_id: uuid.UUID, admin_id: str = Depends(require_adm
     cuenta = ac.ficha(str(user_id))
     if not cuenta:
         raise HTTPException(status_code=404, detail="No existe esa cuenta.")
-    if cp.activo():                      # [P1-PLAN-LOTE-831] apagado, la ficha es exactamente la del lote 774
+    # [P1-PLAN-LOTE-831 · 2026-09-29] apagado, la ficha es exactamente la del lote 774
+    if cp.activo():
         cuenta = acl.ampliar_ficha(cuenta)
     _anotar_vista(admin_id, "ver_cuenta", str(user_id), {})
     return {"cuenta": cuenta}
@@ -199,6 +201,16 @@ def _sin_datos(que: str, e: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail=f"No se pudo leer {que}.")
 
 
+def _sin_completar(que: str, e: Exception) -> HTTPException:
+    """[P1-PLAN-LOTE-831 · 2026-09-29] Un fallo de una escritura de marcas que NO es una regla (`ErrorPrueba` lleva su
+    código): la base que no responde o algo inesperado. 503 con una frase —sin el error dentro— y el error al log, igual
+    que las lecturas (`_sin_datos`). `cuentas_prueba` traduce los fallos de su rastro y de su escritura a `ErrorPrueba`,
+    así que lo que llega aquí sale de una LECTURA previa a la escritura de esa cuenta: no quedó marca a medias. Un lote
+    cortado a mitad deja hechas las anteriores; se relanza y las devuelve como `ya_marcada`."""
+    logger.error(f"🛑 [P1-PLAN-LOTE-831] {que} no se pudo completar: {e!r}")
+    return HTTPException(status_code=503, detail="No se pudo completar la acción.")
+
+
 @router.get("/cuentas", dependencies=[Depends(_exigir_knob_pruebas), Depends(_CUENTAS_LISTA_LIMITER)])
 def api_admin_listar_cuentas(buscar: str = Query(default="", max_length=acl.MAX_BUSQUEDA),
                              orden: _Orden = Query(default="actividad"), filtro: _Filtro = Query(default="todas"),
@@ -207,8 +219,11 @@ def api_admin_listar_cuentas(buscar: str = Query(default="", max_length=acl.MAX_
         r = acl.listar(buscar, orden, filtro, pagina)
     except Exception as e:  # noqa: BLE001
         raise _sin_datos("la lista de cuentas", e) from e
+    # NUNCA el texto buscado: puede ser un correo y la política promete que el registro no guarda correos (enmienda del
+    # controlador, 29-sep). `con_busqueda` dice solo si hubo una, con la misma regla que la consulta (sin blancos).
     _anotar_vista(admin_id, "listar_cuentas", None,
-                  {"buscar": buscar, "orden": orden, "filtro": filtro, "pagina": pagina, "n": len(r["cuentas"])})
+                  {"con_busqueda": acl.patron_de_busqueda(buscar) is not None, "orden": orden, "filtro": filtro,
+                   "pagina": pagina, "n": len(r["cuentas"])})
     return r
 
 
@@ -220,8 +235,9 @@ def api_admin_exportar_cuentas(buscar: str = Query(default="", max_length=acl.MA
         texto, n = acl.exportar_csv(buscar, orden, filtro)
     except Exception as e:  # noqa: BLE001
         raise _sin_datos("el CSV de cuentas", e) from e
-    # `buscar` además del contrato ({filtro, n}): sin él, el rastro no diría QUÉ cuentas salieron en el fichero.
-    _anotar_vista(admin_id, "exportar_cuentas", None, {"filtro": filtro, "buscar": buscar, "n": n})
+    # Igual que la lista: el rastro dice si el fichero salió filtrado por una búsqueda, nunca cuál (puede ser un correo).
+    _anotar_vista(admin_id, "exportar_cuentas", None,
+                  {"con_busqueda": acl.patron_de_busqueda(buscar) is not None, "filtro": filtro, "n": n})
     nombre = f"cuentas-{datetime.now(timezone.utc):%Y%m%d}.csv"
     return Response(content=texto.encode("utf-8"), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{nombre}"', "Cache-Control": "no-store"})
@@ -234,6 +250,8 @@ def api_admin_marcar_prueba(user_id: uuid.UUID, body: _MarcaPrueba, admin_id: st
         cp.marcar(admin_id, str(user_id), body.motivo, body.confirmar_vuelta)
     except cp.ErrorPrueba as e:
         raise HTTPException(status_code=e.status, detail=e.detalle)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_completar("marcar la cuenta", e) from e
     return _con_ficha(str(user_id))
 
 
@@ -244,6 +262,8 @@ def api_admin_quitar_prueba(user_id: uuid.UUID, body: _QuitarPrueba, admin_id: s
         cp.quitar(admin_id, str(user_id), body.motivo)
     except cp.ErrorPrueba as e:
         raise HTTPException(status_code=e.status, detail=e.detalle)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_completar("quitar la marca", e) from e
     return _con_ficha(str(user_id))
 
 
@@ -254,6 +274,8 @@ def api_admin_marcar_pruebas_en_lote(body: _LotePrueba, admin_id: str = Depends(
         resultados = cp.marcar_varias(admin_id, body.user_ids, body.motivo)
     except cp.ErrorPrueba as e:
         raise HTTPException(status_code=e.status, detail=e.detalle)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_completar("marcar en lote", e) from e
     return {"ok": True, "resultados": resultados}
 
 

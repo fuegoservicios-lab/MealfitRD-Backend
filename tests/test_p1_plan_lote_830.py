@@ -499,6 +499,21 @@ def test_el_sql_de_salir_y_del_aviso_solo_toca_marcas_vivas(bd):
     assert "quitada_por = user_id" in salir and "WHERE user_id = %s AND quitada_at IS NULL" in salir
 
 
+def test_el_sql_de_marcar_y_de_quitar_esta_fijado_entero(bd):
+    """El fake reconoce cada escritura solo por cómo EMPIEZA: un INSERT con las columnas cambiadas de orden, o un
+    UPDATE al que se le cae el `WHERE id = %s AND quitada_at IS NULL`, lo atravesarían en verde (y el segundo quitaría la
+    marca de TODAS las cuentas / reescribiría una ya quitada). Aquí van enteros, con sus parámetros en orden."""
+    m = cp.marcar(ADMIN, UID, MOTIVO)
+    cp.quitar(ADMIN2, UID, "fin de la ronda")
+    (insert, p_insert), (update, p_update) = bd.escrituras
+    assert insert == "INSERT INTO public.cuentas_de_prueba (id, user_id, marcada_por, motivo) VALUES (%s, %s, %s, %s)"
+    assert p_insert == (m["id"], UID, ADMIN, MOTIVO)
+    assert update == ("UPDATE public.cuentas_de_prueba SET quitada_at = now(), quitada_por = %s, "
+                      "quitada_por_la_persona = false, motivo_quitar = %s WHERE id = %s AND quitada_at IS NULL "
+                      "RETURNING id")
+    assert p_update == (ADMIN2, "fin de la ronda", m["id"])
+
+
 def test_aviso_visto_solo_anota_la_primera_vez(bd):
     cp.marcar(ADMIN, UID, MOTIVO)
     assert cp.marca_viva(UID)["aviso_visto_at"] is None

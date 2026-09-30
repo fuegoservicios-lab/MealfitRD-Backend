@@ -18,7 +18,11 @@ cuenta de prueba, lote 832). Las definiciones son UNA para la lista, el CSV y la
   · escaneos: `llm_usage_events` con `node = 'vision_scan'`;
   · gasto de IA: la suma de `llm_usage_events.cost_usd_micros` de la cuenta en 30 días, en US$ con 2 decimales;
   · día activo: un día UTC con una comida o un mensaje al coach;
-  · última actividad: lo más reciente de todo lo anterior y de cualquier uso de IA.
+  · última actividad: lo más reciente que HIZO la persona —una comida, un mensaje suyo al coach, un escaneo, un peso o un
+    vaso de agua— y nada más. NO cuenta el uso de IA en general (el chunk worker atribuye a la persona lo que genera en
+    segundo plano: una cuenta abandonada saldría «activa» por lo que hace el sistema), y tampoco un plan (no es una de
+    esas cinco acciones). El gasto de IA sí suma TODOS los eventos (el dinero sale igual). Es lo que ordenan
+    `orden=actividad` y los filtros `activas_7d` / `inactivas_14d`.
 
 Una consulta por página: cada cuenta con sus subconsultas (LATERAL), el filtro y el orden encima, y el total en la misma
 consulta (`count(*) OVER ()`). Los hilos de cada fila son el SSOT con `p.id` en sus tres parámetros (los tres son el
@@ -142,7 +146,11 @@ def _donde(buscar) -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────────── el SQL
 def _sql_filas(donde: str) -> str:
     """`WITH base …, filas …`: una fila por cuenta con sus números (subconsultas por cuenta). `donde` filtra
-    `user_profiles p` (la búsqueda, o el id de la ficha)."""
+    `user_profiles p` (la búsqueda, o el id de la ficha).
+
+    [P1-PLAN-LOTE-831 · 2026-09-29] `ultima` = `GREATEST` de las cinco cosas que HACE la persona: una comida, un mensaje
+    suyo al coach, un escaneo (`llm_usage_events` con `node = 'vision_scan'` — NO todos los eventos de IA), un peso y un
+    vaso de agua. El gasto (`micros_30d`) sí suma todos los eventos."""
     return (
         "WITH base AS ("
         "SELECT p.id::text AS user_id, p.email, p.full_name AS nombre, p.created_at AS alta, "
@@ -150,9 +158,10 @@ def _sql_filas(donde: str) -> str:
         "CASE WHEN jsonb_typeof(p.health_profile) = 'object' THEN p.health_profile ->> 'country' END AS pais, "
         "pr.marcada_at AS prueba_desde, pr.aviso_visto_at AS prueba_aviso_visto_at, "
         "cm.total AS comidas_total, cm.d30 AS comidas_30d, cm.ultima AS comidas_ultima, "
-        "mp.total AS planes, mp.ultima AS planes_ultima, "
+        "mp.total AS planes, "
         "msg.total AS mensajes_coach, msg.ultima AS mensajes_ultima, "
-        "ia.escaneos, ia.micros_30d, ia.ultima AS ia_ultima, "
+        "ia.escaneos, ia.micros_30d, ia.escaneo_ultima, "
+        "pw.ultima AS peso_ultima, ag.ultima AS agua_ultima, "
         "(SELECT count(*) FROM ("
         "SELECT (c.consumed_at AT TIME ZONE 'UTC')::date FROM public.consumed_meals c "
         f"WHERE c.user_id = p.id AND c.consumed_at >= {_TREINTA_DIAS} "
@@ -165,16 +174,22 @@ def _sql_filas(donde: str) -> str:
         "LEFT JOIN LATERAL (SELECT count(*) AS total, "
         f"count(*) FILTER (WHERE c.consumed_at >= {_TREINTA_DIAS}) AS d30, max(c.consumed_at) AS ultima "
         "FROM public.consumed_meals c WHERE c.user_id = p.id) cm ON true "
-        "LEFT JOIN LATERAL (SELECT count(*) AS total, max(x.created_at) AS ultima "
+        "LEFT JOIN LATERAL (SELECT count(*) AS total "
         "FROM public.meal_plans x WHERE x.user_id = p.id) mp ON true "
         "LEFT JOIN LATERAL (SELECT count(*) AS total, max(m.created_at) AS ultima "
         f"FROM public.agent_messages m WHERE m.role = 'user' AND {_EN_SUS_HILOS}) msg ON true "
         "LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE e.node = 'vision_scan') AS escaneos, "
         f"COALESCE(sum(e.cost_usd_micros) FILTER (WHERE e.created_at >= {_TREINTA_DIAS}), 0) AS micros_30d, "
-        "max(e.created_at) AS ultima FROM public.llm_usage_events e WHERE e.user_id = p.id) ia ON true "
+        "max(e.created_at) FILTER (WHERE e.node = 'vision_scan') AS escaneo_ultima "
+        "FROM public.llm_usage_events e WHERE e.user_id = p.id) ia ON true "
+        "LEFT JOIN LATERAL (SELECT max(w.created_at) AS ultima "
+        "FROM public.weight_log w WHERE w.user_id = p.id) pw ON true "
+        # `updated_at` es NOT NULL: el último vaso anotado (o quitado) del día más reciente.
+        "LEFT JOIN LATERAL (SELECT max(a.updated_at) AS ultima "
+        "FROM public.water_intake_log a WHERE a.user_id = p.id) ag ON true "
         f"WHERE {donde}), "
-        "filas AS (SELECT base.*, GREATEST(comidas_ultima, planes_ultima, mensajes_ultima, ia_ultima) AS ultima "
-        "FROM base) "
+        "filas AS (SELECT base.*, GREATEST(comidas_ultima, mensajes_ultima, escaneo_ultima, peso_ultima, agua_ultima) "
+        "AS ultima FROM base) "
     )
 
 
@@ -249,6 +264,12 @@ def _actividad(r: dict) -> dict:
             "gasto_ia_30d_usd": _usd(r.get("micros_30d")), "dias_activos_30d": _n(r.get("dias_activos_30d"))}
 
 
+def _es_admin(pagado, uid, admins) -> bool:
+    """Una cuenta de administración: el tier `admin` o un id de la lista `MEALFIT_ADMIN_USER_IDS` del panel. UNA regla
+    para la etiqueta de la lista y la de la ficha ampliada: no pueden contradecirse."""
+    return pagado == "admin" or str(uid).strip().lower() in admins
+
+
 def _fila_cuenta(r: dict, cortesias: dict, admins) -> dict:
     uid = str(r.get("user_id"))
     pagado = r.get("plan_pagado") or "gratis"
@@ -258,7 +279,7 @@ def _fila_cuenta(r: dict, cortesias: dict, admins) -> dict:
     return {
         "user_id": uid, "email": r.get("email"), "nombre": r.get("nombre"), "alta": rc.iso(r.get("alta")),
         "plan_pagado": pagado, "plan_efectivo": rc.plan_efectivo(pagado, cortesia) or "gratis",
-        "es_admin": pagado == "admin" or uid.lower() in admins,
+        "es_admin": _es_admin(pagado, uid, admins),
         "prueba": ({"estado": cuentas_prueba.estado_de(marca), "desde": rc.iso(marca["marcada_at"])}
                    if marca else None),
         "actividad": _actividad(r),
@@ -347,7 +368,9 @@ def _plataformas(extras: dict) -> list:
 
 def actividad_de(user_id) -> Optional[dict]:
     """La actividad de la ficha (contrato 3): la de la fila de la lista —la MISMA consulta, filtrada por su id— más
-    los números que solo enseña la ficha y el embudo. None si la cuenta no existe. LANZA si la base falla."""
+    los números que solo enseña la ficha y el embudo. None si la cuenta no existe. LANZA si la base falla en la consulta
+    de la fila; si falla SOLO la de los extras (tablas que el resto no toca: agua, peso, cola, alertas, tokens) sale la
+    actividad de siempre con los extras en cero, `[]` o null y su aviso en el log — no se pierde la ficha entera."""
     uid = _uuid(user_id)
     if not uid:
         return None
@@ -355,7 +378,11 @@ def actividad_de(user_id) -> Optional[dict]:
     if not filas:
         return None
     r = filas[0]
-    extras = execute_sql_query(_SQL_EXTRAS, (uid,) * _SQL_EXTRAS.count("%s"), fetch_one=True) or {}
+    try:
+        extras = execute_sql_query(_SQL_EXTRAS, (uid,) * _SQL_EXTRAS.count("%s"), fetch_one=True) or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-831] extras de la actividad ilegibles para {uid[:8]} ({e!r}): salen en cero")
+        extras = {}
     base = _actividad(r)
     dias = base["dias_activos_30d"]
     primer_plan = extras.get("primer_plan")
@@ -394,19 +421,25 @@ def _correos(ids) -> dict:
 
 
 def prueba_de(user_id) -> Optional[dict]:
-    """El bloque `prueba` de la ficha (contrato 3), o None sin marca viva. `marcada_por` es el CORREO del admin (su id
-    no sale del servidor, como en la exportación); el historial trae todas las marcas, la viva primero, y dice cuándo
-    salió la propia persona."""
+    """El bloque `prueba` de la ficha (contrato 3, con la enmienda del 29-sep). `None` SOLO si la cuenta nunca se marcó.
+
+    · Con marca viva: su `estado` (`activa` / `aviso_pendiente`), `desde`, `motivo`, `marcada_por` y `aviso_visto_at`.
+    · Hubo marcas y ninguna vive (la quitó un admin o salió la propia persona): `estado: "sin_marca"`, esos cuatro campos
+      en None y el `historial`, que dice cuándo y quién — sin él la ficha no diría que alguna vez fue de prueba.
+    `marcada_por` es el CORREO del admin (su id no sale del servidor, como en la exportación); el historial trae todas
+    las marcas, la viva primero, y dice cuándo salió la propia persona. La LISTA sigue enseñando `prueba: null` a quien no
+    tiene marca viva (su filtro «prueba» son las vivas)."""
     marca = cuentas_prueba.marca_viva(user_id)
-    if not marca:
-        return None
     historial = cuentas_prueba.historial(user_id)
+    if not marca and not historial:
+        return None
+    marca = marca or {}
     correos = _correos([marca.get("marcada_por"), *(h.get("marcada_por") for h in historial)])
 
     def correo(v):
         return correos.get(_uuid(v) or "")
     return {
-        "estado": cuentas_prueba.estado_de(marca),
+        "estado": cuentas_prueba.estado_de(marca) or "sin_marca",
         "desde": rc.iso(marca.get("marcada_at")),
         "motivo": marca.get("motivo"),
         "marcada_por": correo(marca.get("marcada_por")),
@@ -421,11 +454,16 @@ def prueba_de(user_id) -> Optional[dict]:
 def ampliar_ficha(ficha: Optional[dict]) -> Optional[dict]:
     """La ficha del lote 774 con `actividad`, `ajustes`, `ajustes_dispositivo` y `prueba` (contrato 3), en un dict
     nuevo. Cada bloque que no se puede leer (una migración sin aplicar, la base que falla) sale vacío —`None`, o `{}`
-    en `ajustes_dispositivo`— con su aviso en el log: la ficha carga igual."""
+    en `ajustes_dispositivo`— con su aviso en el log: la ficha carga igual.
+
+    `es_admin` se recalcula con la regla de la LISTA (`_es_admin`: tier `admin` o la lista del .env del panel): la ficha
+    del 774 solo mira el tier, y una cuenta etiquetada «admin» en la lista no puede salir sin etiqueta al abrirla. Solo
+    aquí, con el interruptor encendido: apagado, la ficha es exactamente la del 774."""
     if not ficha:
         return ficha
     uid = ficha.get("user_id")
     salida = dict(ficha)
+    salida["es_admin"] = _es_admin(ficha.get("plan_pagado"), uid, admin_ids())
     try:
         salida["actividad"] = actividad_de(uid)
     except Exception as e:  # noqa: BLE001

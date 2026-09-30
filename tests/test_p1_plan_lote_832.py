@@ -744,23 +744,53 @@ def test_las_claves_del_formulario_existen_en_el_frontend():
     assert not faltan, f"claves que el frontend no conoce: {faltan}"
 
 
-def test_las_comidas_van_por_dias_utc_con_hasta_incluido(mundo):
-    """Aclaración del controlador (contrato 9): `hasta` es INCLUSIVO en días UTC — el frontend pide `hasta` = hoy y
-    espera las comidas de hoy. Una comida de `hasta` a las 23:59 entra; la del día siguiente a las 00:00, no."""
+def test_las_comidas_cubren_el_dia_local_de_cualquier_huso(mundo):
+    """[P1-PLAN-LOTE-832 · 2026-09-29, ronda 1] Los días son los del CALENDARIO del admin (`hasta` inclusivo: el frontend
+    pide `hasta` = hoy y espera las comidas de hoy), pero `consumed_at` está en UTC y las personas viven entre UTC−4 (RD)
+    y UTC+2 (España): la cena de las 23:00 de RD es del día SIGUIENTE en UTC, y el desayuno de la 01:00 de España, del
+    ANTERIOR. La ventana va de `desde` 00:00 UTC − 12 h a `hasta` + 1 día 00:00 UTC + 14 h (el fin, exclusivo)."""
+    mundo.comidas += [
+        _comida(20, UID, datetime(2026, 9, 30, 3, 0, tzinfo=timezone.utc), "Cena en RD"),           # hasta+1 03:00 UTC
+        _comida(21, UID, datetime(2026, 9, 28, 23, 0, tzinfo=timezone.utc), "Desayuno en España"),  # desde−1 23:00 UTC
+        _comida(22, UID, datetime(2026, 9, 30, 13, 59, tzinfo=timezone.utc), "Último minuto de la ventana"),
+        _comida(23, UID, datetime(2026, 9, 30, 14, 0, tzinfo=timezone.utc), "Justo fuera por arriba"),
+        _comida(24, UID, datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc), "Dos días después"),      # hasta+2 00:00 UTC
+        _comida(25, UID, datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc), "Primer minuto de la ventana"),
+        _comida(26, UID, datetime(2026, 9, 28, 11, 59, tzinfo=timezone.utc), "Justo fuera por abajo"),
+    ]
     r = apd.comidas(UID, "2026-09-29", "2026-09-29")
-    assert (r["desde"], r["hasta"]) == ("2026-09-29", "2026-09-29")
-    assert [c["plato"] for c in r["comidas"]] == ["Pollo al horno", "Mangú con huevo", "Medianoche del 29"], (
-        "del 29 a las 00:00 al 29 a las 23:59 (UTC), la más reciente primero")
+    assert (r["desde"], r["hasta"]) == ("2026-09-29", "2026-09-29"), "se devuelven las fechas pedidas, no la ventana"
+    assert [c["plato"] for c in r["comidas"]] == [
+        "Último minuto de la ventana", "Cena en RD", "Desayuno del 30", "Pollo al horno", "Mangú con huevo",
+        "Medianoche del 29", "Cena tardía", "Desayuno en España", "Primer minuto de la ventana"], (
+        "entran la de `hasta` a las 23:59 y la de `hasta`+1 a las 03:00; la de `hasta`+2 a las 00:00 no")
+    nombres = {c["plato"] for c in r["comidas"]}
+    assert not nombres & {"Dos días después", "Justo fuera por arriba", "Justo fuera por abajo", "Comida vieja"}
     _, inicio, fin, limite = next(p for q, p in mundo.consultas if "FROM public.consumed_meals WHERE" in q)
-    assert inicio == datetime(2026, 9, 29, tzinfo=timezone.utc) and fin == datetime(2026, 9, 30, tzinfo=timezone.utc)
-    assert inicio.utcoffset() == timedelta(0) and limite == apd.MAX_COMIDAS
+    assert inicio == datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc), "desde 00:00 UTC − 12 h (inclusivo)"
+    assert fin == datetime(2026, 9, 30, 14, 0, tzinfo=timezone.utc), "hasta + 1 día 00:00 UTC + 14 h (exclusivo)"
+    assert inicio.utcoffset() == timedelta(0) and fin.utcoffset() == timedelta(0) and limite == apd.MAX_COMIDAS
+    assert (apd.MARGEN_ANTES_H, apd.MARGEN_DESPUES_H) == (12, 14)
+    assert apd.ventana_de_comidas(date(2026, 9, 29), date(2026, 9, 29)) == (inicio, fin)
+
+
+def test_las_comidas_de_varios_dias_incluyen_los_dos_extremos(mundo):
     dos = apd.comidas(UID, "2026-09-28", "2026-09-30")["comidas"]
     assert [c["plato"] for c in dos] == ["Desayuno del 30", "Pollo al horno", "Mangú con huevo", "Medianoche del 29",
                                          "Cena tardía"], "los dos extremos del rango entran"
 
 
+def test_el_limite_de_90_dias_es_el_de_las_fechas_no_el_de_la_ventana(mundo):
+    """La ventana rebasa las fechas por 26 h, pero `hasta` − `desde` + 1 ≤ 90 sigue contando FECHAS."""
+    assert apd.comidas(UID, "2026-09-01", "2026-11-29")["comidas"] is not None            # 90 días exactos
+    with pytest.raises(apd.ErrorDetalle) as ei:
+        apd.comidas(UID, "2026-09-01", "2026-11-30")                                        # 91
+    assert (ei.value.status, ei.value.detalle) == (422, "rango")
+
+
 def test_la_forma_de_una_comida(mundo):
-    pollo, mangu, _ = apd.comidas(UID, "2026-09-29", "2026-09-29")["comidas"]
+    por_plato = {c["plato"]: c for c in apd.comidas(UID, "2026-09-29", "2026-09-29")["comidas"]}
+    pollo, mangu = por_plato["Pollo al horno"], por_plato["Mangú con huevo"]
     assert pollo == {
         "id": "f1000000-0000-4000-8000-000000000002",
         "at": datetime(2026, 9, 29, 23, 59, tzinfo=timezone.utc).isoformat(),
@@ -769,8 +799,8 @@ def test_la_forma_de_una_comida(mundo):
         "plan_ref": {"plan_id": P1, "day_index": 1, "meal_index": 2}}
     assert mangu["origen"] == "photo" and mangu["plan_ref"] is None
     assert mangu["ingredientes"] == ["1 plátano verde", "2 huevos"]
-    rara = apd.comidas(UID, "2026-09-28", "2026-09-28")["comidas"][0]
-    assert rara["plato"] == "Cena tardía" and rara["origen"] is None and rara["ingredientes"] == []
+    rara = {c["plato"]: c for c in apd.comidas(UID, "2026-09-28", "2026-09-28")["comidas"]}["Cena tardía"]
+    assert rara["origen"] is None and rara["ingredientes"] == []
     json.dumps(pollo)
 
 
@@ -1064,6 +1094,8 @@ def test_el_rango_de_las_comidas(desde, hasta, esperado):
     ("20260901", None, "fecha"), ("0000-01-01", None, "fecha"),
     # en el borde del calendario: 30 días desde/hasta, o el día siguiente al final, no existen (ni un 500)
     ("9999-12-31", None, "fecha"), (None, "0001-01-05", "fecha"), ("9999-12-30", "9999-12-31", "fecha"),
+    # y la ventana con su margen de 12 h antes de `desde` también tiene que existir (0001-01-01 00:00 − 12 h no)
+    ("0001-01-01", "0001-01-02", "fecha"), (None, "0001-01-30", "fecha"),
 ])
 def test_un_rango_de_comidas_invalido_es_422(desde, hasta, detalle):
     with pytest.raises(apd.ErrorDetalle) as ei:

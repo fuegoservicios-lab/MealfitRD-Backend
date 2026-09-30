@@ -20,7 +20,10 @@ tocarlos. Lo que el trigger no puede saber solo es QUIÉN escribe; eso lo dice e
   · `app` (por defecto): la persona, desde la app.
   · `coach`: la herramienta `cambiar_ajuste_de_la_app` (`ajustes_de_la_app.cambiar_ajuste` corre dentro de
     `origen_de_ajustes("coach")`). Las demás herramientas del coach no corren en ese bloque: si una toca un ajuste
-    vigilado (`update_form_field` con el país o el presupuesto), su cambio queda como `app`.
+    vigilado (`update_form_field` con el país o el presupuesto), su cambio queda como `app`. Tampoco el IDIOMA que la
+    persona le pide al coach: la herramienta solo devuelve un marcador `{"idioma": …}` y lo GUARDA el cliente (la
+    pantalla lo aplica y escribe `locale` como cualquier cambio de Configuración), así que también queda como `app`.
+    Límite conocido: el panel etiqueta esos cambios como «la persona».
   · `sistema`: los apagados automáticos (Nevera vacía 48 h, hidratación sin un vaso 48 h) y el encendido automático de
     una Nevera que el sistema había apagado.
 
@@ -52,7 +55,9 @@ el trigger NO vigila. Con el interruptor maestro `MEALFIT_ADMIN_TEST_ACCOUNTS` a
 
 La purga (`purgar_cambios_antiguos`, cron diario `purge_ajustes_cambios`) borra lo que pasa de
 `MEALFIT_AJUSTES_CAMBIOS_RETENTION_DAYS` (730, acotado a [90, 3650]). El historial se exporta con la cuenta y se va con
-ella (ON DELETE CASCADE).
+ella (ON DELETE CASCADE). La misma pasada diaria deja en el log un CANARIO (`count(*)` y `max(at)` de la tabla): el
+trigger que la llena avisa de sus fallos con un WARNING de Postgres, que NO llega a los logs de la app; una tabla que
+dejó de llenarse se ve porque ese `max(at)` no avanza mientras la app se usa.
 """
 from __future__ import annotations
 
@@ -99,8 +104,14 @@ CLAVES_DISPOSITIVO = {
     "avatar_elegido": bool,
 }
 _RE_BUILD = re.compile(r"[0-9A-Za-z._+\-() ]{1,64}")
-_HORAS_CANAL_LOCAL = 72          # hydration_reminders.HORAS_DE_ALCANCE_LOCAL: el teléfono sincronizado vale 72 h
 _RE_HORA = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _horas_canal_local() -> int:
+    """Cuánto vale un teléfono sincronizado: `hydration_reminders.HORAS_DE_ALCANCE_LOCAL` (SSOT; antes una copia a mano
+    de 72 que se habría desfasado en silencio). Import perezoso: el módulo del agua no se carga hasta que hace falta."""
+    from hydration_reminders import HORAS_DE_ALCANCE_LOCAL
+    return HORAS_DE_ALCANCE_LOCAL
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────── el origen del cambio
@@ -639,7 +650,7 @@ def _evaluar(a: Ajuste, fila: dict) -> Optional[dict]:
         if not entrada:
             return _fila_estado("sin_elegir")
         cuando = _fecha(entrada.get("updated_at"))
-        vivo = cuando is not None and cuando >= datetime.now(timezone.utc) - timedelta(hours=_HORAS_CANAL_LOCAL)
+        vivo = cuando is not None and cuando >= datetime.now(timezone.utc) - timedelta(hours=_horas_canal_local())
         return _fila_estado("encendido" if vivo else "apagado", None, entrada.get("updated_at"))
     if tipo == "apagado_solo":
         valor = (kv.get(nombre) or {}).get("value")
@@ -906,9 +917,25 @@ def dias_de_historial() -> int:
     return _env_int("MEALFIT_AJUSTES_CAMBIOS_RETENTION_DAYS", 730, validator=lambda v: 90 <= v <= 3650)
 
 
+def _canario_del_historial() -> None:
+    """[P1-PLAN-LOTE-837 · 2026-09-29] Una línea al día con cuántos cambios hay y cuándo fue el último (`count(*)` y
+    `max(at)`). El trigger que llena la tabla avisa de sus propios fallos con un WARNING de POSTGRES, que no llega a los
+    logs de la app: una tabla que dejó de llenarse (trigger caído, migración a medias) pasaría meses sin que nada lo
+    dijera. Con la app en uso, un `max(at)` que no avanza es la señal. Nunca lanza."""
+    try:
+        fila = execute_sql_query(
+            "SELECT count(*) AS n, max(at) AS ultimo FROM public.ajustes_cambios", fetch_one=True) or {}
+        n = fila.get("n")
+        n = n if isinstance(n, int) and not isinstance(n, bool) else 0
+        logger.info(f"[P1-PLAN-LOTE-837] canario del historial de ajustes: {n} cambios, el último: "
+                    f"{_iso(fila.get('ultimo')) or 'ninguno'}.")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-837] canario del historial de ajustes sin leer: {e!r}")
+
+
 def purgar_cambios_antiguos() -> int:
-    """Borra los cambios con más de `dias_de_historial()` días. Cron diario; nunca lanza (un fallo se reintenta
-    mañana)."""
+    """Borra los cambios con más de `dias_de_historial()` días y deja el canario del día (`_canario_del_historial`,
+    también si la purga falla). Cron diario; nunca lanza (un fallo se reintenta mañana)."""
     dias = dias_de_historial()
     try:
         r = execute_sql_write(
@@ -917,8 +944,10 @@ def purgar_cambios_antiguos() -> int:
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ [P1-PLAN-LOTE-837] no se pudo purgar el historial de ajustes: {e!r}")
+        _canario_del_historial()
         return 0
     n = len(r) if isinstance(r, list) else 0
     if n:
         logger.info(f"[P1-PLAN-LOTE-837] historial de ajustes: {n} cambios con más de {dias} días purgados.")
+    _canario_del_historial()
     return n
