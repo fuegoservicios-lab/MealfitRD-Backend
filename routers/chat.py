@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 from error_utils import safe_error_detail
 from typing import Optional
@@ -713,6 +713,22 @@ async def api_chat_voz_flujo(data: dict = Body(...),
 # a `llm_usage_events` (node `coach_live_voice`); el turno del coach cobra como cualquier mensaje del chat.
 _LIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _LIVE_NOVEDADES_LIMITER = RateLimiter(max_calls=90, period_seconds=60)
+
+
+_VOZ_DIAGNOSTICO_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+
+@router.post("/diagnostico-voz")
+async def api_chat_voz_diagnostico(request: Request, data: dict = Body(...),
+                                   verified_user_id: Optional[str] = Depends(_VOZ_DIAGNOSTICO_LIMITER)):
+    """[P1-PLAN-LOTE-909] El teléfono avisa de un fallo del dictado / modo voz, o del estado de la voz al arrancar.
+    Sin IA ni cuota; con o sin sesión. 204 siempre que el cuerpo sea un diagnóstico válido (400 si no)."""
+    import diagnostico_voz
+    meta = diagnostico_voz.normalizar(data, request.headers.get("user-agent", ""), verified_user_id)
+    if meta is None:
+        raise HTTPException(status_code=400, detail="Diagnóstico no válido.")
+    await asyncio.to_thread(diagnostico_voz.registrar, meta)
+    return Response(status_code=204)
 
 
 @router.get("/live/disponible")
