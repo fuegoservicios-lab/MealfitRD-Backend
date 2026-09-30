@@ -74,6 +74,21 @@ def test_el_plato_entero_deja_de_nombrar_el_aguacate():
         assert sub in sf._DURADERO
 
 
+def test_la_naranja_se_pela_en_gajos_no_se_corta_en_cubos():
+    """El plato hereda el corte del fresco: «corta 100 g de naranja en cubos» (replay de los bloques)."""
+    import sustitucion_fresca as sf
+    m = {"meal": "Merienda", "name": "Lechosa con maní tostado", "desc": "Merienda fresca: lechosa en cubos con maní.",
+         "ingredients": ["100 g de lechosa", "20 g de maní"], "ingredients_raw": ["100 g de lechosa", "20 g de maní"],
+         "recipe": ["Mise en place: corta 100 g de lechosa en cubos y mide 20 g de maní.",
+                    "Montaje: sirve la lechosa en un vaso y termina con el maní."]}
+    sf.sustituir_en_plato(m, 0, "100 g de lechosa", "100 g de naranja", "naranja")
+    assert m["recipe"][0] == "Mise en place: pela 100 g de naranja en gajos y mide 20 g de maní.", m["recipe"]
+    assert "naranja en gajos" in m["desc"] and "cubos" not in m["desc"], m["desc"]
+    assert fd.gajos("corta la naranja en láminas finas") == "pela la naranja en gajos"
+    assert fd.gajos("pela y corta 95 g de naranja en cubos, y mide") == "pela 95 g de naranja en gajos, y mide", "no «pela y pela»"
+    assert fd.gajos("mide 30 g de aceitunas y corta la pera en cubos") == "mide 30 g de aceitunas y corta la pera en cubos"
+
+
 def test_las_frutas_y_las_aceitunas_cuentan_como_presentes_en_el_dia():
     assert cu.duraderos_del_dia(["100 g de naranja", "30 g de aceitunas", "1 pera"]) >= {"naranja", "aceitunas", "pera"}
 

@@ -1176,6 +1176,8 @@ def sustituir_en_plato(meal: dict, idx: int, viejo: str, nueva: str, sub: str, d
                     meal[k] = foto[k]
     meal["_fresh_substituted"] = (meal.get("_fresh_substituted") or []) + [f"{str(viejo)[:40]} → {sub}"]
     reescribir_plato(meal, viejo, nueva, sub)                                          # [P1-PLAN-LOTE-460]
+    if sub == "naranja":
+        __import__("fruta_duradera").pulir_naranja(meal)                               # [P1-PLAN-LOTE-936] en gajos
 
 
 __all__ = ["reescribir_plato", "parear_raw", "sustituir_en_plato"]

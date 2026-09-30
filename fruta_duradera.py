@@ -82,4 +82,48 @@ def aceitunas_de(texto: str, gramos: Optional[float]) -> str:
     return f"{_ACEITUNAS_SIN_PESO_G} g de {ACEITUNAS}"
 
 
-__all__ = ["RUEDA", "ACEITUNAS", "activo", "es_dulce", "elegir", "aceitunas_de"]
+#: La naranja no se corta en cubos ni en láminas: se pela en gajos. El plato reescrito hereda el corte del fresco
+#: («corta 100 g de naranja en cubos», replay de los bloques); aquí el verbo y el corte pasan a los de la naranja.
+_CORTE_NARANJA = re.compile(r"\b(corta|pica|trocea|rebana|lamina)(\s+(?:la|las|los|el|unos?|unas?)?\s*(?:\d+(?:[.,]\d+)?\s*g\s+de\s+)?"
+                            r"naranjas?)(\s+en\s+(?:cubos|cubitos|laminas|láminas|rodajas|trozos|dados|tiras)(?:\s+fin[oa]s?|"
+                            r"\s+pequeñ[oa]s?)?)?", re.IGNORECASE)
+_EN_CORTE_NARANJA = re.compile(r"\b(naranjas?)\s+en\s+(?:cubos|cubitos|laminas|láminas|rodajas|trozos|dados|tiras)"
+                               r"(?:\s+fin[oa]s?|\s+pequeñ[oa]s?)?\b", re.IGNORECASE)
+
+
+_PELA_Y_PELA = re.compile(r"\bpela\s+y\s+pela\b", re.IGNORECASE)
+
+
+def gajos(texto: str) -> str:
+    """«corta 100 g de naranja en cubos» → «pela 100 g de naranja en gajos»; «naranja en cubos» → «naranja en gajos»."""
+    try:
+        t = _CORTE_NARANJA.sub(lambda mm: "pela" + mm.group(2) + " en gajos", str(texto))
+        t = _EN_CORTE_NARANJA.sub(lambda mm: mm.group(1) + " en gajos", t)
+        return _PELA_Y_PELA.sub("pela", t)             # «pela y corta … en cubos» → «pela … en gajos», no «pela y pela»
+    except Exception:                                                          # noqa: BLE001
+        return texto
+
+
+def pulir_naranja(meal: dict) -> int:
+    """Nombre, ficha y pasos del plato: la naranja, en gajos. Devuelve cuántos textos cambian."""
+    n = 0
+    try:
+        for k in ("name", "desc", "description"):
+            v = meal.get(k)
+            if isinstance(v, str):
+                q = gajos(v)
+                if q != v:
+                    meal[k], n = q, n + 1
+        pasos = meal.get("recipe")
+        if isinstance(pasos, list):
+            for i, p in enumerate(pasos):
+                if isinstance(p, str):
+                    q = gajos(p)
+                    if q != p:
+                        pasos[i], n = q, n + 1
+    except Exception:                                                          # noqa: BLE001
+        pass
+    return n
+
+
+__all__ = ["RUEDA", "ACEITUNAS", "activo", "es_dulce", "elegir", "aceitunas_de", "gajos", "pulir_naranja"]
