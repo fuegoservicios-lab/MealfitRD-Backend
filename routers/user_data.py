@@ -717,6 +717,12 @@ _PROFILE_PATCH_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # Redis es `rl:<max>:<periodo>:<uid>` y con un par compartido se comería el cupo de otro endpoint.
 _AJUSTES_DISPOSITIVO_LIMITER = RateLimiter(max_calls=6, period_seconds=60)
 
+# [P1-PLAN-LOTE-835 · 2026-09-29] La persona y su cuenta de prueba: anotar que vio el aviso y SALIR (spec del panel
+# admin §5). Cero IA: sin `verify_api_quota` (al llegar al tope la persona tiene que poder salir). Par (max, periodo)
+# único en el repo —el spec decía 10/60, pero ese par lo comparten 18 limitadores (medido el 29-sep) y Redis cuenta por
+# par (`rl:<max>:<periodo>:<uid>`): la app arrancando podía dejar a la persona sin cupo para salir—.
+_PRUEBA_LIMITER = RateLimiter(max_calls=11, period_seconds=60)
+
 # [P1-PLAN-LOTE-225 · 2026-09-24] Traducir AL LEER el texto libre que no vive en `_display`: lo que el coach recuerda
 # del usuario (`user_facts.fact`) y los suplementos del día (`days[i].supplements`: nombre, dosis, momento, motivo).
 # Lo escribe el modelo en español y la app lo pintaba así en los cinco idiomas. El cliente pide sólo lo que su caché
@@ -1109,7 +1115,13 @@ async def api_get_profile(
     from nevera_opcional import nevera_activa_de
     # [P1-PLAN-LOTE-843] El permiso para la IA viaja con el perfil que la app ya carga al arrancar: la misma forma que
     # `GET /api/consents`, calculada de la fila ya leída (cero consultas más).
-    return {"profile": {**profile, "nevera_activa": nevera_activa_de(profile), "ai_consent": estado_de_fila(profile)}}
+    perfil = {**profile, "nevera_activa": nevera_activa_de(profile), "ai_consent": estado_de_fila(profile)}
+    # [P1-PLAN-LOTE-835 · 2026-09-29] La marca de cuenta de prueba (`{desde, aviso_visto}` o null) SOLO con el
+    # interruptor maestro: apagado, la clave ni aparece. `para_la_persona` nunca rompe el perfil (si no lee, null).
+    import cuentas_prueba
+    if cuentas_prueba.activo():
+        perfil["cuenta_de_prueba"] = await asyncio.to_thread(cuentas_prueba.para_la_persona, uid)
+    return {"profile": perfil}
 
 
 @router.patch("/profile")
@@ -1298,6 +1310,40 @@ async def api_put_ajustes_dispositivo(
     import ajustes_cuenta
     guardado = await asyncio.to_thread(ajustes_cuenta.guardar_dispositivo, uid, data)
     return {"ok": True, "guardado": bool(guardado)}
+
+
+@router.post("/profile/prueba/aviso-visto")
+async def api_prueba_aviso_visto(verified_user_id: Optional[str] = Depends(_PRUEBA_LIMITER)):
+    """[P1-PLAN-LOTE-835 · 2026-09-29] La app enseñó a la persona el aviso «Esta es una cuenta de prueba» → `{"ok":
+    true}`. Solo anota la primera vez y solo en una marca viva (`cuentas_prueba.aviso_visto`): desde ese momento el
+    panel puede abrir su contenido (spec §13.4). Con el interruptor maestro apagado no anota nada —la app no enseña el
+    aviso con él apagado, y un «visto» a destiempo abriría el contenido sin aviso real—. 503 si no se pudo guardar: el
+    aviso vuelve a salir."""
+    uid = _require_user(verified_user_id)
+    import cuentas_prueba
+    if not cuentas_prueba.activo():
+        return {"ok": True}
+    try:
+        await asyncio.to_thread(cuentas_prueba.aviso_visto, uid)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-835] aviso de cuenta de prueba no anotado ({uid[:8]}): {e!r}")
+        raise HTTPException(status_code=503, detail="No se pudo guardar. Inténtalo de nuevo.")
+    return {"ok": True}
+
+
+@router.post("/profile/prueba/salir")
+async def api_prueba_salir(verified_user_id: Optional[str] = Depends(_PRUEBA_LIMITER)):
+    """[P1-PLAN-LOTE-835 · 2026-09-29] La persona sale del modo de prueba → `{"ok": true, "salio": bool}` (`false`: no
+    tenía marca viva). Funciona SIEMPRE, con el interruptor maestro apagado también: dejar de ser vista nunca depende de
+    un interruptor (spec §7). 503 si la base no responde: nunca un «saliste» que no se guardó."""
+    uid = _require_user(verified_user_id)
+    import cuentas_prueba
+    try:
+        salio = await asyncio.to_thread(cuentas_prueba.salir, uid)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"🛑 [P1-PLAN-LOTE-835] la cuenta {uid[:8]} no pudo salir del modo de prueba: {e!r}")
+        raise HTTPException(status_code=503, detail="No se pudo salir del modo de prueba. Inténtalo de nuevo.")
+    return {"ok": True, "salio": bool(salio)}
 
 
 # ---------------------------------------------------------------------------
