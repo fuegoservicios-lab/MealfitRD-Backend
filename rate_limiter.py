@@ -113,6 +113,9 @@ class RateLimiter:
                 # después del `raise`, para que un rechazo no alargue el castigo.
                 try:
                     redis_client.zadd(key, {str(now): now})
+                    # [P1-PLAN-LOTE-945] El `expire` del pipeline no alcanza a la clave que nace AQUÍ (en la primera
+                    # petición aún no existía): quedaba inmortal. Medido el 30-sep: 953 claves rl:* con TTL -1.
+                    redis_client.expire(key, self.period)
                 except Exception:  # noqa: BLE001 — el conteo es best-effort
                     # Si el zadd falla, la petición YA está autorizada: no se la
                     # negamos por no poder contarla. Peor caso, un hueco en la

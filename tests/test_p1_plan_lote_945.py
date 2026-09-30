@@ -37,8 +37,8 @@ class _Pipe:
         self.ops.append(lambda: [(str(s), s) for s in sorted(self.r.z.get(k, []))[:1]])
         return self
 
-    def expire(self, _k, _t):
-        self.ops.append(lambda: True)
+    def expire(self, k, t):
+        self.ops.append(lambda: self.r.expire(k, t))
         return self
 
     def execute(self):
@@ -47,7 +47,13 @@ class _Pipe:
 
 class _Redis:
     def __init__(self):
-        self.z = {}
+        self.z, self.ttl = {}, {}
+
+    def expire(self, k, t):                     # como Redis: sobre una clave que no existe no hace nada
+        if self.z.get(k):
+            self.ttl[k] = t
+            return True
+        return False
 
     def purga(self, k, hasta):
         self.z[k] = [s for s in self.z.get(k, []) if s > hasta]
@@ -86,6 +92,14 @@ def test_la_identidad_es_estable_entre_workers():
     sitios = {rl.RateLimiter(max_calls=3, period_seconds=60).scope for _ in range(2)}
     assert len(sitios) == 1 and sitios.pop().startswith(__name__ + ":")
     assert rl.RateLimiter(max_calls=3, period_seconds=60, scope="panel").scope == "panel"
+
+
+def test_la_primera_peticion_deja_la_clave_con_caducidad(monkeypatch):
+    r = _Redis()
+    monkeypatch.setattr(rl, "redis_client", r)
+    rl.RateLimiter(max_calls=3, period_seconds=60)(None, verified_user_id="u9")
+    (k,) = [k for k in r.z if k.endswith(":u9")]
+    assert r.ttl.get(k) == 60        # antes: nacía del zadd, después del expire del pipeline, y no caducaba nunca
 
 
 def test_knob_apagado_vuelve_a_la_clave_compartida(monkeypatch):
