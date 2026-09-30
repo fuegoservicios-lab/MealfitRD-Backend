@@ -101,6 +101,34 @@ def activo() -> bool:
         return True
 
 
+# [P1-PLAN-LOTE-925 · 2026-09-30] El paréntesis que da gramos COCIDOS se cuenta cocido aunque la línea diga «secas»:
+# «¼ taza de habichuelas rojas secas (≈135 g cocidas)» — el resolvedor toma los 135 g del paréntesis y «secas» cortaba la
+# conversión: 465 kcal por ~170. Sólo cuando el PARÉNTESIS dice «cocid…»: «⅓ taza de garbanzos secos (60 g) cocidos» y
+# «85 g de guisantes secos cocidos» (el cerrador) están en seco y siguen así. Knob `MEALFIT_COOKED_HINT_WINS` (True).
+# tooltip-anchor: P1-PLAN-LOTE-925
+def _hint_gana() -> bool:
+    try:
+        from knobs import _env_bool
+        return bool(_env_bool("MEALFIT_COOKED_HINT_WINS", True))
+    except Exception:
+        return True
+
+
+def _gramos_del_hint_cocido(linea, gramos) -> bool:
+    """¿Los `gramos` leídos son los del paréntesis y el paréntesis dice «cocido» (sin «seco»)?"""
+    from nutrition_db import _GRAM_ONLY_HINT_RE
+    h = _GRAM_ONLY_HINT_RE.search(str(linea))
+    if not h:
+        return False
+    t = _norm(h.group(0))
+    if not _COCIDO_RX.search(t) or _CRUDO_RX.search(t):
+        return False
+    try:
+        return abs(float(h.group(1).replace(",", ".")) - float(gramos)) < 0.6
+    except (TypeError, ValueError):
+        return False
+
+
 def _norm(s) -> str:
     s = unicodedata.normalize("NFD", str(s or "").lower())
     return " ".join("".join(c for c in s if not unicodedata.combining(c)).split())
@@ -127,9 +155,12 @@ def en_base_de_la_fila(linea, gramos, db):
         cocido = bool(_COCIDO_RX.search(fuera))
         listo = bool(_LISTO_RX.search(fuera))
         prot = bool(_PROT_COCIDO_RX.search(fuera))                   # [P1-PLAN-LOTE-301]
+        hint925 = _hint_gana() and _gramos_del_hint_cocido(linea, gramos)            # [P1-PLAN-LOTE-925]
+        if hint925:
+            cocido = True
         if not (cocido or listo or prot or re.search(r"\blatas?\b", fuera)):
             return gramos
-        if _CRUDO_RX.search(fuera):
+        if _CRUDO_RX.search(fuera) and not hint925:
             return gramos                                   # «secas», «en crudo»: la línea ya habla en la base
         from nutrition_db import _GRAM_ONLY_HINT_RE, _split_qty_unit_name
         qty, unidad, nombre = _split_qty_unit_name(linea)
