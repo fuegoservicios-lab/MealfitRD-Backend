@@ -63,6 +63,15 @@ Escáner pintaba porcentajes de 2 fotos; ningún número tenía contra qué comp
 
 Tests: `test_p1_plan_lote_637.py`; frontend `lote638.test.jsx`, `lote639.test.jsx`.
 
+## Cuentas, actividad y cuentas de prueba (lotes 830-838, 29-sep)
+
+La pestaña «Cuentas» pasó de la búsqueda por correo exacto a la lista de TODAS las cuentas con su actividad en números y
+sus ajustes, y a marcar cuentas de prueba (una, varias o todas) cuyo contenido se abre en el detalle. Todo detrás de
+`MEALFIT_ADMIN_TEST_ACCOUNTS` (apagado por defecto). Tablas, rutas con su limitador y su rastro, knobs, qué ve cada vista y
+por qué (el texto legal), el trigger del historial de ajustes, cómo añadir un ajuste y el orden de despliegue:
+[`admin_cuentas_actividad_pruebas.md`](admin_cuentas_actividad_pruebas.md). Marcar las cuentas existentes desde la consola:
+`scripts/marcar_cuentas_prueba.py`.
+
 ## Cómo se enciende (con permiso del dueño)
 
 1. Aplicar `p1_plan_lote_574_admin_access_log_2026_09_27.sql` (y la 572 del banco) con `scripts/apply_migration.py --apply`.
