@@ -7167,6 +7167,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
+        # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
+        system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
+                                                                   tz_offset=tz_offset)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
         system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
@@ -7803,6 +7806,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
+        # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
+        system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
+                                                                   tz_offset=tz_offset)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
         system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito

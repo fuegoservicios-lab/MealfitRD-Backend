@@ -1240,6 +1240,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # --- GAP 4: A/B Testing de Formato ---
                 nudge_style = get_best_nudge_style(user_id)
                 style_instruction = ""
+                # [P1-PLAN-LOTE-960] La proteína de su Nevera (ya filtrada por el backstop clínico): el aviso propone
+                # con lo que tiene. Se calcula antes del estilo porque, con restricciones, son lo único que puede nombrar.
+                _nevera_aviso = __import__("nevera_del_coach").para_aviso(user_id, health, consumed, meal_to_check) if _ia_ok else ""
                 if nudge_style == "directo":
                     style_instruction = "Haz una pregunta directa y al grano sin rodeos."
                 elif nudge_style == "sugestivo":
@@ -1249,6 +1252,8 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     # texto del coach que no pasa por ningún filtro determinista, así que la regla es no darle ocasión.
                     if _ctx_aviso["restringido"]:
                         style_instruction = "Haz una sugerencia suave y comprensiva, sin nombrar alimentos concretos."
+                        if _nevera_aviso:   # [P1-PLAN-LOTE-960] los de su Nevera ya pasaron el backstop clínico
+                            style_instruction = style_instruction[:-1] + " salvo los de SU NEVERA listados abajo."
                 elif nudge_style == "gamificado":
                     style_instruction = "Usa un tono de reto amistoso, motivando como si fuera un logro a desbloquear."
                 
@@ -1268,6 +1273,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # [P1-PLAN-LOTE-413] lo que lleva HOY (qué registró y, con perfil suficiente, calorías/proteína contra su
                 # meta): sin esto el aviso no sabía nada del día y sonaba a plantilla
                 prompt += bloque_del_dia(consumed, health)
+                prompt += _nevera_aviso   # [P1-PLAN-LOTE-960]
                 prompt += build_language_directive(_nudge_locale)
                 
             if not session_id or not _ia_ok:
