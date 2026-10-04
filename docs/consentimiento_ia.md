@@ -13,7 +13,7 @@ tests `tests/test_p1_plan_lote_843*.py`.
   firmadas) necesita un consentimiento aparte, informado de sus riesgos.
 - Auditoría 2026-09-29, fila 4 y §A.1 (`docs/superpowers/specs/2026-09-29-legal-appstore-auditoria.md`).
 
-**Vigente** = la cuenta aceptó la versión actual (`AI_CONSENT_VERSION = "ia-2026-10"`) con las **dos** claves de IA
+**Vigente** = la cuenta aceptó la versión actual (`AI_CONSENT_VERSION = "ia-2026-10-voz"`) con las **dos** claves de IA
 (`ai_processing` y `ai_transfer_cn`) y no lo retiró después. `analytics` va aparte, es opcional y no cuenta para la IA.
 
 ## Contrato para el frontend (Task 844)
@@ -21,14 +21,14 @@ tests `tests/test_p1_plan_lote_843*.py`.
 Todos los errores del permiso tienen el mismo cuerpo **plano** (sin `{"detail": {...}}` alrededor):
 
 ```json
-{"error_code": "<código>", "version": "ia-2026-10", "detail": "<frase legible en español>"}
+{"error_code": "<código>", "version": "ia-2026-10-voz", "detail": "<frase legible en español>"}
 ```
 
 `detail` es una frase para la persona: un frontend viejo que no conoce el 428 la enseña en vez de romperse.
 
 ### La versión
 
-`ia-2026-10`. Espejo en `frontend/src/consent/version.js`; un test de paridad las ata (se salta mientras ese fichero no
+`ia-2026-10-voz`. Espejo en `frontend/src/consent/version.js`; un test de paridad las ata (se salta mientras ese fichero no
 exista). Subir la versión vuelve a pedir el permiso a todos y el backend rechaza la vieja (409 al concederla, 428 al usar
 la IA).
 
@@ -36,7 +36,7 @@ la IA).
 
 ```json
 {
-  "version": "ia-2026-10",
+  "version": "ia-2026-10-voz",
   "vigente": false,
   "ai_consent_version": null,
   "ai_consent_at": null,
@@ -48,7 +48,7 @@ la IA).
 
 Eso es exactamente lo que devuelve para una cuenta **sin permiso** (nunca preguntada). Las fechas son ISO-8601 UTC;
 `analytics` es `true`, `false` o `null` (no preguntado). Con el permiso dado: `vigente: true`, `ai_consent_version:
-"ia-2026-10"` y las dos fechas. Retirado: `vigente: false` y `ai_consent_revoked_at` con fecha.
+"ia-2026-10-voz"` y las dos fechas. Retirado: `vigente: false` y `ai_consent_revoked_at` con fecha.
 
 **Lo que la app ya carga al arrancar:** `GET /api/profile` devuelve el mismo objeto en `profile.ai_consent`, calculado de
 la fila que ya lee (cero consultas extra). No hace falta una llamada nueva al arrancar.
@@ -56,13 +56,13 @@ la fila que ya lee (cero consultas extra). No hace falta una llamada nueva al ar
 ### `POST /api/consents` (cuenta)
 
 ```json
-{"version": "ia-2026-10", "ai_processing": true, "ai_transfer_cn": true, "analytics": false,
+{"version": "ia-2026-10-voz", "ai_processing": true, "ai_transfer_cn": true, "analytics": false,
  "locale": "es-DO", "platform": "ios", "app_build": "106", "text_sha256": "<64 hex, opcional>"}
 ```
 
 - Conceder la IA exige **las dos** claves a `true`. Una sola, o una a `false`: 422 `ai_consent_incomplete` (para quitar el
   permiso se usa `/withdraw`).
-- `analytics` es opcional e independiente: `{"version": "ia-2026-10", "analytics": true}` sin claves de IA anota solo la
+- `analytics` es opcional e independiente: `{"version": "ia-2026-10-voz", "analytics": true}` sin claves de IA anota solo la
   analítica.
 - `version` distinta de la vigente: **409** `ai_consent_version_outdated`.
 - Nada que anotar: 422 `ai_consent_nothing_to_record`. Campo con forma rara (`platform` fuera de `ios|android|web`,
@@ -85,7 +85,7 @@ El mismo cuerpo que `POST /api/consents` más `"session_id"`: el del invitado (`
 caracteres `[A-Za-z0-9_-]`). Se guarda `sha256(session_id)`, nunca el id. Respuesta 200:
 
 ```json
-{"ok": true, "version": "ia-2026-10", "header": "X-Bioboros-AI-Consent", "ai": true, "analytics": false}
+{"ok": true, "version": "ia-2026-10-voz", "header": "X-Bioboros-AI-Consent", "ai": true, "analytics": false}
 ```
 
 Sin `session_id` válido: 422 `ai_consent_invalid_session`. Si el invitado rota su `session_id` («Probar sin cuenta» de
@@ -97,7 +97,7 @@ Todo endpoint de la tabla de abajo marcado **428** responde, sin permiso vigente
 
 ```
 HTTP/1.1 428 Precondition Required
-{"error_code": "ai_consent_required", "version": "ia-2026-10", "detail": "Para usar la IA necesitamos tu permiso ..."}
+{"error_code": "ai_consent_required", "version": "ia-2026-10-voz", "detail": "Para usar la IA necesitamos tu permiso ..."}
 ```
 
 La app abre la hoja del permiso. Hoy la cuota (402) y los cupos (429) se comprueban antes que el permiso, pero ese orden
@@ -106,7 +106,7 @@ hoja).
 
 ### La cabecera del invitado
 
-`X-Bioboros-AI-Consent: ia-2026-10` en **cada** llamada a la IA **del invitado**. Para el invitado es obligatoria (sin
+`X-Bioboros-AI-Consent: ia-2026-10-voz` en **cada** llamada a la IA **del invitado**. Para el invitado es obligatoria (sin
 ella, o con una versión vieja, 428). Está en `allow_headers` del CORS (en nativo toda llamada es cross-origin).
 
 **Regla para las cuentas (la cumple el frontend, Task 844):** una cuenta con sesión **nunca** manda la cabecera sacada de
@@ -171,11 +171,7 @@ pendiente (`handle_nudge_response` → IA); no tiene llamadores en el frontend. 
 avanza. `/swap-meal/persist` y los paneles de Configuración no son endpoints de IA: su efecto de IA (traducir, extraer
 hechos) se frena dentro, en segundo plano, y los nombres de alimentos que normalizan llevan la marca de abajo.
 
-**GPT-Live-1 (lote 905) solo para el operador.** La sesión manda la VOZ a OpenAI y el texto `ia-2026-10` no lo dice
-(OpenAI: perfil, preferencias y parte de la conversación). Por eso `coach_live.disponible_para` exige, además de
-`MEALFIT_COACH_LIVE_USUARIOS`, estar en `MEALFIT_ADMIN_USER_IDS`. Abrirla a usuarios = versión nueva con la voz en el
-texto de OpenAI (5 idiomas y sus SHA-256) y después quitar esa condición; `test_p1_plan_lote_905.py` la ata a la
-versión.
+**Voz en vivo para todas las cuentas registradas.** La versión `ia-2026-10-voz` informa de que OpenAI recibe el audio del micrófono y las respuestas del coach. Se exige ese permiso antes de abrir la sesión y en cada delegación; las versiones anteriores no autorizan esta transferencia. Los topes de presupuesto y duración usan 0 para permitir uso sin cuota.
 
 ## Embeddings desde caminos sin IA (la marca)
 

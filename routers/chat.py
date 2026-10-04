@@ -709,8 +709,8 @@ async def api_chat_voz_flujo(data: dict = Body(...),
 
 
 # [P1-PLAN-LOTE-905 · 2026-09-29] Modo voz con GPT-Live-1 (OpenAI) y NUESTRO coach como cerebro: `coach_live.py`.
-# Solo para las cuentas de `MEALFIT_COACH_LIVE_USUARIOS`, con tope duro de gasto. Cero créditos del plan: la voz va
-# a `llm_usage_events` (node `coach_live_voice`); el turno del coach cobra como cualquier mensaje del chat.
+# Para todas las cuentas registradas, sin topes de uso por defecto. Cero créditos del plan: la voz va
+# a `llm_usage_events` (node `coach_live_voice`); los turnos de voz no consumen la cuota del chat.
 _LIVE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _LIVE_NOVEDADES_LIMITER = RateLimiter(max_calls=90, period_seconds=60)
 
@@ -737,9 +737,8 @@ async def api_chat_live_disponible(verified_user_id: Optional[str] = Depends(get
     import coach_live
     if not coach_live.disponible_para(verified_user_id):
         return {"disponible": False}
-    gastado = await asyncio.to_thread(coach_live.gastado_usd)
-    return {"disponible": gastado < coach_live.tope_usd(), "gastado_usd": round(gastado, 3),
-            "tope_usd": coach_live.tope_usd()}
+    presupuesto = await asyncio.to_thread(coach_live.hay_presupuesto)
+    return {"disponible": presupuesto, "sin_limite": coach_live.tope_usd() == 0}
 
 
 @router.post("/live/sesion")
@@ -776,15 +775,14 @@ async def api_chat_live_sesion(data: dict = Body(...), verified_user_id: Optiona
 @router.get("/live/{live_id}/novedades")
 async def api_chat_live_novedades(live_id: str, desde: int = 0,
                                   verified_user_id: Optional[str] = Depends(get_verified_user_id),
-                                  _rl: None = Depends(_LIVE_NOVEDADES_LIMITER)):
+                                  _rl: None = Depends(_LIVE_NOVEDADES_LIMITER), esperar_s: float = 0):
     """Lo que el coach hizo en la sesión (ajustes de la app, Nevera) para que el teléfono lo aplique."""
     import coach_live
     s = coach_live.sesion_de(live_id, verified_user_id) if verified_user_id else None
     if not s:
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
-    with s._lock:
-        nuevas = [n for n in s.novedades if n["n"] > int(desde or 0)]
-    return {"novedades": nuevas, "cerrada": s.cerrada, "segundos": round(s.segundos, 1)}
+    espera = min(20.0, max(0.0, float(esperar_s)))
+    return await asyncio.to_thread(s.esperar_novedades, max(0, int(desde or 0)), espera)
 
 
 # [P1-PLAN-LOTE-682 · 2026-09-28] Aquí vivía `POST /tts`: el proxy a ElevenLabs del viejo Modo Llamada.
@@ -847,6 +845,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # red de seguridad; en `POST /api/chat` (abajo) es la única defensa que hay.
         local_date, tz_offset = _resolve_chat_local_time(local_date, tz_offset, verified_user_id)
         is_call_mode = data.get("is_call_mode", False)
+        from coach_live import turno_live_sin_cuota
+        _voz_sin_cuota = turno_live_sin_cuota()
         # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] El contexto de la foto viene
         # ESTRUCTURADO; el servidor compone el bloque y lo pone en el system prompt.
         vision = data.get("vision") if isinstance(data.get("vision"), dict) else None
@@ -1177,7 +1177,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 # `_CHAT_STREAM_LIMITER`; autenticados se facturan en la
                 # identidad que el proveedor de Auth verificó (no spoofeable vía body).
                 # Tooltip-anchor: P1-CHAT-BILL-VERIFIED-UID.
-                if not _billed and _chunk_observed and verified_user_id:
+                if not _billed and _chunk_observed and verified_user_id and not _voz_sin_cuota:
                     try:
                         log_api_usage(verified_user_id, "llm_chat")
                         _billed = True
@@ -1369,4 +1369,3 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
         logger.exception(f"[CHAT] Error en api_chat: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
-

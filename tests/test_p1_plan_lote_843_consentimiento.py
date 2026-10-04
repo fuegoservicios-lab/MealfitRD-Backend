@@ -190,14 +190,14 @@ def test_estado_de_una_cuenta_sin_permiso(lectura):
     lectura["fila"] = {"ai_consent_version": None, "ai_consent_at": None, "ai_cn_transfer_at": None,
                        "ai_consent_revoked_at": None, "analytics_consent": None}
     assert cs.estado(UID) == {
-        "version": "ia-2026-10", "vigente": False, "ai_consent_version": None, "ai_consent_at": None,
+        "version": "ia-2026-10-voz", "vigente": False, "ai_consent_version": None, "ai_consent_at": None,
         "ai_cn_transfer_at": None, "ai_consent_revoked_at": None, "analytics": None,
     }
 
 
 def test_estado_de_fila_vale_para_el_perfil_ya_leido():
     """`GET /api/profile` lo calcula de la fila de `get_user_profile`, que trae las fechas ya en texto ISO."""
-    perfil = {"ai_consent_version": "ia-2026-10", "ai_consent_at": "2026-09-29T10:00:00+00:00",
+    perfil = {"ai_consent_version": "ia-2026-10-voz", "ai_consent_at": "2026-09-29T10:00:00+00:00",
               "ai_cn_transfer_at": "2026-09-29T10:00:00+00:00", "ai_consent_revoked_at": None,
               "analytics_consent": False, "health_profile": {"x": 1}}
     e = cs.estado_de_fila(perfil)
@@ -206,7 +206,7 @@ def test_estado_de_fila_vale_para_el_perfil_ya_leido():
 
 
 # ═════════════════════════════════════════════ 2. validar lo que manda el cliente
-_OK = {"version": "ia-2026-10", "ai_processing": True, "ai_transfer_cn": True}
+_OK = {"version": "ia-2026-10-voz", "ai_processing": True, "ai_transfer_cn": True}
 
 
 def test_validar_la_concesion_completa():
@@ -217,7 +217,7 @@ def test_validar_la_concesion_completa():
 
 
 def test_la_analitica_sola_es_independiente():
-    p = cs.validar_peticion({"version": "ia-2026-10", "analytics": True})
+    p = cs.validar_peticion({"version": "ia-2026-10-voz", "analytics": True})
     assert p["ia"] is False and p["analytics"] is True
 
 
@@ -225,8 +225,8 @@ def test_la_analitica_sola_es_independiente():
     ({**_OK, "version": "ia-2026-01"}, 409, "ai_consent_version_outdated"),
     ({"ai_processing": True, "ai_transfer_cn": True}, 409, "ai_consent_version_outdated"),
     ({**_OK, "ai_transfer_cn": False}, 422, "ai_consent_incomplete"),
-    ({"version": "ia-2026-10", "ai_processing": True}, 422, "ai_consent_incomplete"),
-    ({"version": "ia-2026-10"}, 422, "ai_consent_nothing_to_record"),
+    ({"version": "ia-2026-10-voz", "ai_processing": True}, 422, "ai_consent_incomplete"),
+    ({"version": "ia-2026-10-voz"}, 422, "ai_consent_nothing_to_record"),
     ({**_OK, "ai_processing": "sí"}, 422, "ai_consent_invalid_field"),
     ({**_OK, "platform": "windows"}, 422, "ai_consent_invalid_field"),
     ({**_OK, "text_sha256": "no-es-hex"}, 422, "ai_consent_invalid_field"),
@@ -264,7 +264,7 @@ def test_sin_permiso_428_con_el_cuerpo_plano(app_ia, modo, lectura):
     lectura["fila"] = _fila(at=False, cn=False, version=None)
     r = cliente.post("/ia")
     assert r.status_code == 428
-    assert r.json() == {"error_code": "ai_consent_required", "version": "ia-2026-10", "detail": cs.MENSAJE_REQUERIDO}
+    assert r.json() == {"error_code": "ai_consent_required", "version": "ia-2026-10-voz", "detail": cs.MENSAJE_REQUERIDO}
 
 
 def test_con_permiso_200(app_ia, modo, lectura):
@@ -328,10 +328,10 @@ def test_invitado_sin_cabecera_428_con_ella_200(app_ia, modo, lectura):
     quien["uid"] = None
     r = cliente.post("/ia")
     assert r.status_code == 428 and r.json()["error_code"] == "ai_consent_required"
-    assert cliente.post("/ia", headers={"X-Bioboros-AI-Consent": "ia-2026-10"}).status_code == 200
+    assert cliente.post("/ia", headers={"X-Bioboros-AI-Consent": "ia-2026-10-voz"}).status_code == 200
     assert cliente.post("/ia", headers={"X-Bioboros-AI-Consent": "ia-2026-01"}).status_code == 428
     assert cliente.post("/suave").json() == {"permiso": False}
-    assert cliente.post("/suave", headers={"X-Bioboros-AI-Consent": "ia-2026-10"}).json() == {"permiso": True}
+    assert cliente.post("/suave", headers={"X-Bioboros-AI-Consent": "ia-2026-10-voz"}).json() == {"permiso": True}
     assert lectura["lecturas"] == 0, "el invitado no tiene fila: se decide por la cabecera"
 
 
@@ -339,13 +339,13 @@ def test_con_cuenta_la_cabecera_no_sustituye_al_permiso(app_ia, modo, lectura):
     cliente, _ = app_ia
     modo("block")
     lectura["fila"] = _fila(at=False, cn=False, version=None)
-    assert cliente.post("/ia", headers={"X-Bioboros-AI-Consent": "ia-2026-10"}).status_code == 428
+    assert cliente.post("/ia", headers={"X-Bioboros-AI-Consent": "ia-2026-10-voz"}).status_code == 428
 
 
 def test_sin_el_manejador_el_428_sigue_siendo_428():
     """Una app que no llamó a `instalar` (un test, un router suelto) da el 428 igual, con el cuerpo dentro de `detail`."""
     exc = cs.ErrorDeConsentimiento(428, "ai_consent_required", "x")
-    assert exc.status_code == 428 and exc.detail == {"error_code": "ai_consent_required", "version": "ia-2026-10",
+    assert exc.status_code == 428 and exc.detail == {"error_code": "ai_consent_required", "version": "ia-2026-10-voz",
                                                      "detail": "x"}
 
 
@@ -373,7 +373,7 @@ def test_permite_ia_es_fail_closed_en_block(modo, lectura):
 def test_el_fragmento_sql_es_constante_y_depende_del_modo(modo):
     modo("block")
     f = cs.fragmento_sql_permiso("q1.user_id")
-    assert "upc.id = q1.user_id" in f and "upc.ai_consent_version = 'ia-2026-10'" in f
+    assert "upc.id = q1.user_id" in f and "upc.ai_consent_version = 'ia-2026-10-voz'" in f
     assert "upc.ai_consent_revoked_at IS NULL" in f and "upc.ai_cn_transfer_at IS NOT NULL" in f
     assert "%" not in f and "{" not in f
     modo("log")
@@ -404,7 +404,7 @@ def test_registrar_escribe_registro_y_estado_en_una_transaccion(pool, monkeypatc
     inserts = [(q, par) for q, par in p.execs() if q.startswith("INSERT INTO public.user_consents")]
     assert [(par[2], par[4]) for _, par in inserts] == [("ai_processing", True), ("ai_transfer_cn", True),
                                                         ("analytics", True)]
-    assert all(par[0] == UID and par[1] is None and par[3] == "ia-2026-10" and par[5] == "a" * 64
+    assert all(par[0] == UID and par[1] is None and par[3] == "ia-2026-10-voz" and par[5] == "a" * 64
                and par[9] == "cuenta" for _, par in inserts)
     assert all(", origen) VALUES " in q for q, _ in inserts)
     update = next(q for q, _ in p.execs() if q.startswith("UPDATE user_profiles SET"))
@@ -624,7 +624,7 @@ def test_el_invitado_se_guarda_con_el_hash_y_nunca_con_el_id(monkeypatch):
     monkeypatch.setattr(cs, "execute_sql_write", lambda q, params=None, **k: capturas.append((q, params)) or True)
     out = cs.registrar_invitado(SESION, ia=True, analytics=True, platform="web", locale="en-US")
     h = hashlib.sha256(SESION.encode("utf-8")).hexdigest()
-    assert out == {"ok": True, "version": "ia-2026-10", "header": "X-Bioboros-AI-Consent", "ai": True, "analytics": True}
+    assert out == {"ok": True, "version": "ia-2026-10-voz", "header": "X-Bioboros-AI-Consent", "ai": True, "analytics": True}
     q, params = capturas[0]
     assert _norm(q).startswith("INSERT INTO public.user_consents (user_id, guest_hash,") and q.count("(%s") == 3
     assert SESION not in [str(x) for x in params], "el session_id crudo no se guarda"
@@ -636,11 +636,11 @@ def test_el_invitado_se_guarda_con_el_hash_y_nunca_con_el_id(monkeypatch):
 
 def test_adoptar_copia_con_la_fecha_original_y_sin_duplicar(pool):
     h = hashlib.sha256(SESION.encode("utf-8")).hexdigest()
-    filas = [{"consent_key": "ai_processing", "version": "ia-2026-10", "granted": True, "text_sha256": None,
+    filas = [{"consent_key": "ai_processing", "version": "ia-2026-10-voz", "granted": True, "text_sha256": None,
               "locale": "es-DO", "platform": "ios", "app_build": "106", "created_at": T0},
-             {"consent_key": "ai_transfer_cn", "version": "ia-2026-10", "granted": True, "text_sha256": None,
+             {"consent_key": "ai_transfer_cn", "version": "ia-2026-10-voz", "granted": True, "text_sha256": None,
               "locale": "es-DO", "platform": "ios", "app_build": "106", "created_at": T0},
-             {"consent_key": "analytics", "version": "ia-2026-10", "granted": False, "text_sha256": None,
+             {"consent_key": "analytics", "version": "ia-2026-10-voz", "granted": False, "text_sha256": None,
               "locale": "es-DO", "platform": "ios", "app_build": "106", "created_at": T0}]
     p = pool([("WHERE guest_hash = %s", filas, 3), ("INSERT INTO public.user_consents", [], 1),
               ("UPDATE user_profiles SET ai_consent_version", [], 1), ("analytics_consent IS NULL", [], 1)])
@@ -653,7 +653,7 @@ def test_adoptar_copia_con_la_fecha_original_y_sin_duplicar(pool):
         assert "WHERE NOT EXISTS" in q
         assert "created_at, origen) SELECT" in q and "%s::timestamptz, 'adopcion'" in q, "origen = adopcion"
     upd = next((q, par) for q, par in execs if q.startswith("UPDATE user_profiles SET ai_consent_version"))
-    assert upd[1][:3] == ("ia-2026-10", T0, T0)
+    assert upd[1][:3] == ("ia-2026-10-voz", T0, T0)
     assert "(ai_consent_at IS NULL OR ai_consent_at < %s)" in upd[0], "no pisa una decisión propia más reciente"
     assert "(ai_consent_revoked_at IS NULL OR ai_consent_revoked_at < %s)" in upd[0]
 
@@ -715,7 +715,7 @@ def test_post_con_version_vieja_409_plano(api):
     cliente, _ = api
     r = cliente.post("/api/consents", json={**_OK, "version": "ia-2026-01"})
     assert r.status_code == 409
-    assert r.json()["error_code"] == "ai_consent_version_outdated" and r.json()["version"] == "ia-2026-10"
+    assert r.json()["error_code"] == "ai_consent_version_outdated" and r.json()["version"] == "ia-2026-10-voz"
 
 
 def test_withdraw_y_guest(api, monkeypatch):

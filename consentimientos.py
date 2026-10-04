@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 #: La versión del texto aceptado. Subirla vuelve a pedir el permiso a TODOS y el backend rechaza la vieja: cambiar de
 #: proveedor (también por knob), de datos o de país es cambiar de versión, y se sube ANTES de activar el cambio.
 #: Espejo en `frontend/src/consent/version.js` (test de paridad).
-AI_CONSENT_VERSION = "ia-2026-10"
+AI_CONSENT_VERSION = "ia-2026-10-voz"
 
 CLAVES = ("ai_processing", "ai_transfer_cn", "analytics")
 CLAVES_IA = ("ai_processing", "ai_transfer_cn")

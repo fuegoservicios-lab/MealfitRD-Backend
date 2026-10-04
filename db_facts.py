@@ -1111,11 +1111,18 @@ def delete_consumed_meal(user_id: str, meal_id: str) -> bool:
     try:
         if not connection_pool:
             return False
+        from diario_contexto import DELETE_WITH_REMOVAL_SQL, REMOVALS_PREFIX
         rows = execute_sql_write(
-            "DELETE FROM consumed_meals WHERE id = %s AND user_id = %s RETURNING id",
-            (meal_id, user_id),
+            DELETE_WITH_REMOVAL_SQL,
+            (meal_id, user_id, REMOVALS_PREFIX + str(user_id)),
             returning=True,
         )
+        if rows:
+            try:
+                from coach_live import notificar_borrado
+                notificar_borrado(user_id, rows[0])
+            except Exception as notify_error:
+                logger.warning('Diary deleted; live notification unavailable: %s', type(notify_error).__name__)
         return bool(rows)
     except Exception as e:
         logger.error(f"Error eliminando comida consumida {meal_id}: {e}")

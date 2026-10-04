@@ -25,24 +25,25 @@ def habilitado(monkeypatch):
 
 # ── 1. Quién puede y el tope ──────────────────────────────────────────────────────────────────────────────────
 
-def test_solo_las_cuentas_habilitadas(habilitado, monkeypatch):
+def test_todas_las_cuentas_registradas_pueden_usar_voz(habilitado, monkeypatch):
     assert coach_live.disponible_para("u-duenio") and coach_live.disponible_para("u-otro")
-    assert not coach_live.disponible_para("u-cualquiera") and not coach_live.disponible_para(None)
+    assert coach_live.disponible_para("u-cualquiera")
+    assert not coach_live.disponible_para(None) and not coach_live.disponible_para(' ')
     monkeypatch.setenv("MEALFIT_COACH_LIVE_USUARIOS", "")
-    assert not coach_live.disponible_para("u-duenio"), "vacío = apagado para todos"
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", "")
+    assert coach_live.disponible_para("u-duenio") and coach_live.disponible_para("u-nuevo")
 
 
-def test_mientras_el_texto_del_permiso_no_nombre_la_voz_solo_el_operador(habilitado, monkeypatch):
+def test_el_permiso_vigente_informa_la_voz_para_openai(habilitado, monkeypatch):
     """[lote 843/844] `ia-2026-10` no dice que la voz vaya a OpenAI: habilitada pero no operadora ⇒ no."""
     import consentimientos
     monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", "u-duenio")
     assert coach_live.disponible_para("u-duenio")
-    assert not coach_live.disponible_para("u-otro"), "habilitada sin ser operadora"
+    assert coach_live.disponible_para("u-otro"), "no exige ser operadora"
     texto = open(consentimientos.__file__.replace("consentimientos.py", "docs/consentimientos/ia/"
                                                   f"{consentimientos.AI_CONSENT_VERSION}/es-DO.md"), encoding="utf-8").read()
     bloque_openai = texto.split("OpenAI", 1)[1].split("Google Gemini", 1)[0]
-    assert "voz" not in bloque_openai.lower(), (
-        "el texto vigente ya nombra la voz para OpenAI: quita la condición de operador de disponible_para y este test")
+    assert "audio" in bloque_openai.lower() and "voz" in bloque_openai.lower()
 
 
 def test_la_sesion_pide_el_permiso_de_ia():
@@ -54,6 +55,7 @@ def test_la_sesion_pide_el_permiso_de_ia():
 
 
 def test_sin_presupuesto_no_abre_ni_llama_a_openai(habilitado, monkeypatch):
+    monkeypatch.setenv("MEALFIT_COACH_LIVE_TOPE_USD", "0.60")
     monkeypatch.setattr(coach_live, "gastado_usd", lambda: 0.60)
     import httpx
     monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("sin presupuesto no se llama a OpenAI"))
@@ -64,7 +66,8 @@ def test_sin_presupuesto_no_abre_ni_llama_a_openai(habilitado, monkeypatch):
 
 def test_el_tope_por_defecto_es_el_que_autorizo_el_duenio(monkeypatch):
     monkeypatch.delenv("MEALFIT_COACH_LIVE_TOPE_USD", raising=False)
-    assert coach_live.tope_usd() == 0.60
+    assert coach_live.tope_usd() == 0
+    assert coach_live.max_segundos_por_sesion() == 0
     assert abs(coach_live.costo_usd(60) - 0.05) < 1e-9, "US$0,05 por minuto, por segundo"
 
 
@@ -83,8 +86,9 @@ def test_crear_sesion_pide_delegacion_al_cliente_y_no_expone_la_clave(habilitado
         return _R()
 
     monkeypatch.setattr(httpx, "post", _post)
+    monkeypatch.setattr(coach_live, "gastado_usd", lambda: 1000.0)
     monkeypatch.setattr(coach_live.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
-    live_id, sdp = coach_live.crear_sesion("u-duenio", "oferta", "s1")
+    live_id, sdp = coach_live.crear_sesion("u-nuevo", "oferta", "s1")
     assert (live_id, sdp) == ("live_1", "respuesta")
     assert visto["url"] == "https://api.openai.com/v1/live/sessions"
     c = visto["cuerpo"]
@@ -92,7 +96,7 @@ def test_crear_sesion_pide_delegacion_al_cliente_y_no_expone_la_clave(habilitado
     assert c["session"]["delegation"] == {"type": "client"}, "el cerebro es NUESTRO coach"
     assert c["transport"] == {"type": "webrtc", "sdp": "oferta"}
     assert "Delegation policy" in c["session"]["instructions"]
-    assert coach_live.sesion_de("live_1", "u-duenio") is not None
+    assert coach_live.sesion_de("live_1", "u-nuevo") is not None
     assert coach_live.sesion_de("live_1", "u-otro") is None, "la sesión es de quien la abrió"
 
 
@@ -166,6 +170,7 @@ def test_una_delegacion_corre_el_coach_con_lo_que_dijo_y_devuelve_su_respuesta(h
 
 
 def test_al_llegar_al_tope_el_servidor_cierra_la_sesion(habilitado, monkeypatch):
+    monkeypatch.setenv("MEALFIT_COACH_LIVE_MAX_SEGUNDOS", "300")
     monkeypatch.setattr(coach_live, "gastado_usd", lambda: 0.0)
     s, ws, usos = _correr(monkeypatch, [
         {"type": "session.usage.updated", "usage": {"seconds": 30}},
@@ -177,6 +182,7 @@ def test_al_llegar_al_tope_el_servidor_cierra_la_sesion(habilitado, monkeypatch)
 
 
 def test_el_gasto_de_antes_cuenta_para_el_tope(habilitado, monkeypatch):
+    monkeypatch.setenv("MEALFIT_COACH_LIVE_TOPE_USD", "0.60")
     s0 = coach_live.SesionLive(live_id="l", user_id="u", chat_session_id="s", gastado_antes_usd=0.58)
     ws = _WS([{"type": "session.usage.updated", "usage": {"seconds": 30}}, {"type": "session.closed", "usage": {"seconds": 30}}])
     import websockets.sync.client as wsc
@@ -184,6 +190,23 @@ def test_el_gasto_de_antes_cuenta_para_el_tope(habilitado, monkeypatch):
     monkeypatch.setattr(coach_live, "registrar_uso", lambda *a: None)
     coach_live._canal_lateral(s0, "sk")
     assert ws.enviados and ws.enviados[0]["type"] == "session.close", "0,58 + 0,025 ≥ 0,60"
+
+
+def test_sin_topes_no_cierra_por_gasto_ni_cinco_minutos(habilitado, monkeypatch):
+    monkeypatch.setenv("MEALFIT_COACH_LIVE_TOPE_USD", "0")
+    monkeypatch.setenv("MEALFIT_COACH_LIVE_MAX_SEGUNDOS", "0")
+    s, ws, usos = _correr(monkeypatch, [
+        {"type": "session.usage.updated", "usage": {"seconds": 3601}},
+        {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 3602}},
+    ])
+    assert not ws.enviados
+    assert usos[0][2] == 3602.0, "se sigue registrando el costo real"
+
+
+def test_sin_tope_de_presupuesto_no_consulta_gasto_para_disponibilidad(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COACH_LIVE_TOPE_USD", "0")
+    monkeypatch.setattr(coach_live, "gastado_usd", lambda: pytest.fail("no bloquea por gasto"))
+    assert coach_live.hay_presupuesto()
 
 
 def test_si_el_coach_falla_no_se_queda_mudo(habilitado, monkeypatch):
@@ -226,10 +249,11 @@ def test_el_gasto_va_a_llm_usage_events_con_su_precio_por_minuto(monkeypatch):
 
 # ── 3. Los endpoints ──────────────────────────────────────────────────────────────────────────────────────────
 
-def test_sin_sesion_o_sin_habilitar_no_hay_live(habilitado):
+def test_registrados_tienen_live_invitados_no(habilitado):
     from fastapi import HTTPException
     from routers import chat
-    assert asyncio.run(chat.api_chat_live_disponible("u-cualquiera")) == {"disponible": False}
+    assert asyncio.run(chat.api_chat_live_disponible("u-cualquiera")) == {"disponible": True, "sin_limite": True}
+    assert asyncio.run(chat.api_chat_live_disponible(None)) == {"disponible": False}
     with pytest.raises(HTTPException) as e:
         asyncio.run(chat.api_chat_live_sesion({"sdp": "x", "session_id": "s"}, None, None))
     assert e.value.status_code == 401
