@@ -34,6 +34,7 @@ import asyncio
 import base64
 import logging
 import os
+from catalog_cache import catalog_rows
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -802,103 +803,108 @@ async def api_get_catalog(
     curado, no cómo se llama un alimento.
     """
 
-    def _catalog():
-        from db import execute_sql_query
-        return execute_sql_query(
-            """
-            SELECT id::text AS id, slug, name, name_en,
-                   to_jsonb(mi)->>'gloss_es' AS gloss_es, category, aliases,
-                   density_g_per_cup::float8 AS density_g_per_cup,
-                   density_g_per_unit::float8 AS density_g_per_unit,
-                   shelf_life_days,
-                   price_per_lb::float8 AS price_per_lb,
-                   price_per_unit::float8 AS price_per_unit,
-                   market_container, container_weight_g::float8 AS container_weight_g,
-                   available_sizes_g, default_unit,
-                   kcal_per_100g::float8 AS kcal_per_100g,
-                   protein_g_per_100g::float8 AS protein_g_per_100g,
-                   carbs_g_per_100g::float8 AS carbs_g_per_100g,
-                   fats_g_per_100g::float8 AS fats_g_per_100g,
-                   fiber_g_per_100g::float8 AS fiber_g_per_100g,
-                   sodium_mg_per_100g::float8 AS sodium_mg_per_100g
-            FROM master_ingredients AS mi ORDER BY name ASC
-            """,
-            fetch_all=True,
-        ) or []
+    async def _load_catalog():
+        def _catalog():
+            from db import execute_sql_query
+            return execute_sql_query(
+                """
+                SELECT id::text AS id, slug, name, name_en,
+                       to_jsonb(mi)->>'gloss_es' AS gloss_es, category, aliases,
+                       density_g_per_cup::float8 AS density_g_per_cup,
+                       density_g_per_unit::float8 AS density_g_per_unit,
+                       shelf_life_days,
+                       price_per_lb::float8 AS price_per_lb,
+                       price_per_unit::float8 AS price_per_unit,
+                       market_container, container_weight_g::float8 AS container_weight_g,
+                       available_sizes_g, default_unit,
+                       kcal_per_100g::float8 AS kcal_per_100g,
+                       protein_g_per_100g::float8 AS protein_g_per_100g,
+                       carbs_g_per_100g::float8 AS carbs_g_per_100g,
+                       fats_g_per_100g::float8 AS fats_g_per_100g,
+                       fiber_g_per_100g::float8 AS fiber_g_per_100g,
+                       sodium_mg_per_100g::float8 AS sodium_mg_per_100g
+                FROM master_ingredients AS mi ORDER BY name ASC
+                """,
+                fetch_all=True,
+            ) or []
 
-    items = await asyncio.to_thread(_catalog)
+        items = await asyncio.to_thread(_catalog)
 
-    # [P1-ARQ27-F2-IDENTIDAD · 2026-09-06] La categoría es el PASILLO DE LA TIENDA, no una
-    # afirmación sobre el alimento: cinco filas de nombre vegetal viven en «Lácteos» porque ahí se
-    # compran. El motor ya lo resuelve bien por constituyentes, pero esta proyección mandaba
-    # `category` y NADA MÁS con que decidir, así que quien quisiera saber si algo es vegano tenía
-    # justo el campo que dice «Lácteos» para la leche de coco. `diet` compone los SSOT que ya
-    # deciden (`_diet_pool_item_banned` y `allergen_classes_for`); no es una tercera tabla.
-    try:
-        from food_identity import anotar_catalogo
-        await asyncio.to_thread(anotar_catalogo, items)
-    except Exception:
-        logger.warning("[P1-ARQ27-F2-IDENTIDAD] catálogo sin anotar `diet`", exc_info=True)
+        # [P1-ARQ27-F2-IDENTIDAD · 2026-09-06] La categoría es el PASILLO DE LA TIENDA, no una
+        # afirmación sobre el alimento: cinco filas de nombre vegetal viven en «Lácteos» porque ahí se
+        # compran. El motor ya lo resuelve bien por constituyentes, pero esta proyección mandaba
+        # `category` y NADA MÁS con que decidir, así que quien quisiera saber si algo es vegano tenía
+        # justo el campo que dice «Lácteos» para la leche de coco. `diet` compone los SSOT que ya
+        # deciden (`_diet_pool_item_banned` y `allergen_classes_for`); no es una tercera tabla.
+        try:
+            from food_identity import anotar_catalogo
+            await asyncio.to_thread(anotar_catalogo, items)
+        except Exception:
+            logger.warning("[P1-ARQ27-F2-IDENTIDAD] catálogo sin anotar `diet`", exc_info=True)
 
-    # [P1-STAPLE-SEARCH-RANK · 2026-08-09] Rótulo del gate same-day-protein por
-    # alimento, calculado AQUÍ desde el SSOT (`_MAIN_PROTEIN_ALIASES` +
-    # `_SAME_DAY_PROTEIN_GATE_LABELS`) y servido al cliente.
-    #
-    # El motivo de servirlo en vez de que el frontend lo deduzca: dos alimentos
-    # distintos del catálogo pueden colapsar al MISMO rótulo (clara de huevo y
-    # huevo → "huevo"), así que declarar ambos como básicos gasta dos de los
-    # ocho cupos para un solo efecto. Para avisarlo, el cliente necesita conocer
-    # el rótulo — y la única forma de que no se desincronice con el motor es que
-    # NO tenga su propia copia de la tabla de alias. Este repo ya pagó ese
-    # precio: la canonicalización de dieta vivía en tres tablas a mano, driftaron,
-    # y la del filtro servía pollo a vegetarianas.
-    #
-    # `None` cuando el alimento no participa del gate (legumbres, vegetales,
-    # cereales): esos ya pueden repetirse libremente, así que no hay nada que
-    # avisar. Fail-safe: cualquier error deja el campo ausente y el cliente
-    # degrada a no mostrar el aviso.
-    try:
-        from graph_orchestrator import _protein_gate_labels_in_text
+        # [P1-STAPLE-SEARCH-RANK · 2026-08-09] Rótulo del gate same-day-protein por
+        # alimento, calculado AQUÍ desde el SSOT (`_MAIN_PROTEIN_ALIASES` +
+        # `_SAME_DAY_PROTEIN_GATE_LABELS`) y servido al cliente.
+        #
+        # El motivo de servirlo en vez de que el frontend lo deduzca: dos alimentos
+        # distintos del catálogo pueden colapsar al MISMO rótulo (clara de huevo y
+        # huevo → "huevo"), así que declarar ambos como básicos gasta dos de los
+        # ocho cupos para un solo efecto. Para avisarlo, el cliente necesita conocer
+        # el rótulo — y la única forma de que no se desincronice con el motor es que
+        # NO tenga su propia copia de la tabla de alias. Este repo ya pagó ese
+        # precio: la canonicalización de dieta vivía en tres tablas a mano, driftaron,
+        # y la del filtro servía pollo a vegetarianas.
+        #
+        # `None` cuando el alimento no participa del gate (legumbres, vegetales,
+        # cereales): esos ya pueden repetirse libremente, así que no hay nada que
+        # avisar. Fail-safe: cualquier error deja el campo ausente y el cliente
+        # degrada a no mostrar el aviso.
+        try:
+            from graph_orchestrator import _protein_gate_labels_in_text
+            for _it in items:
+                _labels = _protein_gate_labels_in_text(str(_it.get("name") or ""))
+                _it["staple_gate_label"] = "+".join(sorted(_labels)) if _labels else None
+        except Exception:
+            logger.warning("[P1-STAPLE-SEARCH-RANK] no se pudo anotar el catálogo con el rótulo del gate", exc_info=True)
+
+        # [P1-MANUAL-FOOD-LOG · 2026-08-11] Porciones PRECOMPUTADAS server-side. El
+        # componedor del diario las multiplica (`qty × grams_per_qty`) y eso es aritmética;
+        # decidir cuántos gramos tiene «1 taza de arroz» es del catálogo y de nadie más. Si
+        # el cliente llevara su propia tabla de conversión, sería otra copia del motor
+        # esperando a driftar — el precio que este repo ya pagó con la dieta.
+        # La resolución REAL al enviar vuelve a correr server-side (`food_search`); esto
+        # existe solo para que la vista previa del cliente enseñe los mismos números.
         for _it in items:
-            _labels = _protein_gate_labels_in_text(str(_it.get("name") or ""))
-            _it["staple_gate_label"] = "+".join(sorted(_labels)) if _labels else None
-    except Exception:
-        logger.warning("[P1-STAPLE-SEARCH-RANK] no se pudo anotar el catálogo con el rótulo del gate", exc_info=True)
+            _p = [{"unit": "g", "grams_per_qty": 1.0, "label": "g"}]
+            if _it.get("density_g_per_cup"):
+                _p.append({"unit": "taza", "grams_per_qty": float(_it["density_g_per_cup"]), "label": "taza"})
+            if _it.get("density_g_per_unit"):
+                _p.append({"unit": "unidad", "grams_per_qty": float(_it["density_g_per_unit"]), "label": "unidad"})
+            _du = str(_it.get("default_unit") or "").strip().lower()
+            _def = "unidad" if (_du in ("unidad", "unit") and len(_p) > 2) else ("taza" if any(x["unit"] == "taza" for x in _p) and _du not in ("lb", "unidad") else _p[-1]["unit"])
+            for _x in _p:
+                _x["default"] = (_x["unit"] == _def)
+            _it["portions"] = _p
 
-    # [P1-MANUAL-FOOD-LOG · 2026-08-11] Porciones PRECOMPUTADAS server-side. El
-    # componedor del diario las multiplica (`qty × grams_per_qty`) y eso es aritmética;
-    # decidir cuántos gramos tiene «1 taza de arroz» es del catálogo y de nadie más. Si
-    # el cliente llevara su propia tabla de conversión, sería otra copia del motor
-    # esperando a driftar — el precio que este repo ya pagó con la dieta.
-    # La resolución REAL al enviar vuelve a correr server-side (`food_search`); esto
-    # existe solo para que la vista previa del cliente enseñe los mismos números.
-    for _it in items:
-        _p = [{"unit": "g", "grams_per_qty": 1.0, "label": "g"}]
-        if _it.get("density_g_per_cup"):
-            _p.append({"unit": "taza", "grams_per_qty": float(_it["density_g_per_cup"]), "label": "taza"})
-        if _it.get("density_g_per_unit"):
-            _p.append({"unit": "unidad", "grams_per_qty": float(_it["density_g_per_unit"]), "label": "unidad"})
-        _du = str(_it.get("default_unit") or "").strip().lower()
-        _def = "unidad" if (_du in ("unidad", "unit") and len(_p) > 2) else ("taza" if any(x["unit"] == "taza" for x in _p) and _du not in ("lb", "unidad") else _p[-1]["unit"])
-        for _x in _p:
-            _x["default"] = (_x["unit"] == _def)
-        _it["portions"] = _p
+        # [P1-PLAN-LOTE-225 · 2026-09-24] El alimento en los 4 idiomas que no son el base, para PINTARLO y para BUSCARLO:
+        # `names = {"en-US": …, "pt-BR": …, "fr-FR": …, "it-IT": …}` desde `food_names_i18n`, el mismo léxico con que el
+        # backstop de alergias entiende lo que se escribe en otro idioma. Lo que se selecciona y se guarda sigue siendo
+        # `name`. Un alimento sin fila en el léxico (alta posterior) lleva sólo `en-US` (su `name_en`) y el resto cae al
+        # español en el cliente.
+        try:
+            from food_names_i18n import nombres as _nombres_i18n
+            _lexico = _nombres_i18n()
+            for _it in items:
+                _n = dict(_lexico.get(str(_it.get("name") or "")) or {})
+                if not _n.get("en-US") and _it.get("name_en"):
+                    _n["en-US"] = _it["name_en"]
+                _it["names"] = _n
+        except Exception:
+            logger.warning("[P1-PLAN-LOTE-225] catálogo sin `names`", exc_info=True)
 
-    # [P1-PLAN-LOTE-225 · 2026-09-24] El alimento en los 4 idiomas que no son el base, para PINTARLO y para BUSCARLO:
-    # `names = {"en-US": …, "pt-BR": …, "fr-FR": …, "it-IT": …}` desde `food_names_i18n`, el mismo léxico con que el
-    # backstop de alergias entiende lo que se escribe en otro idioma. Lo que se selecciona y se guarda sigue siendo
-    # `name`. Un alimento sin fila en el léxico (alta posterior) lleva sólo `en-US` (su `name_en`) y el resto cae al
-    # español en el cliente.
-    try:
-        from food_names_i18n import nombres as _nombres_i18n
-        _lexico = _nombres_i18n()
-        for _it in items:
-            _n = dict(_lexico.get(str(_it.get("name") or "")) or {})
-            if not _n.get("en-US") and _it.get("name_en"):
-                _n["en-US"] = _it["name_en"]
-            _it["names"] = _n
-    except Exception:
-        logger.warning("[P1-PLAN-LOTE-225] catálogo sin `names`", exc_info=True)
+        return items
+
+    items = await catalog_rows.get(_load_catalog)
 
     # [P1-GUEST-CATALOG · 2026-08-11] La poda va DESPUÉS de anotar el rótulo del gate: ese
     # campo lo calcula el backend a propósito (ver la nota de P1-STAPLE-SEARCH-RANK justo
