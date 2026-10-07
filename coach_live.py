@@ -115,6 +115,9 @@ def registrar_uso(user_id: Optional[str], live_id: str, segundos: float, motivo:
 
 # ── instrucciones de la voz ────────────────────────────────────────────────────────────────────────────────────
 
+from health_evidence import HEALTH_EVIDENCE_RULES
+
+
 def instrucciones(locale: str = "es-DO") -> str:
     idioma = {"en-US": "inglés", "pt-BR": "portugués de Brasil", "fr-FR": "francés", "it-IT": "italiano"}.get(
         locale, "español latinoamericano (el usuario es dominicano: entiende su forma de hablar y sus comidas)")
@@ -157,7 +160,7 @@ Delegation policy (tu cerebro es el backend: tiene el diario, el plan, la Nevera
 - Los cambios manuales verificados del diario que recibas son el estado actual: una comida eliminada ya no cuenta,
   aunque tú o el coach la hayan mencionado antes. Reconoce el cambio brevemente cuando el usuario termine de hablar.
   No conviertas ese aviso en un nuevo consumo ni repongas el registro. Si te pide totales después, delega para leerlos.
-- Nunca des diagnósticos médicos ni dosis de medicamentos."""
+- Nunca des diagnósticos médicos ni dosis de medicamentos.""" + HEALTH_EVIDENCE_RULES + "\nPara la voz: No leas URLs en voz alta; menciona la institución y remite a Fuentes de salud y nutrición, visible junto a las respuestas del chat y en el aviso médico."
 
 
 # ── sesiones vivas ─────────────────────────────────────────────────────────────────────────────────────────────
