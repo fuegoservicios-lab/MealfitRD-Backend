@@ -48,7 +48,7 @@ def test_vigentes_filtra_en_sql_y_no_consulta_con_un_id_que_no_es_uuid(monkeypat
     rc.regalos_vigentes(UID)
     q, p = llamadas[0]
     assert "revoked_at IS NULL" in q and "starts_at <= now()" in q and "(ends_at IS NULL OR ends_at > now())" in q
-    assert p == (UID,)
+    assert "usage_scope = %s" in q and p == (UID, "web")
 
 
 def test_lectura_rota_o_knob_apagado_devuelve_nada(monkeypatch):

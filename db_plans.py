@@ -1791,6 +1791,8 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False,
     # [P1-PLAN-LOTE-818 · 2026-09-29] La fila es lo que lee la caché semántica (`match_similar_plan`): la huella del 813
     # no llega aunque el llamador salte el escudo (`skip_plan_data_finalize`). No-op si el escudo ya la retiró.
     __import__("mutadores_de_contenido").retirar_claves_privadas(data.get("plan_data"))
+    from ios_free import scope
+    data = {**data, "usage_scope": scope()}
     cols = list(data.keys())
     vals = []
     for col, v in zip(cols, data.values()):

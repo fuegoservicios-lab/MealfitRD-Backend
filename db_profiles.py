@@ -464,6 +464,9 @@ def get_user_plan_tier(user_id: str) -> Optional[str]:
     caller normaliza y aplica fail-cheap. Excepciones propagan — el caller
     (`llm_provider.get_user_tier`) las captura y degrada a `gratis`.
     """
+    from ios_free import is_free
+    if is_free():
+        return "gratis"
     if not user_id:
         return None
     # [P1-NEON-DB-MIGRATION · 2026-06-12] SQL directo vía pool (hot path —
@@ -835,7 +838,8 @@ def log_api_usage(user_id: str, endpoint: str = "llm"):
         from db_core import connection_pool
         if not connection_pool:
             return None
-        res = execute_sql_write("INSERT INTO api_usage (user_id, endpoint) VALUES (%s, %s)", (user_id, endpoint))
+        from ios_free import scope
+        res = execute_sql_write("INSERT INTO api_usage (user_id, endpoint, usage_scope) VALUES (%s, %s, %s)", (user_id, endpoint, scope()))
         return res
     except Exception as e:
         logger.error(f"Error registrando api_usage: {e}")
@@ -1136,7 +1140,9 @@ def get_monthly_api_usage(user_id: str, kind: str = "generation") -> int:
             _sql = "SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s AND endpoint = 'llm_chat'"
         else:
             _sql = "SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s AND COALESCE(endpoint, '') <> 'llm_chat'"
-        res = execute_sql_query(_sql, (user_id, start_date), fetch_one=True)
+        from ios_free import scope
+        _sql += " AND usage_scope = %s"
+        res = execute_sql_query(_sql, (user_id, start_date, scope()), fetch_one=True)
         if res and 'total' in res:
             return int(res['total'])
         return 0

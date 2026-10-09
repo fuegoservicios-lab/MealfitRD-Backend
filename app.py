@@ -3296,6 +3296,9 @@ _ACCOUNT_EXPORT_LIMITER = RateLimiter(max_calls=3, period_seconds=300)
 # al whitelist (no auto-whitelist via `*`).
 #
 # Tooltip-anchor: P2-CORS-NARROW.
+from ios_free import FreeIOSMiddleware
+app.add_middleware(FreeIOSMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

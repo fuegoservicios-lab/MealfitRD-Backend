@@ -77,6 +77,11 @@ class _Cortesia(BaseModel):
     motivo: str = Field(max_length=400)
 
 
+class _RecargaIOS(BaseModel):
+    request_id: uuid.UUID
+    motivo: str = Field(min_length=3, max_length=300)
+
+
 class _Revocar(BaseModel):
     motivo: str = Field(max_length=400)
 
@@ -139,6 +144,15 @@ def api_admin_dar_cortesia(user_id: uuid.UUID, body: _Cortesia, admin_id: str = 
     except ac.ErrorRegalo as e:
         raise HTTPException(status_code=e.status, detail=e.detalle)
     return _hecho(str(user_id), r)
+
+
+@router.post("/cuentas/{user_id}/ios-gratis/recargar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA_LIMITER)])
+def api_admin_recargar_ios(user_id: uuid.UUID, body: _RecargaIOS, admin_id: str = Depends(require_admin)):
+    try:
+        result = ac.recargar_ios_gratis(admin_id, str(user_id), body.request_id, body.motivo)
+    except ac.ErrorRegalo as error:
+        raise HTTPException(status_code=error.status, detail=error.detalle)
+    return _hecho(str(user_id), result)
 
 
 @router.post("/regalos/{grant_id}/revocar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA_LIMITER)])

@@ -86,7 +86,8 @@ def desacoplar(generador: Iterable[str], session_id) -> Iterator[str]:
                     _TURNOS.pop(clave, None)
             cola.put(_FIN)
 
-    threading.Thread(target=_hilo, name=f"chat-turno-{clave[:8]}", daemon=True).start()
+    from ios_free import inherit_context
+    threading.Thread(target=inherit_context(_hilo), name=f"chat-turno-{clave[:8]}", daemon=True).start()
 
     def _leer():
         while True:

@@ -48,7 +48,7 @@ def inicio_de_mes(desplazamiento: int = 0, ahora: datetime | None = None) -> dat
     return datetime(indice // 12, indice % 12 + 1, 1, tzinfo=timezone.utc)
 
 
-def regalos_vigentes(user_id) -> list:
+def regalos_vigentes(user_id, usage_scope="web") -> list:
     """Los regalos vigentes de la cuenta. [] si el knob está apagado, el id no es de una cuenta o la lectura falla."""
     uid = str(user_id or "")
     if not _ES_UUID.match(uid) or not activo():
@@ -56,8 +56,8 @@ def regalos_vigentes(user_id) -> list:
     try:
         return execute_sql_query(
             "SELECT id::text AS id, kind, amount, plan, starts_at, ends_at, created_at FROM public.account_grants "
-            f"WHERE user_id = %s AND {_VIGENTE} ORDER BY created_at",
-            (uid,), fetch_all=True) or []
+            f"WHERE user_id = %s AND usage_scope = %s AND {_VIGENTE} ORDER BY created_at",
+            (uid, usage_scope), fetch_all=True) or []
     except Exception as e:  # noqa: BLE001 — sin regalos queda lo pagado, nunca menos
         logger.warning(f"⚠️ [P1-PLAN-LOTE-771] regalos no legibles para {uid}: {e!r}")
         return []
@@ -91,6 +91,9 @@ def superponer(perfil):
     Jamás se escribe de vuelta."""
     if not perfil:
         return perfil
+    from ios_free import is_free, project_profile
+    if is_free():
+        return project_profile(perfil)
     pagado = perfil.get("plan_tier")
     regalos = [] if pagado == "admin" else regalos_vigentes(perfil.get("id"))
     cortesia = cortesia_de(regalos)
@@ -111,8 +114,10 @@ def resumen_creditos(perfil) -> dict:
     from auth import _TIER_LIMITS   # perezoso: auth importa db al arrancar y este módulo lo importa db_profiles
     perfil = perfil or {}
     tier = perfil.get("plan_tier") or "gratis"
-    base = int(_TIER_LIMITS.get(tier, _TIER_LIMITS["gratis"]))
-    regalos = [] if tier == "admin" else regalos_vigentes(perfil.get("id"))
+    from ios_free import is_free, GENERATION
+    base = GENERATION if is_free() else int(_TIER_LIMITS.get(tier, _TIER_LIMITS["gratis"]))
+    regalos = (regalos_vigentes(perfil.get("id"), usage_scope="ios_free") if is_free()
+               else [] if tier == "admin" else regalos_vigentes(perfil.get("id")))
     extra = extra_de(regalos, "generacion")
     hastas = [r["ends_at"] for r in regalos if r.get("kind") == MEDIDORES["generacion"] and r.get("ends_at")]
     desde = datetime.now(timezone.utc) - timedelta(days=DIAS_AVISO)

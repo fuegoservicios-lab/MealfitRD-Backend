@@ -90,11 +90,13 @@ def ficha(user_id):
     tope_plan, tope_coach = _topes(efectivo)
     extra_g, extra_c = rc.extra_de(vigentes, "generacion"), rc.extra_de(vigentes, "coach")
     historial = execute_sql_query(
-        "SELECT id::text AS id, kind, amount, plan, starts_at, ends_at, reason, created_at, revoked_at, revoke_reason "
+        "SELECT id::text AS id, kind, amount, plan, starts_at, ends_at, reason, created_at, revoked_at, revoke_reason, usage_scope "
         "FROM public.account_grants WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
         (user_id, _HISTORIAL), fetch_all=True) or []
     ahora = datetime.now(timezone.utc)
+    from ios_free import allowance, enabled
     return {
+        **({"ios_gratis": allowance(user_id)} if enabled() else {}),
         "user_id": p["id"], "email": p.get("email"), "nombre": p.get("full_name"), "alta": rc.iso(p.get("created_at")),
         "plan_pagado": pagado, "plan_efectivo": efectivo, "es_admin": es_admin,
         "suscripcion": {"estado": p.get("subscription_status"), "fin": rc.iso(p.get("subscription_end_date")),
@@ -105,7 +107,7 @@ def ficha(user_id):
                      "tope": tope_plan + extra_g},
         "coach": {"usados": int(get_monthly_api_usage(user_id, kind="coach") or 0), "plan": tope_coach,
                   "regalo": extra_c, "tope": tope_coach + extra_c},
-        "regalos": [{"id": r["id"], "tipo": r.get("kind"), "detalle": _detalle(r), "desde": rc.iso(r.get("starts_at")),
+        "regalos": [{"id": r["id"], "tipo": r.get("kind"), "detalle": ("iPhone · Gratis · " if r.get("usage_scope") == "ios_free" else "") + _detalle(r), "desde": rc.iso(r.get("starts_at")),
                      "hasta": rc.iso(r.get("ends_at")), "motivo": r.get("reason"), "estado": _estado(r, ahora),
                      "motivo_reversion": r.get("revoke_reason")} for r in historial],
         "validez_creditos": {"mes": rc.iso(rc.inicio_de_mes(1)), "mes_siguiente": rc.iso(rc.inicio_de_mes(2))},
@@ -117,6 +119,32 @@ def _motivo(v) -> str:
     if not 3 <= len(m) <= 300:
         raise ErrorRegalo(422, "El motivo es obligatorio (de 3 a 300 caracteres).")
     return m
+
+
+def recargar_ios_gratis(admin_id, user_id, request_id, motivo):
+    """Free fixed package, atomic and idempotent across retries; unrelated to web tier."""
+    from ios_free import enabled, GENERATION, COACH
+    if not enabled():
+        raise ErrorRegalo(503, "La versión gratuita de iPhone todavía no está habilitada.")
+    _exigir_activo()
+    if not _perfil(user_id):
+        raise ErrorRegalo(404, "No existe esa cuenta.")
+    motivo = _motivo(motivo)
+    namespace = uuid.UUID(str(request_id))
+    ids = [str(uuid.uuid5(namespace, f"{admin_id}:{user_id}:{kind}")) for kind in ("generacion", "coach")]
+    fin = datetime.now(timezone.utc) + timedelta(days=14)
+    _anotar(admin_id, "recargar_ios_gratis", user_id, {
+        "request_id": str(request_id), "grant_ids": ids, "generacion": GENERATION,
+        "coach": COACH, "motivo": motivo, "hasta": fin.isoformat(), "gratuita": True})
+    query = ("INSERT INTO public.account_grants (id, user_id, kind, amount, ends_at, reason, granted_by, usage_scope) "
+             "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ios_free') ON CONFLICT (id) DO NOTHING")
+    try:
+        execute_sql_transaction([
+            (query, (gid, user_id, rc.MEDIDORES[kind], amount, fin, motivo, admin_id))
+            for gid, kind, amount in zip(ids, ("generacion", "coach"), (GENERATION, COACH))])
+    except Exception as e:
+        raise _fallo_al_guardar(admin_id, "recargar_ios_gratis", user_id, ids[0], e) from e
+    return {"grant_ids": ids, "generacion": GENERATION, "coach": COACH}
 
 
 def _exigir_activo() -> None:

@@ -327,7 +327,8 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
     _limpiar_viejas()
     with _SESIONES_LOCK:
         SESIONES[live_id] = s
-    threading.Thread(target=_canal_lateral, args=(s, clave), name=f"coach-live-{live_id[:8]}", daemon=True).start()
+    from ios_free import inherit_context
+    threading.Thread(target=inherit_context(_canal_lateral), args=(s, clave), name=f"coach-live-{live_id[:8]}", daemon=True).start()
     logger.info(f"🎙️ [P1-PLAN-LOTE-905] sesión Live {live_id} abierta (user={str(user_id)[:8]}, gastado {gastado:.3f} USD)")
     return live_id, respuesta_sdp
 
@@ -381,7 +382,8 @@ def _canal_lateral(s: SesionLive, clave: str) -> None:
                         with s._lock:
                             dicho = "".join(s._oido).strip()
                             s._oido.clear()
-                        threading.Thread(target=_delegar, args=(ws, s, deleg["id"], dicho), daemon=True).start()
+                        from ios_free import inherit_context
+                        threading.Thread(target=inherit_context(_delegar), args=(ws, s, deleg["id"], dicho), daemon=True).start()
                 elif tipo == "session.usage.updated":
                     s.segundos = float(((ev.get("usage") or {}).get("seconds")) or s.segundos)
                     if not s.cerrada and ((tope_sesion > 0 and s.segundos >= tope_sesion)

@@ -310,8 +310,9 @@ def _call_with_timeout(fn, timeout_s: float, *args, **kwargs):
         except BaseException as e:
             result_box["error"] = e
 
+    from ios_free import inherit_context
     t = threading.Thread(
-        target=_wrapper, daemon=True,
+        target=inherit_context(_wrapper), daemon=True,
         name=f"timed-{getattr(fn, '__name__', 'callable')}"
     )
     t.start()
@@ -3930,6 +3931,54 @@ def _resolve_stale_scheduler_alerts() -> None:
             "ttl_hours": ttl_h,
         },
     )
+
+
+def _resolve_completed_temporal_alerts() -> int:
+    """Close a deferral only after its exact user/plan/week has completed, never by age.
+
+    The inline gate resolver can be skipped by alternative completion paths. This sweep
+    checks the queue, preserves the alert and stores why it was closed for the admin history.
+    It never resumes jobs, changes plans or supplies consent on a user's behalf.
+    """
+    if not _env_bool("MEALFIT_TEMPORAL_ALERT_AUTO_RESOLVE_ENABLED", True):
+        return 0
+    count, failed = 0, False
+    try:
+        rows = execute_sql_write(
+            """
+            UPDATE public.system_alerts AS a
+               SET resolved_at = NOW(),
+                   metadata = COALESCE(a.metadata, '{}'::jsonb) ||
+                     jsonb_build_object('resolution', jsonb_build_object(
+                       'reason', 'block_completed', 'checked_at', NOW(),
+                       'block_completed_at', q.updated_at))
+              FROM public.plan_chunk_queue AS q
+             WHERE a.resolved_at IS NULL
+               AND a.alert_key = CONCAT('temporal_gate_proactive', ':', q.user_id::text,
+                   ':', q.meal_plan_id::text, ':', q.week_number::text)
+               AND a.metadata->>'meal_plan_id' = q.meal_plan_id::text
+               AND a.metadata->>'week_number' = q.week_number::text
+               AND q.status = 'completed'
+               AND q.dead_lettered_at IS NULL
+               AND q.updated_at >= a.triggered_at
+             RETURNING a.alert_key
+            """, tuple(), returning=True,
+        ) or []
+        count = len(rows) if isinstance(rows, list) else 0
+        if count:
+            logger.info("[TEMPORAL-ALERT-RESOLVE] %s avisos cerrados con bloque completado", count)
+    except Exception as exc:
+        failed = True
+        logger.warning("[TEMPORAL-ALERT-RESOLVE] No se pudo comprobar el cierre: %s", type(exc).__name__)
+    try:
+        execute_sql_write(
+            "INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+            "VALUES ('_temporal_alert_resolution_tick', 0, 0, 0, 0, %s::jsonb)",
+            (json.dumps({'resolved': count, 'failed': failed}),),
+        )
+    except Exception:
+        pass
+    return count
 
 
 def _resolve_stale_plan_quality_alerts() -> None:
@@ -7762,6 +7811,14 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info(
             f"⏰ [P2-6/POOL-FALLBACK-ALERT] Cron _alert_atomic_pool_fallback registrado cada {_P26_INT} min."
+        )
+
+    # Deferrals with a completed queue row no longer require attention. Refresh history every 15 min.
+    if not scheduler.get_job("resolve_completed_temporal_alerts"):
+        _add_job_jittered(scheduler,
+            _resolve_completed_temporal_alerts, "interval", minutes=15,
+            id="resolve_completed_temporal_alerts", max_instances=1, coalesce=True,
+            replace_existing=True,
         )
 
     # [P2-NEW-10 · 2026-05-11] Auto-resolve para `plan_quality_degraded:*` y
@@ -19532,6 +19589,16 @@ def _enqueue_plan_chunk(
     from datetime import timedelta
     # [P0-4] Estampar cuándo fue capturado el snapshot del inventario.
     pipeline_snapshot = copy.deepcopy(pipeline_snapshot) if pipeline_snapshot else {}
+    from ios_free import scope
+    # Fresh native requests use their own allowance. Autonomous refills inherit
+    # the persisted plan's origin, never the account's paid web subscription.
+    _billing_scope = scope()
+    if _billing_scope == "web":
+        _scope_row = execute_sql_query("SELECT usage_scope FROM meal_plans WHERE id = %s AND user_id = %s",
+                                       (meal_plan_id, user_id), fetch_one=True) or {}
+        if _scope_row.get("usage_scope") == "ios_free":
+            _billing_scope = "ios_free"
+    pipeline_snapshot["_usage_scope"] = _billing_scope
     if isinstance(pipeline_snapshot.get("form_data"), dict):
         pipeline_snapshot["form_data"]["_pantry_captured_at"] = datetime.now(timezone.utc).isoformat()
         # [P1-5] Snapshot del modo de validación de cantidades + tolerance al
@@ -27257,8 +27324,11 @@ def _merge_chunk_live_profile(form_data: dict, health_profile: dict) -> dict:
     return form_data
 
 
+from ios_free import isolated_worker
+
 @_drain_aware
 @_with_worker_metrics
+@isolated_worker
 def process_plan_chunk_queue(target_plan_id=None):
     """Worker que genera las semanas 2-N de planes de largo plazo. Corre cada minuto vía APScheduler.
 
@@ -27763,6 +27833,9 @@ __PLAN_MODE_GATE__
         snap = task["pipeline_snapshot"]
         if isinstance(snap, str):
             snap = json.loads(snap)
+
+        from ios_free import restore_snapshot
+        restore_snapshot(snap)
 
         chunk_kind = task.get("chunk_kind") or ("rolling_refill" if snap.get("_is_rolling_refill", False) else "initial_plan")
         is_rolling_refill = chunk_kind == "rolling_refill"
@@ -31356,7 +31429,8 @@ __PLAN_MODE_GATE__
 
                         import concurrent.futures as _cf
                         _exec = _cf.ThreadPoolExecutor(max_workers=1)
-                        _fut = _exec.submit(run_plan_pipeline, form_data, [], taste_profile, memory_context, None, None)
+                        from ios_free import inherit_context
+                        _fut = _exec.submit(inherit_context(run_plan_pipeline), form_data, [], taste_profile, memory_context, None, None)
                         try:
 
                             from constants import CHUNK_PIPELINE_TIMEOUT_SECONDS

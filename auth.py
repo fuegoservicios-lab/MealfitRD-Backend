@@ -532,7 +532,8 @@ def coach_quota_snapshot(user_id: str) -> dict:
     if profile:
         plan_tier = profile.get("plan_tier", "gratis") or "gratis"
         extra = _creditos_extra(profile, "coach")
-    limit = int(_COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])) + extra
+    from ios_free import is_free, COACH
+    limit = (COACH if is_free() else int(_COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"]))) + extra
     now = datetime.now(timezone.utc)
     resets_at = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1, tzinfo=timezone.utc)
     return {
@@ -556,7 +557,8 @@ def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_us
         if profile:
             plan_tier = profile.get("plan_tier", "gratis")
             extra = _creditos_extra(profile, "coach")
-        limit = _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"]) + extra
+        from ios_free import is_free, COACH
+        limit = (COACH if is_free() else _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])) + extra
         if used >= limit:
             # [P1-COACH-QUOTA-METER · 2026-09-02] Cabeceras estructuradas para que el cliente
             # pinte «se renueva el …» sin parsear la frase; el detail se conserva tal cual.
@@ -564,8 +566,9 @@ def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_us
             raise HTTPException(
                 status_code=402,
                 detail=(
-                    f"Alcanzaste tus {limit} mensajes de coach de este mes. "
-                    "Mejora tu plan para seguir conversando."
+                    f"Alcanzaste tus {limit} mensajes de coach de este mes. " +
+                    ("Puedes esperar a la renovación mensual o recibir una recarga gratuita." if is_free()
+                     else "Mejora tu plan para seguir conversando.")
                 ),
                 headers={
                     "X-Coach-Quota-Limit": str(limit),
@@ -592,9 +595,12 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
         # `_TIER_LIMITS` module-level (knobs auto-registrados). Default
         # gratis=15 cuando el tier es desconocido (defensive — usuario con
         # `plan_tier` corrupto NO debe quedar con quota ilimitada).
-        limit = _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"]) + extra  # [P1-PLAN-LOTE-772] + créditos regalados
+        from ios_free import is_free, GENERATION
+        limit = (GENERATION if is_free() else _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"])) + extra  # [P1-PLAN-LOTE-772] + créditos regalados
 
         if credits_used >= limit:
-            raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
+            detail = ("Agotaste tus créditos gratuitos. Puedes esperar a la renovación mensual o recibir una recarga gratuita."
+                      if is_free() else f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
+            raise HTTPException(status_code=402, detail=detail)
 
     return verified_user_id

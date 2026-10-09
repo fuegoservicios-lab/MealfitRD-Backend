@@ -484,6 +484,9 @@ def get_user_tier(user_id: Optional[str]) -> str:
     no acoplar este módulo (importado a module-init por todo el backend)
     al stack de DB en import-time.
     """
+    from ios_free import is_free
+    if is_free():
+        return "gratis"
     if not user_id or not isinstance(user_id, str):
         return "gratis"
     uid = user_id.strip()
