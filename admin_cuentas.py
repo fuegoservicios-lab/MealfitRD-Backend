@@ -107,7 +107,7 @@ def ficha(user_id):
                      "tope": tope_plan + extra_g},
         "coach": {"usados": int(get_monthly_api_usage(user_id, kind="coach") or 0), "plan": tope_coach,
                   "regalo": extra_c, "tope": tope_coach + extra_c},
-        "regalos": [{"id": r["id"], "tipo": r.get("kind"), "detalle": ("iPhone · Gratis · " if r.get("usage_scope") == "ios_free" else "") + _detalle(r), "desde": rc.iso(r.get("starts_at")),
+        "regalos": [{"id": r["id"], "tipo": r.get("kind"), "usage_scope": r.get("usage_scope", "web"), "detalle": ("iPhone · Gratis · " if r.get("usage_scope") == "ios_free" else "") + _detalle(r), "desde": rc.iso(r.get("starts_at")),
                      "hasta": rc.iso(r.get("ends_at")), "motivo": r.get("reason"), "estado": _estado(r, ahora),
                      "motivo_reversion": r.get("revoke_reason")} for r in historial],
         "validez_creditos": {"mes": rc.iso(rc.inicio_de_mes(1)), "mes_siguiente": rc.iso(rc.inicio_de_mes(2))},
