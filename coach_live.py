@@ -454,13 +454,16 @@ def correr_turno_del_coach(s: SesionLive, dicho: str) -> tuple:
     from fastapi import BackgroundTasks
     from routers.chat import api_chat_stream
     tareas = BackgroundTasks()
+    # A live call may cross midnight. Resolve today's date anew on every delegated turn.
+    from routers.chat import _resolve_chat_local_time
+    local_date, tz_offset = _resolve_chat_local_time(None, s.tz_offset, s.user_id)
     datos = {
         "session_id": s.chat_session_id,
         "prompt": dicho,
         "user_id": s.user_id,
         "is_call_mode": True,
-        "local_date": s.local_date,
-        "tz_offset": s.tz_offset,
+        "local_date": local_date,
+        "tz_offset": tz_offset,
     }
     token = _TURNO_LIVE_SIN_CUOTA.set(True)
     try:

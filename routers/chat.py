@@ -758,11 +758,15 @@ async def api_chat_live_sesion(data: dict = Body(...), verified_user_id: Optiona
     if dueno and dueno != verified_user_id:
         raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
     tz = (data or {}).get("tz_offset")
+    # Old live clients sent local-minus-UTC; chat and profiles use getTimezoneOffset().
+    # The marker lets both installed clients and the fixed OTA use the correct clock.
+    from meal_registration_time import normalize_live_offset
+    tz = normalize_live_offset(tz, (data or {}).get("tz_offset_convention"))
     try:
         live_id, respuesta = await asyncio.to_thread(
             coach_live.crear_sesion, verified_user_id, sdp, chat_session_id,
             str((data or {}).get("locale") or "es-DO")[:10], (data or {}).get("local_date"),
-            int(tz) if isinstance(tz, (int, float)) else None,
+            tz,
         )
     except coach_live.LiveNoDisponible as e:
         return JSONResponse(status_code=409, content={"motivo": e.motivo})

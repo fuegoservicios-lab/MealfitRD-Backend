@@ -4242,6 +4242,7 @@ class ChatState(MessagesState):
     user_id: str
     session_id: str
     form_data: dict
+    tz_offset: int | None
     current_plan: dict
     updated_fields: dict
     new_plan: dict
@@ -4741,6 +4742,17 @@ def execute_tools(state: ChatState):
                         f"prompt injection — verificar último mensaje del usuario."
                     )
                 tool_args["user_id"] = _trusted_uid
+                # Unspecified meals use the user's clock, never an LLM guess based on food size.
+                if tool_name == "log_consumed_meal" and not tool_args.get("days_ago"):
+                    from meal_registration_time import infer_current_meal_slot
+                    from prompts.chat_agent import hora_local_del_chat
+                    from tools import _hora_local_float
+                    _hora_registro = (hora_local_del_chat(state["tz_offset"])
+                                      if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
+                    _slot_registro = infer_current_meal_slot(
+                        messages, _hora_registro, (state.get("form_data") or {}).get("scheduleType"))
+                    if _slot_registro:
+                        tool_args["meal_type"] = _slot_registro
                 # [P1-PLAN-LOTE-56] «ayer me comí un chimi» → days_ago=0 y la respuesta decía «quedó
                 # como la cena de ayer»: el diario de HOY se llevó 750 kcal. El día que el usuario
                 # NOMBRA manda (regla 8 del prompt), así que no depende de que el modelo lo copie.
@@ -7235,6 +7247,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "user_id": user_id or "guest",
         "session_id": session_id,
         "form_data": form_data or {},
+        "tz_offset": tz_offset,
         "current_plan": current_plan or {},
         "sys_prompt": system_prompt, # Sobre-escribe el prompt dinámicamente en cada ejecución
         "updated_fields": {},        # Reinicia los valores extraídos en cada ejecución
@@ -7871,6 +7884,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "user_id": user_id or "guest",
         "session_id": session_id,
         "form_data": form_data or {},
+        "tz_offset": tz_offset,
         "current_plan": current_plan or {},
         "sys_prompt": system_prompt,
         "updated_fields": {},
