@@ -830,6 +830,7 @@ async def api_diary_upload(
             # 'plato' (macros → diario), 'items' (compra → Nevera vía chat-
             # agent/modify_pantry_inventory), 'otro'. `items` sanitizados.
             "photo_kind": vision_result.get("photo_kind") or ("plato" if is_food else "otro"),
+            "supplement_facts": vision_result.get("supplement_facts"),
             "items": items_out,
             # [P1-PLAN-LOTE-305] lo que la foto no deja saber: el modal lo muestra junto al plato
             # [P1-PLAN-LOTE-626] en el idioma del usuario (la pregunta; las opciones llevan su `*_mostrar` al lado)

@@ -10,7 +10,7 @@ El nodo LangGraph `execute_tools` ([`backend/agent.py`](../agent.py)) force-over
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer.
 
-## Las 18 tools cubiertas
+## Las 19 tools cubiertas
 
 | # | Tool | Mutación cross-user que el override impide |
 |---|---|---|
@@ -32,6 +32,7 @@ Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s
 | 16 | `buscar_etiqueta_en_internet` | consumo del cupo diario de búsquedas de OTRO usuario (`MEALFIT_ETIQUETA_WEB_MAX_POR_DIA`, contado por `user_id` en `llm_usage_events`) y su fila de gasto. No lee ni escribe datos del usuario: la etiqueta encontrada se guarda por PRODUCTO en `app_kv_store` (P1-PLAN-LOTE-767 - 2026-09-29) |
 | 17 | `cambiar_ajuste_de_la_app` | escritura cross-user: encender o apagar la Hidratación, la Nevera, la memoria a largo plazo, la generación de planes (pausa/reanuda SU cola de bloques) o los recordatorios de OTRO usuario. Tema e idioma no tocan la base: los aplica la pantalla de quien habla (P1-PLAN-LOTE-900 - 2026-09-29) |
 | 18 | `abrir_pantalla_de_la_app` | ninguna: no lee ni escribe datos, solo dice a la pantalla de quien habla qué abrir. Lleva `user_id` por el contrato común del override (P1-PLAN-LOTE-900 - 2026-09-29) |
+| 19 | `analizar_suplemento` | Lectura del pote de suplementos exclusivamente del usuario autenticado; no escribe ni registra tomas. |
 
 ### Retiradas temporalmente del set activo (P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12)
 

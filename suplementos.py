@@ -58,6 +58,10 @@ def etiqueta_valida(etiqueta) -> dict | None:
     # [P1-PLAN-LOTE-292 · revisión I3] Atwater: las kcal no pueden pasar de lo que dan sus macros (+ margen de redondeo).
     if out["kcal"] > 4 * out["protein_g"] + 4 * out["carbs_g"] + 9 * out["fats_g"] + 40:
         return None
+    from supplement_labels import normalize
+    facts = normalize(etiqueta.get("supplement_facts"))
+    if facts:
+        out["supplement_facts"] = facts
     return out
 
 
@@ -235,6 +239,9 @@ def bloque_para_chat(user_id: str) -> str:
             u = p.get("serving_unit") or "porción"
             et = (f"1 {u}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g proteína "
                   f"({p.get('label_source') or 'estimado'})") if e else "sin etiqueta"
+            if e and e.get('supplement_facts'):
+                from supplement_labels import context
+                et += context(e['supplement_facts'])
             marca = f" ({p['brand']})" if p.get("brand") else ""
             lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}")
         out += " SU ALACENA: " + "; ".join(lineas) + "."

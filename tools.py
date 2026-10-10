@@ -5420,6 +5420,37 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
 
 # Lista de tools disponibles para el agente
 @tool
+def analizar_suplemento(user_id: str, nombre: str = None, etiqueta: dict = None,
+                       unidades_tomadas: float = None, porciones_tomadas: float = None,
+                       unidad_tomada: str = None) -> str:
+    """Lee vitaminas/minerales de una etiqueta, sin registrar ni prescribir.
+    Úsala para magnesio, multivitaminas y otros suplementos que el usuario muestre o pregunte.
+    etiqueta = supplement_facts de la foto, o {supplement_facts: ...} de un pote guardado.
+    Si no envías etiqueta, nombre busca SOLO en la Alacena de este usuario.
+    unidades_tomadas = cápsulas/tabletas/scoops de LA MISMA unidad de la etiqueta.
+    unidad_tomada = la unidad que dijo que tomó, obligatoria para calcular unidades; no la inventes.
+    porciones_tomadas = raciones de la etiqueta (alternativa a unidades, nunca ambas).
+    Omite cantidades si solo quiere conocer el producto o no dijo cuánto tomó; no supongas una.
+    No convierte masa de citrato a magnesio elemental, porcentajes a mg, IU ni ácido fólico a DFE.
+    Devuelve la cuenta por porción y, si hay base y cantidad explícitas, por toma.
+    No autoriza dosis, combinaciones ni sustitución de medicamentos y NO escribe en el diario.
+    """
+    import json
+    from supplement_labels import analyze
+    raw = etiqueta
+    if raw is None and nombre and user_id and not str(user_id).lower().startswith('guest'):
+        try:
+            import suplementos
+            raw = (suplementos.buscar(user_id, nombre) or {}).get('serving_label')
+        except Exception:
+            logger.exception('Supplement label lookup failed')
+            return 'No pude consultar el pote ahora. Pide la foto de la tabla; no digas que lo analicé.'
+    if isinstance(raw, dict) and 'supplement_facts' in raw:
+        raw = raw['supplement_facts']
+    return json.dumps(analyze(raw, unidades_tomadas, porciones_tomadas, unidad_tomada), ensure_ascii=False, allow_nan=False)
+
+
+@tool
 def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: float = None, unidad: str = "scoop",
                        etiqueta: dict = None, fuente: str = "estimado", clave: str = None,
                        encender_nevera: bool = False) -> str:
@@ -5429,6 +5460,7 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
     no diga nada: la foto de un pote de varias porciones ES decir que lo tiene [P1-PLAN-LOTE-765]. Funciona aunque su
     Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
     - etiqueta: {"gramos_porcion","kcal","protein_g","carbs_g","fats_g"} POR PORCIÓN, tal como la lee la foto o la dice él.
+      Para vitaminas/minerales añade supplement_facts completo de la foto; no lo conviertas a macros ni lo omitas.
     - fuente: 'foto' (tabla leída) | 'frente' (kcal y proteína del frente del envase: el sistema estima
       carbohidratos y grasa) | 'web' (buscar_etiqueta_en_internet) | 'marca' | 'estimado'. Sin etiqueta,
       fuente='estimado' y `clave` del tipo: whey_protein,
@@ -5454,6 +5486,9 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
         txt = f"Guardado en su Alacena: {nombre}" + (f" ({marca})" if marca else "")
         if e:
             txt += f" — 1 {unidad}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g de proteína"
+            if e.get('supplement_facts'):
+                from supplement_labels import context
+                txt += context(e['supplement_facts'])
         if r["fuente"] == "estimado":
             txt += (" (Para el asistente: la etiqueta es un ESTIMADO genérico" if e else " (Para el asistente: SIN etiqueta")
             txt += "; díselo y que la ajuste mandando una foto de la tabla nutricional del pote.)"
@@ -5547,7 +5582,7 @@ def abrir_pantalla_de_la_app(user_id: str, pantalla: str, seccion: str = None) -
     return ajustes_de_la_app.abrir_pantalla(pantalla, seccion)
 
 
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app]
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

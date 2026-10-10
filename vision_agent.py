@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
+from supplement_labels import SupplementFacts, normalize as normalize_supplement_facts
 
 from db import save_visual_entry
 from image_prep import prepare_image_for_vision  # [P1-VISION-LUNA · 2026-07-28]
@@ -226,6 +227,10 @@ _MEAL_VISION_SCHEMA = {
 }
 
 # [P1-MEAL-SCAN-DR-DISHES · 2026-07-12] Desambiguacion de platos criollos.
+_supplement_schema = SupplementFacts.model_json_schema()
+_MEAL_VISION_SCHEMA['$defs'] = _supplement_schema.pop('$defs', {})
+_MEAL_VISION_SCHEMA['properties']['supplement_facts'] = {'anyOf': [_supplement_schema, {'type': 'null'}]}
+
 # Vivo (owner, 2 scans del mismo tres golpes): v1 nombro el mangu 'arroz';
 # v2 dejo de confundirlo pero lo OMITIO por completo (nombre y macros) — el
 # cap de 6 palabras recortaba justo la base del plato. v3: inventario completo
@@ -251,6 +256,13 @@ _MEAL_VISION_PROMPT = (
     "marca; producto; tamano de la porcion TAL COMO lo dice la etiqueta (ej: '1 scoop (31 g)'); porciones por envase "
     "si se lee; y los valores por porcion. Si la tabla nutricional NO se ve o no se puede leer (solo el frente del "
     "pote), deja los numeros en 0 y dilo en 'description': 'no se lee la tabla nutricional'. "
+    "MAGNESIO, MULTIVITAMINAS Y OTROS SUPLEMENTOS tambien son 'etiqueta', aunque no aporten calorias/proteina. "
+    "Para ellos llena supplement_facts: serving_text literal, units_per_serving SOLO si se lee, serving_unit, "
+    "amount_basis='per_serving' solo con esa base visible, table_readable y nutrients con name, amount, unit, form, "
+    "basis y label_text (transcripcion de la fila). Copia vitaminas/minerales y advertencias impresas. "
+    "No inventes ausentes: amount=null. No conviertas porcentajes, IU/UI ni acido folico a DFE. "
+    "Distingue magnesio ELEMENTAL de peso del CITRATO/compuesto: una cifra del frente de 'citrato 1000 mg' "
+    "es compound, nunca 1000 mg de magnesio elemental. Sin tabla legible table_readable=false. "
     # [P1-PLAN-LOTE-767 · 2026-09-29] El frente de un pote suele IMPRIMIR sus cifras grandes (kcal y proteina por
     # porcion, gramos, porciones por envase): el Atlas Gainer del dueno las traia y el escaner solo dijo «no se lee la
     # tabla». Van en 'description' con su base TAL CUAL (el coach las pasa a una porcion); los numeros siguen en 0: el
@@ -398,6 +410,7 @@ class _MealVisionResult(BaseModel):
     carbs: float = Field(default=0, description="Gramos de carbohidratos totales estimados. 0 si no aplica.")
     healthy_fats: float = Field(default=0, description="Gramos de grasas saludables totales estimados. 0 si no aplica.")
     items: list[_MealVisionItem] = Field(default_factory=list, description="Alimentos sueltos (photo_kind='items') o componentes del plato con lo que aporta cada uno (photo_kind='plato').")
+    supplement_facts: Optional[SupplementFacts] = Field(default=None, description="Only supplement labels: literal serving size, vitamin/mineral amounts and warnings. Null for meals/foods.")
     # [P1-PLAN-LOTE-305] solo 'plato': lo que no se puede saber mirando y cambia la cuenta
     dudas: list[_MealVisionDuda] = Field(default_factory=list, description="Solo si photo_kind='plato': máx. 2 dudas reales (cantidad no contable, alimento ambiguo, grasa de cocción invisible). Vacío si todo se ve claro.")
 
@@ -619,7 +632,8 @@ def _coerce_meal_scan(data: dict) -> dict:
     # propias kcal (fibra, polialcoholes y redondeos legales las separan de esa cuenta) y lo leído manda.
     if kind == "etiqueta":
         leido = {k: _macro(k) for k in ("calories", "protein", "carbs", "healthy_fats")}
-        sin_tabla = not any(leido.values())
+        supplement_facts = normalize_supplement_facts(data.get("supplement_facts"))
+        sin_tabla = not any(leido.values()) and not (supplement_facts and supplement_facts['table_readable'])
         return {
             "photo_kind": "etiqueta",
             "is_food": True,
@@ -629,6 +643,7 @@ def _coerce_meal_scan(data: dict) -> dict:
                                and "no se lee" not in (description or "").lower() else ""))[:900],
             "meal_name": meal_name,
             "label_read": not sin_tabla,
+            "supplement_facts": supplement_facts,
             "dudas": [],   # [P1-PLAN-LOTE-305] una etiqueta se lee: no hay dudas que preguntar
             **leido,
         }
