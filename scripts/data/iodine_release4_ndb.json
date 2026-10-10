@@ -1,0 +1,2994 @@
+{
+  "01001": {
+    "value": 4.6,
+    "description": "Butter, salted",
+    "database_id": 91,
+    "ndb_number": "01001",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01192": {
+    "value": 53.9,
+    "description": "Cheese product, made with 2% reduced fat milk",
+    "database_id": 359,
+    "ndb_number": "01192",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01253": {
+    "value": 56.7,
+    "description": "Cheese, American, processed",
+    "database_id": 24,
+    "ndb_number": "01253",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01009": {
+    "value": 45.9,
+    "description": "Cheese, cheddar (sharp/mild)",
+    "database_id": 25,
+    "ndb_number": "01009",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01019": {
+    "value": 48.4,
+    "description": "Cheese, feta, whole milk, crumbled",
+    "database_id": 450,
+    "ndb_number": "01019",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01025": {
+    "value": 40,
+    "description": "Cheese, Monterey Jack",
+    "database_id": 190,
+    "ndb_number": "01025",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01029": {
+    "value": 51,
+    "description": "Cheese, mozzarella",
+    "database_id": 191,
+    "ndb_number": "01029",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01032": {
+    "value": 82.4,
+    "description": "Cheese, parmesan, grated",
+    "database_id": 349,
+    "ndb_number": "01032",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43379": {
+    "value": 59.9,
+    "description": "Cheese, processed, Swiss, low fat",
+    "database_id": 348,
+    "ndb_number": "43379",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01035": {
+    "value": 64.3,
+    "description": "Cheese, provolone",
+    "database_id": 491,
+    "ndb_number": "01035",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01036": {
+    "value": 66,
+    "description": "Cheese, ricotta, whole milk",
+    "database_id": 350,
+    "ndb_number": "01036",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01040": {
+    "value": 137.3,
+    "description": "Cheese, Swiss",
+    "database_id": 127,
+    "ndb_number": "01040",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01267": {
+    "value": 64.8,
+    "description": "Cheese, queso cotija",
+    "database_id": 494,
+    "ndb_number": "01267",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01228": {
+    "value": 79.9,
+    "description": "Cheese, queso fresco",
+    "database_id": 492,
+    "ndb_number": "01228",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01015": {
+    "value": 36.6,
+    "description": "Cottage cheese, creamed, reduced fat",
+    "database_id": 161,
+    "ndb_number": "01015",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01012": {
+    "value": 45.7,
+    "description": "Cottage cheese, full fat, small or large curd",
+    "database_id": 489,
+    "ndb_number": "01012",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01017": {
+    "value": 35.9,
+    "description": "Cream cheese ",
+    "database_id": 128,
+    "ndb_number": "01017",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01068": {
+    "value": 0.6,
+    "description": "Cream substitute, non-dairy, fluid",
+    "database_id": 94,
+    "ndb_number": "01068",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01053": {
+    "value": 20.9,
+    "description": "Cream, heavy whipping, fluid",
+    "database_id": 351,
+    "ndb_number": "01053",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01049": {
+    "value": 29.4,
+    "description": "Cream, half & half",
+    "database_id": 93,
+    "ndb_number": "01049",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01258": {
+    "value": 34,
+    "description": "Egg, white, dried, stabilized, glucose reduced",
+    "database_id": 362,
+    "ndb_number": "01258",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01172": {
+    "value": 1.5,
+    "description": "Egg, white, raw, frozen, pasteurized",
+    "database_id": 358,
+    "ndb_number": "01172",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01133": {
+    "value": 274.4,
+    "description": "Egg, whole, dried",
+    "database_id": 355,
+    "ndb_number": "01133",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01123": {
+    "value": 49.2,
+    "description": "Egg, whole, raw, fresh",
+    "database_id": 353,
+    "ndb_number": "01123",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01171": {
+    "value": 61.6,
+    "description": "Egg, whole, raw, frozen, pasteurized",
+    "database_id": 357,
+    "ndb_number": "01171",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01137": {
+    "value": 349.3,
+    "description": "Egg, yolk, dried",
+    "database_id": 356,
+    "ndb_number": "01137",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01126": {
+    "value": 176.9,
+    "description": "Egg, yolk, raw, frozen, pasteurized",
+    "database_id": 354,
+    "ndb_number": "01126",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01129": {
+    "value": 61,
+    "description": "Eggs, hard-boiled",
+    "database_id": 34,
+    "ndb_number": "01129",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01132": {
+    "value": 42.6,
+    "description": "Eggs, scrambled with oil",
+    "database_id": 336,
+    "ndb_number": "01132",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19270": {
+    "value": 31.5,
+    "description": "Ice cream, chocolate",
+    "database_id": 192,
+    "ndb_number": "19270",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01243": {
+    "value": 45.2,
+    "description": "Ice cream, lowfat, vanilla",
+    "database_id": 341,
+    "ndb_number": "01243",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19095": {
+    "value": 37.6,
+    "description": "Ice cream, regular (not lowfat), vanilla",
+    "database_id": 143,
+    "ndb_number": "19095",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01088": {
+    "value": 34.2,
+    "description": "Milk, buttermilk, lowfat",
+    "database_id": 446,
+    "ndb_number": "01088",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01103": {
+    "value": 29.7,
+    "description": "Milk, chocolate, lowfat, fluid ",
+    "database_id": 22,
+    "ndb_number": "01103",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01079": {
+    "value": 35.8,
+    "description": "Milk, reduced fat (2%), fluid",
+    "database_id": 21,
+    "ndb_number": "01079",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01082": {
+    "value": 36.1,
+    "description": "Milk, lowfat (1%), fluid",
+    "database_id": 352,
+    "ndb_number": "01082",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01085": {
+    "value": 34.2,
+    "description": "Milk, skim, fluid ",
+    "database_id": 23,
+    "ndb_number": "01085",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01077": {
+    "value": 33.5,
+    "description": "Milk, whole, fluid",
+    "database_id": 20,
+    "ndb_number": "01077",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01056": {
+    "value": 31.1,
+    "description": "Sour cream ",
+    "database_id": 154,
+    "ndb_number": "01056",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01298": {
+    "value": 45.9,
+    "description": "Yogurt, frozen, vanilla",
+    "database_id": 295,
+    "ndb_number": "01298",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01293": {
+    "value": 42.3,
+    "description": "Yogurt, Greek, whole milk, plain",
+    "database_id": 447,
+    "ndb_number": "01293",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01256": {
+    "value": 51.2,
+    "description": "Yogurt, Greek, plain, nonfat",
+    "database_id": 361,
+    "ndb_number": "01256",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01284": {
+    "value": 41.9,
+    "description": "Yogurt, Greek, strawberry, lowfat",
+    "database_id": 363,
+    "ndb_number": "01284",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01285": {
+    "value": 41.3,
+    "description": "Yogurt, Greek, strawberry, nonfat",
+    "database_id": 364,
+    "ndb_number": "01285",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01286": {
+    "value": 50.5,
+    "description": "Yogurt, Greek, vanilla, nonfat",
+    "database_id": 365,
+    "ndb_number": "01286",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01122": {
+    "value": 31,
+    "description": "Yogurt, fruit-flavored, lowfat",
+    "database_id": 126,
+    "ndb_number": "01122",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01117": {
+    "value": 58.9,
+    "description": "Yogurt, regular, plain, nonfat",
+    "database_id": 490,
+    "ndb_number": "01117",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01220": {
+    "value": 34,
+    "description": "Yogurt, vanilla, lowfat",
+    "database_id": 222,
+    "ndb_number": "01220",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01116": {
+    "value": 32.3,
+    "description": "Yogurt, whole milk, plain",
+    "database_id": 448,
+    "ndb_number": "01116",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "02047": {
+    "value": 5213.1,
+    "description": "Salt, table, iodized",
+    "database_id": 19,
+    "ndb_number": "02047",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06116": {
+    "value": 1.5,
+    "description": "Brown gravy, canned or bottled ",
+    "database_id": 180,
+    "ndb_number": "06116",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "27052": {
+    "value": 19,
+    "description": "Dip, salsa con queso (salsa with cheese)",
+    "database_id": 412,
+    "ndb_number": "27052",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11935": {
+    "value": 1,
+    "description": "Ketchup, tomato, bottled",
+    "database_id": 98,
+    "ndb_number": "11935",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "02046": {
+    "value": 0.4,
+    "description": "Mustard, yellow, plain",
+    "database_id": 152,
+    "ndb_number": "02046",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06164": {
+    "value": 1.6,
+    "description": "Salsa, tomato, bottled",
+    "database_id": 177,
+    "ndb_number": "06164",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06150": {
+    "value": 2.7,
+    "description": "Sauce, barbecue, bottled",
+    "database_id": 203,
+    "ndb_number": "06150",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06179": {
+    "value": 20.7,
+    "description": "Sauce, fish, ready-to-serve",
+    "database_id": 366,
+    "ndb_number": "06179",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "27050": {
+    "value": 0.7,
+    "description": "Sauce, sweet & sour, bottled",
+    "database_id": 12,
+    "ndb_number": "27050",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06931": {
+    "value": 1.6,
+    "description": "Sauce, tomato pasta, bottled",
+    "database_id": 221,
+    "ndb_number": "06931",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06404": {
+    "value": 0.3,
+    "description": "Soup, bean with bacon/pork, canned, condensed, prepared with water",
+    "database_id": 5,
+    "ndb_number": "06404",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06030": {
+    "value": 10.9,
+    "description": "Soup, clam chowder, New England, canned,  ready to eat (RTE)",
+    "database_id": 230,
+    "ndb_number": "06030",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06742": {
+    "value": 1.8,
+    "description": "Soup, vegetable beef, canned,  ready to eat (RTE)",
+    "database_id": 231,
+    "ndb_number": "06742",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "06471": {
+    "value": 1.1,
+    "description": "Soup, vegetable beef, canned, condensed, prepared with water",
+    "database_id": 312,
+    "ndb_number": "06471",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03165": {
+    "value": 0.1,
+    "description": "Baby food, apples with berries",
+    "database_id": 302,
+    "ndb_number": "03165",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03163": {
+    "value": 0.2,
+    "description": "Baby food, apples with fruit other than berries",
+    "database_id": 240,
+    "ndb_number": "03163",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03117": {
+    "value": 0,
+    "description": "Baby food, applesauce ",
+    "database_id": 122,
+    "ndb_number": "03117",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03143": {
+    "value": 0.3,
+    "description": "Baby food, apricots with mixed fruit",
+    "database_id": 298,
+    "ndb_number": "03143",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43546": {
+    "value": 0.2,
+    "description": "Baby food, bananas",
+    "database_id": 157,
+    "ndb_number": "43546",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03131": {
+    "value": 0.1,
+    "description": "Baby food, peaches",
+    "database_id": 123,
+    "ndb_number": "03131",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03133": {
+    "value": 0,
+    "description": "Baby food, pears",
+    "database_id": 124,
+    "ndb_number": "03133",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03159": {
+    "value": 0.2,
+    "description": "Baby food, pears and pineapple ",
+    "database_id": 296,
+    "ndb_number": "03159",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03170": {
+    "value": 0.6,
+    "description": "Baby food, plums/prunes with apples or pears",
+    "database_id": 297,
+    "ndb_number": "03170",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03139": {
+    "value": 1,
+    "description": "Baby food, prunes",
+    "database_id": 241,
+    "ndb_number": "03139",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03166": {
+    "value": 1,
+    "description": "Baby food, juice, apple ",
+    "database_id": 125,
+    "ndb_number": "03166",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "44074": {
+    "value": 0.8,
+    "description": "Baby food, juice, grape ",
+    "database_id": 237,
+    "ndb_number": "44074",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43408": {
+    "value": 0.3,
+    "description": "Baby food, juice, pear ",
+    "database_id": 236,
+    "ndb_number": "43408",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03100": {
+    "value": 0.5,
+    "description": "Baby food, carrots ",
+    "database_id": 117,
+    "ndb_number": "03100",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03092": {
+    "value": 0.3,
+    "description": "Baby food, green beans",
+    "database_id": 118,
+    "ndb_number": "03092",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03121": {
+    "value": 0.1,
+    "description": "Baby food, peas",
+    "database_id": 121,
+    "ndb_number": "03121",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03105": {
+    "value": 0.4,
+    "description": "Baby food, squash ",
+    "database_id": 159,
+    "ndb_number": "03105",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03109": {
+    "value": 0.4,
+    "description": "Baby food, sweet potatoes",
+    "database_id": 120,
+    "ndb_number": "03109",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03279": {
+    "value": 0.4,
+    "description": "Baby food, vegetables, mixed",
+    "database_id": 119,
+    "ndb_number": "03279",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03189": {
+    "value": 0.4,
+    "description": "Baby food, cereal, oatmeal, dry",
+    "database_id": 482,
+    "ndb_number": "03189",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43523": {
+    "value": 23.3,
+    "description": "Baby food, fruit yogurt dessert",
+    "database_id": 238,
+    "ndb_number": "43523",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03214": {
+    "value": 8.9,
+    "description": "Baby food, cookies, arrowroot",
+    "database_id": 299,
+    "ndb_number": "03214",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "42284": {
+    "value": 7.4,
+    "description": "Baby food, finger food, baked product, cereal, fortified",
+    "database_id": 432,
+    "ndb_number": "42284",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03069": {
+    "value": 0.5,
+    "description": "Baby food, chicken noodle dinner",
+    "database_id": 114,
+    "ndb_number": "03069",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43008": {
+    "value": 0.7,
+    "description": "Baby food, chicken with rice",
+    "database_id": 301,
+    "ndb_number": "43008",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03045": {
+    "value": 2,
+    "description": "Baby food, pasta, tomato and beef",
+    "database_id": 115,
+    "ndb_number": "03045",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03046": {
+    "value": 4.6,
+    "description": "Baby food, ravioli, cheese-filled, with tomato sauce",
+    "database_id": 242,
+    "ndb_number": "03046",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03002": {
+    "value": 1.3,
+    "description": "Baby food, beef and broth/gravy ",
+    "database_id": 111,
+    "ndb_number": "03002",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03013": {
+    "value": 27.9,
+    "description": "Baby food, chicken and broth/gravy ",
+    "database_id": 343,
+    "ndb_number": "03013",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03016": {
+    "value": 1.1,
+    "description": "Baby food, turkey and broth/gravy",
+    "database_id": 160,
+    "ndb_number": "03016",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03083": {
+    "value": 0.5,
+    "description": "Baby food, turkey and rice",
+    "database_id": 116,
+    "ndb_number": "03083",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03055": {
+    "value": 0.5,
+    "description": "Baby food, vegetables and beef ",
+    "database_id": 112,
+    "ndb_number": "03055",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03073": {
+    "value": 0.5,
+    "description": "Baby food, vegetables and chicken",
+    "database_id": 113,
+    "ndb_number": "03073",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "03085": {
+    "value": 2.1,
+    "description": "Baby food, vegetables and turkey ",
+    "database_id": 239,
+    "ndb_number": "03085",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04691": {
+    "value": 1.2,
+    "description": "Margarine, salted",
+    "database_id": 90,
+    "ndb_number": "04691",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04018": {
+    "value": 5.3,
+    "description": "Mayonnaise, regular, bottled ",
+    "database_id": 92,
+    "ndb_number": "04018",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04053": {
+    "value": 0.2,
+    "description": "Oil, olive",
+    "database_id": 182,
+    "ndb_number": "04053",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04044": {
+    "value": 0,
+    "description": "Oil, vegetable",
+    "database_id": 183,
+    "ndb_number": "04044",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43016": {
+    "value": 1.5,
+    "description": "Salad dressing, coleslaw, bottled",
+    "database_id": 433,
+    "ndb_number": "43016",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43215": {
+    "value": 12.7,
+    "description": "Salad dressing, creamy/buttermilk type, low-calorie, bottled ",
+    "database_id": 329,
+    "ndb_number": "43215",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04114": {
+    "value": 0.7,
+    "description": "Salad dressing, Italian, regular, bottled ",
+    "database_id": 181,
+    "ndb_number": "04114",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04640": {
+    "value": 7.8,
+    "description": "Salad dressing, ranch, low-calorie, bottled",
+    "database_id": 217,
+    "ndb_number": "04640",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "04639": {
+    "value": 9.9,
+    "description": "Salad dressing, ranch, regular, bottled",
+    "database_id": 218,
+    "ndb_number": "04639",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09003": {
+    "value": 0.1,
+    "description": "Apple, red, with peel, raw",
+    "database_id": 54,
+    "ndb_number": "09003",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09020": {
+    "value": 0.1,
+    "description": "Applesauce, bottled ",
+    "database_id": 59,
+    "ndb_number": "09020",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09026": {
+    "value": 6.2,
+    "description": "Apricots, canned in heavy/light syrup ",
+    "database_id": 324,
+    "ndb_number": "09026",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09037": {
+    "value": 0.2,
+    "description": "Avocado, raw",
+    "database_id": 67,
+    "ndb_number": "09037",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09040": {
+    "value": 0.2,
+    "description": "Banana, raw",
+    "database_id": 56,
+    "ndb_number": "09040",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09050": {
+    "value": 0.3,
+    "description": "Blueberries, raw",
+    "database_id": 196,
+    "ndb_number": "09050",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09181": {
+    "value": 0.3,
+    "description": "Cantaloupe, raw/frozen",
+    "database_id": 64,
+    "ndb_number": "09181",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09099": {
+    "value": 3.9,
+    "description": "Fruit cocktail, canned in light syrup ",
+    "database_id": 62,
+    "ndb_number": "09099",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09111": {
+    "value": 0.1,
+    "description": "Grapefruit, raw",
+    "database_id": 65,
+    "ndb_number": "09111",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09132": {
+    "value": 0.4,
+    "description": "Grapes, seedless, red/green, raw ",
+    "database_id": 63,
+    "ndb_number": "09132",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09176": {
+    "value": 0.1,
+    "description": "Mango, raw/frozen",
+    "database_id": 453,
+    "ndb_number": "09176",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09193": {
+    "value": 2.1,
+    "description": "Olives, black, pitted",
+    "database_id": 153,
+    "ndb_number": "09193",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09200": {
+    "value": 0.2,
+    "description": "Orange, raw",
+    "database_id": 55,
+    "ndb_number": "09200",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09239": {
+    "value": 6.2,
+    "description": "Peach, canned in light/medium syrup ",
+    "database_id": 345,
+    "ndb_number": "09239",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09236": {
+    "value": 0.2,
+    "description": "Peach, raw/frozen ",
+    "database_id": 58,
+    "ndb_number": "09236",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09256": {
+    "value": 0.1,
+    "description": "Pear, canned in light syrup ",
+    "database_id": 346,
+    "ndb_number": "09256",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09252": {
+    "value": 0.1,
+    "description": "Pear, with peel, raw",
+    "database_id": 60,
+    "ndb_number": "09252",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09354": {
+    "value": 1.8,
+    "description": "Pineapple, canned in juice ",
+    "database_id": 309,
+    "ndb_number": "09354",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09266": {
+    "value": 0.3,
+    "description": "Pineapple, raw/frozen",
+    "database_id": 194,
+    "ndb_number": "09266",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09298": {
+    "value": 1.7,
+    "description": "Raisins ",
+    "database_id": 66,
+    "ndb_number": "09298",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09316": {
+    "value": 0.3,
+    "description": "Strawberries, raw/frozen ",
+    "database_id": 61,
+    "ndb_number": "09316",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09326": {
+    "value": 0.1,
+    "description": "Watermelon, raw/frozen",
+    "database_id": 57,
+    "ndb_number": "09326",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11012": {
+    "value": 0.9,
+    "description": "Asparagus, fresh/frozen, boiled",
+    "database_id": 74,
+    "ndb_number": "11012",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11084": {
+    "value": 0.4,
+    "description": "Beets, canned ",
+    "database_id": 340,
+    "ndb_number": "11084",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11742": {
+    "value": 0.5,
+    "description": "Broccoli, fresh/frozen, boiled",
+    "database_id": 72,
+    "ndb_number": "11742",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11099": {
+    "value": 0,
+    "description": "Brussels sprouts, fresh/frozen, boiled",
+    "database_id": 140,
+    "ndb_number": "11099",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11110": {
+    "value": 0.1,
+    "description": "Cabbage, fresh, boiled ",
+    "database_id": 331,
+    "ndb_number": "11110",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11109": {
+    "value": 0,
+    "description": "Cabbage, raw",
+    "database_id": 204,
+    "ndb_number": "11109",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11960": {
+    "value": 0.6,
+    "description": "Carrot, baby, raw",
+    "database_id": 175,
+    "ndb_number": "11960",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11125": {
+    "value": 0.5,
+    "description": "Carrot, fresh, peeled, boiled ",
+    "database_id": 313,
+    "ndb_number": "11125",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11136": {
+    "value": 0.6,
+    "description": "Cauliflower, fresh/frozen, boiled",
+    "database_id": 75,
+    "ndb_number": "11136",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11143": {
+    "value": 1.7,
+    "description": "Celery, raw",
+    "database_id": 73,
+    "ndb_number": "11143",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11162": {
+    "value": 0.8,
+    "description": "Collards, fresh/frozen, boiled",
+    "database_id": 70,
+    "ndb_number": "11162",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11172": {
+    "value": 0.3,
+    "description": "Corn, canned, drained solids ",
+    "database_id": 45,
+    "ndb_number": "11172",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11179": {
+    "value": 0.2,
+    "description": "Corn, frozen, boiled",
+    "database_id": 44,
+    "ndb_number": "11179",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11206": {
+    "value": 0.5,
+    "description": "Cucumber, peeled, raw",
+    "database_id": 79,
+    "ndb_number": "11206",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11210": {
+    "value": 0.2,
+    "description": "Eggplant, fresh, without peel, boiled",
+    "database_id": 315,
+    "ndb_number": "11210",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11215": {
+    "value": 1,
+    "description": "Garlic, raw",
+    "database_id": 454,
+    "ndb_number": "11215",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11729": {
+    "value": 0.3,
+    "description": "Green beans, canned, drained solids",
+    "database_id": 78,
+    "ndb_number": "11729",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11061": {
+    "value": 0.6,
+    "description": "Green beans, fresh/frozen, boiled",
+    "database_id": 77,
+    "ndb_number": "11061",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11236": {
+    "value": 1.8,
+    "description": "Kale, fresh, pan-cooked",
+    "database_id": 452,
+    "ndb_number": "11236",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11252": {
+    "value": 0.2,
+    "description": "Lettuce, iceberg, raw ",
+    "database_id": 71,
+    "ndb_number": "11252",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11253": {
+    "value": 1.1,
+    "description": "Lettuce, leaf, raw",
+    "database_id": 176,
+    "ndb_number": "11253",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11032": {
+    "value": 0.2,
+    "description": "Lima beans, immature, frozen, boiled ",
+    "database_id": 36,
+    "ndb_number": "11032",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11584": {
+    "value": 0.2,
+    "description": "Mixed vegetables, frozen, boiled ",
+    "database_id": 142,
+    "ndb_number": "11584",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11260": {
+    "value": 0.3,
+    "description": "Mushrooms, raw",
+    "database_id": 141,
+    "ndb_number": "11260",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11279": {
+    "value": 1,
+    "description": "Okra, fresh/frozen, boiled ",
+    "database_id": 317,
+    "ndb_number": "11279",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11282": {
+    "value": 0.3,
+    "description": "Onion, mature, raw",
+    "database_id": 82,
+    "ndb_number": "11282",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11313": {
+    "value": 0.1,
+    "description": "Peas, green, fresh/frozen, boiled ",
+    "database_id": 37,
+    "ndb_number": "11313",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11333": {
+    "value": 0.2,
+    "description": "Pepper, bell, green, raw",
+    "database_id": 80,
+    "ndb_number": "11333",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11937": {
+    "value": 0.7,
+    "description": "Pickles, dill, cucumber",
+    "database_id": 89,
+    "ndb_number": "11937",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11367": {
+    "value": 0,
+    "description": "Potato, peeled, boiled1",
+    "database_id": 83,
+    "ndb_number": "11367",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11674": {
+    "value": 0.5,
+    "description": "Potato, with peel, baked",
+    "database_id": 84,
+    "ndb_number": "11674",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11371": {
+    "value": 6.2,
+    "description": "Potatoes, mashed, prepared from fresh",
+    "database_id": 293,
+    "ndb_number": "11371",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11549": {
+    "value": 0.9,
+    "description": "Sauce, tomato, canned/bottled",
+    "database_id": 220,
+    "ndb_number": "11549",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11458": {
+    "value": 3.9,
+    "description": "Spinach, fresh/frozen, boiled ",
+    "database_id": 1,
+    "ndb_number": "11458",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11457": {
+    "value": 6.7,
+    "description": "Spinach, raw",
+    "database_id": 206,
+    "ndb_number": "11457",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11468": {
+    "value": 0.3,
+    "description": "Squash, summer, fresh/frozen, boiled ",
+    "database_id": 332,
+    "ndb_number": "11468",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11478": {
+    "value": 0.6,
+    "description": "Squash, summer, zucchini, fresh/frozen, boiled",
+    "database_id": 205,
+    "ndb_number": "11478",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11644": {
+    "value": 0.8,
+    "description": "Squash, winter (Hubbard or acorn), fresh/frozen, boiled",
+    "database_id": 81,
+    "ndb_number": "11644",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11508": {
+    "value": 1.5,
+    "description": "Sweet potato, baked, peel removed",
+    "database_id": 195,
+    "ndb_number": "11508",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11514": {
+    "value": 0.7,
+    "description": "Sweet potato, canned ",
+    "database_id": 325,
+    "ndb_number": "11514",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11529": {
+    "value": 0.2,
+    "description": "Tomato, raw",
+    "database_id": 76,
+    "ndb_number": "11529",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11567": {
+    "value": 0.3,
+    "description": "Turnip, fresh/frozen, boiled ",
+    "database_id": 316,
+    "ndb_number": "11567",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16146": {
+    "value": 0.9,
+    "description": "Beans, pinto, canned, drained",
+    "database_id": 228,
+    "ndb_number": "16146",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16043": {
+    "value": 0,
+    "description": "Beans, pinto, from dry, boiled",
+    "database_id": 304,
+    "ndb_number": "16043",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16103": {
+    "value": 0.8,
+    "description": "Beans, refried, canned",
+    "database_id": 167,
+    "ndb_number": "16103",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16050": {
+    "value": 0.1,
+    "description": "Beans, white, from dry, boiled",
+    "database_id": 323,
+    "ndb_number": "16050",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16009": {
+    "value": 0.2,
+    "description": "Beans, with pork, canned",
+    "database_id": 35,
+    "ndb_number": "16009",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16167": {
+    "value": 0.4,
+    "description": "Peanut butter, smooth/creamy",
+    "database_id": 38,
+    "ndb_number": "16167",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16090": {
+    "value": 0.5,
+    "description": "Peanuts, dry roasted, salted ",
+    "database_id": 39,
+    "ndb_number": "16090",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16126": {
+    "value": 0,
+    "description": "Tofu, firm, plain, drained solids",
+    "database_id": 458,
+    "ndb_number": "16126",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "43137": {
+    "value": 9.5,
+    "description": "Veggie burger, soy based, baked",
+    "database_id": 18,
+    "ndb_number": "43137",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "12061": {
+    "value": 0,
+    "description": "Almonds, shelled",
+    "database_id": 227,
+    "ndb_number": "12061",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "12586": {
+    "value": 0,
+    "description": "Nuts, cashew, oil roasted, with salt added",
+    "database_id": 455,
+    "ndb_number": "12586",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "12537": {
+    "value": 0.1,
+    "description": "Seeds, sunflower, shelled, salted, roasted",
+    "database_id": 168,
+    "ndb_number": "12537",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "12155": {
+    "value": 0,
+    "description": "Walnuts, shelled",
+    "database_id": 201,
+    "ndb_number": "12155",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14003": {
+    "value": 0.9,
+    "description": "Alcohol, beer",
+    "database_id": 110,
+    "ndb_number": "14003",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14051": {
+    "value": 0,
+    "description": "Alcohol, distilled, vodka",
+    "database_id": 207,
+    "ndb_number": "14051",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14084": {
+    "value": 1.6,
+    "description": "Alcohol, wine, red/white",
+    "database_id": 342,
+    "ndb_number": "14084",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14091": {
+    "value": 0.4,
+    "description": "Beverage, almond ",
+    "database_id": 210,
+    "ndb_number": "14091",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14090": {
+    "value": 0.6,
+    "description": "Beverage, coconut water",
+    "database_id": 211,
+    "ndb_number": "14090",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14060": {
+    "value": 0.1,
+    "description": "Beverage, energy",
+    "database_id": 212,
+    "ndb_number": "14060",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "16222": {
+    "value": 1.3,
+    "description": "Beverage, soy, shelf stable",
+    "database_id": 213,
+    "ndb_number": "16222",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14164": {
+    "value": 28.1,
+    "description": "Beverage, chocolate malt powder, prepared with 1% milk, fortified",
+    "database_id": 374,
+    "ndb_number": "14164",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14416": {
+    "value": 0.3,
+    "description": "Carbonated beverage, cola, low-calorie ",
+    "database_id": 108,
+    "ndb_number": "14416",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14148": {
+    "value": 0.2,
+    "description": "Carbonated beverage, cola, regular",
+    "database_id": 106,
+    "ndb_number": "14148",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14144": {
+    "value": 0.1,
+    "description": "Carbonated beverage, fruit-flavored ",
+    "database_id": 320,
+    "ndb_number": "14144",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14209": {
+    "value": 0.1,
+    "description": "Coffee, brewed from ground",
+    "database_id": 155,
+    "ndb_number": "14209",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14201": {
+    "value": 0.2,
+    "description": "Coffee, decaffeinated, from ground",
+    "database_id": 13,
+    "ndb_number": "14201",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14242": {
+    "value": 0.2,
+    "description": "Cranberry juice cocktail, canned/bottled ",
+    "database_id": 173,
+    "ndb_number": "14242",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14651": {
+    "value": 0.7,
+    "description": "Fruit drink (5% - 25% juice), canned/bottled",
+    "database_id": 156,
+    "ndb_number": "14651",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14541": {
+    "value": 0.1,
+    "description": "Fruit drink from powder, reconstituted ",
+    "database_id": 107,
+    "ndb_number": "14541",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09400": {
+    "value": 0.4,
+    "description": "Juice, apple, bottled",
+    "database_id": 68,
+    "ndb_number": "09400",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09444": {
+    "value": 0.8,
+    "description": "Juice, fruit blend (100% juice), canned/bottled",
+    "database_id": 172,
+    "ndb_number": "09444",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09130": {
+    "value": 0.3,
+    "description": "Juice, grape, bottled",
+    "database_id": 138,
+    "ndb_number": "09130",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09123": {
+    "value": 5.1,
+    "description": "Juice, grapefruit, bottle/carton",
+    "database_id": 69,
+    "ndb_number": "09123",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09152": {
+    "value": 1.5,
+    "description": "Juice, lemon, bottled",
+    "database_id": 225,
+    "ndb_number": "09152",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09207": {
+    "value": 8.5,
+    "description": "Juice, orange, bottle/carton",
+    "database_id": 174,
+    "ndb_number": "09207",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09209": {
+    "value": 0.4,
+    "description": "Juice, orange, from frozen concentrate, reconstituted",
+    "database_id": 338,
+    "ndb_number": "09209",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09409": {
+    "value": 0.2,
+    "description": "Juice, pineapple, canned",
+    "database_id": 137,
+    "ndb_number": "09409",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "09294": {
+    "value": 1.3,
+    "description": "Juice, prune, bottled",
+    "database_id": 339,
+    "ndb_number": "09294",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11886": {
+    "value": 1.1,
+    "description": "Juice, tomato, bottled ",
+    "database_id": 314,
+    "ndb_number": "11886",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "11578": {
+    "value": 0.8,
+    "description": "Juice, tomato-vegetable, bottled",
+    "database_id": 226,
+    "ndb_number": "11578",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14293": {
+    "value": 0.1,
+    "description": "Lemonade, from frozen concentrate, reconstituted ",
+    "database_id": 310,
+    "ndb_number": "14293",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14066": {
+    "value": 97.7,
+    "description": "Powder, protein",
+    "database_id": 215,
+    "ndb_number": "14066",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14355": {
+    "value": 0.1,
+    "description": "Tea, brewed from tea bag",
+    "database_id": 109,
+    "ndb_number": "14355",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14352": {
+    "value": 0.1,
+    "description": "Tea, decaffeinated, brewed from tea bag",
+    "database_id": 14,
+    "ndb_number": "14352",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14555": {
+    "value": 0.2,
+    "description": "Water, mineral/spring, bottled",
+    "database_id": 184,
+    "ndb_number": "14555",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "14411": {
+    "value": 1.1,
+    "description": "Water, tap, drinking2",
+    "database_id": 439,
+    "ndb_number": "14411",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15141": {
+    "value": 37.8,
+    "description": "Crustaceans, crab, blue, canned",
+    "database_id": 389,
+    "ndb_number": "15141",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15148": {
+    "value": 185,
+    "description": "Crustaceans, lobster, northern, cooked, moist heat",
+    "database_id": 390,
+    "ndb_number": "15148",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15149": {
+    "value": 14.2,
+    "description": "Crustaceans, shrimp, mixed species, raw",
+    "database_id": 391,
+    "ndb_number": "15149",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15151": {
+    "value": 15.2,
+    "description": "Crustaceans, shrimp, precooked, shell removed, no tail",
+    "database_id": 132,
+    "ndb_number": "15151",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15027": {
+    "value": 66.9,
+    "description": "Fish sticks or patty, frozen, oven-cooked ",
+    "database_id": 33,
+    "ndb_number": "15027",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15234": {
+    "value": 1.9,
+    "description": "Fish, catfish, farmed, raw",
+    "database_id": 499,
+    "ndb_number": "15234",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15235": {
+    "value": 3.2,
+    "description": "Fish, catfish, pan-cooked with oil",
+    "database_id": 165,
+    "ndb_number": "15235",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15192": {
+    "value": 172.1,
+    "description": "Fish, cod, baked",
+    "database_id": 186,
+    "ndb_number": "15192",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15019": {
+    "value": 130.6,
+    "description": "Fish, cod, Pacific, raw",
+    "database_id": 375,
+    "ndb_number": "15019",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15028": {
+    "value": 14.3,
+    "description": "Fish, flatfish (flounder and sole species), raw",
+    "database_id": 376,
+    "ndb_number": "15028",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15033": {
+    "value": 227,
+    "description": "Fish, haddock, raw",
+    "database_id": 377,
+    "ndb_number": "15033",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15036": {
+    "value": 8,
+    "description": "Fish, halibut, Atlantic and Pacific, raw",
+    "database_id": 378,
+    "ndb_number": "15036",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15057": {
+    "value": 9.3,
+    "description": "Fish, ocean perch, Atlantic, raw",
+    "database_id": 379,
+    "ndb_number": "15057",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15266": {
+    "value": 43.5,
+    "description": "Fish, pollock, Alaska, raw",
+    "database_id": 396,
+    "ndb_number": "15266",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15070": {
+    "value": 14,
+    "description": "Fish, rockfish, Pacific, mixed species, raw",
+    "database_id": 380,
+    "ndb_number": "15070",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15236": {
+    "value": 3.2,
+    "description": "Fish, salmon, Atlantic, farmed, raw",
+    "database_id": 496,
+    "ndb_number": "15236",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "35171": {
+    "value": 38.4,
+    "description": "Fish, salmon, chum, dried (Alaska Native)",
+    "database_id": 421,
+    "ndb_number": "35171",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15260": {
+    "value": 14,
+    "description": "Fish, salmon, pink, canned, drained solids",
+    "database_id": 395,
+    "ndb_number": "15260",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15083": {
+    "value": 26.2,
+    "description": "Fish, salmon, pink, raw",
+    "database_id": 381,
+    "ndb_number": "15083",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15087": {
+    "value": 22,
+    "description": "Fish, salmon, sockeye, canned, drained solids",
+    "database_id": 384,
+    "ndb_number": "15087",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15085": {
+    "value": 14.3,
+    "description": "Fish, salmon, sockeye, raw",
+    "database_id": 382,
+    "ndb_number": "15085",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15237": {
+    "value": 12.8,
+    "description": "Fish, salmon, steaks/fillets, baked",
+    "database_id": 158,
+    "ndb_number": "15237",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "35184": {
+    "value": 216,
+    "description": "Fish, smelt, dried (Alaska Native)",
+    "database_id": 422,
+    "ndb_number": "35184",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15110": {
+    "value": 19.5,
+    "description": "Fish, swordfish, raw",
+    "database_id": 385,
+    "ndb_number": "15110",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15262": {
+    "value": 6.9,
+    "description": "Fish, tilapia, baked",
+    "database_id": 187,
+    "ndb_number": "15262",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15115": {
+    "value": 7.4,
+    "description": "Fish, trout, rainbow, wild, raw",
+    "database_id": 386,
+    "ndb_number": "15115",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15121": {
+    "value": 8.7,
+    "description": "Fish, tuna, canned in water, drained",
+    "database_id": 166,
+    "ndb_number": "15121",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15118": {
+    "value": 23,
+    "description": "Fish, tuna, fresh, bluefin, cooked, dry heat",
+    "database_id": 388,
+    "ndb_number": "15118",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15117": {
+    "value": 17.6,
+    "description": "Fish, tuna, fresh, bluefin, raw",
+    "database_id": 387,
+    "ndb_number": "15117",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "35091": {
+    "value": 33.6,
+    "description": "Fish, whitefish, broad, including head, eyes, cheeks and soft bones (Alaska Native), raw",
+    "database_id": 420,
+    "ndb_number": "35091",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15160": {
+    "value": 66.5,
+    "description": "Mollusks, clam, mixed species, canned, drained solids",
+    "database_id": 392,
+    "ndb_number": "15160",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15169": {
+    "value": 109.1,
+    "description": "Mollusks, oyster, eastern, wild, cooked, moist heat",
+    "database_id": 393,
+    "ndb_number": "15169",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "15172": {
+    "value": 7.4,
+    "description": "Mollusks, scallop, mixed species, raw",
+    "database_id": 394,
+    "ndb_number": "15172",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20081": {
+    "value": 0.8,
+    "description": "Flour, white, all-purpose",
+    "database_id": 16,
+    "ndb_number": "20081",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20110": {
+    "value": 3.7,
+    "description": "Noodles, egg, enriched, boiled",
+    "database_id": 53,
+    "ndb_number": "20110",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20321": {
+    "value": 22.4,
+    "description": "Pasta, enriched, boiled in water with iodized salt using amount per pasta label",
+    "database_id": 347,
+    "ndb_number": "20321",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20134": {
+    "value": 0.9,
+    "description": "Pasta, rice noodles, cooked",
+    "database_id": 232,
+    "ndb_number": "20134",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20121": {
+    "value": 0.3,
+    "description": "Pasta, spaghetti, enriched, boiled",
+    "database_id": 171,
+    "ndb_number": "20121",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20125": {
+    "value": 0,
+    "description": "Pasta, whole wheat, cooked",
+    "database_id": 233,
+    "ndb_number": "20125",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20137": {
+    "value": 0,
+    "description": "Quinoa, cooked",
+    "database_id": 223,
+    "ndb_number": "20137",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20041": {
+    "value": 0,
+    "description": "Rice, brown, cooked",
+    "database_id": 200,
+    "ndb_number": "20041",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "20051": {
+    "value": 0.2,
+    "description": "Rice, white, enriched, cooked",
+    "database_id": 40,
+    "ndb_number": "20051",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "08091": {
+    "value": 0,
+    "description": "Cereal, corn/hominy grits, enriched, cooked",
+    "database_id": 43,
+    "ndb_number": "08091",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "08169": {
+    "value": 0,
+    "description": "Cereal, cream of wheat (farina), enriched, cooked",
+    "database_id": 42,
+    "ndb_number": "08169",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "08121": {
+    "value": 0.2,
+    "description": "Cereal, oatmeal, plain, cooked",
+    "database_id": 41,
+    "ndb_number": "08121",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18001": {
+    "value": 0.6,
+    "description": "Bagel, plain, toasted ",
+    "database_id": 133,
+    "ndb_number": "18001",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18015": {
+    "value": 2.5,
+    "description": "Biscuits, refrigerated-type, baked ",
+    "database_id": 305,
+    "ndb_number": "18015",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "28397": {
+    "value": 1.8,
+    "description": "Bread, multigrain5",
+    "database_id": 344,
+    "ndb_number": "28397",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18060": {
+    "value": 0.6,
+    "description": "Bread, rye ",
+    "database_id": 337,
+    "ndb_number": "18060",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18350": {
+    "value": 2.4,
+    "description": "Bread, white roll/bun (hamburger/hotdog)6",
+    "database_id": 199,
+    "ndb_number": "18350",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18069": {
+    "value": 1.8,
+    "description": "Bread, white, enriched, pre-sliced7",
+    "database_id": 46,
+    "ndb_number": "18069",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18075": {
+    "value": 1.9,
+    "description": "Bread, whole-wheat, commercially prepared8",
+    "database_id": 48,
+    "ndb_number": "18075",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18079": {
+    "value": 111.7,
+    "description": "Breadcrumbs",
+    "database_id": 15,
+    "ndb_number": "18079",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18362": {
+    "value": 2.3,
+    "description": "Breakfast tart/toaster pastry9",
+    "database_id": 170,
+    "ndb_number": "18362",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18151": {
+    "value": 9.7,
+    "description": "Brownie, commercially prepared",
+    "database_id": 146,
+    "ndb_number": "18151",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18096": {
+    "value": 8.1,
+    "description": "Cake, chocolate with chocolate icing, commercially prepared10",
+    "database_id": 99,
+    "ndb_number": "18096",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18140": {
+    "value": 7.4,
+    "description": "Cake, yellow with chocolate frosting, commercially prepared",
+    "database_id": 399,
+    "ndb_number": "18140",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18964": {
+    "value": 3.8,
+    "description": "Cinnamon roll, from package, iced",
+    "database_id": 185,
+    "ndb_number": "18964",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18160": {
+    "value": 1.1,
+    "description": "Cookies, from package, chocolate chip",
+    "database_id": 100,
+    "ndb_number": "18160",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18166": {
+    "value": 0.3,
+    "description": "Cookies, from package, sandwich with crème filling",
+    "database_id": 101,
+    "ndb_number": "18166",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18204": {
+    "value": 4.7,
+    "description": "Cookies, from package, sugar12",
+    "database_id": 147,
+    "ndb_number": "18204",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18024": {
+    "value": 26.6,
+    "description": "Cornbread, homemade ",
+    "database_id": 47,
+    "ndb_number": "18024",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18023": {
+    "value": 16.7,
+    "description": "Cornbread, from dry mix, prepared with 2% milk, margarine, and eggs",
+    "database_id": 398,
+    "ndb_number": "18023",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18229": {
+    "value": 0.3,
+    "description": "Crackers, butter-type",
+    "database_id": 136,
+    "ndb_number": "18229",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18214": {
+    "value": 10.5,
+    "description": "Crackers, cheese, regular",
+    "database_id": 229,
+    "ndb_number": "18214",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18173": {
+    "value": 0.9,
+    "description": "Crackers, graham ",
+    "database_id": 135,
+    "ndb_number": "18173",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18228": {
+    "value": 0.3,
+    "description": "Crackers, saltine ",
+    "database_id": 51,
+    "ndb_number": "18228",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18248": {
+    "value": 15.2,
+    "description": "Doughnut, cake-type, plain, commercially prepared",
+    "database_id": 145,
+    "ndb_number": "18248",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18437": {
+    "value": 1.1,
+    "description": "English muffin, plain, toasted ",
+    "database_id": 134,
+    "ndb_number": "18437",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18274": {
+    "value": 12.4,
+    "description": "Muffin, blueberry, commercially prepared",
+    "database_id": 50,
+    "ndb_number": "18274",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18936": {
+    "value": 6.7,
+    "description": "Pancakes, frozen, heated ",
+    "database_id": 169,
+    "ndb_number": "18936",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18335": {
+    "value": 1.2,
+    "description": "Pie crust, commercially prepared",
+    "database_id": 234,
+    "ndb_number": "18335",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18443": {
+    "value": 0.4,
+    "description": "Pie, apple, fresh/frozen, commercially prepared",
+    "database_id": 102,
+    "ndb_number": "18443",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18326": {
+    "value": 21.9,
+    "description": "Pie, pumpkin, fresh/frozen, commercially prepared",
+    "database_id": 103,
+    "ndb_number": "18326",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18244": {
+    "value": 6,
+    "description": "Sweet roll/Danish pastry ",
+    "database_id": 3,
+    "ndb_number": "18244",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18363": {
+    "value": 0.3,
+    "description": "Tortilla, corn",
+    "database_id": 198,
+    "ndb_number": "18363",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "18970": {
+    "value": 0.4,
+    "description": "Tortilla, flour",
+    "database_id": 49,
+    "ndb_number": "18970",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19919": {
+    "value": 1.6,
+    "description": "Candy, fruit snacks",
+    "database_id": 216,
+    "ndb_number": "19919",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19155": {
+    "value": 17.4,
+    "description": "Candy bar (chocolate, nougat, and nuts) ",
+    "database_id": 178,
+    "ndb_number": "19155",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19120": {
+    "value": 46,
+    "description": "Candy bar, milk chocolate, plain ",
+    "database_id": 104,
+    "ndb_number": "19120",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19107": {
+    "value": 7.8,
+    "description": "Candy, hard, assorted flavors",
+    "database_id": 148,
+    "ndb_number": "19107",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19411": {
+    "value": 2.3,
+    "description": "Chips, potato",
+    "database_id": 85,
+    "ndb_number": "19411",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19412": {
+    "value": 1.5,
+    "description": "Chips, potato, made from dried potatoes, cheese-flavor",
+    "database_id": 402,
+    "ndb_number": "19412",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "25028": {
+    "value": 1.8,
+    "description": "Chips, corn/tortilla ",
+    "database_id": 52,
+    "ndb_number": "25028",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19173": {
+    "value": 0.5,
+    "description": "Gelatin dessert, assorted flavors, prepared",
+    "database_id": 105,
+    "ndb_number": "19173",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19015": {
+    "value": 1.9,
+    "description": "Granola bar",
+    "database_id": 224,
+    "ndb_number": "19015",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19296": {
+    "value": 0.7,
+    "description": "Honey ",
+    "database_id": 97,
+    "ndb_number": "19296",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19300": {
+    "value": 1,
+    "description": "Jelly, assorted flavors",
+    "database_id": 151,
+    "ndb_number": "19300",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19283": {
+    "value": 1.1,
+    "description": "Popsicle, fruit-flavored13",
+    "database_id": 144,
+    "ndb_number": "19283",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "25026": {
+    "value": 0.4,
+    "description": "Popcorn, microwave, butter-flavored ",
+    "database_id": 179,
+    "ndb_number": "25026",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19047": {
+    "value": 0.5,
+    "description": "Pretzels, hard, salted ",
+    "database_id": 149,
+    "ndb_number": "19047",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19183": {
+    "value": 13.7,
+    "description": "Pudding, ready-to-eat, chocolate",
+    "database_id": 235,
+    "ndb_number": "19183",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19193": {
+    "value": 27.5,
+    "description": "Pudding, rice, ready-to-eat",
+    "database_id": 401,
+    "ndb_number": "19193",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19097": {
+    "value": 14.5,
+    "description": "Sherbet, fruit-flavored14",
+    "database_id": 289,
+    "ndb_number": "19097",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19335": {
+    "value": 0,
+    "description": "Sugar, white, granulated",
+    "database_id": 95,
+    "ndb_number": "19335",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19348": {
+    "value": 0.7,
+    "description": "Syrup, chocolate ",
+    "database_id": 150,
+    "ndb_number": "19348",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "19129": {
+    "value": 0.2,
+    "description": "Syrup, pancake ",
+    "database_id": 96,
+    "ndb_number": "19129",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "22906": {
+    "value": 3.6,
+    "description": "Chicken potpie, frozen, heated ",
+    "database_id": 88,
+    "ndb_number": "22906",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "22904": {
+    "value": 1.7,
+    "description": "Chili con carne with beans, canned ",
+    "database_id": 86,
+    "ndb_number": "22904",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21127": {
+    "value": 1.8,
+    "description": "Coleslaw, mayonnaise-type, from grocery/deli ",
+    "database_id": 294,
+    "ndb_number": "21127",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "22973": {
+    "value": 23.7,
+    "description": "Corn dogs, frozen, prepared",
+    "database_id": 411,
+    "ndb_number": "22973",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "22977": {
+    "value": 8.4,
+    "description": "Lasagna with meat, frozen, heated ",
+    "database_id": 6,
+    "ndb_number": "22977",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "32019": {
+    "value": 10.7,
+    "description": "Lasagna, cheese, frozen, unprepared",
+    "database_id": 418,
+    "ndb_number": "32019",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "22960": {
+    "value": 18.9,
+    "description": "Macaroni and cheese, prepared from box mix ",
+    "database_id": 87,
+    "ndb_number": "22960",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "32008": {
+    "value": 7.4,
+    "description": "Pasta mix, classic cheeseburger macaroni, unprepared",
+    "database_id": 416,
+    "ndb_number": "32008",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "32010": {
+    "value": 11.3,
+    "description": "Pasta mix, Italian lasagna, unprepared",
+    "database_id": 417,
+    "ndb_number": "32010",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21505": {
+    "value": 23.3,
+    "description": "Pizza, cheese topping, thin crust, frozen, baked",
+    "database_id": 409,
+    "ndb_number": "21505",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "22971": {
+    "value": 1.5,
+    "description": "Potato salad with egg",
+    "database_id": 410,
+    "ndb_number": "22971",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21140": {
+    "value": 2.6,
+    "description": "Potato salad, mayonnaise-type, from grocery/deli ",
+    "database_id": 292,
+    "ndb_number": "21140",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "32007": {
+    "value": 7.4,
+    "description": "Taquitos, frozen, beef and cheese, oven-heated",
+    "database_id": 415,
+    "ndb_number": "32007",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "32006": {
+    "value": 7.4,
+    "description": "Taquitos, frozen, chicken and cheese, oven-heated",
+    "database_id": 414,
+    "ndb_number": "32006",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "32037": {
+    "value": 20.9,
+    "description": "Turnover, pepperoni pizza",
+    "database_id": 419,
+    "ndb_number": "32037",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21142": {
+    "value": 9.1,
+    "description": "Biscuits, fast food",
+    "database_id": 197,
+    "ndb_number": "21142",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21064": {
+    "value": 5.4,
+    "description": "Burrito with beef, beans and cheese, from Mexican carry-out",
+    "database_id": 10,
+    "ndb_number": "21064",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21469": {
+    "value": 3.8,
+    "description": "Chicken breast, fried, with skin, fast food15",
+    "database_id": 162,
+    "ndb_number": "21469",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21470": {
+    "value": 2.3,
+    "description": "Chicken leg, fried, with skin, fast food",
+    "database_id": 164,
+    "ndb_number": "21470",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21229": {
+    "value": 0.9,
+    "description": "Chicken nuggets, fast food",
+    "database_id": 131,
+    "ndb_number": "21229",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01110": {
+    "value": 35.3,
+    "description": "Milk shake, chocolate, fast food",
+    "database_id": 303,
+    "ndb_number": "01110",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "01111": {
+    "value": 36.2,
+    "description": "Milk shake, vanilla, fast food",
+    "database_id": 193,
+    "ndb_number": "01111",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21302": {
+    "value": 11.7,
+    "description": "Pizza, cheese and pepperoni, regular crust, from pizza carry-out ",
+    "database_id": 318,
+    "ndb_number": "21302",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21299": {
+    "value": 12,
+    "description": "Pizza, cheese, fast food",
+    "database_id": 202,
+    "ndb_number": "21299",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21484": {
+    "value": 13.2,
+    "description": "Pizza, with sausage topping, regular crust, fast food",
+    "database_id": 408,
+    "ndb_number": "21484",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21138": {
+    "value": 1.1,
+    "description": "Potatoes, French fries, fast food",
+    "database_id": 139,
+    "ndb_number": "21138",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21112": {
+    "value": 3.3,
+    "description": "Sandwich, hamburger, single, large patty, fast food",
+    "database_id": 2,
+    "ndb_number": "21112",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21092": {
+    "value": 11.1,
+    "description": "Sandwich, cheeseburger, double, regular patty, plain, fast food",
+    "database_id": 406,
+    "ndb_number": "21092",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21096": {
+    "value": 10.3,
+    "description": "Sandwich, cheeseburger, single, large patty, fast food",
+    "database_id": 286,
+    "ndb_number": "21096",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21490": {
+    "value": 1.8,
+    "description": "Sandwich, chicken filet (broiled) sandwich, fast food",
+    "database_id": 11,
+    "ndb_number": "21490",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21021": {
+    "value": 24.5,
+    "description": "Sandwich, egg, cheese, and ham on English muffin, fast food",
+    "database_id": 288,
+    "ndb_number": "21021",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21105": {
+    "value": 36.2,
+    "description": "Sandwich, fish, fast food",
+    "database_id": 287,
+    "ndb_number": "21105",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21059": {
+    "value": 7.4,
+    "description": "Shrimp, breaded and fried, fast food",
+    "database_id": 405,
+    "ndb_number": "21059",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "21486": {
+    "value": 7,
+    "description": "Taco/tostada with beef and cheese, from Mexican carry-out",
+    "database_id": 4,
+    "ndb_number": "21486",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36603": {
+    "value": 4.3,
+    "description": "Beef with vegetables in sauce, restaurant, Chinese",
+    "database_id": 7,
+    "ndb_number": "36603",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36050": {
+    "value": 16.1,
+    "description": "Cheese enchilada, restaurant, Mexican",
+    "database_id": 428,
+    "ndb_number": "36050",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36052": {
+    "value": 23.1,
+    "description": "Cheese quesadilla, restaurant, Mexican",
+    "database_id": 429,
+    "ndb_number": "36052",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36055": {
+    "value": 21.5,
+    "description": "Cheese ravioli with marinara sauce, restaurant, Italian",
+    "database_id": 430,
+    "ndb_number": "36055",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36626": {
+    "value": 3.8,
+    "description": "Chicken with vegetables in sauce, restaurant, Chinese",
+    "database_id": 8,
+    "ndb_number": "36626",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36033": {
+    "value": 13,
+    "description": "Fish fillet, parmesan crusted tilapia, restaurant, family style",
+    "database_id": 444,
+    "ndb_number": "36033",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36012": {
+    "value": 38.1,
+    "description": "Fried mozzarella sticks, restaurant, family style",
+    "database_id": 423,
+    "ndb_number": "36012",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36602": {
+    "value": 5.5,
+    "description": "Fried rice, meatless, restaurant, Chinese",
+    "database_id": 9,
+    "ndb_number": "36602",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36041": {
+    "value": 27.5,
+    "description": "Lasagna with meat, restaurant, Italian",
+    "database_id": 427,
+    "ndb_number": "36041",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36017": {
+    "value": 22.4,
+    "description": "Macaroni & cheese, from kids' menu, restaurant, family style",
+    "database_id": 425,
+    "ndb_number": "36017",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "36620": {
+    "value": 1.5,
+    "description": "Shrimp and vegetables, restaurant, Chinese",
+    "database_id": 431,
+    "ndb_number": "36620",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07959": {
+    "value": 25.5,
+    "description": "Bologna (beef/pork) ",
+    "database_id": 32,
+    "ndb_number": "07959",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07949": {
+    "value": 8.8,
+    "description": "Frankfurter, beef/pork, boiled16",
+    "database_id": 31,
+    "ndb_number": "07949",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07945": {
+    "value": 7.4,
+    "description": "Frankfurter, beef, heated",
+    "database_id": 369,
+    "ndb_number": "07945",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07081": {
+    "value": 3.5,
+    "description": "Luncheon meat (chicken/turkey) ",
+    "database_id": 261,
+    "ndb_number": "07081",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07028": {
+    "value": 1.2,
+    "description": "Luncheon meat, ham",
+    "database_id": 129,
+    "ndb_number": "07028",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07072": {
+    "value": 10.1,
+    "description": "Salami, dry/hard",
+    "database_id": 188,
+    "ndb_number": "07072",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07019": {
+    "value": 29.8,
+    "description": "Sausage, pork, chorizo, raw",
+    "database_id": 367,
+    "ndb_number": "07019",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "07953": {
+    "value": 4.2,
+    "description": "Sausage, pork, oven-cooked",
+    "database_id": 28,
+    "ndb_number": "07953",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "05064": {
+    "value": 1.2,
+    "description": "Chicken breast, oven-roasted (skin removed) ",
+    "database_id": 130,
+    "ndb_number": "05064",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "05098": {
+    "value": 0.9,
+    "description": "Chicken thigh, oven-roasted (skin removed) ",
+    "database_id": 163,
+    "ndb_number": "05098",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "05192": {
+    "value": 4.8,
+    "description": "Turkey breast, oven-roasted",
+    "database_id": 30,
+    "ndb_number": "05192",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "05306": {
+    "value": 3.9,
+    "description": "Turkey, ground, pan-cooked",
+    "database_id": 189,
+    "ndb_number": "05306",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "10136": {
+    "value": 0.7,
+    "description": "Ham, cured (not canned), baked",
+    "database_id": 26,
+    "ndb_number": "10136",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "10860": {
+    "value": 1.1,
+    "description": "Pork bacon, oven-cooked",
+    "database_id": 29,
+    "ndb_number": "10860",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "10179": {
+    "value": 0.5,
+    "description": "Pork chop, pan-cooked with oil",
+    "database_id": 27,
+    "ndb_number": "10179",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  },
+  "17204": {
+    "value": 16.4,
+    "description": "Beef/calf, liver, pan-cooked with oil",
+    "database_id": 335,
+    "ndb_number": "17204",
+    "source": "USDA/FDA/NIH Iodine Release 4 (2024)",
+    "url": "https://www.ars.usda.gov/ARSUserFiles/80400535/Data/Iodine/IODINE_RELEASE_4.zip"
+  }
+}

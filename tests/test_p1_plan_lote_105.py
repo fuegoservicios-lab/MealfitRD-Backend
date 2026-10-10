@@ -21,13 +21,14 @@ Lo que cierra:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
 import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
-_FRONT = _BACKEND.parent / "frontend"
+_FRONT = Path(os.environ.get("MEALFIT_FRONTEND_TEST_DIR", str(_BACKEND.parent / "frontend")))
 
 
 def _front(rel: str) -> str:
@@ -70,7 +71,8 @@ def test_el_diario_de_dias_anteriores_esta_completo():
     assert "t('Extras y snacks')" in dh
     # borrar desde cualquier día, avisando a la tarjeta
     assert "fetchWithAuth(`/api/diary/consumed/${meal.id}`, { method: 'DELETE' })" in dh
-    assert "detail: { source: 'diary-history', date: selected }" in dh
+    assert "detail: { source: 'diary-history', date: selected," in dh
+    assert "deletedMeal: { id: meal.id, name: meal.meal_name }" in dh
     # registrar en el día que miras, hasta el tope del backend
     assert "const DIAS_ATRAS_REGISTRO = 7;" in dh
     # [P1-PLAN-LOTE-124] el montaje ganó `onScan` (el escáner también desde el diario) y `userId`; lo que este test
@@ -91,7 +93,8 @@ def test_el_diario_de_dias_anteriores_esta_completo():
 def test_la_tarjeta_escucha_el_borrado_del_cajon_sin_reaccionar_al_suyo():
     tp = _front("src/components/dashboard/TrackingProgress.jsx")
     assert "if (isMounted && e?.detail?.source !== 'tracking-progress') fetchConsumed();" in tp
-    assert "new CustomEvent('mealfit:diary-changed', { detail: { source: 'tracking-progress' } })" in tp
+    assert "new CustomEvent('mealfit:diary-changed', { detail: { source: 'tracking-progress'," in tp
+    assert "deletedMeal: { id: meal.id, name: meal.meal_name }" in tp
 
 
 def test_el_componedor_abre_en_el_dia_pedido():

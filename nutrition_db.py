@@ -538,6 +538,9 @@ class NutritionInfo:
     vit_k_mcg: Optional[float] = None
     selenium_mcg: Optional[float] = None
     omega3_g: Optional[float] = None
+    vit_b6_mg: Optional[float] = None
+    iodine_mcg: Optional[float] = None
+    micronutrient_provenance: Optional[dict] = None
 
 
 class IngredientNutritionDB:
@@ -712,6 +715,9 @@ class IngredientNutritionDB:
             vit_k_mcg=_num(row.get("vitamin_k_mcg_per_100g")),
             selenium_mcg=_num(row.get("selenium_mcg_per_100g")),
             omega3_g=_num(row.get("omega3_ala_g_per_100g")),
+            vit_b6_mg=_num(row.get("vitamin_b6_mg_per_100g")),
+            iodine_mcg=_num(row.get("iodine_mcg_per_100g")),
+            micronutrient_provenance=row.get("micronutrient_provenance") or {},
         )
 
     def category_of(self, raw_name: str) -> Optional[str]:
@@ -942,6 +948,10 @@ class IngredientNutritionDB:
             "vit_k_mcg": _sc(info.vit_k_mcg),
             "selenium_mcg": _sc(info.selenium_mcg),
             "omega3_g": _sc(info.omega3_g),
+            "vit_b6_mg": _sc(info.vit_b6_mg),
+            "iodine_mcg": _sc(info.iodine_mcg),
+            "provenance": {"catalog": {"source": info.source or "legacy", "fdc_id": info.fdc_id}, **(info.micronutrient_provenance or {})},
+            "verified_diary_fields": [key for key, evidence in (info.micronutrient_provenance or {}).items() if isinstance(evidence, dict) and evidence.get("reported") is True],
         }
 
     def macros_for_line(self, qty, unit, raw_name: str) -> Optional[dict]:

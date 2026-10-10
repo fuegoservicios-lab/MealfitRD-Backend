@@ -12,9 +12,10 @@ Cobertura honesta, por diseño: una comida registrada con foto o con macros prop
 micros, y el contador lo dice (`micros=None` en esa comida; `micros_coverage` en el total). Mostrar 0 mg de
 calcio por un plato escaneado sería mentir con número.
 
-Los OCHO del contador (el dueño eligió esta lista): fibra, sodio, potasio, calcio, hierro, vitamina C, vitamina A
-y vitamina D. Las metas salen de `micronutrients.dri_targets` (DRI/IOM + OMS, por sexo/edad/embarazo): el sodio
-es TECHO (OMS <2000 mg), el resto SUELO.
+Los 17 indicadores se declaran en diary_nutrients. Las referencias adultas
+son RDA/AI, con embarazo y lactancia separados; no son umbrales de toxicidad.
+El sodio conserva su máximo recomendado OMS. Los nueve indicadores nuevos
+requieren composición verificada, sin ceros de relleno de catálogos antiguos.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import threading
 from typing import Any, Optional
 
 from knobs import _env_float
+from diary_nutrients import NUTRIENTS, CATALOG_VERSION, valid_amount, references
 
 logger = logging.getLogger(__name__)
 
@@ -53,18 +55,10 @@ def _ratio_max() -> float:
 
 
 # Orden de pantalla. Clave del contador → clave del dict que devuelve `micros_from_ingredient_string`.
-MICROS_CONTADOR: tuple[tuple[str, str], ...] = (
-    ("fiber_g", "fiber"),
-    ("sodium_mg", "sodium_mg"),
-    ("potassium_mg", "potassium_mg"),
-    ("calcium_mg", "calcium_mg"),
-    ("iron_mg", "iron_mg"),
-    ("vit_c_mg", "vit_c_mg"),
-    ("vit_a_mcg", "vit_a_mcg"),
-    ("vit_d_mcg", "vit_d_mcg"),
-)
+MICROS_CONTADOR = tuple((key, src) for key, src, _, _ in NUTRIENTS)
 
 CLAVES = tuple(k for k, _ in MICROS_CONTADOR)
+AMPLIADOS = frozenset(CLAVES[8:])
 
 
 def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
@@ -76,6 +70,8 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
     if not isinstance(ingredients, list) or not ingredients:
         return None
     acc = {k: 0.0 for k in CLAVES}
+    known = {k: 0 for k in CLAVES}
+    sources = {k: [] for k in CLAVES}
     resolved = 0
     total = 0
     kcal = 0.0
@@ -99,12 +95,23 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
             except Exception:
                 pass
         for clave, src in MICROS_CONTADOR:
-            v = m.get(src)
+            v = valid_amount(m.get(src))
+            # New indicators require audited evidence; legacy proxy/fill zeros remain unknown.
+            if clave in AMPLIADOS and "verified_diary_fields" in m and src not in m["verified_diary_fields"]:
+                v = None
             if v is not None:
-                acc[clave] += float(v)
+                acc[clave] += v
+                known[clave] += 1
+                provenance = (m.get("provenance") or {}).get(src) or (m.get("provenance") or {}).get("catalog")
+                if provenance and provenance not in sources[clave]:
+                    sources[clave].append(provenance)
     if total == 0:
         return None
-    out = {"values": {k: round(v, 1) for k, v in acc.items()}, "resolved": resolved, "total": total}
+    out = {"values": {k: round(v, 3) if known[k] else None for k, v in acc.items()},
+           "resolved": resolved, "total": total, "catalog_version": CATALOG_VERSION,
+           "coverage": {k: {"known": known[k], "total": total,
+                            "status": "none" if not known[k] else "complete" if known[k] == total else "partial"} for k in CLAVES},
+           "provenance": sources}
     if con_macros:
         out["kcal"] = round(kcal, 1)
     return out
@@ -134,30 +141,38 @@ def micros_plausibles(micros: Optional[dict], kcal_comida) -> Optional[dict]:
 def resumen_micros(meals: list[dict]) -> dict:
     """Totales del día + cobertura: cuántas comidas aportaron datos de las registradas."""
     tot = {k: 0.0 for k in CLAVES}
+    known = {k: 0 for k in CLAVES}
+    complete = {k: 0 for k in CLAVES}
+    sources = {k: [] for k in CLAVES}
     con_datos = 0
     for m in meals or []:
         mi = m.get("micros")
         if not mi:
             continue
-        con_datos += 1
+        if any(valid_amount(v) is not None for v in (mi.get("values") or {}).values()):
+            con_datos += 1
         for k in CLAVES:
-            tot[k] += float((mi.get("values") or {}).get(k) or 0.0)
+            v = valid_amount((mi.get("values") or {}).get(k))
+            if v is not None:
+                tot[k] += v
+                known[k] += 1
+                for source in (mi.get("provenance") or {}).get(k, []):
+                    if source not in sources[k]:
+                        sources[k].append(source)
+                c = (mi.get("coverage") or {}).get(k)
+                if c and c.get("status") == "complete":
+                    complete[k] += 1
+    total = len(meals or [])
     return {
-        "micros": {k: round(v, 1) for k, v in tot.items()},
-        "micros_coverage": {"con_datos": con_datos, "total": len(meals or [])},
+        "micros": {k: round(v, 3) if known[k] else None for k, v in tot.items()},
+        "micros_coverage": {"con_datos": con_datos, "total": total,
+                            "by_nutrient": {k: {"known": known[k], "total": total,
+                                                 "status": "none" if not known[k] else "complete" if complete[k] == total else "partial",
+                                                 "sources": sources[k]} for k in CLAVES},
+                            "catalog_version": CATALOG_VERSION},
     }
 
 
-def metas_micros(sex: Optional[str], age: Optional[int], pregnant: bool = False) -> dict:
-    """Las metas de los ocho, en la forma que pinta el cliente: `{clave: {target, kind, unit}}`.
-    `kind` es `floor` (llegar) o `ceiling` (no pasar: el sodio)."""
-    from micronutrients import dri_targets
-    dri = dri_targets(sex=sex, age=age, pregnant=pregnant)
-    out = {}
-    for k in CLAVES:
-        d = dri.get(k) or {}
-        if "ceiling" in d:
-            out[k] = {"target": float(d["ceiling"]), "kind": "ceiling", "unit": d.get("unit", "")}
-        elif "floor" in d:
-            out[k] = {"target": float(d["floor"]), "kind": "floor", "unit": d.get("unit", "")}
-    return out
+def metas_micros(sex: Optional[str], age: Optional[int], pregnant: bool = False, lactating: bool = False) -> dict:
+    """References with source/scope metadata; no inferred universal safety maxima."""
+    return references(sex, age, pregnant, lactating)

@@ -21,7 +21,7 @@ DRY = "--dry-run" in sys.argv
 # lowercase). Folato prioriza DFE (1190) sobre total (1177); omega-3 prioriza ALA (1404) sobre 18:3 (1270).
 TARGETS = {
     "zinc_mg_per_100g":           ([1095],        ["zinc, zn"]),
-    "folate_mcg_dfe_per_100g":    ([1190, 1177],  ["folate, dfe", "folate, total"]),
+    "folate_mcg_dfe_per_100g":    ([1190],        ["folate, dfe"]),
     "vitamin_a_mcg_rae_per_100g": ([1106],        ["vitamin a, rae"]),
     "vitamin_c_mg_per_100g":      ([1162],        ["vitamin c, total ascorbic acid"]),
     "vitamin_e_mg_per_100g":      ([1109],        ["vitamin e (alpha-tocopherol)"]),

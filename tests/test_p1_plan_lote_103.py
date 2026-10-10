@@ -8,13 +8,14 @@ y el total dice con cuántas comidas se calculó. Metas: los ocho del dueño des
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
 import pytest
 
 _BACKEND = Path(__file__).resolve().parents[1]
-_FRONT = _BACKEND.parent / "frontend"
+_FRONT = Path(os.environ.get("MEALFIT_FRONTEND_TEST_DIR", str(_BACKEND.parent / "frontend")))
 
 
 def _front(rel: str) -> str:
@@ -55,16 +56,18 @@ def test_sin_ingredientes_no_hay_micros_ni_cero_disfrazado():
     con = {"micros": micros_de_ingredientes(["100 g de Guineo maduro"], _DBFalsa())}
     sin = {"micros": None}
     r = resumen_micros([con, sin])
-    assert r["micros_coverage"] == {"con_datos": 1, "total": 2}
+    assert r["micros_coverage"]["con_datos"] == 1 and r["micros_coverage"]["total"] == 2
+    assert r["micros_coverage"]["by_nutrient"]["potassium_mg"]["status"] == "partial"
     assert r["micros"]["potassium_mg"] == 358.0
 
 
 def test_los_ocho_del_dueno_y_el_sodio_como_techo():
     from diary_micros import CLAVES, metas_micros
-    assert CLAVES == ("fiber_g", "sodium_mg", "potassium_mg", "calcium_mg", "iron_mg", "vit_c_mg", "vit_a_mcg", "vit_d_mcg")
+    assert CLAVES[:8] == ("fiber_g", "sodium_mg", "potassium_mg", "calcium_mg", "iron_mg", "vit_c_mg", "vit_a_mcg", "vit_d_mcg")
+    assert len(CLAVES) == 17
     m = metas_micros("male", 31)
     assert set(m) == set(CLAVES)
-    assert m["sodium_mg"] == {"target": 2000.0, "kind": "ceiling", "unit": "mg"}
+    assert {k: m["sodium_mg"][k] for k in ("target", "kind", "unit")} == {"target": 2000.0, "kind": "ceiling", "unit": "mg"}
     assert m["fiber_g"]["kind"] == "floor" and m["fiber_g"]["target"] == 38.0
     # sexo/edad cuentan (DRI): hierro 18 mg en mujer joven, 8 en hombre
     assert metas_micros("female", 30)["iron_mg"]["target"] == 18.0 and m["iron_mg"]["target"] == 8.0

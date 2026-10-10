@@ -1068,12 +1068,9 @@ def _metas_micros_de(hp: dict) -> dict:
     cliente pinta los totales sin barra, nunca una barra contra un cero inventado."""
     try:
         from diary_micros import metas_micros
-        try:
-            from nutrition_calculator import _is_pregnancy_or_lactation
-            _preg = bool(_is_pregnancy_or_lactation(hp))
-        except Exception:
-            _preg = False
-        return metas_micros(hp.get("gender"), hp.get("age"), pregnant=_preg)
+        from diary_nutrients import life_stage
+        pregnant, lactating = life_stage(hp)
+        return metas_micros(hp.get("gender"), hp.get("age"), pregnant=pregnant, lactating=lactating)
     except Exception as e:
         logger.warning(f"[P1-PLAN-LOTE-103] metas de micros no calculadas: {e}")
         return {}
