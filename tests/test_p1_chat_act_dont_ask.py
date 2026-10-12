@@ -192,10 +192,10 @@ def test_duplicate_guard_and_force_true_survive(log_bullets: dict):
             f"[{name}] el guard de duplicado (`force=true`) desapareció del "
             f"bullet — regresión sobre P1-CONSUMED-BACKDATE."
         )
-        assert re.search(r"ese d[ií]a ya tiene esa comida", bullet, re.IGNORECASE), (
-            f"[{name}] falta la referencia al guard 'ese día ya tiene esa "
-            f"comida (principal) registrada'."
+        assert "reintento" in bullet and "porción" in bullet, (
+            f"[{name}] falta distinguir un reintento de otra porción realmente consumida."
         )
+        assert not re.search(r"ese d[ií]a ya tiene esa comida", bullet, re.IGNORECASE)
 
 
 def test_p1_consumed_backdate_marker_and_days_ago_survive(prompts_src: str):
@@ -285,16 +285,11 @@ def test_diario_de_hoy_no_longer_primes_preguntar(agent_src: str):
     )
 
 
-def test_diario_de_hoy_still_prevents_duplicate_logging(agent_src: str):
+def test_diario_de_hoy_accepts_new_foods_in_the_same_slot(agent_src: str):
     line = _diario_hoy_registrado_line(agent_src)
-    assert re.search(r"NO DUPLICAR|sin volver a registrarlo", line), (
-        "el bloque DIARIO DE HOY dejó de instruir no duplicar un registro "
-        "ya existente — eso SÍ debe sobrevivir (evita doble conteo)."
-    )
-    assert "snack nocturno" in line, (
-        "se perdió el ejemplo concreto (cena ya registrada + foto nocturna "
-        "nueva → asumir snack, no duplicar la cena)."
-    )
+    assert "aunque ya existan otras en esa franja" in line
+    assert "No la conviertas en snack por haber otra cena" in line
+    assert "solo cuando el usuario diga que la anterior estaba mal" in line
 
 
 def test_diario_de_hoy_reinforces_act_dont_ask_generally(agent_src: str):

@@ -1239,7 +1239,9 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
     - suplemento / porciones: si tomó un suplemento de su Alacena («me tomé 2 scoops de whey»), pasa su nombre y
       cuántas porciones: las macros salen de la etiqueta guardada del pote y se restan del pote.
-    - Si ya existe una comida principal del MISMO tipo ese día, la tool NO inserta y te lo informa: pregúntale al usuario si de verdad quiere registrar dos (repite con force=true SOLO si él confirma) o si prefiere corregir.
+    - Varias comidas/alimentos pueden compartir meal_type y día. Un alimento distinto se añade sin pedir permiso.
+    - force: permite repetir un registro idéntico reciente SOLO si el usuario confirma que comió otra porción.
+      Un reintento de la misma escritura se omite; informa que ya estaba anotado, no que guardaste otra comida.
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
@@ -1298,9 +1300,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # pierde el registro) pero ya NO en silencio: se le dice al modelo para que lo corrija.
     _mt_reconocido = meal_type is None or _resolver_meal_type(meal_type) is not None
     _meal_type = _normalize_meal_type(meal_type)
-    # [P1-DIARY-DINNER-SLOT · 2026-07-30] ANTES del dup-guard a propósito: si esto reclasifica a
-    # `cena`, la cena reclasificada tiene que pasar por su propia comprobación de duplicado como
-    # cualquier comida principal. Al revés (después del guard) se colaría una segunda cena.
+    # A substantial meal can still recover its inferred dinner slot; the slot never limits diary rows.
     _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
     # [P1-DIARY-DINNER-SLOT · 2026-07-30] El único log de qué slot se escribe era `logger.debug`, y
@@ -1310,44 +1310,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     logger.info(f"🍽️ [DIARY] slot='{_meal_type}' (pedido='{meal_type}') days_ago={_days_ago} "
                 f"kcal={calories} user={str(user_id)[:8]} · '{str(meal_name)[:40]}'")
 
-    # Guard: una sola comida PRINCIPAL (desayuno/almuerzo/cena) por día local
-    # (RD = UTC-4, misma convención que _local_date_str_for_user). Meriendas y
-    # snacks se repiten legítimamente. `force=true` (tras confirmación del
-    # usuario) lo salta. Best-effort: si el check falla, se procede (no perder
-    # un registro legítimo por un hiccup de DB).
-    if _meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force:
-        try:
-            from db import execute_sql_query as _esq_cm
-            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] offset por usuario — ver nota gemela en
-            # `_rescue_dinner_slot` (misma equivalencia algebraica; offset=240 byte-idéntico al
-            # hardcode previo). Ambos lados de la comparación (la fila existente Y el evento
-            # nuevo `_consumed_at`) usan el MISMO offset resuelto — comparar "mismo día local"
-            # exige la misma vara de medir en los dos lados.
-            _tz_off_cm = user_tz_offset_min(user_id)
-            _dup = _esq_cm(
-                "SELECT meal_name, calories, consumed_at FROM consumed_meals "
-                "WHERE user_id = %s AND meal_type = %s "
-                "AND (consumed_at - make_interval(mins => %s))::date = "
-                "((%s::timestamptz) - make_interval(mins => %s))::date "
-                "ORDER BY consumed_at DESC LIMIT 1",
-                (user_id, _meal_type, _tz_off_cm, _consumed_at, _tz_off_cm),
-                fetch_one=True,
-            )
-            if _dup:
-                _dia = "hoy" if _days_ago == 0 else ("ayer" if _days_ago == 1 else f"hace {_days_ago} días")
-                logger.info(
-                    f"🍽️ [P1-CONSUMED-BACKDATE] dup-guard: ya hay {_meal_type} {_dia} "
-                    f"para user {user_id[:8]} ('{_dup.get('meal_name')}') — no inserto sin force."
-                )
-                return (
-                    f"⚠️ NO REGISTRADO: el usuario YA tiene un {_meal_type} registrado {_dia} "
-                    f"('{_dup.get('meal_name')}', {int(_dup.get('calories') or 0)} kcal). "
-                    f"Díselo amablemente y pregúntale si de verdad comió dos {_meal_type}s ese día "
-                    f"(si lo confirma, repite esta herramienta con force=true) o si prefiere no duplicar."
-                )
-        except Exception as _dup_err:
-            logger.warning(f"[P1-CONSUMED-BACKDATE] dup-guard falló (procediendo): {_dup_err}")
-
+    # The diary can contain several distinct foods/plates in the same meal slot.
+    # Persistence only suppresses a recent retry of the same food and quantity.
     # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
     # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
     from food_label_nutrients import snapshot
@@ -1362,6 +1326,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         mark_inventory_synced=has_ingredients,
         consumed_at_override=(_consumed_at if _days_ago > 0 else None),
         nutrition=_nutrition,
+        allow_repeat=force,
         source="chat",   # [P1-PLAN-LOTE-720] la ficha del plato dice «Anotada por el coach»
     )
     import db_inventory
@@ -1396,6 +1361,10 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         except Exception as _des_err:
             logger.warning(f"[P1-PLAN-LOTE-291] no se pudo restar del pote: {_des_err!r}")
 
+    if result == "deduped":
+        return ("NO REGISTRADO DE NUEVO: esta misma comida y cantidad acaba de anotarse. "
+                "Se omitió el reintento y no se descontó la Nevera otra vez. Dile que ya estaba anotada; "
+                "solo usa force=true si confirma que comió otra porción idéntica.")
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
@@ -1543,9 +1512,8 @@ def correct_consumed_meal(
       nada — dile la verdad y pregúntale a cuál comida se refiere; usa
       `log_consumed_meal` solo si de verdad es una comida DISTINTA que aún
       no está registrada.
-    - Mover la comida a otro día conserva su hora. Si ese día ya hay otra
-      comida principal del mismo tipo, la herramienta NO corrige y te lo dice:
-      repite con force=true SOLO si el usuario confirma que fueron dos.
+    - Mover la comida a otro día conserva su hora. Otros registros del mismo
+      tipo/día no impiden corregir esta fila; desayuno/almuerzo/cena admiten varias filas.
     - ingredients: si cambian, la Nevera se ajusta (devuelve lo anterior y
       descuenta lo nuevo) cuando es seguro; si no, la respuesta te lo dice.
     """
@@ -1616,36 +1584,6 @@ def correct_consumed_meal(
         _orig_at = (_fila or {}).get("consumed_at")
         _consumed_at_override = _consumed_at_para_dia(_orig_at, _d, _tz_off() if _orig_at is not None else 0)
         _dia_txt = "hoy" if _d == 0 else ("ayer" if _d == 1 else f"hace {_d} días")
-
-    # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] El guard «una comida principal por día» de
-    # `log_consumed_meal`, aplicado también a la corrección: cambiar el tipo o el día era la puerta
-    # trasera para dejar dos desayunos el mismo día. Best-effort como allá.
-    _tipo_final = _meal_type or (_fila or {}).get("meal_type")
-    _at_final = _consumed_at_override or (_fila or {}).get("consumed_at")
-    if ((_meal_type is not None or days_ago is not None) and not force
-            and _tipo_final in _CONSUMED_MAIN_MEAL_TYPES and _at_final is not None):
-        try:
-            from db import execute_sql_query as _esq_cg
-            _off_cg = _tz_off()
-            _at_txt = _at_final.isoformat() if hasattr(_at_final, "isoformat") else str(_at_final)
-            _dup = _esq_cg(
-                "SELECT meal_name, calories FROM consumed_meals "
-                "WHERE user_id = %s AND meal_type = %s AND id <> %s "
-                "AND (consumed_at - make_interval(mins => %s))::date = "
-                "((%s::timestamptz) - make_interval(mins => %s))::date "
-                "ORDER BY consumed_at DESC LIMIT 1",
-                (user_id, _tipo_final, _mid, _off_cg, _at_txt, _off_cg),
-                fetch_one=True,
-            )
-            if _dup:
-                return (
-                    f"⚠️ NO CORREGIDO: ese día el usuario YA tiene un {_tipo_final} registrado "
-                    f"('{_dup.get('meal_name')}', {int(_dup.get('calories') or 0)} kcal). Pregúntale si "
-                    f"de verdad fueron dos {_tipo_final}s (si lo confirma, repite esta corrección con "
-                    f"force=true) o si el otro registro es el que sobra."
-                )
-        except Exception as _e_cg:
-            logger.warning(f"[P1-CHAT-TOOLS-AUDIT] dup-guard de la corrección falló (procediendo): {type(_e_cg).__name__}")
 
     # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Cambiar `ingredients` no movía la Nevera. Solo se ajusta
     # cuando es SEGURO: (a) si el registro original aún no descontó (`inventory_synced_at` NULL), la

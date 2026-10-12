@@ -4762,15 +4762,17 @@ def execute_tools(state: ChatState):
                         logger.warning(f"🛡️ [P1-PLAN-LOTE-56] log_consumed_meal days_ago "
                                        f"{tool_args.get('days_ago')!r} → {_dias} (el usuario nombró el día)")
                         tool_args["days_ago"] = _dias
-                # [P1-PLAN-LOTE-168 · 2026-09-23] `force` salta el guard «una comida principal por día» y solo vale como
-                # RESPUESTA a su aviso: el aviso sale en un turno y el usuario confirma en el siguiente. Batería del
-                # caso del dueño (foto del desayuno + «y me comí 3 tacos»): el modelo mandó los tacos como OTRO desayuno
-                # con force=true en la misma tanda, sin aviso ni confirmación. Sin aviso en el turno anterior, se apaga:
-                # el guard avisa y el modelo decide la franja de verdad o pregunta.
+                # Repeat permission comes from a human statement, never the model's choice of slot.
+                from meal_registration_time import confirmed_repeat_consumption
+                _repeat_confirmed = confirmed_repeat_consumption(
+                    state.get("messages") or [],
+                    previous_warning=_duplicado_avisado_en_turno_previo(state.get("messages") or []))
+                if tool_name == "log_consumed_meal" and _repeat_confirmed:
+                    tool_args["force"] = True
                 if (tool_name in ("log_consumed_meal", "correct_consumed_meal") and tool_args.get("force")
-                        and not _duplicado_avisado_en_turno_previo(state.get("messages") or [])):
-                    logger.warning(f"🛡️ [P1-PLAN-LOTE-168] {tool_name} force=true sin aviso de duplicado en el "
-                                   f"turno anterior → force=false")
+                        and not _repeat_confirmed):
+                    logger.warning(f"🛡️ [P1-PLAN-LOTE-168] {tool_name} force=true sin confirmación de "
+                                   f"otra porción consumida → force=false")
                     tool_args["force"] = False
 
             tool_result = ""
@@ -5224,9 +5226,8 @@ def _days_ago_named_by_user(messages: list):
     return None
 
 
-# [P1-PLAN-LOTE-168 · 2026-09-23] Los avisos del guard «una comida principal por día» (`log_consumed_meal` y
-# `correct_consumed_meal`, tools.py). `force=true` solo es la respuesta del usuario a uno de ellos.
-_AVISOS_DE_DUPLICADO = ("NO REGISTRADO: el usuario YA tiene un", "NO CORREGIDO: ese día el usuario YA tiene un")
+# Old warnings remain recognizable in existing chats; new ones only concern an identical recent retry.
+_AVISOS_DE_DUPLICADO = ("NO REGISTRADO DE NUEVO:", "NO REGISTRADO: el usuario YA tiene un", "NO CORREGIDO: ese día el usuario YA tiene un")
 
 
 def _duplicado_avisado_en_turno_previo(messages: list) -> bool:
@@ -7134,12 +7135,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
-                # [P1-DIARY-FREETEXT-ESTIMATE v2 · 2026-09-04] un plato repetido con las mismas kcal es casi siempre un
-                # registro doble: avisar Y dar el total sin él (el coach solo EDITA filas; borrar es «Deshacer registro»).
+                # Repeated dishes may be genuinely consumed twice; the diary remains authoritative.
                 system_prompt += (
-                    " Si dos registros de hoy llevan el MISMO plato con las MISMAS kcal, trátalos como un registro "
-                    "DUPLICADO: dilo con los dos slots, y da los totales del día SIN el duplicado (además del bruto). "
-                    "Tú no puedes borrar filas: el usuario lo quita con «Deshacer registro» en el diario."
+                    " Varias filas pueden ser alimentos del mismo desayuno/almuerzo/cena o porciones repetidas. "
+                    "Mismo plato, calorías o franja NO prueban duplicado: respeta todos los totales del diario. "
+                    "Solo una repetición accidental confirmada por el usuario autoriza tratar una fila como sobrante."
                 )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.
@@ -7779,13 +7779,12 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     except Exception as _tgt_e:
                         logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
-                system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Úsalo para NO DUPLICAR, no para pedir permiso: si una foto o mensaje nuevo coincide con algo que ya está aquí, felicítalo o coméntalo sin volver a registrarlo de nuevo; si ya tiene una cena registrada y llega otra foto de noche, asume que es un snack nocturno (o pregúntale por qué repite) en vez de tratarla como si fuera la cena otra vez. Fuera de ese caso de duplicado, sigue la regla general: comida nueva en pasado = regístrala YA, sin preguntar."
-                # [P1-DIARY-FREETEXT-ESTIMATE v2 · 2026-09-04] un plato repetido con las mismas kcal es casi siempre un
-                # registro doble: avisar Y dar el total sin él (el coach solo EDITA filas; borrar es «Deshacer registro»).
+                system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Una comida nueva en pasado se añade sin preguntar aunque ya existan otras en esa franja. No la conviertas en snack por haber otra cena ni preguntes por qué repite. Corrige una fila solo cuando el usuario diga que la anterior estaba mal."
+                # Repeated dishes may be genuinely consumed twice; the diary remains authoritative.
                 system_prompt += (
-                    " Si dos registros de hoy llevan el MISMO plato con las MISMAS kcal, trátalos como un registro "
-                    "DUPLICADO: dilo con los dos slots, y da los totales del día SIN el duplicado (además del bruto). "
-                    "Tú no puedes borrar filas: el usuario lo quita con «Deshacer registro» en el diario."
+                    " Varias filas pueden ser alimentos del mismo desayuno/almuerzo/cena o porciones repetidas. "
+                    "Mismo plato, calorías o franja NO prueban duplicado: respeta todos los totales del diario. "
+                    "Solo una repetición accidental confirmada por el usuario autoriza tratar una fila como sobrante."
                 )
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
                 # día — las MISMAS que la card 'Progreso en Tiempo Real'.

@@ -885,7 +885,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary (tras retries): {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None, source: Optional[str] = None, plan_ref: Optional[dict] = None, nutrition: Optional[dict] = None):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None, source: Optional[str] = None, plan_ref: Optional[dict] = None, nutrition: Optional[dict] = None, allow_repeat: bool = False):
     """Guarda una comida consumida en la tabla consumed_meals.
 
     [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
@@ -910,7 +910,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # se invoca desde la tool del chat-agent (re-emisión posible del LLM) y
         # desde POST /api/diary (doble-tap móvil / retry de red del SSE). El INSERT
         # plano duplica el conteo calórico del día. Dedup por VENTANA CORTA: si ya
-        # hay una fila idéntica (user_id, meal_name, meal_type) en los últimos N s,
+        # hay una fila idéntica (usuario, alimento, macros e ingredientes) en los últimos N s,
         # es un doble-submit → skip idempotente. NO bloquea repeticiones legítimas
         # (un 2º café horas después cae fuera de la ventana). Best-effort: si el
         # check falla, se procede con el INSERT (no perder un registro legítimo).
@@ -920,7 +920,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             _dedup_win = _dedup_env_int("MEALFIT_CONSUMED_MEAL_DEDUP_WINDOW_S", 60)
         except Exception:
             _dedup_win = 60
-        if _dedup_win > 0:
+        if _dedup_win > 0 and not allow_repeat:
             try:
                 # [P1-PLAN-LOTE-381] la ventana es de cuándo SE ESCRIBIÓ la fila (`created_at`): una comida de
                 # «Ayer» nace con `consumed_at` en el pasado y `consumed_at > NOW() - 60 s` no la veía nunca (un
@@ -928,9 +928,11 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 # que se va a insertar), para no tomar el café de hoy por un doble toque del de ayer.
                 _dup = execute_sql_query(
                     "SELECT id FROM consumed_meals WHERE user_id = %s AND meal_name = %s "
-                    "AND meal_type = %s AND created_at > NOW() - make_interval(secs => %s) "
+                    "AND calories = %s AND protein = %s AND carbs = %s AND healthy_fats = %s "
+                    "AND ingredients = %s AND created_at > NOW() - make_interval(secs => %s) "
                     "AND consumed_at BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours' LIMIT 1",
-                    (user_id, meal_name, meal_type, _dedup_win, now, now),
+                    (user_id, meal_name, calories, protein, carbs, healthy_fats,
+                     Jsonb(ingredients if ingredients is not None else []), _dedup_win, now, now),
                     fetch_one=True,
                 )
                 if _dup:

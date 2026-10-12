@@ -6,6 +6,52 @@ import re
 import unicodedata
 
 
+def _latest_human_text(messages):
+    for message in reversed(messages or []):
+        role = message.get('role') if isinstance(message, dict) else getattr(message, 'type', None)
+        if role not in ('human', 'user'):
+            continue
+        text = message.get('content', '') if isinstance(message, dict) else getattr(message, 'content', '')
+        if isinstance(text, list):
+            text = ' '.join(part.get('text', '') for part in text
+                            if isinstance(part, dict) and part.get('type') == 'text')
+        if isinstance(text, str):
+            if 'Mensaje del usuario:' in text:
+                text = text.rsplit('Mensaje del usuario:', 1)[1].strip().strip('"')
+            text = re.sub(r'<dietary_context>[\s\S]*?</dietary_context>', '', text)
+        return ''.join(c for c in unicodedata.normalize('NFD', text.lower())
+                       if not unicodedata.combining(c)) if isinstance(text, str) else ''
+    return ''
+
+
+def explicit_repeat_consumption(messages):
+    """A fresh statement that another serving was eaten, never an assistant's guess."""
+    text = _latest_human_text(messages)
+    if text.lstrip().startswith('¿') or re.search(r'\b(no|not|didn.t|nao|pas|non)\b', text):
+        return False
+    return bool(re.search(r'\b(?:repeti (?:el plato|la comida|la porcion|la racion|el desayuno|el almuerzo|la cena)|'
+                          r'me (?:comi|tome) otr[oa]|comi de nuevo|'
+                          r'i (?:ate|had) (?:another|a second)|otra (?:porcion|racion|vez).{0,20}(?:comi|tome))\b', text))
+
+
+def confirmed_repeat_consumption(messages, previous_warning=False):
+    """Allow a real repeat or a clear yes to the previous duplicate warning."""
+    if explicit_repeat_consumption(messages):
+        return True
+    text = _latest_human_text(messages).strip()
+    return bool(previous_warning and re.fullmatch(
+        r'(?:si|yes)(?:[,\s]+(?:dos|comi dos|me lo comi otra vez|eran dos porciones))?[.!\s]*', text))
+
+
+def _isolated_snack(text):
+    body = re.sub(r'^(?:me (?:comi|he comido|tome)|comi|he comido|i (?:ate|had))\s+', '', text.strip())
+    # Conservative whole-description match: cookies alongside eggs/plantain stay a full meal.
+    return bool(re.fullmatch(r'(?:(?:una?|unos?|dos|tres|cuatro|cinco|\d+)\s+)?'
+                             r'(?:(?:paquete|bolsa|porcion)\s+de\s+)?'
+                             r'(?:galletas?(?:\s+oreo)?|oreos?|papitas|chips|caramelos?|chocolate|helado)'
+                             r'(?:\s+(?:grande|grandes|pequeno|pequenas|suelta|sueltas|entero|completo))*[.!\s]*', body))
+
+
 def normalize_live_offset(value, convention=None):
     """Convert legacy live offsets to the JS convention used throughout chat."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -19,21 +65,12 @@ def infer_current_meal_slot(messages, local_hour, schedule_type=None):
     """Only a fresh, unqualified consumption statement gets the clock default.
 
     Explicit meal labels, earlier dates/times, clarifications, and shifted schedules
-    stay with the coach's existing interpretation. Never use an assistant's question
-    or a food name to determine the slot.
+    stay with the coach's existing interpretation. An isolated snack stays a snack;
+    never use an assistant's previous question to determine the slot.
     """
     if local_hour is None or schedule_type in ('night_shift', 'variable'):
         return None
-    text = None
-    for message in reversed(messages or []):
-        if getattr(message, 'type', None) in ('human', 'user'):
-            content = getattr(message, 'content', '')
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                text = ' '.join(part.get('text', '') for part in content
-                                if isinstance(part, dict) and part.get('type') == 'text')
-            break
+    text = _latest_human_text(messages)
     if not text:
         return None
     text = ''.join(c for c in unicodedata.normalize('NFD', text.lower())
@@ -55,5 +92,7 @@ def infer_current_meal_slot(messages, local_hour, schedule_type=None):
         return None
     if re.search(r'\b(?:a las?|as|alle)\s+(?:\d{1,2}|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\b', text):
         return None
+    if _isolated_snack(text):
+        return 'snack'
     from coach_day_context import franja_por_hora
     return franja_por_hora(local_hour)

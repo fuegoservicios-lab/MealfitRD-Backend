@@ -91,6 +91,31 @@ def test_actual_agent_rewrites_guessed_merienda_before_invoking_diary(monkeypatc
     assert 'cena' in result['messages'][0].content
 
 
+@pytest.mark.parametrize('text,guessed,expected,repeat', [
+    ('Me comí un plátano grande maduro, un pedazo de aguacate, y dos huevos', 'snack', 'almuerzo', False),
+    ('Me comí una galleta Oreo suelta', 'almuerzo', 'snack', False),
+    ('Me comí otra porción de arroz', 'almuerzo', 'almuerzo', True),
+])
+def test_actual_dispatch_keeps_new_foods_and_real_repeat_intent(monkeypatch, text, guessed, expected, repeat):
+    import agent
+    import prompts.chat_agent
+    monkeypatch.setattr(prompts.chat_agent, 'hora_local_del_chat', lambda offset: 13)
+    calls = []
+    monkeypatch.setattr(agent, 'agent_tools', [SimpleNamespace(
+        name='log_consumed_meal', invoke=lambda args: calls.append(dict(args)) or 'Guardado')])
+    args = {'meal_name': text, 'calories': 500, 'protein': 20, 'carbs': 60,
+            'healthy_fats': 20, 'meal_type': guessed, 'force': True, 'days_ago': 0}
+    state = {'user_id': 'owner', 'session_id': 'chat', 'form_data': {}, 'tz_offset': 240,
+             'messages': [HumanMessage(content='Me comí una Oreo'),
+                          AIMessage(content='Anotada como almuerzo'), HumanMessage(content=text),
+                          AIMessage(content='', tool_calls=[{'name': 'log_consumed_meal',
+                              'args': args, 'id': 'write', 'type': 'tool_call'}])]}
+    agent.execute_tools(state)
+    assert len(calls) == 1
+    assert calls[0]['meal_type'] == expected
+    assert calls[0]['force'] is repeat
+
+
 def test_long_live_session_refreshes_local_date_each_turn(monkeypatch):
     import coach_live
     from routers import chat

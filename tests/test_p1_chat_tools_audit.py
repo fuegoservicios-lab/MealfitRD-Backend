@@ -455,14 +455,29 @@ def _hace(dias: int, hh: int, mm: int) -> datetime:
     return datetime.combine(dia, datetime.min.time().replace(hour=hh, minute=mm)).replace(tzinfo=timezone.utc) + off
 
 
-def test_corregir_el_tipo_respeta_el_guard_de_comida_principal(diario):
+def test_corregir_el_tipo_admite_otro_registro_en_la_misma_franja(diario):
     diario["fila"] = {"meal_type": "snack", "consumed_at": _hace(0, 8, 15), "inventory_synced_at": None}
     diario["dup"] = {"meal_name": "Mangú con huevo", "calories": 600}
     out = _corregir(meal_type="desayuno")
-    assert diario["updates"] == [], "la corrección dejó dos desayunos el mismo día"
-    assert "NO CORREGIDO" in out and "force=true" in out
-    _corregir(meal_type="desayuno", force=True)
+    assert out.startswith("¡Corregido!")
     assert len(diario["updates"]) == 1
+
+
+def test_platano_aguacate_y_huevos_no_chocan_con_una_oreo(diario):
+    diario["dup"] = {"meal_name": "Una galleta Oreo", "calories": 170}
+    out = _log(meal_name="Plátano maduro con aguacate y dos huevos", meal_type="almuerzo")
+    assert out.startswith("¡Éxito!")
+    assert len(diario["logs"]) == 1
+    assert diario["logs"][0][1]["meal_type"] == "almuerzo"
+    assert "NO REGISTRADO" not in out
+
+
+def test_reintento_no_afirma_otra_comida_ni_descuenta_nevera(diario, monkeypatch):
+    import tools
+    monkeypatch.setattr(tools, "db_log_consumed_meal", lambda *a, **k: "deduped")
+    out = _log(ingredients=["100 g de plátano"], meal_type="almuerzo")
+    assert "NO REGISTRADO DE NUEVO" in out and not out.startswith("¡Éxito!")
+    assert diario["descuentos"] == []
 
 
 def test_mover_de_dia_conserva_la_hora(diario):

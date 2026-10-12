@@ -7,9 +7,7 @@ Progreso en Tiempo Real mostró 1600 kcal de HOY con una comida de ayer dentro.
 Fix en 3 capas:
   1. tools.log_consumed_meal: `days_ago` (clamp [0,3], garbage→0 — el diario
      nunca registra a futuro) + `meal_type` normalizado + guard de duplicado
-     por comida PRINCIPAL/día local RD (una sola desayuno/almuerzo/cena por
-     día; merienda/snack se repiten legítimamente) con `force` para override
-     confirmado por el usuario.
+     por un reintento reciente de la misma comida/cantidad, sin cupos por franja.
   2. db_facts.log_consumed_meal: `consumed_at_override` aplica la fecha real.
   3. Prompts (2 builders + instrucción de foto en AgentPage) enseñan al agente
      a extraer el día y el tipo de la conversación.
@@ -60,7 +58,7 @@ def test_db_layer_accepts_consumed_at_override():
         "default None: callers existentes (diary.py POST /consumed) intactos"
 
 
-def test_dup_guard_scoped_to_main_meals_local_date():
+def test_backdating_keeps_timezone_without_a_slot_limit():
     with open(os.path.join(_BACKEND, "tools.py"), encoding="utf-8") as f:
         src = f.read()
     i = src.find("_CONSUMED_MAIN_MEAL_TYPES")
@@ -73,10 +71,8 @@ def test_dup_guard_scoped_to_main_meals_local_date():
     # es LOCAL, nunca el día UTC del server) no cambió — solo CÓMO se resuelve cuál es "local".
     assert "user_tz_offset_min(user_id)" in src, \
         "el 'mismo día' debe resolverse vía el offset del usuario, no quedar fijo a UTC"
-    assert "make_interval(mins => %s)" in src, \
-        "el corte de día debe seguir parametrizado por aritmética, no volver a un hardcode de zona"
-    assert "repite esta herramienta con force=true" in src, \
-        "el guard devuelve instrucción de confirmación, no un error mudo"
+    assert "make_interval(mins => %s)" in src
+    assert "NO REGISTRADO DE NUEVO" in src
 
 
 def test_prompts_teach_backdate_to_agent():
