@@ -29,6 +29,8 @@ import os
 import threading
 import time
 import uuid
+import httpx
+from functools import lru_cache
 from dataclasses import dataclass, field
 from contextvars import ContextVar
 from typing import Optional
@@ -44,6 +46,11 @@ _URL_SESIONES = "https://api.openai.com/v1/live/sessions"
 _URL_ATTACH = "wss://api.openai.com/v1/live/sessions/{id}/attach"
 _PAUSA_DESPEDIDA_S = 6.0
 _TURNO_LIVE_SIN_CUOTA = ContextVar('turno_live_sin_cuota', default=False)
+
+
+@lru_cache(maxsize=1)
+def _session_http():
+    return httpx.Client(timeout=20.0)
 
 
 def turno_live_sin_cuota() -> bool:
@@ -296,13 +303,14 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
     """(live_id, sdp de respuesta). Levanta `LiveNoDisponible` si no toca o no queda presupuesto."""
     if not disponible_para(user_id):
         raise LiveNoDisponible("no_habilitado")
-    gastado = gastado_usd()
-    if tope_usd() > 0 and gastado >= tope_usd():
+    started = time.monotonic()
+    limit = tope_usd()
+    gastado = gastado_usd() if limit > 0 else 0.0
+    if limit > 0 and gastado >= limit:
         raise LiveNoDisponible("presupuesto")
     clave = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not clave:
         raise LiveNoDisponible("sin_clave")
-    import httpx
     cuerpo = {
         "session": {
             "model": MODELO,
@@ -312,7 +320,7 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
         },
         "transport": {"type": "webrtc", "sdp": sdp},
     }
-    r = httpx.post(_URL_SESIONES, headers={"Authorization": f"Bearer {clave}", "Content-Type": "application/json"},
+    r = _session_http().post(_URL_SESIONES, headers={"Authorization": f"Bearer {clave}", "Content-Type": "application/json"},
                    json=cuerpo, timeout=20.0)
     if r.status_code >= 400:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-905] OpenAI rechazó la sesión Live: HTTP {r.status_code} {r.text[:300]}")
@@ -330,6 +338,7 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
     from ios_free import inherit_context
     threading.Thread(target=inherit_context(_canal_lateral), args=(s, clave), name=f"coach-live-{live_id[:8]}", daemon=True).start()
     logger.info(f"🎙️ [P1-PLAN-LOTE-905] sesión Live {live_id} abierta (user={str(user_id)[:8]}, gastado {gastado:.3f} USD)")
+    logger.info("Voice session opening completed in %d ms", round((time.monotonic() - started) * 1000))
     return live_id, respuesta_sdp
 
 

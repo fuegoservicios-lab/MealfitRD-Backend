@@ -1225,13 +1225,16 @@ def _dias_atras_de_fila(user_id: str, consumed_at) -> Optional[int]:
         return None
 
 
+from food_label_nutrients import FoodLabel
+
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None, food_facts: FoodLabel = None, label_servings: float = None) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
     Incluye carbohidratos y grasas saludables si están disponibles.
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras.
+    - food_facts / label_servings: nutrientes LEÍDOS de la etiqueta o dictados por el usuario, por porción, y número de porciones realmente consumidas. No inventes valores ni conviertas %VD.
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'. Dedúcelo de lo que diga el usuario o de la hora.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
     - suplemento / porciones: si tomó un suplemento de su Alacena («me tomé 2 scoops de whey»), pasa su nombre y
@@ -1347,12 +1350,18 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 
     # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
     # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
+    from food_label_nutrients import snapshot
+    try:
+        _nutrition = snapshot(food_facts, label_servings)
+    except (TypeError, ValueError) as error:
+        return f"NO REGISTRADO: {error}. Aclara etiqueta y porción antes de registrar."
     has_ingredients = bool(ingredients)
     result = db_log_consumed_meal(
         user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients,
         meal_type=_meal_type,
         mark_inventory_synced=has_ingredients,
         consumed_at_override=(_consumed_at if _days_ago > 0 else None),
+        nutrition=_nutrition,
         source="chat",   # [P1-PLAN-LOTE-720] la ficha del plato dice «Anotada por el coach»
     )
     import db_inventory
@@ -1507,6 +1516,8 @@ def correct_consumed_meal(
     days_ago: int = None,
     ingredients: list[str] = None,
     force: bool = False,
+    food_facts: FoodLabel = None,
+    label_servings: float = None,
 ) -> str:
     """
     Corrige EN SITIO una comida que YA está en el diario del usuario porque
@@ -1672,6 +1683,11 @@ def correct_consumed_meal(
                                 "original y devolverlo a ciegas lo contaría dos veces. Si hace falta, "
                                 "corrígela con modify_pantry_inventory.")
 
+    from food_label_nutrients import snapshot
+    try:
+        _nutrition = snapshot(food_facts, label_servings)
+    except (TypeError, ValueError) as error:
+        return f"NO CORREGIDO: {error}."
     updated_id = db_update_consumed_meal(
         user_id,
         _mid,
@@ -1683,6 +1699,7 @@ def correct_consumed_meal(
         meal_type=_meal_type,
         ingredients=ingredients,
         consumed_at_override=_consumed_at_override,
+        nutrition=_nutrition,
     )
 
     if updated_id:

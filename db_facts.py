@@ -885,7 +885,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary (tras retries): {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None, source: Optional[str] = None, plan_ref: Optional[dict] = None):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None, source: Optional[str] = None, plan_ref: Optional[dict] = None, nutrition: Optional[dict] = None):
     """Guarda una comida consumida en la tabla consumed_meals.
 
     [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
@@ -984,10 +984,10 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # `routers/diary.py`) solo chequean truthiness (`is not None`,
         # `!= "deduped"`, `not _logged_ok`) — un string uuid es tan truthy
         # como el `True` que devolvía antes.
-        _base = (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at)
+        _base = (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at, Jsonb(nutrition) if nutrition else None)
         _insert_base = (
             "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, "
-            "consumed_at, meal_type, inventory_synced_at{extra}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s{marcas}) "
+            "consumed_at, meal_type, inventory_synced_at, nutrition{extra}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{marcas}) "
             "RETURNING id"
         )
         # [P1-PLAN-LOTE-720 · 2026-09-28] El origen, si lo hay. Si la base aún no tiene las columnas (la migración
@@ -1031,6 +1031,7 @@ def update_consumed_meal(
     meal_type: Optional[str] = None,
     ingredients: Optional[list] = None,
     consumed_at_override: Optional[str] = None,
+    nutrition: Optional[dict] = None,
 ) -> Optional[str]:
     """Corrige EN SITIO una fila de `consumed_meals` mal registrada.
 
@@ -1078,6 +1079,16 @@ def update_consumed_meal(
         if consumed_at_override is not None:
             set_parts.append("consumed_at = %s")
             params.append(consumed_at_override)
+
+        if nutrition is not None:
+            set_parts.append("nutrition = %s")
+            params.append(Jsonb(nutrition))
+        elif any(v is not None for v in (meal_name, calories, protein, carbs, healthy_fats, ingredients)):
+            # A changed food/quantity invalidates its old label snapshot. Never retain stale micros.
+            # Keep inventory ingredients for audit, but don't reuse them as nutrient evidence when
+            # only the macros/name changed. New ingredient quantities can resolve the catalog again.
+            set_parts.append("nutrition = NULL" if ingredients is not None else
+                             "nutrition = '{\"source\":\"unavailable\",\"reason\":\"food_corrected\"}'::jsonb")
 
         if not set_parts:
             # Nada que corregir — no ejecutar un UPDATE vacío/no-op.
@@ -1216,7 +1227,7 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             # así que esa frase NUNCA salió. La columna existe desde siempre (NOT NULL); no depende de la migración.
             _COLUMNS = (
                 "id, meal_name, calories, protein, carbs, healthy_fats, created_at, "
-                "consumed_at, meal_type, ingredients"
+                "consumed_at, meal_type, ingredients, nutrition"
             )
             # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST.
             if not connection_pool:

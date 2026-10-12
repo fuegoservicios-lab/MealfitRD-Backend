@@ -5001,7 +5001,8 @@ def execute_tools(state: ChatState):
                 else:
                     for t in agent_tools:
                         if t.name == tool_name:
-                            tool_result = t.invoke(tool_args)
+                            from packaged_food_portions import guard as guard_packaged_portion
+                            tool_result = guard_packaged_portion(tool_name, tool_args, messages) or t.invoke(tool_args)
                             # [P1-PLAN-LOTE-900] El cambio para la pantalla sale del resultado: el modelo no ve el JSON.
                             if isinstance(tool_result, str) and "<<AJUSTE_APP_JSON:" in tool_result:
                                 from ajustes_de_la_app import extraer_marcador

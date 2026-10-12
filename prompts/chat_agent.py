@@ -209,6 +209,18 @@ CHAT_VOICE_MODE_PROMPT = (
 # BUILDERS DE CONTEXTO DINÁMICO (compartidos entre chat y stream)
 # ============================================================
 
+# Portions and label data apply to text and delegated voice turns.
+_CHAT_RESOLVE_RULES += """
+ALIMENTOS ENVASADOS: distingue pieza, paquete y porción de etiqueta. Si dice «una galleta Oreo»
+y la presentación no está clara, pregunta brevemente si es una suelta o un paquete y cuántas/gramos contiene.
+Si ya dio cantidad/tamaño, no vuelvas a preguntarlo. No deduzcas un paquete, peso ni sus micros de 170 kcal.
+Una corrección de calorías no autoriza inventar otro tamaño: corrige lo confirmado y aclara lo pendiente.
+Para comidas conocidas envía ingredientes con cantidades; un nombre comercial no identifica una receta.
+Con etiqueta legible, conserva food_facts y label_servings en log_consumed_meal/correct_consumed_meal.
+Solo nutrientes declarados, nunca %VD convertido ni ceros de relleno. Si faltan, explica que las macros
+están registradas pero los micros requieren etiqueta/composición; no digas que el alimento no tiene micros.
+"""
+
 def build_temporal_context(local_date: Optional[str] = None,
                           tz_offset: Optional[int] = None) -> str:
     """Genera la línea de contexto temporal (fecha/hora actual).
@@ -1170,6 +1182,8 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
             if item_kind == "etiqueta":
                 from supplement_labels import context as supplement_label_context
                 description += supplement_label_context(item.get('supplement_facts'))
+                from food_label_nutrients import context as food_label_context
+                description += food_label_context(item.get('food_facts'))
             if item_kind == "items":
                 label = "ALIMENTOS SUELTOS/COMPRA"
                 has_loose_items = True
@@ -1216,6 +1230,8 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
     if kind == 'etiqueta':
         from supplement_labels import context as supplement_label_context
         desc += supplement_label_context(vision.get('supplement_facts'))
+        from food_label_nutrients import context as food_label_context
+        desc += food_label_context(vision.get('food_facts'))
     has_text = bool(vision.get("has_text"))
     if kind == "unavailable":
         motivo = _VISION_REASONS.get(str(vision.get("reason") or ""), _VISION_REASONS["down"])

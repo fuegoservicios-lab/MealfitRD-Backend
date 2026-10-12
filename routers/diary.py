@@ -152,7 +152,12 @@ class RepeatMealRequest(BaseModel):
     days_ago: int = Field(default=0, ge=0, le=7)
 
 
+from food_label_nutrients import FoodLabel, snapshot as label_snapshot, micros_from_snapshot
+
+
 class ConsumedMealRequest(BaseModel):
+    food_facts: Optional[FoodLabel] = None
+    label_servings: Optional[float] = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     """Payload para `POST /api/diary/consumed`. Campos numéricos clamp a
     rangos sanos para evitar NaN/Infinity contamination en agregados."""
     user_id: Optional[str] = None
@@ -831,6 +836,7 @@ async def api_diary_upload(
             # agent/modify_pantry_inventory), 'otro'. `items` sanitizados.
             "photo_kind": vision_result.get("photo_kind") or ("plato" if is_food else "otro"),
             "supplement_facts": vision_result.get("supplement_facts"),
+            "food_facts": vision_result.get("food_facts"),
             "items": items_out,
             # [P1-PLAN-LOTE-305] lo que la foto no deja saber: el modal lo muestra junto al plato
             # [P1-PLAN-LOTE-626] en el idioma del usuario (la pregunta; las opciones llevan su `*_mostrar` al lado)
@@ -991,7 +997,7 @@ def _clamp_diary_days_ago(days_ago) -> int:
 def _persist_consumed_meal(
     *, user_id: str, meal_name: str, meal_type: str, calories, protein, carbs,
     healthy_fats, ingredients, days_ago, background_tasks: BackgroundTasks,
-    source: str, deduct: bool = True, origen: Optional[str] = None,
+    source: str, deduct: bool = True, origen: Optional[str] = None, nutrition: Optional[dict] = None,
 ) -> dict:
     """[P1-MANUAL-FOOD-LOG · 2026-08-11] EL camino de escritura del diario, extraído
     del cuerpo de `/consumed` para que la foto y el componedor manual lo COMPARTAN en
@@ -1024,7 +1030,7 @@ def _persist_consumed_meal(
         int(healthy_fats), ingredients=_ingredients, meal_type=meal_type,
         mark_inventory_synced=bool(_ingredients),
         consumed_at_override=consumed_at_override,
-        source=(origen or source),
+        source=(origen or source), nutrition=nutrition,
     )
     if not _logged_ok:
         raise HTTPException(
@@ -1096,7 +1102,12 @@ def api_log_consumed_meal(
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
 
+        try:
+            nutrition = label_snapshot(payload.food_facts, payload.label_servings)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         resp = _persist_consumed_meal(
+            nutrition=nutrition,
             user_id=user_id, meal_name=payload.meal_name, meal_type=payload.meal_type,
             calories=payload.calories, protein=payload.protein, carbs=payload.carbs,
             healthy_fats=payload.healthy_fats, ingredients=payload.ingredients,
@@ -1405,7 +1416,7 @@ def api_repeat_consumed_meal(
 
         row = execute_sql_query(
             """
-            SELECT meal_name, meal_type, calories, protein, carbs, healthy_fats, ingredients
+            SELECT meal_name, meal_type, calories, protein, carbs, healthy_fats, ingredients, nutrition
             FROM consumed_meals WHERE id = %s AND user_id = %s
             """,
             (payload.source_meal_id, verified_user_id),
@@ -1420,6 +1431,7 @@ def api_repeat_consumed_meal(
             calories=row.get("calories") or 0, protein=row.get("protein") or 0,
             carbs=row.get("carbs") or 0, healthy_fats=row.get("healthy_fats") or 0,
             ingredients=(row.get("ingredients") or None),
+            nutrition=row.get("nutrition"),
             days_ago=payload.days_ago, background_tasks=background_tasks,
             source="manual", deduct=False, origen="repeat",   # [P1-PLAN-LOTE-720]
         )
@@ -1766,7 +1778,9 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
             from nutrition_db import IngredientNutritionDB
             _ndb = IngredientNutritionDB()
             for m in meals:
-                m["micros"] = micros_de_ingredientes(m.pop("ingredients", None), _ndb)
+                nutrition = m.pop("nutrition", None)
+                ingredients = m.pop("ingredients", None)
+                m["micros"] = micros_from_snapshot(nutrition) if nutrition is not None else micros_de_ingredientes(ingredients, _ndb)
                 # [P1-DIARY-MICROS-PLAUSIBLE · 2026-09-23] renglones que pesan más energía que la comida ⇒ sin micros
                 m["micros"] = micros_plausibles(m["micros"], m.get("calories"))
             _resumen = resumen_micros(meals)
