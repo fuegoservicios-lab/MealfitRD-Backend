@@ -3,7 +3,7 @@
 
   1. «¿Quieres que la IA te arme el plan?» aparecía «tan seguido»: el descarte vivía en el localStorage de CADA
      dispositivo (cada binario de TestFlight, cada navegador). Ahora es una vez por SEMANA y por USUARIO (`plan_invite.py`,
-     `GET/PATCH /api/user/preferences/plan-invite`): vista → 24 h a la vista → escondida hasta los 7 días; «Ahora no» →
+     `GET/PATCH /api/user/preferences/plan-invite`): vista → 1 min a la vista → escondida hasta los 7 días; «Ahora no» →
      escondida en el acto hasta 7 días después.
   2. Hidratación: avisos a las 11/15/19 h locales si va por debajo de lo esperado, por Web Push (cron
      `run_hydration_checks`) o locales en la app nativa (`water` dentro de `GET /api/notifications/meal-reminders`).
@@ -29,8 +29,10 @@ def test_la_invitacion_se_ve_una_vez_por_semana():
     import plan_invite as pi
     assert pi.estado_de_la_invitacion(None, T0)["visible"] is True, "nunca vista: se muestra"
     vista = {"shown_at": T0.isoformat()}
-    assert pi.estado_de_la_invitacion(vista, T0 + timedelta(hours=6))["visible"] is True, "el mismo día sigue a la vista"
-    assert pi.estado_de_la_invitacion(vista, T0 + timedelta(hours=25))["visible"] is False, "al día siguiente se esconde sola"
+    assert pi.estado_de_la_invitacion(vista, T0 + timedelta(seconds=59))["visible"] is True
+    assert pi.estado_de_la_invitacion(vista, T0 + timedelta(seconds=60))["visible"] is False, "se cierra al minuto"
+    assert pi.estado_de_la_invitacion(vista, T0 + timedelta(hours=6))["visible"] is False
+    assert pi.estado_de_la_invitacion(vista, T0 + timedelta(seconds=20))["visible_until"] == (T0 + timedelta(seconds=60)).isoformat()
     assert pi.estado_de_la_invitacion(vista, T0 + timedelta(days=6, hours=23))["visible"] is False
     assert pi.estado_de_la_invitacion(vista, T0 + timedelta(days=7))["visible"] is True, "a la semana vuelve"
 
@@ -43,14 +45,16 @@ def test_ahora_no_la_esconde_en_el_acto_y_por_una_semana():
     assert pi.estado_de_la_invitacion(doc, T0 + timedelta(days=7, minutes=2))["visible"] is True
 
 
-def test_repintarla_no_alarga_su_dia_y_la_vista_de_la_semana_siguiente_abre_otra(monkeypatch):
+def test_repintarla_no_alarga_su_minuto_y_la_vista_de_la_semana_siguiente_abre_otra(monkeypatch):
     import plan_invite as pi
     almacen = {}
     monkeypatch.setattr(pi, "_leer", lambda _u: dict(almacen))
     monkeypatch.setattr(pi, "_guardar", lambda _u, doc: (almacen.clear(), almacen.update(doc)))
     pi.anotar("u", "seen", T0)
-    pi.anotar("u", "seen", T0 + timedelta(hours=5))
-    assert almacen["shown_at"] == T0.isoformat(), "pintarla otra vez dentro de sus 24 h no mueve el reloj"
+    pi.anotar("u", "seen", T0 + timedelta(seconds=30))
+    assert almacen["shown_at"] == T0.isoformat(), "pintarla otra vez dentro del minuto no mueve el reloj"
+    pi.anotar("u", "seen", T0 + timedelta(seconds=65))
+    assert almacen["shown_at"] == T0.isoformat(), "no reabre una ventana que acaba de expirar"
     pi.anotar("u", "seen", T0 + timedelta(days=3))
     assert almacen["shown_at"] == T0.isoformat(), "escondida: una vista fantasma no abre semana"
     pi.anotar("u", "dismiss", T0 + timedelta(days=7, hours=1))

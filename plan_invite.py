@@ -11,8 +11,8 @@ almacén y la tarjeta volvía en el siguiente. Ahora la cuenta la lleva el servi
 
 La regla (pura, `estado_de_la_invitacion`):
   · nunca vista → se muestra, y esa primera vista abre la semana;
-  · vista → sigue a la vista `HORAS_A_LA_VISTA` (24) —quien la vio por la mañana y vuelve por la tarde no la pierde a
-    mitad de decidirse— y luego se esconde sola hasta cumplir `DIAS_ENTRE_INVITACIONES` (7) desde esa vista;
+  · vista → sigue a la vista `SEGUNDOS_A_LA_VISTA` (60) y luego se esconde sola hasta cumplir
+    `DIAS_ENTRE_INVITACIONES` (7) desde esa vista, aunque no pulse «Ahora no»;
   · «Ahora no» → se esconde en el acto, hasta 7 días después del descarte.
 Estado en `app_kv_store` (`plan_invite:<user_id>`), con barrido por TTL y borrado en la purga de la cuenta: sin DDL.
 tooltip-anchor: estado_de_la_invitacion (test_p1_plan_lote_135.py)
@@ -29,7 +29,7 @@ from knobs import _env_int
 logger = logging.getLogger(__name__)
 
 PREFIJO = "plan_invite:"
-HORAS_A_LA_VISTA = 24
+SEGUNDOS_A_LA_VISTA = 60
 
 
 def _dias_entre_invitaciones() -> int:
@@ -47,18 +47,20 @@ def _parse(valor) -> Optional[datetime]:
 
 
 def estado_de_la_invitacion(doc: Optional[dict], ahora: datetime) -> dict:
-    """`{visible, next_at}`. Pura: todo entra por parámetro."""
+    """`{visible, next_at, visible_until}`. Pura: todo entra por parámetro."""
     doc = doc or {}
     vista, descartada = _parse(doc.get("shown_at")), _parse(doc.get("dismissed_at"))
     semana = timedelta(days=_dias_entre_invitaciones())
     if vista is None and descartada is None:
-        return {"visible": True, "next_at": None}
+        return {"visible": True, "next_at": None, "visible_until": None}
     if descartada is not None and (vista is None or descartada >= vista):
         vuelve = descartada + semana
-        return {"visible": ahora >= vuelve, "next_at": vuelve.isoformat()}
+        return {"visible": ahora >= vuelve, "next_at": vuelve.isoformat(), "visible_until": None}
     vuelve = vista + semana
-    visible = ahora < vista + timedelta(hours=HORAS_A_LA_VISTA) or ahora >= vuelve
-    return {"visible": visible, "next_at": vuelve.isoformat()}
+    limite = vista + timedelta(seconds=SEGUNDOS_A_LA_VISTA)
+    visible = ahora < limite or ahora >= vuelve
+    return {"visible": visible, "next_at": vuelve.isoformat(),
+            "visible_until": limite.isoformat() if ahora < limite else None}
 
 
 def _leer(user_id: str) -> dict:
@@ -92,8 +94,8 @@ def anotar(user_id: str, accion: str, ahora: Optional[datetime] = None) -> dict:
     elif accion == "seen":
         vista = _parse(doc.get("shown_at"))
         previo = estado_de_la_invitacion(doc, ahora)
-        # solo una vista que ABRE semana mueve el reloj: re-pintarla dentro de sus 24 h no la alarga
-        abre_semana = vista is None or ahora >= vista + timedelta(hours=HORAS_A_LA_VISTA)
+        # solo una vista que ABRE semana mueve el reloj: re-pintarla dentro de su minuto no la alarga
+        abre_semana = vista is None or ahora >= vista + timedelta(seconds=SEGUNDOS_A_LA_VISTA)
         if previo["visible"] and abre_semana:
             doc["shown_at"] = ahora.isoformat()
     else:
