@@ -4414,6 +4414,40 @@ def _kwargs_de_razonamiento_modo_voz(state) -> dict:
     return {"extra_body": {"thinking": {"type": "disabled"}}}
 
 
+def _chat_agent_fallback_model(primary_model: str) -> Optional[str]:
+    """[P1-CHAT-PROVIDER-FALLBACK · 2026-10-14] Modelo de RESPALDO del coach cuando el proveedor
+    principal falla (5xx «Service is too busy», timeout) o su breaker está abierto.
+
+    Incidente 2026-10-14 (21:27-22:30 local): el proveedor principal respondía 503 «too busy» y
+    timeouts intermitentes; el breaker del modelo del chat quedó abierto y TODOS los turnos del
+    coach acabaron en «El asistente está temporalmente saturado» (Moisés, Android), mientras el
+    proveedor de respaldo respondía en ~1 s. Un solo proveedor = un solo punto de fallo.
+
+    Knob `MEALFIT_CHAT_AGENT_FALLBACK_MODEL` (default GPT-6 Luna); vacío/"off" lo apaga. Sin
+    `OPENAI_API_KEY` para un modelo OpenAI, o si coincide con el principal, no hay respaldo."""
+    fb = (_env_str("MEALFIT_CHAT_AGENT_FALLBACK_MODEL", GPT6_LUNA) or "").strip()
+    if not fb or fb.lower() in ("off", "none", "0", "false"):
+        return None
+    if fb.lower() == str(primary_model or "").strip().lower():
+        return None
+    if is_openai_model(fb) and not os.environ.get("OPENAI_API_KEY"):
+        return None
+    return fb
+
+
+def _build_chat_fallback_llm(model: str):
+    """Cliente del respaldo: sin `extra_body.thinking` (OpenAI lo rechaza), esfuerzo bajo para
+    no sumar latencia a un turno que ya pagó el fallo del principal."""
+    kwargs = {"timeout": _chat_agent_llm_timeout_s(), "max_retries": 1}
+    m = (model or "").lower()
+    if is_openai_model(model):
+        if "luna" in m or m.startswith(("o1", "o3", "o4")):
+            kwargs["reasoning_effort"] = _env_str("MEALFIT_CHAT_AGENT_FALLBACK_EFFORT", "low") or "low"
+    else:
+        kwargs["temperature"] = 0.7
+    return build_chat_llm(model, **kwargs)
+
+
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
@@ -4425,10 +4459,15 @@ def call_model(state: ChatState):
     # [P0-LLM-PROVIDER-MIGRATION] Identidad para tier-routing (paid→pro). Guests
     # (session_id) resuelven a flash via fail-cheap del router.
     _model_uid = state.get("user_id") or state.get("session_id")
+    # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, el principal reintenta UNA vez (el default del
+    # cliente son 2: con timeouts de 30 s el turno moría antes de llegar a ningún respaldo).
+    _fallback_model = _chat_agent_fallback_model(_chat_agent_model_name(_model_uid))
+    _primary_retry_kwargs = {"max_retries": 1} if _fallback_model else {}
     chat_llm = ChatGLM(
         model=_chat_agent_model_name(_model_uid),
         temperature=0.7,
         timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+        **_primary_retry_kwargs,
         **_kwargs_de_razonamiento_modo_voz(state),
     )
     llm_with_tools = chat_llm.bind_tools(agent_tools)
@@ -4447,13 +4486,22 @@ def call_model(state: ChatState):
     # Costo trivial: tier lookup cacheado con TTL en llm_provider.
     _cb_model = _chat_agent_model_name(_model_uid)
     _cb = _get_circuit_breaker(_cb_model)
+    import time as _time_chat
+    _chat_invoke_start = _time_chat.time()
+    response = None
+    _primary_exc = None
     if not _cb.can_proceed():
         logger.warning(
             f"🛑 [P1-CHAT-CB] LLM circuit breaker abierto para model={_cb_model!r} "
-            f"— fail-fast sin invocar Gemini. Reintentar tras "
-            f"MEALFIT_CB_RESET_TIMEOUT_S segundos."
+            f"— fail-fast sin invocar al proveedor principal"
+            + (f"; usando respaldo {_fallback_model!r}." if _fallback_model else
+               ". Reintentar tras MEALFIT_CB_RESET_TIMEOUT_S segundos.")
         )
-        raise LLMCircuitBreakerOpen(
+        if not _fallback_model:
+            raise LLMCircuitBreakerOpen(
+                f"chat LLM circuit breaker open for model={_cb_model}"
+            )
+        _primary_exc = LLMCircuitBreakerOpen(
             f"chat LLM circuit breaker open for model={_cb_model}"
         )
 
@@ -4475,45 +4523,70 @@ def call_model(state: ChatState):
     # el SSOT del repo (mismo helper que plan-gen, mismo schema
     # `llm_usage_events`, mismo cost calculation `compute_llm_cost_micros`).
     # Tooltip-anchor: P2-CHAT-TOKEN-TELEMETRY.
-    import time as _time_chat
-    _chat_invoke_start = _time_chat.time()
-    try:
-        response = llm_with_tools.invoke(llm_messages)
-    except Exception as _invoke_exc:
-        # [P1-CHAT-LLM-429 · 2026-05-20] Diferenciar rate-limit del provider
-        # de fallos genuinos. 429 NO debe contar como CB-failure: el provider
-        # está vivo, solo está throttleando este API key (saturación temporal,
-        # NO degradación). Si contábamos 429 como failure, 3 bursts en ventana
-        # de 30s abrían el CB → 503 falso-positivo a usuarios legítimos.
-        # Ahora: 429 → metric + re-raise como `LLMRateLimitedError` (mapea a
-        # HTTP 429, router → Retry-After); resto → CB failure + re-raise.
-        if _is_rate_limit_error(_invoke_exc):
-            _emit_chat_rate_limited_metric_best_effort(
-                state.get("user_id"), state.get("session_id"), _cb_model,
-            )
-            logger.warning(
-                f"⚠️ [P1-CHAT-LLM-429] Gemini rate-limit detectado "
-                f"model={_cb_model!r} exc_type={type(_invoke_exc).__name__} — "
-                f"NO cuenta como CB failure."
-            )
-            raise LLMRateLimitedError(
-                f"chat LLM rate limited for model={_cb_model}: {_invoke_exc!r}"
-            ) from _invoke_exc
-        # [P1-CHAT-CB-CLIENT-ERRORS · 2026-09-14] Un 4xx es la petición de ESTA
-        # sesión, no el proveedor caído: no abre el breaker de todos.
-        if _is_client_request_error(_invoke_exc):
-            logger.warning(
-                f"⚠️ [P1-CHAT-CB-CLIENT-ERRORS] 4xx del proveedor model={_cb_model!r} "
-                f"exc_type={type(_invoke_exc).__name__} — NO cuenta como CB failure."
-            )
-            raise
-        # Resto: timeout, DeadlineExceeded, 5xx, parse error. El repo usa
-        # broad-catch (graph_orchestrator.py:1423) — la excepción se
-        # re-raises para que LangGraph la propague al caller.
-        _cb.record_failure()
-        raise
+    if _primary_exc is None:
+        try:
+            response = llm_with_tools.invoke(llm_messages)
+        except Exception as _invoke_exc:
+            # [P1-CHAT-LLM-429 · 2026-05-20] Diferenciar rate-limit del provider
+            # de fallos genuinos. 429 NO debe contar como CB-failure: el provider
+            # está vivo, solo está throttleando este API key (saturación temporal,
+            # NO degradación). Si contábamos 429 como failure, 3 bursts en ventana
+            # de 30s abrían el CB → 503 falso-positivo a usuarios legítimos.
+            # Ahora: 429 → metric + re-raise como `LLMRateLimitedError` (mapea a
+            # HTTP 429, router → Retry-After); resto → CB failure + re-raise.
+            # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, 429 y 5xx/timeout pasan a él.
+            if _is_rate_limit_error(_invoke_exc):
+                _emit_chat_rate_limited_metric_best_effort(
+                    state.get("user_id"), state.get("session_id"), _cb_model,
+                )
+                logger.warning(
+                    f"⚠️ [P1-CHAT-LLM-429] rate-limit del proveedor detectado "
+                    f"model={_cb_model!r} exc_type={type(_invoke_exc).__name__} — "
+                    f"NO cuenta como CB failure."
+                )
+                _rl = LLMRateLimitedError(
+                    f"chat LLM rate limited for model={_cb_model}: {_invoke_exc!r}"
+                )
+                if not _fallback_model:
+                    raise _rl from _invoke_exc
+                _primary_exc = _rl
+            # [P1-CHAT-CB-CLIENT-ERRORS · 2026-09-14] Un 4xx es la petición de ESTA
+            # sesión, no el proveedor caído: no abre el breaker de todos.
+            elif _is_client_request_error(_invoke_exc):
+                logger.warning(
+                    f"⚠️ [P1-CHAT-CB-CLIENT-ERRORS] 4xx del proveedor model={_cb_model!r} "
+                    f"exc_type={type(_invoke_exc).__name__} — NO cuenta como CB failure."
+                )
+                raise
+            else:
+                # Resto: timeout, DeadlineExceeded, 5xx, parse error. El repo usa
+                # broad-catch (graph_orchestrator.py:1423) — la excepción se
+                # re-raises para que LangGraph la propague al caller.
+                _cb.record_failure()
+                if not _fallback_model:
+                    raise
+                _primary_exc = _invoke_exc
+        else:
+            _cb.record_success()
 
-    _cb.record_success()
+    if response is None:
+        # [P1-CHAT-PROVIDER-FALLBACK] Un intento con el respaldo. Si también falla, se
+        # propaga el error ORIGINAL del principal (su clasificación decide el copy del cliente).
+        logger.warning(
+            f"🔁 [P1-CHAT-PROVIDER-FALLBACK] principal {_cb_model!r} no disponible "
+            f"({type(_primary_exc).__name__}) — turno con respaldo {_fallback_model!r}."
+        )
+        try:
+            chat_llm = _build_chat_fallback_llm(_fallback_model)
+            _chat_invoke_start = _time_chat.time()
+            response = chat_llm.bind_tools(agent_tools).invoke(llm_messages)
+            _cb_model = _fallback_model
+        except Exception as _fb_exc:
+            logger.error(
+                f"❌ [P1-CHAT-PROVIDER-FALLBACK] respaldo {_fallback_model!r} también falló: "
+                f"{type(_fb_exc).__name__}: {_fb_exc}"
+            )
+            raise _primary_exc from _fb_exc
 
     # [P1-CHAT-EMPTY-RESPONSE · 2026-05-20] Detección de response vacío
     # post-invoke (Gemini safety filter). Modo de fallo observado en
@@ -5638,7 +5711,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         # el título. Trade-off aceptable: NO bloqueamos al user por un
         # title cosmético cuando el provider está degradado. Tooltip-
         # anchor: P1-CHAT-CB-EXTEND.
-        _title_cb_model = _chat_title_model_name()
+        _title_cb_model = f"{_chat_title_model_name()}:title"
         _title_cb = _get_circuit_breaker(_title_cb_model)
         if not _title_cb.can_proceed():
             logger.info(
@@ -5794,7 +5867,7 @@ def rag_query_router(prompt: str) -> dict:
     # es graceful: el chat sigue funcionando sin RAG hasta que el provider
     # se recupere (cron `_sweep_stale_llm_circuit_breakers` cierra ventana).
     # Tooltip-anchor: P1-CHAT-CB-EXTEND.
-    _router_cb_model = _chat_router_model_name()
+    _router_cb_model = f"{_chat_router_model_name()}:rag_router"
     _router_cb = _get_circuit_breaker(_router_cb_model)
     if not _router_cb.can_proceed():
         logger.warning(

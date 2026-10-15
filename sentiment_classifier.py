@@ -30,7 +30,7 @@ from prompts.sentiment import PERSONALITY_PROFILES, SENTIMENT_PROMPT
 def _sentiment_llm_timeout_s() -> float:
     return _env_float(
         "MEALFIT_SENTIMENT_LLM_TIMEOUT_S",
-        8.0,
+        3.5,
         validator=lambda v: 0.0 < v <= 60.0,
     )
 
