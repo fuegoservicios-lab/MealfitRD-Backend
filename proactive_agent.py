@@ -1286,7 +1286,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 prompt += _nevera_aviso   # [P1-PLAN-LOTE-960]
                 _prev_model = [str(m.get("content") or "").strip() for m in (recent or []) if m.get("role") == "model" and m.get("content")]
                 if _prev_model:
-                    _prev_joined = " | ".join(f"\"{p[:160]}\"" for p in _prev_model[:3])
+                    _prev_joined = " | ".join(f"\"{p[:160]}\"" for p in _prev_model[:5])
                     prompt += f"\nUltimo aviso enviado en este chat (NO repitas el mismo alimento/plato ni el mismo arranque): {_prev_joined}\n"
                 prompt += build_language_directive(_nudge_locale)
                 

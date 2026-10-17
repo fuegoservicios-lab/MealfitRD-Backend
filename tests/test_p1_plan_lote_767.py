@@ -287,3 +287,38 @@ def test_mejoras_bimg_bomg_noche_memoria_y_alita(monkeypatch):
     assert "1 alita de pollo (≈35 g de carne sin hueso) aporta ~8-9 g de proteína" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
 
 
+def test_mejoras_darian_sandwich_proteina_y_avisos(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import coach_day_context as cdc
+    import db
+    import tools
+
+    # 1. Rescate de cena cuando el usuario registró almuerzo hace >7h pero saltó el desayuno (caso Darian 10:19 PM)
+    hace_7h = datetime.now(timezone.utc) - timedelta(hours=7, minutes=18)
+    monkeypatch.setattr(db, "execute_sql_query", lambda *a, **k: [{"meal_type": "almuerzo", "ultima": hace_7h}])
+    assert tools._rescue_dinner_slot("u-darian", "merienda", 350, 0) == "cena"
+
+    # 2. Aclaración en turno siguiente («de pollo danés con vegetales») va a correct_consumed_meal, nunca doble log_consumed_meal
+    assert "«de pollo danés con vegetales»" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
+    assert "usa `correct_consumed_meal` sobre el `ID_REGISTRO_DIARIO` anterior" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
+    assert "de pollo danés con vegetales" in ca.build_tools_instructions("u-darian")
+    assert "de pollo danés con vegetales" in ca.build_tools_instructions_stream("u-darian")
+
+    # 3. proponer_comidas puntúa con las macros reales post-inclinación: para meta alta de proteína (780 kcal, 73g P)
+    #    prioriza platos que sí alcanzan alta proteína (>=55g) y descarta habichuelas con batata (31g P)
+    fd_darian = {"country": "DO", "mainGoal": "gain_muscle"}
+    obj_darian = {"kcal": 780, "protein_g": 73, "carbs_g": 60, "fats_g": 27}
+    propuestas = cdc.proponer_comidas(fd_darian, "cena", obj_darian, n=2, rotacion=0)
+    assert len(propuestas) == 2
+    nombres = [p["name"] for p in propuestas]
+    assert "Habichuelas negras guisadas con batata" not in nombres
+    for p in propuestas:
+        prot_num = float(str(p.get("protein") or "0").replace("g", "").strip())
+        assert prot_num >= 55.0, f"{p['name']} solo aporta {prot_num}g de proteína para una meta de 73g"
+
+    # 4. No insistir en comidas pendientes ya preguntadas y cubrir hasta 5 avisos previos en proactive_agent
+    assert "cierra sin volver a nombrarla" in tools._NO_INSISTAS
+    pa_src = (_BACKEND / "proactive_agent.py").read_text(encoding="utf-8")
+    assert "_prev_model[:5]" in pa_src
+
+

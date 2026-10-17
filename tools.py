@@ -1025,8 +1025,8 @@ def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: i
         _por_slot = {str(r.get("meal_type")): r.get("ultima") for r in _rows if isinstance(r, dict)}
         if "cena" in _por_slot:
             return meal_type                      # ya cenó: esto sí es un picoteo
-        if not {"desayuno", "almuerzo"}.issubset(_por_slot.keys()):
-            return meal_type                      # sin ancla en su propio ritmo
+        if "almuerzo" not in _por_slot:
+            return meal_type                      # sin almuerzo registrado no hay ancla previa a la cena
         from datetime import datetime, timezone as _tz_ds
         _ult = max(v for v in _por_slot.values() if v is not None)
         if _ult.tzinfo is None:
@@ -1102,7 +1102,7 @@ def _comidas_por_hora(faltan, hora_local, horas) -> tuple:
 
 # [P1-PLAN-LOTE-696 · 2026-09-28] La nota sale en CADA registro o corrección: el dueño recibió «¿Ese almuerzo lo comiste
 # o de verdad te lo saltaste?» dos turnos seguidos (22-sep, 02:23 y 02:29) sin haber contestado la primera.
-_NO_INSISTAS = (" Una sola vez: si ya se lo preguntaste en esta conversación y no lo contestó, no lo repitas.")
+_NO_INSISTAS = (" Una sola vez: si ya se lo preguntaste en esta conversación y no lo contestó, no lo repitas. Si ya preguntaste por esa comida antes en este chat, cierra sin volver a nombrarla.")
 
 
 def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ahora_local=None) -> str:

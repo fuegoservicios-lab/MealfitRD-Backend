@@ -576,6 +576,20 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
         c = _armar(t, f, catalogo, franja, objetivo)
         if not c:
             continue
+        _cp = _num(c.get("protein"))
+        _cc = _num(c.get("carbs"))
+        _cf = _num(c.get("fats"))
+        _pena_riesgo = 0.0
+        if _evitar_riesgos:
+            _attrs = t.get("intrinsic_risk_attributes") or {}
+            _pena_riesgo = PENA_POR_RIESGO_CLINICO * sum(1 for r in _evitar_riesgos if _attrs.get(r))
+        score_real = (
+            2.0 * abs(_cp - op) / op
+            + 1.5 * max(0.0, op - _cp) / op
+            + abs(_cc - oc) / oc
+            + abs(_cf - of) / of
+            + _pena_riesgo
+        )
         minutos = None
         try:
             lg = t.get("logistics") or {}
@@ -584,7 +598,7 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
         except (TypeError, ValueError):
             minutos = None
         tiene, falta = cobertura_nevera(c["_lineas"], nevera_nombres)
-        c.update({"_score": round(score, 4), "_minutos": minutos, "_tiene": tiene, "_falta": falta, "_tid": tid,
+        c.update({"_score": round(score_real, 4), "_minutos": minutos, "_tiene": tiene, "_falta": falta, "_tid": tid,
                   "_factor": f})
         armadas.append(c)
 
