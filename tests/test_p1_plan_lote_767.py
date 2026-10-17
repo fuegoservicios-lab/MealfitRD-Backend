@@ -191,3 +191,54 @@ def test_la_bateria_cubre_los_tres_caminos():
     assert casos["P6"]["expect"]["tools"] == ["buscar_etiqueta_en_internet", "guardar_suplemento"]
     assert "buscar_etiqueta_en_internet" in casos["P9"]["expect"]["no_tools"]
     assert casos["P10"]["expect"]["tools"] == ["buscar_etiqueta_en_internet", "guardar_suplemento"]
+
+
+def test_mass_gainer_web_incluye_gramos_y_no_pierde_etiqueta(monkeypatch):
+    import tools
+    fn = tools.buscar_etiqueta_en_internet.func
+    monkeypatch.setattr(ew, "buscar", lambda *a, **k: {"estado": "encontrada", "etiqueta": {
+        "gramos_porcion": 360.0, "kcal": 1340.0, "protein_g": 50.0, "carbs_g": 277.0, "fats_g": 3.5},
+        "porciones": 15.0, "porcion_texto": "6 scoops (Cookies & Cream)", "fuente": "gnc.com"})
+    txt = fn(user_id="u1", marca="GNC", producto="Pro Performance Bulk 1340")
+    assert "6 scoops (Cookies & Cream), 360 g" in txt
+
+    escrito = []
+    monkeypatch.setattr(suplementos, "_upsert", lambda *a: escrito.append(a))
+    monkeypatch.setattr(suplementos, "buscar", lambda *a, **k: None)
+    import nevera_opcional
+    monkeypatch.setattr(nevera_opcional, "encender_por_uso", lambda *a, **k: "activa")
+    # Caso Moisés 1: etiqueta de 1340 kcal sin gramos_porcion pasados al tool
+    r1 = suplementos.guardar("u1", "Bulk 1340", "GNC", 15, "porcion",
+                             {"kcal": 1340, "protein_g": 50, "carbs_g": 277, "fats_g": 3.5}, "web")
+    assert r1["ok"] and r1["etiqueta"]["kcal"] == 1340 and r1["etiqueta"]["gramos_porcion"] >= 330
+    # Caso Moisés 2: modelo dividió entre 6 scoops pero adivinó gramos_porcion=30 (< P+C+F=55g)
+    r2 = suplementos.guardar("u1", "Bulk 1340", "GNC", 90, "scoop",
+                             {"gramos_porcion": 30, "kcal": 223, "protein_g": 8.3, "carbs_g": 46.2, "fats_g": 0.6}, "web")
+    assert r2["ok"] and r2["etiqueta"]["kcal"] == 223 and r2["etiqueta"]["gramos_porcion"] >= 55
+
+
+def test_buscar_subconjunto_inverso_y_proteger_etiqueta_foto(monkeypatch):
+    import db_core
+    filas = [
+        {"id": 1, "ingredient_name": "Bulk 1340", "brand": "GNC", "quantity": 7.0,
+         "unit": "sup_porcion", "serving_unit": "porcion", "label_source": "foto",
+         "serving_label": {"gramos_porcion": 360.0, "kcal": 1340.0, "protein_g": 50.0, "carbs_g": 277.0, "fats_g": 4.0}},
+        {"id": 2, "ingredient_name": "Mass gainer GNC Bulk 1340", "brand": "GNC", "quantity": 10.0,
+         "unit": "sup_scoop", "serving_unit": "scoop", "label_source": None, "serving_label": None},
+    ]
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: filas)
+    m = suplementos.buscar("u1", "Mass gainer GNC Bulk 1340")
+    assert m is not None and m["ingredient_name"] == "Bulk 1340"
+    blk = suplementos.bloque_para_chat("u1")
+    assert "1340 kcal" in blk and "277 g carbohidratos" in blk and "Mass gainer GNC Bulk 1340" not in blk
+
+
+def test_proponer_comidas_rota_entre_dias_en_banda_de_empate():
+    import coach_day_context as cdc
+    fd = {"allergies": ["Huevo"], "dietTypes": ["Vegana"]}
+    obj = {"kcal": 650, "protein_g": 35, "carbs_g": 75, "fats_g": 20}
+    r0 = cdc.proponer_comidas(fd, "Almuerzo", obj, n=2, rotacion=0)
+    r1 = cdc.proponer_comidas(fd, "Almuerzo", obj, n=2, rotacion=1)
+    assert len(r0) == 2 and len(r1) == 2
+    assert [p["name"] for p in r0] != [p["name"] for p in r1]
+

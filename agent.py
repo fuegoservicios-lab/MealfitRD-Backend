@@ -7147,24 +7147,24 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # el plan real en pausa (PAUSADO ≠ AMPUTADO).
         system_prompt += _plan_context_for_chat(user_id, current_plan)
         system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
-        
-        from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
-        _n_sup = normalizar_suplementos(form_data)
-        if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
-            selected_supps = _n_sup["toma"]
-            if selected_supps:
-                from constants import SUPPLEMENT_NAMES as SUPP_NAMES
-                names = [SUPP_NAMES.get(s, s) for s in selected_supps]
-                system_prompt += f"\n💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos."
-            else:
-                system_prompt += "\n💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación."
-        # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
-        if user_id and user_id != "guest":
-            try:
-                from suplementos import bloque_para_chat
-                system_prompt += bloque_para_chat(user_id)
-            except Exception as _sup_err:
-                logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
+
+    from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
+    _n_sup = normalizar_suplementos(form_data)
+    if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
+        selected_supps = _n_sup["toma"]
+        if selected_supps:
+            from constants import SUPPLEMENT_NAMES as SUPP_NAMES
+            names = [SUPP_NAMES.get(s, s) for s in selected_supps]
+            system_prompt += f"\n💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos."
+        else:
+            system_prompt += "\n💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación."
+    # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
+    if user_id and user_id != "guest":
+        try:
+            from suplementos import bloque_para_chat
+            system_prompt += bloque_para_chat(user_id)
+        except Exception as _sup_err:
+            logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
 
     if memory.get('summary_context'):
         system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
@@ -7795,24 +7795,24 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # no-stream — la divergencia entre ambos ya costó bugs (P1-CHAT-PAST-DAYS).
         system_prompt += _plan_context_for_chat(user_id, current_plan)
         system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
-        
-        from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
-        _n_sup = normalizar_suplementos(form_data)
-        if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
-            selected_supps = _n_sup["toma"]
-            if selected_supps:
-                from constants import SUPPLEMENT_NAMES as SUPP_NAMES
-                names = [SUPP_NAMES.get(s, s) for s in selected_supps]
-                system_prompt += f"💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos.\n"
-            else:
-                system_prompt += "💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación.\n"
-        # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
-        if user_id and user_id != "guest":
-            try:
-                from suplementos import bloque_para_chat
-                system_prompt += bloque_para_chat(user_id)
-            except Exception as _sup_err:
-                logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
+
+    from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
+    _n_sup = normalizar_suplementos(form_data)
+    if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
+        selected_supps = _n_sup["toma"]
+        if selected_supps:
+            from constants import SUPPLEMENT_NAMES as SUPP_NAMES
+            names = [SUPP_NAMES.get(s, s) for s in selected_supps]
+            system_prompt += f"💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos.\n"
+        else:
+            system_prompt += "💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación.\n"
+    # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
+    if user_id and user_id != "guest":
+        try:
+            from suplementos import bloque_para_chat
+            system_prompt += bloque_para_chat(user_id)
+        except Exception as _sup_err:
+            logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
 
     if memory.get('summary_context'):
         system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"

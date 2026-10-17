@@ -591,6 +591,13 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
         return (tarde, c["_score"] + PENA_POR_INGREDIENTE_QUE_FALTA * n_falta)
 
     armadas.sort(key=_orden)
+    if rotacion and len(armadas) > 1:
+        _top0 = _orden(armadas[0])
+        _techo = _top0[-1] + dd._empate_score()
+        _emp = [c for c in armadas if _orden(c)[:-1] == _top0[:-1] and _orden(c)[-1] <= _techo]
+        if len(_emp) > 1:
+            _r = int(rotacion) % len(_emp)
+            armadas = _emp[_r:] + _emp[:_r] + armadas[len(_emp):]
     out = []
     for c in armadas:
         # La receta va ANTES de verificar: V3 acusa al ingrediente que ningún paso menciona, y sin pasos los acusa a

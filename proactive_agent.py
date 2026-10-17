@@ -1225,13 +1225,23 @@ No uses demasiados emojis. Sé directo, breve y empático.
                         emb_str = f"[{','.join(map(str, context_embedding))}]"
                         query = "SELECT * FROM match_successful_nudges(query_embedding => %s, match_threshold => 0.85, match_count => 2)"
                         successful_nudges = execute_sql_query(query, (emb_str,), fetch_all=True)
+                        _malos = {"annoyed", "frustration", "sadness", "guilt"}
+                        successful_nudges = [
+                            sn for sn in (successful_nudges or [])
+                            if str(sn.get("response_sentiment") or "").lower() not in _malos
+                        ]
                         if successful_nudges:
                             proven_strategies_text = "Estrategias previas que funcionaron con usuarios en situaciones emocionales idénticas:\n"
                             for sn in successful_nudges:
                                 n_content = sn.get("nudge_content", "")
                                 n_sentiment = sn.get("response_sentiment", "motivado")
                                 proven_strategies_text += f"- (Éxito: sintió {n_sentiment}): \"{n_content}\"\n"
-                            proven_strategies_text += "\nInspírate en estas estrategias para tu respuesta (NO las copies exactas).\n"
+                            proven_strategies_text += (
+                                "\nInspírate SOLO en el TONO de estas estrategias — PROHIBIDO copiar o repetir los "
+                                "alimentos o platos que mencionan (cada comida lleva una idea propia de su franja: "
+                                "para Almuerzo o Cena propón comida salada real como pollo, carne, pescado o huevos, "
+                                "nunca yogur ni avena).\n"
+                            )
                 except Exception as emb_err:
                     logger.error(f"Error en embedding de nudge: {emb_err}")
                 
@@ -1274,6 +1284,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # meta): sin esto el aviso no sabía nada del día y sonaba a plantilla
                 prompt += bloque_del_dia(consumed, health)
                 prompt += _nevera_aviso   # [P1-PLAN-LOTE-960]
+                _prev_model = [str(m.get("content") or "").strip() for m in (recent or []) if m.get("role") == "model" and m.get("content")]
+                if _prev_model:
+                    prompt += f"\nUltimo aviso enviado en este chat (NO repitas el mismo alimento/plato ni el mismo arranque): \"{_prev_model[0][:160]}\"\n"
                 prompt += build_language_directive(_nudge_locale)
                 
             if not session_id or not _ia_ok:

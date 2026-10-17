@@ -537,6 +537,9 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
     Mensaje del usuario: "{user_message}"
     
     Usa el contexto reciente SOLO para entender a qué se refiere el mensaje actual (ej. si dice "y también me dio alergia", el contexto te dirá a qué alimento). Pero EXTRAE hechos principalmente basados en el último mensaje.
+    REGLAS DE PRECISIÓN:
+    - NO confundas una corrección o aclaración puntual de lo que llevaba o NO llevaba un plato («no hubo ni salchicha ni pan, fue solo cereal», «hoy fue sin queso») con un 'rechazo' permanente: aclarar qué comió en esa comida NO significa que rechace ni odie ese ingrediente (no extraigas 'rechazo' por eso).
+    - Junto a huevos o claras («2 huevos hervidos claros y 2 completos», «huevos completos»), «completos» significa huevos enteros (con clara y yema), nunca pan con salchicha.
     Si el mensaje NO contiene hechos importantes (ej. "hola", "gracias", "ok"), devuelve una lista vacía [].
     Si contiene hechos, extráelos como oraciones cortas, precisas (en tercera persona sobre el usuario).
     Asegúrate de incluir los metadatos de categoría, intensidad, e 'ingrediente' si aplica (y el 'ingrediente_canonico' rigurosamente guiado por el catálogo).

@@ -472,7 +472,8 @@ _REGLA_UNA_LLAMADA_POR_COMIDA = (
     "`meal_type`; nunca las juntes en una ni dejes una fuera. Caso real: foto del desayuno + «y me comí 3 tacos» quedó "
     "solo como un almuerzo de tacos, y el desayuno de la foto no llegó al diario. EL TOTAL DEL DÍA sale del resultado "
     "de la herramienta («TOTAL REAL DE HOY»), nunca de sumar a mano un total que dijiste antes: la conversación puede "
-    "venir de otros días."
+    "venir de otros días. Junto a huevos o claras («2 huevos hervidos claros y 2 completos», «huevos completos»), "
+    "«completos» significa huevos ENTEROS (con clara y yema), nunca pan con salchicha."
 )
 
 

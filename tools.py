@@ -5485,6 +5485,8 @@ def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: 
     if r.get("estado") == "encontrada":
         e = r["etiqueta"]
         porcion = r.get("porcion_texto") or (f"{e['gramos_porcion']:g} g" if e.get("gramos_porcion") else "1 porción")
+        if e.get("gramos_porcion") and f"{e['gramos_porcion']:g}" not in str(porcion):
+            porcion = f"{porcion}, {e['gramos_porcion']:g} g"
         txt = (f"Encontré su tabla en internet. Por porción ({porcion}): {int(round(e['kcal']))} kcal, "
                f"{e['protein_g']:g} g de proteína, {e['carbs_g']:g} g de carbohidratos y {e['fats_g']:g} g de grasa")
         if r.get("porciones"):

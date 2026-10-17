@@ -90,14 +90,23 @@ def buscar(user_id: str, nombre: str) -> dict | None:
     # el ÚNICO: «proteína» con whey y vegana en la Alacena es ambiguo y no se adivina.
     from constants import strip_accents
     _n = lambda s: " ".join(strip_accents(str(s or "")).lower().split())
-    exacto = [f for f in filas if _n(f.get("ingredient_name")) == _n(nombre)]
-    if exacto:
-        return exacto[0]
     _pal = lambda s: set(_n(s).replace("(", " ").replace(")", " ").replace("/", " ").split())
+    exacto = [f for f in filas if _n(f.get("ingredient_name")) == _n(nombre)]
+    if exacto and etiqueta_valida(exacto[0].get("serving_label")):
+        return exacto[0]
     _q = _pal(nombre)
     parecidos = [f for f in filas
                  if (_q and _q <= _pal(f.get("ingredient_name")))       # «whey» ⊂ «Proteína Whey»
+                 or (_pal(f.get("ingredient_name")) and _pal(f.get("ingredient_name")) <= _q)
                  or pantry_names_match(f.get("ingredient_name") or "", nombre or "")]
+    if len(parecidos) > 1:
+        con_etiqueta = [f for f in parecidos if etiqueta_valida(f.get("serving_label"))]
+        if len(con_etiqueta) == 1:
+            _base = _pal(con_etiqueta[0].get("ingredient_name"))
+            if _base and all(_base <= _pal(f.get("ingredient_name")) or _pal(f.get("ingredient_name")) <= _base for f in parecidos):
+                return con_etiqueta[0]
+    if exacto:
+        return exacto[0]
     return parecidos[0] if len(parecidos) == 1 else None
 
 
@@ -158,6 +167,22 @@ def completar_desde_el_frente(etiqueta):
     return out
 
 
+def _completar_gramos_porcion(etiqueta, fuente: str):
+    """Si la etiqueta trae kcal y los 3 macros coherentes con Atwater pero el modelo omitió `gramos_porcion` (o en
+    `fuente='web'` puso un scoop estándar de 30 g tras dividir un ganador de peso), calcula los gramos desde los macros."""
+    if not isinstance(etiqueta, dict):
+        return etiqueta
+    kcal, p = _num(etiqueta.get("kcal")), _num(etiqueta.get("protein_g"))
+    c, f = _num(etiqueta.get("carbs_g")), _num(etiqueta.get("fats_g"))
+    g = _num(etiqueta.get("gramos_porcion"))
+    if kcal and p is not None and c is not None and f is not None and (p + c + f) > 0:
+        atwater = 4 * p + 4 * c + 9 * f
+        if abs(kcal - atwater) <= max(40.0, 0.15 * kcal):
+            if not g or (fuente == "web" and g < p + c + f):
+                return {**etiqueta, "gramos_porcion": round((p + c + f) * 1.05)}
+    return etiqueta
+
+
 def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiqueta=None, fuente="estimado",
             clave=None, forzar_nevera=False, usar_estimado=True) -> dict:
     """Guarda (o actualiza) el pote. Pasa antes por la regla de la Nevera: si la apagó el usuario, no escribe y
@@ -179,11 +204,17 @@ def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiquet
         unidad = _existente.get("serving_unit") or unidad
     if fuente == "frente":   # [P1-PLAN-LOTE-767]
         etiqueta = completar_desde_el_frente(etiqueta)
+    elif fuente in ("foto", "web"):
+        etiqueta = _completar_gramos_porcion(etiqueta, fuente)
     e = etiqueta_valida(etiqueta)
     if e is None or fuente not in FUENTES:
         fuente = "estimado"
         base = ESTIMADOS.get(clave or "") if usar_estimado else None
         e = etiqueta_valida(base) if base else None
+    if _existente and _existente.get("label_source") == "foto" and fuente != "foto":
+        _e_foto = etiqueta_valida(_existente.get("serving_label"))
+        if _e_foto:
+            e, fuente = _e_foto, "foto"
     _upsert(user_id, str(nombre).strip(), marca, porciones, unidad, e, fuente if e else None)
     return {"ok": True, "estado_nevera": estado, "etiqueta": e, "fuente": fuente}
 
@@ -233,18 +264,25 @@ def bloque_para_chat(user_id: str) -> str:
         potes = []
     out = BLOQUE_CONOCIMIENTO
     if potes:
+        from constants import strip_accents
+        _pal = lambda s: set(" ".join(strip_accents(str(s or "")).lower().split()).replace("(", " ").replace(")", " ").split())
+        _con_et = [_pal(p.get("ingredient_name")) for p in potes if etiqueta_valida(p.get("serving_label"))]
         lineas = []
         for p in potes:
             e = etiqueta_valida(p.get("serving_label"))
+            if not e and any(b and b <= _pal(p.get("ingredient_name")) for b in _con_et):
+                continue
             u = p.get("serving_unit") or "porción"
-            et = (f"1 {u}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g proteína "
+            et = (f"1 {u}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g proteína, "
+                  f"{e['carbs_g']:g} g carbohidratos, {e['fats_g']:g} g grasa "
                   f"({p.get('label_source') or 'estimado'})") if e else "sin etiqueta"
             if e and e.get('supplement_facts'):
                 from supplement_labels import context
                 et += context(e['supplement_facts'])
             marca = f" ({p['brand']})" if p.get("brand") else ""
             lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}")
-        out += " SU ALACENA: " + "; ".join(lineas) + "."
+        if lineas:
+            out += " SU ALACENA: " + "; ".join(lineas) + "."
     return out
 
 
