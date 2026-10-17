@@ -1145,18 +1145,30 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                               f"«cuando {_CUANDO_COMAS.get(_prox, 'comas')}, cuéntame qué comiste y lo anoto»")
                     if _pasadas:
                         return (f" (Para el asistente: son las {_hora_txt}. Hoy sigue sin registrar {', '.join(_pasadas)}, que ya "
-                                f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta. "
+                                f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta (qué comió para "
+                                f"anotarlo, nunca «cuando la comas» ni «¿te propongo algo?»). "
                                 f"{', '.join(_proximas)} aún no toca: no preguntes por ella.{_NO_INSISTAS})")
                     return (f" (Para el asistente: son las {_hora_txt} y hoy ya tiene registrado todo lo que tocaba hasta ahora. "
                             f"La próxima es {_prox} (~{_fmt_hora_float(float(_prox_h))}) y todavía no ha llegado: NO preguntes si "
                             f"la anotas ni si la registras. Cierra con UNA frase consciente de la hora, sin pregunta, del tipo "
                             f"{_frase}.)")
+                if _pasadas:
+                    return (f" (Para el asistente: son las {_hora_txt}. {_dia_txt} sigue sin registrar {', '.join(_faltan)} "
+                            f"(ya pasó su hora) — cierra ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta "
+                            f"sobre qué comió para anotarlo (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
+                            f"pregunta genérica de si le falta algo).{_NO_INSISTAS})")
         if _faltan:
             return (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
                     f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta; nunca la pregunta "
                     f"genérica de si le falta algo.{_NO_INSISTAS})")
+        _cierre_noche = ""
+        if not days_ago:
+            _ahora_fin = ahora_local if ahora_local is not None else _hora_local_float(user_id)
+            if _ahora_fin is not None and float(_ahora_fin) >= 21.0:
+                _cierre_noche = (f" Son las {_fmt_hora_float(float(_ahora_fin))} y el día ya cerró: NO sugieras comer "
+                                 f"nada más ni tomar batidas antes de dormir salvo que el usuario lo pida.")
         return (f" (Para el asistente: {_dia_txt} ya tiene todas sus comidas registradas — NO preguntes si "
-                f"le falta algo de ese día.)")
+                f"le falta algo de ese día.{_cierre_noche})")
     except Exception as _falta_err:
         logger.warning(f"[P1-PLAN-LOTE-76] comidas sin registrar no calculadas: {_falta_err}")
         return ""

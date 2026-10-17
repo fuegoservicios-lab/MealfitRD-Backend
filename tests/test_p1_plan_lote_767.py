@@ -242,3 +242,48 @@ def test_proponer_comidas_rota_entre_dias_en_banda_de_empate():
     assert len(r0) == 2 and len(r1) == 2
     assert [p["name"] for p in r0] != [p["name"] for p in r1]
 
+
+def test_mejoras_bimg_bomg_noche_memoria_y_alita(monkeypatch):
+    import coach_day_context as cdc
+    import db_facts
+    import tools
+
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda *a, **k: [])
+    monkeypatch.setattr(tools, "get_latest_usable_meal_plan", lambda *a, **k: None)
+    monkeypatch.setattr(tools, "_horas_tipicas_de_comida", lambda *a, **k: {"Desayuno": 8.0, "Almuerzo": 13.0, "Cena": 20.0})
+
+    # 1. A las 23:34 (11:34 PM), falta la Cena (ya pasó su hora): pide preguntar qué cenó, prohibido "cuando la comas" o "¿te propongo algo?"
+    nota_tarde = tools._nota_comidas_sin_registrar(
+        "u1",
+        0,
+        rows_extra=[{"meal_type": "Desayuno"}, {"meal_type": "Almuerzo"}],
+        ahora_local=23.56,
+    )
+    assert "hoy sigue sin registrar cena (ya pasó su hora)" in nota_tarde
+    assert "nunca «cuando la comas»" in nota_tarde
+    assert "«¿te propongo algo para comer?»" in nota_tarde
+
+    # 2. A las 23:42 (11:42 PM), ya están las 3 comidas registradas: indica que el día ya cerró y no sugiera batidas antes de dormir
+    nota_completa = tools._nota_comidas_sin_registrar(
+        "u1",
+        0,
+        rows_extra=[{"meal_type": "Desayuno"}, {"meal_type": "Almuerzo"}, {"meal_type": "Cena"}],
+        ahora_local=23.7,
+    )
+    assert "ya tiene todas sus comidas registradas" in nota_completa
+    assert "NO sugieras comer nada más ni tomar batidas antes de dormir" in nota_completa
+
+    # 3. estado_de_las_comidas después de las 22:30 avisa no cerrar con "cuando cenes" ni "¿te propongo algo para la cena?"
+    est_2348 = cdc.estado_de_las_comidas([{"meal_type": "Desayuno"}, {"meal_type": "Almuerzo"}], 23.8)
+    assert "no cierres con «cuando cenes» ni «¿te propongo algo para la cena?»" in est_2348
+
+    # 4. Regla anti-fusión de comidas de días distintos en fact_extractor y dreaming
+    fe_src = (_BACKEND / "fact_extractor.py").read_text(encoding="utf-8")
+    dr_src = (_BACKEND / "dreaming.py").read_text(encoding="utf-8")
+    assert "NUNCA fusiones registros de comidas puntuales de días u ocasiones distintas" in fe_src
+    assert "NUNCA combines comidas puntuales de días" in dr_src
+
+    # 5. Regla de porción comestible real en piezas pequeñas con hueso (1 alita ~8-9 g proteína)
+    assert "1 alita de pollo (≈35 g de carne sin hueso) aporta ~8-9 g de proteína" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
+
+

@@ -423,7 +423,10 @@ Recibes TODOS los hechos activos de UN usuario. Tu trabajo OFFLINE:
 
 1) FUSIONAR (merges): agrupa hechos de PREFERENCIA redundantes/complementarios en UN hecho canónico
    más completo. Indica los source_fact_ids fusionados. NO fusiones hechos de categorías 'alergia' o
-   'condicion_medica' — esos son clínicos y NUNCA se tocan.
+   'condicion_medica' — esos son clínicos y NUNCA se tocan. NUNCA combines comidas puntuales de días
+   distintos como si fueran un único plato comido el mismo día (ej. "almorzó X" + "almorzó Y" JAMÁS es
+   "su almuerzo consistió en X e Y"; si los agrupas como hábito, exprésalos como opciones separadas:
+   "En sus almuerzos suele alternar entre platos como X e Y").
 2) CONTRADICCIONES: marca (sin resolver) pares de hechos que se contradigan, sobre todo los clínicos.
    Solo describe y lista fact_ids; NO los borres.
 3) USER_MODEL: sintetiza 6-8 frases en español que describan al usuario para personalizar

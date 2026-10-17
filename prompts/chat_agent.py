@@ -473,7 +473,9 @@ _REGLA_UNA_LLAMADA_POR_COMIDA = (
     "solo como un almuerzo de tacos, y el desayuno de la foto no llegó al diario. EL TOTAL DEL DÍA sale del resultado "
     "de la herramienta («TOTAL REAL DE HOY»), nunca de sumar a mano un total que dijiste antes: la conversación puede "
     "venir de otros días. Junto a huevos o claras («2 huevos hervidos claros y 2 completos», «huevos completos»), "
-    "«completos» significa huevos ENTEROS (con clara y yema), nunca pan con salchicha."
+    "«completos» significa huevos ENTEROS (con clara y yema), nunca pan con salchicha. Al estimar proteína por pieza, "
+    "respeta el peso comestible real sin inflarlo a una porción estándar: 1 alita de pollo (≈35 g de carne sin hueso) "
+    "aporta ~8-9 g de proteína (no 18-20 g), 1 muslo pequeño ~14-16 g, 1 huevo entero ~6-7 g."
 )
 
 

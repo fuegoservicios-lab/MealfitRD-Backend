@@ -874,6 +874,7 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = "") -> 
           Incluye "ids_to_delete" de los viejos y "skip_new_fact" con el texto del nuevo.
         - Si un hecho nuevo es INDEPENDIENTE, NO lo incluyas en ninguna lista.
         - NO fusiones hechos de temas distintos.
+        - NUNCA fusiones registros de comidas puntuales de días u ocasiones distintas como si hubieran sido un único plato combinado (ej. "almorzó yuca con pollo" + "almorzó arroz con aguacate y alita" JAMÁS debe fusionarse en "su almuerzo consistió en arroz, aguacate, alita y yuca con pollo"). Déjalos como hechos independientes o, si reflejan opciones habituales de esa comida, redáctalo como alternativas separadas ("En el almuerzo suele comer platos como X o Y").
 
         HECHOS A ANALIZAR:
         {all_sections}

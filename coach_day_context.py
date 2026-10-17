@@ -268,6 +268,9 @@ def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=N
                                   "a esta hora no le toca ninguna comida: no cierres invitándole a comer")
             + " — nunca «cuando almuerces» si el almuerzo ya pasó, y NUNCA copies el cierre de tu respuesta anterior: "
             "mira la hora de ESTE mensaje.")
+    if ahora == "cena" and h >= 22.5:
+        out += (" Como ya es tarde en la noche, no cierres con «cuando cenes» ni «¿te propongo algo para la cena?»: "
+                "si preguntas por la cena, pregunta qué cenó para anotarlo.")
     if pasadas:
         p = pasadas[-1]
         out += (f" Del {p} (ya pasó sin anotar) se habla en PASADO y una sola vez en la conversación, si no se lo dijiste "
@@ -347,7 +350,9 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
                 "(pre-entrenos, «quemadores», batidas con café) y mucho líquido justo antes de acostarse (mejor ~1 hora "
                 "antes). Dilo en UNA frase y solo lo que aplique a lo que él va a comer. Sus condiciones médicas mandan "
                 "sobre todo esto (enfermedad renal ⇒ la proteína extra la decide su médico; diabetes ⇒ cuidado con el "
-                "carbohidrato nocturno).")
+                "carbohidrato nocturno). (Usa esta guía SOLO si pide qué cenar o cómo cerrar sus macros; si ya registró "
+                "la cena o solo está anotando su diario a última hora de la noche, NO le sugieras comer más ni tomar "
+                "batidas antes de dormir.)")
         elif momento in ("manana", "mediodia", "tarde") and fp is not None and fp > 25:
             out += (" Si pide ideas, reparte la proteína que falta entre las comidas que quedan en vez de dejarla "
                     "toda para la noche.")
