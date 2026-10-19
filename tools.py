@@ -852,21 +852,26 @@ def _clamp_days_ago(days_ago) -> int:
 # almuerzo registrado como snack se salta el dup-guard de comida principal y el hueco de la cena.
 # Claves normalizadas (`_norm_txt`: sin acentos, `-`/`_` como espacio). «comida» y «brunch» NO
 # están a propósito: son ambiguas (en México «comida» es el almuerzo; en RD, cualquier comida).
-_MEAL_TYPES_CANON = ("desayuno", "almuerzo", "cena", "merienda", "snack")
+_MEAL_TYPES_CANON = ("desayuno", "almuerzo", "cena", "merienda", "snack", "suplemento")
 _MEAL_TYPE_SYNONYMS = {
     # en-US
     "breakfast": "desayuno", "lunch": "almuerzo", "dinner": "cena", "supper": "cena",
     "snacks": "snack", "afternoon snack": "merienda",
+    "supplement": "suplemento", "supplements": "suplemento",
     # pt-BR
     "cafe da manha": "desayuno", "desjejum": "desayuno", "almoco": "almuerzo", "jantar": "cena",
     "ceia": "cena", "lanche": "snack", "lanche da tarde": "merienda",
+    "suplementos": "suplemento",
     # fr-FR (en Francia «déjeuner» es el almuerzo)
     "petit dejeuner": "desayuno", "petit dej": "desayuno", "dejeuner": "almuerzo",
     "diner": "cena", "souper": "cena", "gouter": "merienda", "collation": "snack", "en cas": "snack",
+    "complement": "suplemento", "complements": "suplemento",
     # it-IT («cena» ya es canónica)
     "colazione": "desayuno", "pranzo": "almuerzo", "merenda": "merienda", "spuntino": "snack",
+    "integratore": "suplemento", "integratori": "suplemento",
     # es (variantes)
     "tentempie": "snack", "picadera": "snack", "picoteo": "snack", "media manana": "merienda",
+    "suplementos": "suplemento",
 }
 
 
@@ -1247,7 +1252,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Incluye carbohidratos y grasas saludables si están disponibles.
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras.
     - food_facts / label_servings: nutrientes LEÍDOS de la etiqueta o dictados por el usuario, por porción, y número de porciones realmente consumidas. No inventes valores ni conviertas %VD.
-    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'. Dedúcelo de lo que diga el usuario o de la hora.
+    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack' | 'suplemento'. Dedúcelo de lo que diga el usuario o de la hora. NUNCA uses 'desayuno', 'almuerzo' o 'cena' para una toma de suplemento (creatina, proteínas, vitaminas, pastillas, cápsulas): un suplemento tomado por la mañana NO es el desayuno. Para suplementos usa 'suplemento' o 'snack'.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
     - suplemento / porciones: si tomó un suplemento de su Alacena («me tomé 2 scoops de whey»), pasa su nombre y
       cuántas porciones: las macros salen de la etiqueta guardada del pote y se restan del pote.
@@ -1314,6 +1319,23 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     _meal_type = _normalize_meal_type(meal_type)
     # A substantial meal can still recover its inferred dinner slot; the slot never limits diary rows.
     _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
+
+    # [P1-SUPPLEMENT-SLOT-GUARD · 2026-10-19] Una toma de suplemento (o producto no calórico como creatina,
+    # pastillas, vitaminas o minerales) NUNCA debe ocupar una comida principal (desayuno/almuerzo/cena). Un
+    # usuario que se toma 1 cápsula de creatina por la mañana NO ha desayunado: clasificarlo como
+    # desayuno atenúa el desayuno en su plan y hace que el asistente le diga «cuando almuerces...».
+    _norm_name = _norm_txt(meal_name or "")
+    _norm_req = _norm_txt(meal_type or "")
+    _es_supp_explicito = _norm_req in ("suplemento", "supplement", "suplementos", "supplements")
+    _es_supp_nombre = any(k in _norm_name for k in (
+        "creatina", "creatine", "capsula", "pastilla", "multivitamin", "vitamina",
+        "mineral", "magnesio", "colageno", "colageno", "omega 3", "omega3", "bcaa",
+        "glutamina", "suplemento", "pre entreno", "pre workout", "zinc"
+    ))
+    if _es_supp_explicito or (_es_supp_nombre and calories is not None and calories < 100) or (bool(suplemento) and calories is not None and calories < 50):
+        if _meal_type in ("desayuno", "almuerzo", "cena") or _es_supp_explicito:
+            logger.info(f"💊 [SUPPLEMENT-SLOT-GUARD] '{meal_name}' reclasificado '{_meal_type}' → 'suplemento' (no ocupa comida principal)")
+            _meal_type = "suplemento"
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
     # [P1-DIARY-DINNER-SLOT · 2026-07-30] El único log de qué slot se escribe era `logger.debug`, y
     # en producción solo se emite INFO+ — o sea que al revisar el journal NO había forma de saber
@@ -1385,6 +1407,10 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # [P1-PLAN-LOTE-76 · 2026-09-17] qué comidas de ESE día siguen sin registrar (helper; la batería en seco lo comparte)
         msg += _nota_comidas_sin_registrar(user_id, _days_ago)
         msg += _nota_pote   # [P1-PLAN-LOTE-291]
+        if _meal_type == "suplemento":
+            msg += (f" (Aviso para el asistente: registraste '{meal_name}' como suplemento, NO como una comida principal. "
+                    f"Tomar un suplemento por la mañana NO es el desayuno y no concluye esa comida. Dile qué anotaste y que cuando "
+                    f"desayune o coma algo te avise para anotarlo; NUNCA le digas «cuando almuerces» si aún no ha desayunado.)")
         if not _mt_reconocido:
             msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{meal_type}' y quedó como "
                     f"snack; si era desayuno, almuerzo o cena, corrígelo con correct_consumed_meal.)")

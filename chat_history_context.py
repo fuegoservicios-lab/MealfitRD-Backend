@@ -703,6 +703,8 @@ def slot_canonico(value: Any) -> Optional[str]:
     """desayuno | almuerzo | merienda | cena, o None si no se reconoce (snack/colación ⇒ merienda)."""
     import unicodedata
     v = "".join(ch for ch in unicodedata.normalize("NFKD", str(value or "")) if not unicodedata.combining(ch)).lower()
+    if "suplement" in v:
+        return None
     if "desayun" in v:
         return "desayuno"
     if "almuer" in v or v.strip().startswith("comida"):
@@ -717,7 +719,21 @@ def slot_canonico(value: Any) -> Optional[str]:
 def comidas_sin_registrar(rows_del_dia: Any, plan_day: Any = None) -> list:
     """Comidas de ESE día que faltan en el diario, en orden del día. `plan_day` es el registro de
     `resolve_day_dates`/`find_plan_day_for_date` (o el dict del día del plan): solo decide si la merienda cuenta."""
-    registradas = {slot_canonico(r.get("meal_type")) for r in (rows_del_dia or []) if isinstance(r, dict)}
+    def _es_comida_real(r: dict) -> bool:
+        if not isinstance(r, dict):
+            return False
+        mt = str(r.get("meal_type") or "").strip().lower()
+        if "suplement" in mt or r.get("suplemento"):
+            return False
+        # [P1-SUPPLEMENT-SLOT-GUARD · 2026-10-19] Una fila con 0 kcal de pastilla/cápsula/suplemento
+        # no cuenta como haber completado una comida principal (desayuno/almuerzo/cena).
+        cal = r.get("calories")
+        nm = str(r.get("meal_name") or "").lower()
+        if cal is not None and float(cal) <= 0 and any(k in nm for k in ("creatina", "creatine", "capsula", "pastilla", "vitamina", "mineral", "suplemento")):
+            return False
+        return True
+
+    registradas = {slot_canonico(r.get("meal_type")) for r in (rows_del_dia or []) if _es_comida_real(r)}
     slots = set(_SLOTS_PRINCIPALES)
     dia = plan_day.get("day") if isinstance(plan_day, dict) and isinstance(plan_day.get("day"), dict) else plan_day
     meals = dia.get("meals") if isinstance(dia, dict) else None
