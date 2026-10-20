@@ -19,6 +19,7 @@ PROHIBIDO abrir preguntando «¿Ya {verbo}?» o cualquier variante de si ya comi
 Su objetivo es contexto, no un estribillo: menciónalo como mucho de pasada y solo si aporta algo concreto; NO cierres con «para apoyar tu objetivo…» ni «para no frenar tu objetivo…».
 Nada de interrogatorios («¿qué está fallando?», «¿por qué no…?»): termina con una idea o una invitación concreta y amable.
 Si abajo tienes lo que lleva hoy, úsalo para ser concreto (por ejemplo, cuánta proteína le falta y qué la cubre), sin recitar números.
+IDIOMA OBLIGATORIO: Escribe en español (salvo que una directiva al final indique otro idioma expresamente). PROHIBIDO escribir en inglés si el usuario está en español.
 {tone_instruction}
 
 INSTRUCCIÓN DE FORMATO OBLIGATORIA:

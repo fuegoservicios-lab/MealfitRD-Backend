@@ -1188,7 +1188,14 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: este nudge es
                     # prosa LLM user-facing (chat + body de la Web Push) — misma frontera que
                     # el coach: solo mueve el IDIOMA de la prosa, comida/nombres siguen español.
-                    prompt += build_language_directive(_nudge_locale)
+                    _es_espanol = not _nudge_locale or str(_nudge_locale).lower().startswith("es")
+                    if _es_espanol:
+                        prompt += (
+                            "\n\n🌐 IDIOMA DE RESPUESTA — OBLIGATORIO: Escribe tu mensaje en ESPAÑOL. "
+                            "PROHIBIDO responder en inglés u otro idioma. Tu respuesta debe ser 100% en español."
+                        )
+                    else:
+                        prompt += build_language_directive(_nudge_locale)
             else:
                 # [P1-PLAN-LOTE-72] De las comidas que tocan, la primera que falte. Antes se miraba solo la primera
                 # que coincidía con la hora y, si ya estaba registrada, se abandonaba el tick.
@@ -1230,6 +1237,13 @@ No uses demasiados emojis. Sé directo, breve y empático.
                             sn for sn in (successful_nudges or [])
                             if str(sn.get("response_sentiment") or "").lower() not in _malos
                         ]
+                        _es_espanol = not _nudge_locale or str(_nudge_locale).lower().startswith("es")
+                        if successful_nudges and _es_espanol:
+                            from prompts.chat_agent import detect_message_locale
+                            successful_nudges = [
+                                sn for sn in successful_nudges
+                                if detect_message_locale(sn.get("nudge_content") or "") != "en-US"
+                            ]
                         if successful_nudges:
                             proven_strategies_text = "Estrategias previas que funcionaron con usuarios en situaciones emocionales idénticas:\n"
                             for sn in successful_nudges:
@@ -1284,11 +1298,23 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # meta): sin esto el aviso no sabía nada del día y sonaba a plantilla
                 prompt += bloque_del_dia(consumed, health)
                 prompt += _nevera_aviso   # [P1-PLAN-LOTE-960]
+                _es_espanol = not _nudge_locale or str(_nudge_locale).lower().startswith("es")
                 _prev_model = [str(m.get("content") or "").strip() for m in (recent or []) if m.get("role") == "model" and m.get("content")]
+                if _es_espanol and _prev_model:
+                    from prompts.chat_agent import detect_message_locale
+                    _prev_model = [p for p in _prev_model if detect_message_locale(p) != "en-US"]
                 if _prev_model:
                     _prev_joined = " | ".join(f"\"{p[:160]}\"" for p in _prev_model[:5])
                     prompt += f"\nUltimo aviso enviado en este chat (NO repitas el mismo alimento/plato ni el mismo arranque): {_prev_joined}\n"
-                prompt += build_language_directive(_nudge_locale)
+
+                if _es_espanol:
+                    prompt += (
+                        "\n\n🌐 IDIOMA DE RESPUESTA — OBLIGATORIO: Escribe TODO tu mensaje en ESPAÑOL dominicano / neutro. "
+                        "Bajo NINGUNA circunstancia respondas en inglés u otro idioma, incluso si ves ejemplos, estrategias "
+                        "o notas de recordatorios en inglés. Tu respuesta DEBE ser 100% en español."
+                    )
+                else:
+                    prompt += build_language_directive(_nudge_locale)
                 
             if not session_id or not _ia_ok:
                 # [P1-PLAN-LOTE-133] Sin chat reciente: el aviso corto y fijo en su idioma, directo a la pantalla.
