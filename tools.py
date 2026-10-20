@@ -874,6 +874,17 @@ _MEAL_TYPE_SYNONYMS = {
     "suplementos": "suplemento",
 }
 
+# [P1-SUPPLEMENT-DIARY-GUARD · 2026-10-20] Palabras clave para distinguir suplementos en el diario
+_SUPPLEMENT_KEYWORDS: tuple[str, ...] = (
+    "creatina", "creatine", "suplemento", "suplementos", "supplement", "supplements",
+    "vitamina", "vitamin", "multivitamin", "multivitaminico", "mineral",
+    "proteina", "protein", "whey", "caseina", "casein", "bcaa", "glutamina", "glutamine",
+    "magnesio", "magnesium", "zinc", "colageno", "collagen", "omega 3", "omega3",
+    "pre entreno", "pre workout", "preentreno", "preworkout", "electrolitos", "electrolytes",
+    "melatonina", "melatonin", "ashwagandha", "creapure", "capsula", "pastilla",
+    "scoop", "gomita", "gomitas",
+)
+
 
 def _resolver_meal_type(meal_type) -> Optional[str]:
     """Tipo canónico o None si no se reconoce (el caller decide: registrar como snack y AVISAR, o
@@ -933,8 +944,8 @@ def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     try:
         from db import execute_sql_query as _esq_fd
         return _esq_fd(
-            "SELECT meal_type, consumed_at, inventory_synced_at FROM consumed_meals "
-            "WHERE id = %s AND user_id = %s",
+            "SELECT meal_name, meal_type, calories, protein, carbs, healthy_fats, consumed_at, inventory_synced_at "
+            "FROM consumed_meals WHERE id = %s AND user_id = %s",
             (meal_id, user_id), fetch_one=True,
         ) or None
     except Exception as _e_fd:
@@ -1594,7 +1605,7 @@ def correct_consumed_meal(
         _meal_type = _resolver_meal_type(meal_type)
         if _meal_type is None:
             return (f"ERROR: no reconocí el tipo de comida '{meal_type}'. Usa 'desayuno' | 'almuerzo' | "
-                    f"'cena' | 'merienda' | 'snack'. No se corrigió nada.")
+                    f"'cena' | 'merienda' | 'snack' | 'suplemento'. No se corrigió nada.")
 
     _macros, _err_macros = _validar_macros_comida(
         calories=calories, protein=protein, carbs=carbs, healthy_fats=healthy_fats)
@@ -1604,8 +1615,77 @@ def correct_consumed_meal(
         _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
 
     _mid = str(meal_id).strip()
-    _fila = _leer_fila_diario(user_id, _mid) if (
-        days_ago is not None or _meal_type is not None or ingredients is not None) else None
+    _fila = _leer_fila_diario(user_id, _mid)
+
+    # [P1-SUPPLEMENT-DIARY-GUARD · 2026-10-20] Guard bidireccional comida ↔ suplemento:
+    # 1. Un suplemento NUNCA debe convertirse en una comida regular ni ser sobreescrito
+    #    por un plato nuevo (ej. arroz con carne «Res») enviado después por foto o texto.
+    # 2. Una comida principal NUNCA debe ser sobreescrita por un suplemento.
+    if _fila is not None:
+        _orig_type = (_fila.get("meal_type") or "").strip().lower()
+        _orig_name = str(_fila.get("meal_name") or "").strip()
+        _norm_orig_name = _norm_txt(_orig_name)
+        _norm_new_name = _norm_txt(meal_name or "")
+
+        _es_suplemento_orig = (
+            _orig_type == "suplemento"
+            or any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS)
+        )
+
+        if _es_suplemento_orig:
+            _intenta_cambiar_a_comida = False
+            _motivo = ""
+
+            if _meal_type in ("desayuno", "almuerzo", "cena", "merienda", "snack"):
+                _intenta_cambiar_a_comida = True
+                _motivo = f"el nuevo tipo de comida es '{_meal_type}'"
+            elif meal_name is not None and not any(kw in _norm_new_name for kw in _SUPPLEMENT_KEYWORDS):
+                _intenta_cambiar_a_comida = True
+                _motivo = f"el nuevo plato ('{meal_name}') es comida real y no un suplemento"
+            elif ingredients is not None and len(ingredients) > 0 and not any(
+                kw in _norm_txt(" ".join(ingredients)) for kw in _SUPPLEMENT_KEYWORDS
+            ):
+                _intenta_cambiar_a_comida = True
+                _motivo = "los ingredientes corresponden a comida y no a un suplemento"
+            elif calories is not None and calories > 100 and any(
+                kw in _norm_orig_name for kw in ("creatina", "creatine", "vitamina", "vitamin", "magnesio", "zinc", "melatonina")
+            ):
+                _intenta_cambiar_a_comida = True
+                _motivo = f"un suplemento no calórico como '{_orig_name}' no aporta {calories} kcal"
+
+            if _intenta_cambiar_a_comida:
+                logger.warning(
+                    f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir suplemento {meal_id} ('{_orig_name}') "
+                    f"con comida ('{meal_name}', tipo='{_meal_type}') para user={user_id}. RECHAZADO."
+                )
+                return (
+                    f"RECHAZADO: El registro {meal_id} corresponde a un SUPLEMENTO ('{_orig_name}', tipo='{_orig_type or 'suplemento'}'), "
+                    f"NO a un plato de comida. Una comida o foto nueva ({_motivo}) NUNCA debe sobreescribir ni reemplazar un "
+                    f"suplemento en el diario. "
+                    f"Para registrar esta comida, DEBES llamar a `log_consumed_meal` como un registro nuevo "
+                    f"(con su propio meal_type y macros) sin alterar el suplemento existente."
+                )
+
+        _es_comida_orig = _orig_type in ("desayuno", "almuerzo", "cena")
+        if _es_comida_orig:
+            _intenta_cambiar_a_supl = False
+            if _meal_type == "suplemento":
+                _intenta_cambiar_a_supl = True
+            elif meal_name is not None and any(kw in _norm_new_name for kw in _SUPPLEMENT_KEYWORDS) and not any(
+                kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS
+            ):
+                _intenta_cambiar_a_supl = True
+
+            if _intenta_cambiar_a_supl:
+                logger.warning(
+                    f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir comida principal {meal_id} ('{_orig_name}', tipo='{_orig_type}') "
+                    f"con suplemento ('{meal_name}', tipo='{_meal_type}') para user={user_id}. RECHAZADO."
+                )
+                return (
+                    f"RECHAZADO: El registro {meal_id} corresponde a una comida principal ('{_orig_name}', tipo='{_orig_type}'). "
+                    f"Un suplemento NUNCA debe sobreescribir una comida existente en el diario. "
+                    f"Para registrar el suplemento, llama a `log_consumed_meal` con `meal_type='suplemento'` como un registro nuevo."
+                )
 
     def _tz_off() -> int:
         try:
@@ -1714,7 +1794,7 @@ def correct_consumed_meal(
         if days_ago is not None:
             _nota_total = _nota_total_del_dia(user_id, _clamp_days_ago(days_ago))
         else:
-            _dias_fila = _dias_atras_de_fila(user_id, (_fila or _leer_fila_diario(user_id, _mid) or {}).get("consumed_at"))
+            _dias_fila = _dias_atras_de_fila(user_id, (_fila or {}).get("consumed_at"))
             if _dias_fila is not None:
                 _nota_total = _nota_total_del_dia(user_id, _dias_fila)
         return (
