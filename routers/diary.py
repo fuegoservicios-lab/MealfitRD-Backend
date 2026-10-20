@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 import ajuste_de_duda  # [P1-PLAN-LOTE-361] el modelo de la petición se resuelve al importar el router
 import ingrediente_corregido  # [P1-PLAN-LOTE-365] ídem
+import ajustar_plato  # [P1-SCAN-AI-ASSISTANT-MODAL · 2026-10-20] ajuste con IA y nuevo ingrediente
 router = APIRouter(
     prefix="/api/diary",
     tags=["diary"],
@@ -359,6 +360,9 @@ _ESTIMATE_PLATE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _AJUSTE_DUDA_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # [P1-PLAN-LOTE-365] «Cambiar» un ingrediente del escáner (flash, texto); exento de la cuota como el de arriba
 _INGREDIENTE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-SCAN-AI-ASSISTANT-MODAL · 2026-10-20] Ajustar plato completo y añadir ingrediente con IA en el modal
+_AJUSTAR_PLATO_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+_AGREGAR_INGREDIENTE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # [P1-PLAN-LOTE-720 · 2026-09-28] La ficha de un plato registrado (lectura, cero LLM): exenta de la cuota como el resto
 # del diario — abrir lo que ya comiste no puede quemar un crédito de planes ni dar 402.
 _MEAL_DETAIL_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
@@ -1257,6 +1261,48 @@ async def api_ingrediente_corregido(payload: ingrediente_corregido.PeticionIngre
         return {"operation_failed": True, "error_code": "ingredient_unavailable",
                 "error_message": "No pudimos calcular ese ingrediente ahora; inténtalo de nuevo o corrige las calorías a mano."}
     return {"nombre": " ".join(payload.nuevo.split())[:80], **ingrediente_corregido.normalizar(crudo)}
+
+
+@router.post("/scan/ajustar-plato")
+async def api_ajustar_plato(
+    payload: ajustar_plato.PeticionAjustarPlato,
+    verified_user_id: Optional[str] = Depends(_AJUSTAR_PLATO_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
+):
+    """[P1-SCAN-AI-ASSISTANT-MODAL · 2026-10-20] Ajusta el plato completo en lenguaje natural."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    try:
+        resultado = await ajustar_plato.ajustar_con_ia(payload, verified_user_id)
+        return {"success": True, **resultado}
+    except Exception as e:
+        logger.warning(f"[P1-SCAN-AI-ASSISTANT-MODAL] ajustar_plato falló user={verified_user_id[:8]}: {type(e).__name__}: {e}")
+        return {
+            "operation_failed": True,
+            "error_code": "adjust_plate_unavailable",
+            "error_message": "No pudimos ajustar el plato con esa indicación; intenta redactarla de otra forma o edita los ingredientes a mano.",
+        }
+
+
+@router.post("/scan/agregar-ingrediente")
+async def api_agregar_ingrediente(
+    payload: ajustar_plato.PeticionAgregarIngrediente,
+    verified_user_id: Optional[str] = Depends(_AGREGAR_INGREDIENTE_LIMITER),
+    _ia: None = Depends(requiere_consentimiento_ia),  # [P1-PLAN-LOTE-843]
+):
+    """[P1-SCAN-AI-ASSISTANT-MODAL · 2026-10-20] Estima y añade un ingrediente individual por texto libre."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Autenticación requerida")
+    try:
+        resultado = await ajustar_plato.agregar_ingrediente_con_ia(payload, verified_user_id)
+        return {"success": True, **resultado}
+    except Exception as e:
+        logger.warning(f"[P1-SCAN-AI-ASSISTANT-MODAL] agregar_ingrediente falló user={verified_user_id[:8]}: {type(e).__name__}: {e}")
+        return {
+            "operation_failed": True,
+            "error_code": "add_ingredient_unavailable",
+            "error_message": "No pudimos estimar ese alimento ahora; intenta especificar la cantidad o añádelo con otra descripción.",
+        }
 
 
 @router.post("/consumed/estimate-plate")

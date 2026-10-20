@@ -136,6 +136,7 @@ _PROVEEDOR_RE = re.compile(r"ChatGLM\(|build_chat_llm\(|ChatOpenAI\(|cohere\.Cli
 _CERCO = {
     "agent.py": "turno del chat (/api/chat/*, 428); swap_meal por /swap-meal, /regenerate-day, /fix-sodium-day",
     "ai_helpers.py": "/recipe/expand (428); título (services._titulo_del_plan); retrospectiva (permite_ia)",
+    "ajustar_plato.py": "/api/diary/scan/ajustar-plato y /api/diary/scan/agregar-ingrediente (428)",
     "ajuste_de_duda.py": "/api/diary/scan/ajuste-duda (428)",
     "coach_live.py": "/api/chat/live/sesion (428) + permite_ia en cada delegación; solo operador (lote 905)",
     "coach_voz.py": "/api/chat/voz (428)",

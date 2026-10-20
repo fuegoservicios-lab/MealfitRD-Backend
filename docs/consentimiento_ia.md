@@ -159,6 +159,8 @@ direcciones, también contra las rutas reales de la app).
 | POST | /api/diary/consumed/estimate-plate | routers/diary.py | api_estimate_plate | 428 |
 | POST | /api/diary/scan/ajuste-duda | routers/diary.py | api_ajuste_de_duda | 428 |
 | POST | /api/diary/scan/ingrediente | routers/diary.py | api_ingrediente_corregido | 428 |
+| POST | /api/diary/scan/ajustar-plato | routers/diary.py | api_ajustar_plato | 428 |
+| POST | /api/diary/scan/agregar-ingrediente | routers/diary.py | api_agregar_ingrediente | 428 |
 | POST | /api/inventory/photo-scan | routers/user_data.py | api_inventory_photo_scan | 428 |
 | POST | /api/help/chat | routers/help_chat.py | api_help_chat | 428 |
 | POST | /api/i18n/textos | routers/user_data.py | api_traducir_textos | suave |
