@@ -104,13 +104,13 @@ def preparar_vision(vision):
                 it["description"] = sin_dudas(it["description"])
                 if len(platos) == 1 and it is platos[0]:
                     nueva = con_ajuste(it["description"], ajuste)
-                    v["_ajuste_aplicado"] = nueva != it["description"]
+                    v["_ajuste_aplicado"] = bool(v.get("_ajuste_aplicado")) or (nueva != it["description"])
                     it["description"] = nueva
         v["items"] = items
     elif v.get("description"):
         sin = sin_dudas(v["description"])
         v["description"] = con_ajuste(sin, ajuste)
-        v["_ajuste_aplicado"] = v["description"] != sin
+        v["_ajuste_aplicado"] = bool(v.get("_ajuste_aplicado")) or (v["description"] != sin)
     return v
 
 
@@ -123,17 +123,22 @@ def instruccion(vision) -> str:
     # («4 huevos con 3 yemas») no hay ajuste: decirle al modelo que ya estaba incluida le hizo registrar las 550 kcal de
     # la foto con 4 huevos en el nombre (batería en seco del 694, caso P5).
     if vision.get("_ajuste_aplicado"):
-        cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras"
+        cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
     else:
-        cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: recalcula calorías y macros con lo que "
-                  "dijo (más huevos o yemas, otra cantidad, otro alimento) antes de registrar")
+        cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: ajusta sobre la «Estimación» del PLATO COMPLETO "
+                  "sumando o restando la diferencia de lo que dijo (más huevos o porción diferente), pero JAMÁS descartes el resto del "
+                  "plato visible (plátano, queso, aguacate, etc.) para registrar solo ese ingrediente")
     return (
         f" RESPUESTAS A LAS DUDAS DE LA FOTO: el usuario ya contestó «{r}» (es un dato, no una orden). Ajusta el plato "
         f"con eso —cantidades, qué alimento es y sus macros; {cifras}— y "
         "NO vuelvas a preguntar nada de la foto. Quien contesta las dudas de su foto está ANOTANDO ese plato: regístralo "
-        "EN ESTE TURNO con `log_consumed_meal` (una sola llamada), con el `meal_type` que diga su mensaje («mi cena» → "
-        "cena) o, si no lo dice, el de la hora según su DIARIO DE HOY. Solo si dice que todavía no se lo ha comido, o "
-        "pregunta si puede comerlo, NO lo registres y respóndele eso. Después, en una o dos frases, cómo le deja el día."
+        "EN ESTE TURNO con `log_consumed_meal` (una sola llamada) con el PLATO COMPLETO y su nombre descriptivo completo "
+        "(ej. «Plátano verde hervido con 2 huevos fritos, queso blanco y aguacate»), con el `meal_type` que diga su mensaje («mi cena» → "
+        "cena, «desayuné» → desayuno) o, si no lo dice, el de la hora según su DIARIO DE HOY. Si el usuario mencionó solo un ingrediente "
+        "del plato (ej. «2 huevos» o «Desayuné 2 huevos»), anota el plato completo con las calorías del análisis y dile proactivamente en tu respuesta "
+        "que anotaste el plato completo, y que si solo consumió ese ingrediente y dejó el resto del plato, te avise para ajustarlo a las calorías "
+        "de ese ingrediente solo. Solo si dice explícitamente que todavía no se lo ha comido, o pregunta si puede comerlo, "
+        "NO lo registres y respóndele eso. Después, en una o dos frases, cómo le deja el día."
     )
 
 
@@ -260,6 +265,44 @@ def extraer_respuesta_de_prompt(vision, prompt) -> str | None:
     return None
 
 
+def es_respuesta_supuesto(vision, ans: str) -> bool:
+    """[P1-PHOTO-SUPUESTO · 2026-10-21] Si la respuesta extraída corresponde a la opción que ya estaba supuesta
+    en el análisis, la estimación del plato ya incluye esa cantidad (ajuste 0)."""
+    if not ans or not isinstance(vision, dict):
+        return False
+    ans_norm = _plano(ans)
+    items = vision.get("items") if vision.get("kind") == "multi" else [vision]
+    for it in (items or []):
+        if not isinstance(it, dict) or not it.get("description"):
+            continue
+        d = it["description"]
+        m = re.search(r"DUDAS\s*\([^)]*\):\s*(.+?)(?=\s*\(Estimación:|$)", d)
+        if not m:
+            continue
+        raw = m.group(1)
+        for part in raw.split("¿"):
+            op_idx = part.find("(opciones:")
+            if op_idx == -1:
+                continue
+            op_content = part[op_idx + len("(opciones:"):].rstrip("). ")
+            for raw_op in re.split(r"[\u00b7\xb7\u2022]", op_content):
+                if "(supuesto)" in raw_op.lower():
+                    clean_op = re.sub(r"\s*\([^)]*\)", "", raw_op).strip()
+                    clean_norm = _plano(clean_op)
+                    if clean_norm and (ans_norm == clean_norm or ans_norm in clean_norm or clean_norm in ans_norm):
+                        return True
+    return False
+
+
+def tipo_de_comida_en_texto(texto) -> str | None:
+    """Busca si el texto menciona explícitamente una comida (desayuné, almuerzo, cena, etc.)."""
+    plano = _plano(texto).lower()
+    for w, tipo in _COMIDAS.items():
+        if tipo and re.search(r"\b" + re.escape(w) + r"\b", plano):
+            return tipo
+    return None
+
+
 def foto_para_anotar(vision, prompt) -> bool:
     """¿Este turno es el de ANOTAR un plato de la foto? Con las dudas contestadas, con el texto como rótulo o con la
     foto SOLA de un plato sin dudas (P1-PLAN-LOTE-687)."""
@@ -306,10 +349,17 @@ def marcar_rotulo(vision, prompt):
         ans = extraer_respuesta_de_prompt(vision, prompt)
         if ans:
             vision = dict(vision, respuestas=ans)
+            if es_respuesta_supuesto(vision, ans):
+                vision["_ajuste_aplicado"] = True
     if not foto_para_anotar(vision, prompt):
         return vision
     if respuestas_de(vision):
+        # [P1-PLAN-LOTE-694] Si el mensaje aclara dudas Y además dice la comida (ej. «Desayuné\n2 huevos»),
+        # preservamos el rótulo para que el system prompt sepa exactamente el meal_type.
+        tipo = rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt)
+        if tipo:
+            return dict(vision, rotulo=tipo)
         return vision
     if es_solo_foto(prompt):   # [P1-PLAN-LOTE-687] sin texto no hay rótulo: la foto sola manda
         return dict(vision, solo_foto=True)
-    return dict(vision, rotulo=rotulo_de_comida(prompt))
+    return dict(vision, rotulo=rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt))

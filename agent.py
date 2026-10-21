@@ -5499,12 +5499,20 @@ def _registro_es_la_foto(args: dict, foto: dict) -> bool:
     Los ingredientes no cuentan: «queso al gusto» de unos tacos casaba con el queso del desayuno."""
     if not isinstance(args, dict):
         return False
+    try:
+        kcal = float(args.get("calories") or 0)
+        kcal_foto = float(foto.get("kcal") or 0)
+    except (TypeError, ValueError):
+        kcal, kcal_foto = 0.0, 0.0
+
+    # [P1-PLATE-PHOTO-INTEGRITY · 2026-10-21] Si el plato de la foto tiene una estimación sustancial (>= 200 kcal),
+    # un registro con menos del 50% de las calorías de la foto NO es la comida de la foto: el modelo redujo un plato
+    # completo a un solo ingrediente/snack (ej. 143 kcal de huevos en un plato de 535 kcal con plátano y queso).
+    if kcal_foto >= 200 and kcal > 0 and kcal < 0.50 * kcal_foto:
+        return False
+
     if _tokens_de_comida(args.get("meal_name")) & _tokens_de_comida(foto.get("desc")):
         return True
-    try:
-        kcal, kcal_foto = float(args.get("calories") or 0), float(foto.get("kcal") or 0)
-    except (TypeError, ValueError):
-        return False
     return kcal > 0 and kcal_foto > 0 and abs(kcal - kcal_foto) <= 0.30 * kcal_foto
 
 

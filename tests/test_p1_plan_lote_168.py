@@ -200,6 +200,8 @@ def test_un_registro_es_la_foto_por_nombre_o_por_kcal():
     assert agent._registro_es_la_foto({"meal_name": "Desayuno típico", "calories": 700}, foto)
     assert not agent._registro_es_la_foto({"meal_name": "Desayuno típico", "calories": 1200}, foto)
     assert not agent._registro_es_la_foto(None, foto)
+    # [P1-PLATE-PHOTO-INTEGRITY · 2026-10-21] Registrar solo 2 huevos (143 kcal) ante un plato de 670 kcal NO es la foto
+    assert not agent._registro_es_la_foto({"meal_name": "2 huevos", "calories": 143}, foto)
 
 
 def _turno(tool_calls, *, texto_final="Quedó como almuerzo: ~1050 kcal.", previos=()):

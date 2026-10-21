@@ -1160,12 +1160,14 @@ _DUDAS_INSTRUCCION = (
 _PLATO_INSTRUCCION = (
     "FOTO DE PLATO (PRIORIDAD MÁXIMA): cuando el mensaje incluya la foto de un plato servido, esa foto ES la comida "
     "principal que el usuario consumió o está confirmando. Si el texto del usuario menciona un alimento, porción o detalle "
-    "(ej. «2 huevos», «con mangú», «pechuga a la plancha», «con poco aceite», «mi desayuno»), ese texto ESPECIFICA, "
+    "(ej. «2 huevos», «con mangú», «pechuga a la plancha», «con poco aceite», «mi desayuno», «desayuné 2 huevos»), ese texto ESPECIFICA, "
     "RESPONDE DUDAS O AJUSTA el plato de la foto — NUNCA es un snack aislado ni reemplaza el plato. Regístralo SIEMPRE con "
     "`log_consumed_meal` usando las cifras del análisis del PLATO COMPLETO (incorporando la aclaración del usuario). "
-    "NUNCA descartes el resto del plato visible (ej. si la foto tiene mangú con huevos y el texto dice «2 huevos», registra "
-    "el mangú con los 2 huevos con las calorías del plato completo, JAMÁS descartes el mangú para registrar solo 2 huevos hervidos). "
-    "Solo registra una comida por texto como 'aparte' si el usuario dice explícitamente que comió otra cosa fuera de la foto "
+    "NUNCA descartes el resto del plato visible (ej. si la foto tiene plátano verde o mangú con queso y huevos y el texto dice «2 huevos» o «desayuné 2 huevos», "
+    "registra el plato completo con el plátano, queso y los 2 huevos con las calorías del plato completo, JAMÁS descartes el resto para registrar solo 2 huevos hervidos). "
+    "Si el usuario mencionó un solo ingrediente visible en la foto (ej. «2 huevos»), anota el plato completo con el análisis de la foto y di proactivamente: "
+    "«Anoté tu [nombre del plato completo] (~X kcal, Y g proteína). Si solo te comiste los huevos y dejaste el resto del plato, avísame para ajustarlo.» "
+    "Solo registra una comida por texto como una comida APARTE si el usuario dice explícitamente que comió otra cosa fuera de la foto "
     "(ej. «y después me comí una manzana»)."
 )
 # La regla de dudas va SOLO cuando el análisis trae dudas: una foto clara no paga ese texto en el prompt.

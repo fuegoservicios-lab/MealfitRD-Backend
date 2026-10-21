@@ -107,6 +107,38 @@ def test_prompt_que_contesta_duda_se_extrae_como_respuesta():
     assert "Plátano verde hervido" in ctx
 
 
+def test_prompt_con_comida_y_supuesto_registra_plato_completo_con_proactividad():
+    """[P1-PHOTO-PROACTIVE-PLATE · 2026-10-21] Caso vivo: 'Desayuné\\n2 huevos' con foto de plátano, queso, aguacate y 2 huevos.
+    El texto aclara la duda del supuesto y la comida, sin descartar el resto del plato."""
+    v = {
+        "kind": "multi",
+        "items": [{
+            "kind": "plato",
+            "description": (
+                "Plátano verde hervido cortado en trozos, acompañado de 2 huevos fritos, queso blanco derretido y 2 lascas finas de aguacate. "
+                "DUDAS (pregúntale solo esto): ¿Eran 1 o 2 huevos fritos? (opciones: 2 huevos (supuesto) · 1 huevo) "
+                "(Estimación: Calorías: 535, Proteína: 23g, Carbohidratos: 45g, Grasas Saludables: 30g)"
+            )
+        }],
+        "has_text": True
+    }
+    prompt = "Desayuné\n2 huevos"
+    ans = rf.extraer_respuesta_de_prompt(v, prompt)
+    assert ans == "2 huevos"
+    assert rf.es_respuesta_supuesto(v, ans) is True
+    assert rf.tipo_de_comida_en_texto(prompt) == "desayuno"
+
+    v_marked = rf.marcar_rotulo(v, prompt)
+    assert v_marked.get("respuestas") == "2 huevos"
+    assert v_marked.get("_ajuste_aplicado") is True
+    assert v_marked.get("rotulo") == "desayuno"
+
+    ctx = build_vision_context(v_marked)
+    assert "YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO" in ctx
+    assert "Plátano verde hervido con 2 huevos fritos, queso blanco y aguacate" in ctx
+    assert "proactivamente" in ctx
+
+
 def test_frontend_espera_las_respuestas_antes_del_coach():
     """El chat no abre el turno del coach mientras la foto tenga dudas sin contestar."""
     ruta = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "pages", "AgentPage.jsx")
