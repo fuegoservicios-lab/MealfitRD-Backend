@@ -1263,7 +1263,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Incluye carbohidratos y grasas saludables si están disponibles.
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras.
     - food_facts / label_servings: nutrientes LEÍDOS de la etiqueta o dictados por el usuario, por porción, y número de porciones realmente consumidas. No inventes valores ni conviertas %VD.
-    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack' | 'suplemento'. Dedúcelo de lo que diga el usuario o de la hora. NUNCA uses 'desayuno', 'almuerzo' o 'cena' para una toma de suplemento (creatina, proteínas, vitaminas, pastillas, cápsulas): un suplemento tomado por la mañana NO es el desayuno. Para suplementos usa 'suplemento' o 'snack'.
+    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack' | 'suplemento'. Dedúcelo de lo que diga el usuario o de la hora. NUNCA uses 'desayuno', 'almuerzo', 'cena', 'merienda' o 'snack' para una toma de suplemento (creatina, proteínas, vitaminas, pastillas, cápsulas): un suplemento NO es una comida ni una merienda. Para suplementos usa SIEMPRE 'suplemento'.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
     - suplemento / porciones: si tomó un suplemento de su Alacena («me tomé 2 scoops de whey»), pasa su nombre y
       cuántas porciones: las macros salen de la etiqueta guardada del pote y se restan del pote.
@@ -1344,8 +1344,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         "glutamina", "suplemento", "pre entreno", "pre workout", "zinc"
     ))
     if _es_supp_explicito or (_es_supp_nombre and calories is not None and calories < 100) or (bool(suplemento) and calories is not None and calories < 50):
-        if _meal_type in ("desayuno", "almuerzo", "cena") or _es_supp_explicito:
-            logger.info(f"💊 [SUPPLEMENT-SLOT-GUARD] '{meal_name}' reclasificado '{_meal_type}' → 'suplemento' (no ocupa comida principal)")
+        if _meal_type != "suplemento":
+            logger.info(f"💊 [SUPPLEMENT-SLOT-GUARD] '{meal_name}' reclasificado '{_meal_type}' → 'suplemento' (los suplementos no son comidas ni meriendas)")
             _meal_type = "suplemento"
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
     # [P1-DIARY-DINNER-SLOT · 2026-07-30] El único log de qué slot se escribe era `logger.debug`, y

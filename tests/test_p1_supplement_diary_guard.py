@@ -70,6 +70,32 @@ def test_log_consumed_meal_reclasifica_creatina_de_desayuno_a_suplemento(mock_di
     assert "NUNCA le digas «cuando almuerces»" in out
 
 
+def test_log_consumed_meal_reclasifica_creatina_de_merienda_y_snack_a_suplemento(mock_diario):
+    # Caso reportado por usuario: Creatine 5000 registrada como merienda
+    out = tools.log_consumed_meal.func(
+        _UID,
+        meal_name="Creatine 5000 Creatine Monohydrate Capsules (Natural Sport) — 5 cápsulas",
+        calories=0,
+        protein=0,
+        meal_type="merienda",
+    )
+    assert len(mock_diario) == 1
+    _, kwargs = mock_diario[0]
+    assert kwargs["meal_type"] == "suplemento"
+    assert "como suplemento" in out
+
+    out2 = tools.log_consumed_meal.func(
+        _UID,
+        meal_name="Creatina 5g",
+        calories=0,
+        protein=0,
+        meal_type="snack",
+    )
+    assert len(mock_diario) == 2
+    _, kwargs2 = mock_diario[1]
+    assert kwargs2["meal_type"] == "suplemento"
+
+
 def test_log_consumed_meal_respeta_suplemento_explicito(mock_diario):
     out = tools.log_consumed_meal.func(
         _UID,
