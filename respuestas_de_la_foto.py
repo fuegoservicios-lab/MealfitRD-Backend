@@ -226,6 +226,40 @@ def _platos_claros(vision) -> bool:
     return bool(platos) and not any(_MARCA_DUDAS.strip() in str(i.get("description")) for i in platos)
 
 
+def extraer_respuesta_de_prompt(vision, prompt) -> str | None:
+    """[P1-PHOTO-ANSWER-EXTRACT · 2026-10-21] Si el prompt del usuario contesta una de las opciones de DUDAS de la foto
+    (ej. «2 huevos» ante «¿Cuántos huevos fritos tiene el plato? (opciones: 2 huevos (supuesto) · 1 huevo)»), extrae
+    esa respuesta para que el turno la trate como contestada sin descartar el resto del plato."""
+    if not prompt or not isinstance(vision, dict):
+        return None
+    p_norm = _plano(prompt)
+    if not p_norm or len(p_norm) > 80:
+        return None
+    items = vision.get("items") if vision.get("kind") == "multi" else [vision]
+    for it in (items or []):
+        if not isinstance(it, dict) or not it.get("description"):
+            continue
+        d = it["description"]
+        m = re.search(r"DUDAS\s*\([^)]*\):\s*(.+?)(?=\s*\(Estimación:|$)", d)
+        if not m:
+            continue
+        raw = m.group(1)
+        for part in raw.split("¿"):
+            if not part.strip():
+                continue
+            q_text = "¿" + part
+            op_idx = q_text.find("(opciones:")
+            if op_idx == -1:
+                continue
+            op_content = q_text[op_idx + len("(opciones:"):].rstrip("). ")
+            opciones = [re.sub(r"\s*\([^)]*\)", "", x).strip() for x in re.split(r"[\u00b7\xb7\u2022]", op_content)]
+            for o in opciones:
+                o_norm = _plano(o)
+                if o_norm and (p_norm == o_norm or p_norm in o_norm or o_norm in p_norm):
+                    return o
+    return None
+
+
 def foto_para_anotar(vision, prompt) -> bool:
     """¿Este turno es el de ANOTAR un plato de la foto? Con las dudas contestadas, con el texto como rótulo o con la
     foto SOLA de un plato sin dudas (P1-PLAN-LOTE-687)."""
@@ -236,7 +270,7 @@ def foto_para_anotar(vision, prompt) -> bool:
                     for i in (items or []))
     if not hay_plato:
         return False
-    if respuestas_de(vision) or rotulo_de_comida(prompt) is not None:
+    if respuestas_de(vision) or rotulo_de_comida(prompt) is not None or extraer_respuesta_de_prompt(vision, prompt) is not None:
         return True
     return es_solo_foto(prompt) and _platos_claros(vision)
 
@@ -266,7 +300,15 @@ NOTA_REINTENTO = (
 def marcar_rotulo(vision, prompt):
     """El `vision` con `rotulo` cuando el texto del turno es el rótulo de una foto de plato (y no hay respuestas: con
     ellas manda su propia regla). Sin rótulo, el MISMO objeto."""
-    if not isinstance(vision, dict) or respuestas_de(vision) or not foto_para_anotar(vision, prompt):
+    if not isinstance(vision, dict):
+        return vision
+    if not respuestas_de(vision):
+        ans = extraer_respuesta_de_prompt(vision, prompt)
+        if ans:
+            vision = dict(vision, respuestas=ans)
+    if not foto_para_anotar(vision, prompt):
+        return vision
+    if respuestas_de(vision):
         return vision
     if es_solo_foto(prompt):   # [P1-PLAN-LOTE-687] sin texto no hay rótulo: la foto sola manda
         return dict(vision, solo_foto=True)

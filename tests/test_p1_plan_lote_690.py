@@ -95,6 +95,18 @@ def test_rama_de_una_foto_tambien():
     assert "Calorías: 478" in ctx and "RESPUESTAS A LAS DUDAS" in ctx and "pregúntale solo esto" not in ctx
 
 
+def test_prompt_que_contesta_duda_se_extrae_como_respuesta():
+    v = _vision()   # DUDAS: ¿Cuántos huevos usaste en el revuelto? (opciones: 1 huevo · 2 huevos (supuesto) · 3 huevos)
+    assert rf.extraer_respuesta_de_prompt(v, "2 huevos") == "2 huevos"
+    v_marked = rf.marcar_rotulo(v, "2 huevos")
+    assert v_marked.get("respuestas") == "2 huevos"
+    assert rf.foto_para_anotar(v, "2 huevos") is True
+    ctx = build_vision_context(rf.preparar_vision(v_marked))
+    assert "RESPUESTAS A LAS DUDAS DE LA FOTO" in ctx
+    assert "pregúntale solo esto" not in ctx
+    assert "Plátano verde hervido" in ctx
+
+
 def test_frontend_espera_las_respuestas_antes_del_coach():
     """El chat no abre el turno del coach mientras la foto tenga dudas sin contestar."""
     ruta = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "pages", "AgentPage.jsx")

@@ -1158,9 +1158,15 @@ _DUDAS_INSTRUCCION = (
     "de la foto: registra y sigue."
 )
 _PLATO_INSTRUCCION = (
-    "PLATO: si el usuario dice que se comió lo de la foto («este fue el desayuno», «me comí esto»), regístralo EN ESTE "
-    "TURNO con `log_consumed_meal` y las cifras de su análisis, como una comida APARTE de cualquier otra que cuente por "
-    "texto: una llamada por comida, cada una con su `meal_type`."
+    "FOTO DE PLATO (PRIORIDAD MÁXIMA): cuando el mensaje incluya la foto de un plato servido, esa foto ES la comida "
+    "principal que el usuario consumió o está confirmando. Si el texto del usuario menciona un alimento, porción o detalle "
+    "(ej. «2 huevos», «con mangú», «pechuga a la plancha», «con poco aceite», «mi desayuno»), ese texto ESPECIFICA, "
+    "RESPONDE DUDAS O AJUSTA el plato de la foto — NUNCA es un snack aislado ni reemplaza el plato. Regístralo SIEMPRE con "
+    "`log_consumed_meal` usando las cifras del análisis del PLATO COMPLETO (incorporando la aclaración del usuario). "
+    "NUNCA descartes el resto del plato visible (ej. si la foto tiene mangú con huevos y el texto dice «2 huevos», registra "
+    "el mangú con los 2 huevos con las calorías del plato completo, JAMÁS descartes el mangú para registrar solo 2 huevos hervidos). "
+    "Solo registra una comida por texto como 'aparte' si el usuario dice explícitamente que comió otra cosa fuera de la foto "
+    "(ej. «y después me comí una manzana»)."
 )
 # La regla de dudas va SOLO cuando el análisis trae dudas: una foto clara no paga ese texto en el prompt.
 _MARCA_DUDAS = "DUDAS (pregúntale solo esto)"
