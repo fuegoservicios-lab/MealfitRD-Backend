@@ -615,7 +615,7 @@ _SQL_SESIONES = (
 _SQL_MENSAJES = ("SELECT m.id::text AS id, m.role, m.content, m.created_at, m.feedback, m.attachments "
                  "FROM public.agent_messages m "
                  f"WHERE m.session_id = %s AND m.session_id::text IN ({_HILOS}) "
-                 "AND (m.content IS NULL OR NOT m.content LIKE '[SYSTEM_TITLE] %') "
+                 "AND (m.content IS NULL OR NOT m.content LIKE '[SYSTEM_TITLE] %%') "
                  "ORDER BY m.created_at DESC, m.id DESC LIMIT %s")
 _SQL_ADJUNTO = ("SELECT a.content, a.content_type FROM public.chat_attachments a WHERE a.id = %s "
                 f"AND a.message_id IS NOT NULL AND a.session_id::text IN ({_HILOS}) "
