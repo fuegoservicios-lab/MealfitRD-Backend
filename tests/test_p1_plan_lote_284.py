@@ -99,6 +99,17 @@ def test_paridad_con_el_normalizador_de_julio():
     assert abs(antes - _kcal(db, f"{seco} g de habichuelas negras secas")) <= 2
 
 
+def test_platos_guisados_y_arroz_blanco_preparado():
+    db = _db()
+    # Habichuelas guisadas deben resolver como legumbre cocida (~190 kcal por 150g, no 517 kcal en seco)
+    assert 180 <= _kcal(db, "150 g de habichuelas negras guisadas") <= 200
+    # Arroz blanco con hint de porción (≈200 g) son ~260 kcal, no 717 kcal
+    assert 250 <= _kcal(db, "arroz blanco (≈200 g)") <= 270
+    assert 250 <= _kcal(db, "200 g de arroz blanco") <= 270
+    # Lo crudo explícito se mantiene en seco
+    assert _kcal(db, "60 g de arroz blanco crudo") == 215
+
+
 def test_el_gancho_vive_en_el_resolvedor():
     src = (_BACKEND / "nutrition_db.py").read_text(encoding="utf-8")
     assert 'return __import__("cocido_en_catalogo").en_base_de_la_fila(s, self._grams_literales(s), self)' in src

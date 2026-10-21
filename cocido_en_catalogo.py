@@ -38,9 +38,11 @@ FAMILIAS = (
     # soya texturizada hidratada: el mismo 0,35× que usa la lista (327 × 0,35); sin densidad cocida fiable → solo gramos
     (("texturizada",), 114.0, None, False),
 )
-_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|hervid[oa]s?|sancochad[oa]s?)\b")
+_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|hervid[oa]s?|sancochad[oa]s?|guisad[oa]s?|estofad[oa]s?|saltead[oa]s?|al vapor|vapor|hornead[oa]s?|al horno)\b")
 _LISTO_RX = re.compile(r"\b(de lata|en lata|enlatad[oa]s?|escurrid[oa]s?)\b")
 _CRUDO_RX = re.compile(r"\b(crud[oa]s?|sec[oa]s?|en seco|peso seco)\b")
+_APROX_HINT_RX = re.compile(r"\([≈~]\s*\d+")
+_PREPARADO_RX = re.compile(r"\b(arroz blanco|moro|locrio|espaguetis?|coditos)\b")
 _PAREN_RX = re.compile(r"\([^)]*\)")
 _UNIDAD_MASA = {"g", "gr", "grs", "gramo", "gramos", "kg", "kilo", "kilos", "oz", "onza", "onzas", "lb", "lbs",
                 "libra", "libras"}
@@ -56,7 +58,7 @@ _UNIDAD_LATA = {"lata", "latas"}
 # CRUDO (nunca jamón, salami, chorizo…: esos se venden ya hechos), solo líneas en gramos (una «1 pechuga cocida» sigue
 # siendo una pechuga) y nunca si el paréntesis ya dice «crudo». Knob `MEALFIT_COOKED_PROTEIN_RAW_FACTOR` (1,35; 1,0 =
 # apagado). tooltip-anchor: P1-PLAN-LOTE-301-PROTEINA-COCIDA
-_PROT_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|hervid[oa]s?|asad[oa]s?|hornead[oa]s?|desmenuzad[oa]s?|frit[oa]s?)\b")
+_PROT_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|hervid[oa]s?|asad[oa]s?|hornead[oa]s?|desmenuzad[oa]s?|frit[oa]s?|guisad[oa]s?|estofad[oa]s?|a la plancha|plancha|saltead[oa]s?|al vapor)\b")
 _PROT_FILA_RX = re.compile(r"\b(pollo|pechuga|muslo|pavo|res|carne|cerdo|chivo|conejo|pernil|higado|filete|pescado|mero|"
                            r"tilapia|salmon|trucha|chillo|camaron\w*|gambas?|cangrejo|mejillon\w*|vieiras?|percebes?)\b")
 _PROT_PROCESADO_RX = re.compile(r"\b(jamon|embuchado|chorizo|salchich\w*|salami|longaniza|tocineta|panceta|chicharron|"
@@ -152,7 +154,7 @@ def en_base_de_la_fila(linea, gramos, db):
             return gramos
         texto = _norm(linea)
         fuera = _PAREN_RX.sub(" ", texto)
-        cocido = bool(_COCIDO_RX.search(fuera))
+        cocido = bool(_COCIDO_RX.search(fuera)) or bool(_APROX_HINT_RX.search(str(linea))) or bool(_PREPARADO_RX.search(fuera))
         listo = bool(_LISTO_RX.search(fuera))
         prot = bool(_PROT_COCIDO_RX.search(fuera))                   # [P1-PLAN-LOTE-301]
         hint925 = _hint_gana() and _gramos_del_hint_cocido(linea, gramos)            # [P1-PLAN-LOTE-925]
