@@ -5545,6 +5545,34 @@ def nudge_plate_photo(state: ChatState):
         f"«{f.get('desc')}»" + (f" (~{int(f['kcal'])} kcal según el análisis)" if f.get("kcal") else "")
         for f in fotos
     ) or "la foto de este turno"
+
+    # [P1-MERIENDA-PREVENT · 2026-10-22] Si el turno era para anotar la foto de comida principal y el modelo ya llamó
+    # log_consumed_meal en este turno (ej. registró solo «Salmón» como almuerzo), NUNCA debe registrar una segunda
+    # comida como merienda: debe corregir el registro previo con correct_consumed_meal para unificarlo en el plato completo.
+    registros = []
+    for msg in reversed((state or {}).get("messages") or []):
+        if isinstance(msg, HumanMessage):
+            break
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            nombre = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if nombre == "log_consumed_meal":
+                registros.append((tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)) or {})
+
+    if registros and state.get("turn_photo_to_log"):
+        prev_name = registros[0].get("meal_name") or "la comida anterior"
+        prev_type = registros[0].get("meal_type") or "almuerzo"
+        kcal_foto = int(fotos[0]["kcal"]) if fotos and fotos[0].get("kcal") else 450
+        return {
+            "messages": [SystemMessage(content=(
+                f"ALTO. Registraste únicamente una parte o ingrediente aislado («{prev_name}»), pero el usuario te mandó "
+                f"el plato completo: {lista}.\n"
+                f"NO registres una segunda comida como merienda ni dupliques el diario. Usa `correct_consumed_meal` con el "
+                f"ID_REGISTRO_DIARIO recién creado para unificarlo en el PLATO COMPLETO («{lista}») con las calorías del análisis "
+                f"(~{kcal_foto} kcal) y meal_type='{prev_type}'."
+            ))],
+            "plate_photo_retried": True,
+        }
+
     return {
         "messages": [SystemMessage(content=(
             f"ALTO. En este turno el usuario te mandó la foto de un plato que NO registraste: {lista}. Lo que "
@@ -7647,8 +7675,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
     # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
-    from respuestas_de_la_foto import marcar_rotulo, foto_para_anotar as _foto_para_anotar
-    vision = marcar_rotulo(vision, prompt)
+    from respuestas_de_la_foto import marcar_rotulo, preparar_vision, foto_para_anotar as _foto_para_anotar
+    vision = preparar_vision(marcar_rotulo(vision, prompt))
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
     # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`

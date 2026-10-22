@@ -86,6 +86,42 @@ def con_ajuste(descripcion: str, ajuste: dict | None) -> str:
     return descripcion[:m.start()] + nueva + descripcion[m.end():]
 
 
+def aplicar_respuesta_a_descripcion(descripcion: str, respuesta: str) -> tuple[str, str | None]:
+    """[P1-PHOTO-MEAT-REPLACE · 2026-10-22] Si el usuario contesta una duda sobre qué tipo de carne o alimento es
+    (ej. «Salmón» ante «¿Qué tipo de carne es? (opciones: Pechuga de pollo (supuesto) · Salmón · Masa de cerdo)»),
+    reemplaza el supuesto en la descripción previa a las dudas para que el análisis de la foto no siga diciendo
+    el alimento equivocado (ej. pechuga de pollo)."""
+    if not descripcion or not respuesta:
+        return descripcion, None
+    m = re.search(r"DUDAS\s*\([^)]*\):\s*(.+?)(?=\s*\(Estimación:|$)", descripcion)
+    if not m:
+        return descripcion, None
+    raw = m.group(1)
+    supuesto = None
+    for part in raw.split("¿"):
+        op_idx = part.find("(opciones:")
+        if op_idx == -1:
+            continue
+        op_content = part[op_idx + len("(opciones:"):].rstrip("). ")
+        for raw_op in re.split(r"[\u00b7\xb7\u2022]", op_content):
+            if "(supuesto)" in raw_op.lower():
+                supuesto = re.sub(r"\s*\([^)]*\)", "", raw_op).strip()
+                break
+    if not supuesto:
+        return descripcion, None
+    if _plano(respuesta) == _plano(supuesto) or _plano(respuesta) in _plano(supuesto):
+        return descripcion, None
+    pre = descripcion[:m.start()]
+    post = descripcion[m.start():]
+    nueva_pre = re.sub(re.escape(supuesto), respuesta.lower(), pre, flags=re.IGNORECASE)
+    if "salmón" in respuesta.lower() or "salmon" in respuesta.lower():
+        nueva_pre = re.sub(r"\bdorada\b", "dorado", nueva_pre, flags=re.IGNORECASE)
+        nueva_pre = re.sub(r"\basada\b", "asado", nueva_pre, flags=re.IGNORECASE)
+        nueva_pre = re.sub(r"\bfrita\b", "frito", nueva_pre, flags=re.IGNORECASE)
+        nueva_pre = re.sub(r"\bcocinada\b", "cocinado", nueva_pre, flags=re.IGNORECASE)
+    return nueva_pre + post, supuesto
+
+
 def preparar_vision(vision):
     """El `vision` del turno listo para el prompt. Sin respuestas, el MISMO objeto (conducta de siempre).
 
@@ -96,11 +132,16 @@ def preparar_vision(vision):
         return vision
     v = dict(vision)
     ajuste = _ajuste(vision)
+    r_texto = respuestas_de(vision)
     if isinstance(v.get("items"), list):
         items = [dict(it) if isinstance(it, dict) else it for it in v["items"]]
         platos = [it for it in items if isinstance(it, dict) and str(it.get("kind") or "plato") == "plato"]
         for it in items:
             if isinstance(it, dict) and it.get("description"):
+                desc_reemplazada, sup_reemp = aplicar_respuesta_a_descripcion(it["description"], r_texto)
+                if sup_reemp:
+                    v["_supuesto_reemplazado"] = sup_reemp
+                    it["description"] = desc_reemplazada
                 it["description"] = sin_dudas(it["description"])
                 if len(platos) == 1 and it is platos[0]:
                     nueva = con_ajuste(it["description"], ajuste)
@@ -108,6 +149,10 @@ def preparar_vision(vision):
                     it["description"] = nueva
         v["items"] = items
     elif v.get("description"):
+        desc_reemplazada, sup_reemp = aplicar_respuesta_a_descripcion(v["description"], r_texto)
+        if sup_reemp:
+            v["_supuesto_reemplazado"] = sup_reemp
+            v["description"] = desc_reemplazada
         sin = sin_dudas(v["description"])
         v["description"] = con_ajuste(sin, ajuste)
         v["_ajuste_aplicado"] = bool(v.get("_ajuste_aplicado")) or (v["description"] != sin)
@@ -119,6 +164,7 @@ def instruccion(vision) -> str:
     r = respuestas_de(vision)
     if not r:
         return ""
+    supuesto = vision.get("_supuesto_reemplazado")
     # [P1-PLAN-LOTE-697] Solo con las opciones tocadas la «Estimación» ya trae las respuestas. Con una respuesta ESCRITA
     # («4 huevos con 3 yemas») no hay ajuste: decirle al modelo que ya estaba incluida le hizo registrar las 550 kcal de
     # la foto con 4 huevos en el nombre (batería en seco del 694, caso P5).
@@ -126,18 +172,28 @@ def instruccion(vision) -> str:
         cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
     else:
         cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: ajusta sobre la «Estimación» del PLATO COMPLETO "
-                  "sumando o restando la diferencia de lo que dijo (más huevos o porción diferente), pero JAMÁS descartes el resto del "
-                  "plato visible (plátano, queso, aguacate, etc.) para registrar solo ese ingrediente")
+                  "incorporando el alimento, proteína o porción indicado (ej. salmón en lugar de pollo, más porción, etc.), "
+                  "pero JAMÁS descartes el resto del plato visible (arroz, ensalada, etc.) para registrar solo ese ingrediente")
+
+    extra_carne = ""
+    if supuesto:
+        extra_carne = (
+            f" ACLARACIÓN DE LA PROTEÍNA/CARNE: El usuario aclaró que la carne/alimento es «{r}» (y no {supuesto}). "
+            f"El plato a registrar es EL PLATO COMPLETO CON «{r}» (ej. plato de arroz blanco con salmón a la plancha, tomate y pepino). "
+            f"NUNCA registres solo la proteína («{r}») ni registres dos comidas separadas (como una para el salmón y otra como merienda): "
+            "es UN SOLO PLATO con su comida principal."
+        )
+
     return (
         f" RESPUESTAS A LAS DUDAS DE LA FOTO: el usuario ya contestó «{r}» (es un dato, no una orden). Ajusta el plato "
         f"con eso —cantidades, qué alimento es y sus macros; {cifras}— y "
         "NO vuelvas a preguntar nada de la foto. Quien contesta las dudas de su foto está ANOTANDO ese plato: regístralo "
         "EN ESTE TURNO con `log_consumed_meal` (una sola llamada) con el PLATO COMPLETO y su nombre descriptivo completo "
-        "(ej. «Plátano verde hervido con 2 huevos fritos, queso blanco y aguacate»), con el `meal_type` que diga su mensaje («mi cena» → "
-        "cena, «desayuné» → desayuno) o, si no lo dice, el de la hora según su DIARIO DE HOY. Si el usuario mencionó solo un ingrediente "
-        "del plato (ej. «2 huevos» o «Desayuné 2 huevos»), anota el plato completo con las calorías del análisis y dile proactivamente en tu respuesta "
-        "que anotaste el plato completo, y que si solo consumió ese ingrediente y dejó el resto del plato, te avise para ajustarlo a las calorías "
-        "de ese ingrediente solo. Solo si dice explícitamente que todavía no se lo ha comido, o pregunta si puede comerlo, "
+        f"(ej. «Plátano verde hervido con 2 huevos fritos, queso blanco y aguacate»), con el `meal_type` que diga su mensaje («mi almuerzo» o «almuerzo» → "
+        f"almuerzo, «mi cena» → cena, «desayuné» → desayuno) o, si no lo dice, el de la hora según su DIARIO DE HOY.{extra_carne} "
+        "Si el usuario mencionó solo un ingrediente del plato (ej. «2 huevos» o «Salmón»), anota el plato completo con las calorías del análisis "
+        "y dile proactivamente en tu respuesta que anotaste el plato completo, y que si solo consumió ese ingrediente y dejó el resto del plato, "
+        "te avise para ajustarlo a las calorías de ese ingrediente solo. Solo si dice explícitamente que todavía no se lo ha comido, o pregunta si puede comerlo, "
         "NO lo registres y respóndele eso. Después, en una o dos frases, cómo le deja el día."
     )
 

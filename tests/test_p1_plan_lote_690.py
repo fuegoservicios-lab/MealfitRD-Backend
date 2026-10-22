@@ -139,6 +139,40 @@ def test_prompt_con_comida_y_supuesto_registra_plato_completo_con_proactividad()
     assert "proactivamente" in ctx
 
 
+def test_prompt_con_reemplazo_de_proteina_actualiza_descripcion_y_rotulo():
+    """[P1-PHOTO-MEAT-REPLACE · 2026-10-22] Caso vivo: 'Almuerzo\\nSalmón' ante foto con arroz, pechuga (supuesto) y ensalada.
+    Reemplaza pechuga por salmón en la descripción, fija rótulo almuerzo y no duplica comidas."""
+    v = {
+        "kind": "multi",
+        "items": [{
+            "kind": "plato",
+            "description": (
+                "Plato servido con una porción de arroz blanco, un filete pequeño de pechuga de pollo dorada a la plancha, rodajas de tomate y rodajas de pepino fresco. "
+                "DUDAS (pregúntale solo esto): ¿Qué tipo de carne es la que está en el plato? (opciones: Pechuga de pollo (supuesto) · Salmón · Masa de cerdo) "
+                "(Estimación: Calorías: 430, Proteína: 32g, Carbohidratos: 62g, Grasas Saludables: 5g)"
+            )
+        }],
+        "has_text": True
+    }
+    prompt = "Almuerzo\nSalmón"
+    ans = rf.extraer_respuesta_de_prompt(v, prompt)
+    assert ans == "Salmón"
+    assert rf.es_respuesta_supuesto(v, ans) is False
+    assert rf.tipo_de_comida_en_texto(prompt) == "almuerzo"
+
+    v_prep = rf.preparar_vision(rf.marcar_rotulo(v, prompt))
+    assert v_prep.get("respuestas") == "Salmón"
+    assert v_prep.get("rotulo") == "almuerzo"
+    desc = v_prep["items"][0]["description"]
+    assert "pechuga de pollo" not in desc.lower()
+    assert "salmón" in desc.lower()
+
+    ctx = build_vision_context(v_prep)
+    assert "salmón" in ctx.lower()
+    assert "ACLARACIÓN DE LA PROTEÍNA/CARNE" in ctx
+    assert "almuerzo" in ctx.lower()
+
+
 def test_frontend_espera_las_respuestas_antes_del_coach():
     """El chat no abre el turno del coach mientras la foto tenga dudas sin contestar."""
     ruta = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "pages", "AgentPage.jsx")
