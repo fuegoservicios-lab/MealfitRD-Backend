@@ -1418,6 +1418,26 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # [P1-PLAN-LOTE-76 · 2026-09-17] qué comidas de ESE día siguen sin registrar (helper; la batería en seco lo comparte)
         msg += _nota_comidas_sin_registrar(user_id, _days_ago)
         msg += _nota_pote   # [P1-PLAN-LOTE-291]
+        # [P1-CLINICAL-ALLERGEN-WARNING · 2026-10-23]
+        # Alerta al asistente si la comida registrada contiene un alérgeno declarado en el perfil
+        try:
+            from db import get_user_profile as _gup_tools
+            from graph_orchestrator import _scan_allergen_violations
+            _prof = _gup_tools(user_id) or {}
+            _hp = _prof.get("health_profile") or {}
+            _alergias = [a for a in _hp.get("allergies", []) if a and str(a).strip().lower() not in ("ninguna", "ninguno", "no", "")]
+            if _alergias:
+                _plan_check = {"days": [{"meals": [{"name": meal_name, "ingredients": ingredients or [meal_name]}]}]}
+                _viol = _scan_allergen_violations(_plan_check, _alergias)
+                if _viol:
+                    _al_nombres = ", ".join(list(set(v[2] for v in _viol)))
+                    msg += (
+                        f" (⚠️ ALERTA DE SEGURIDAD CLÍNICA: El usuario tiene declarada alergia a {_al_nombres} "
+                        f"en su perfil y este registro contiene {_al_nombres}. En tu respuesta, ADVIÉRTELE a la persona de inmediato y con empatía "
+                        f"sobre la presencia de este alérgeno en su plato y pregúntale si está bien o si hubo una confusión)."
+                    )
+        except Exception as _al_err:
+            logger.debug(f"[log_consumed_meal] error chequeando alergenos: {_al_err}")
         if _meal_type == "suplemento":
             msg += (f" (Aviso para el asistente: registraste '{meal_name}' como suplemento, NO como una comida principal. "
                     f"Tomar un suplemento por la mañana NO es el desayuno y no concluye esa comida. Dile qué anotaste y que cuando "

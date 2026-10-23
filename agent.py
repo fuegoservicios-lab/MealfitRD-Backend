@@ -747,12 +747,11 @@ def _chat_title_max_output_tokens() -> int:
     trunca a 32 chars post-hoc (agent.py ~L2112) — si el LLM ignora la
     instrucción y emite una frase larga, esos tokens se generan (output
     facturado) y luego se DESCARTAN. Capar el output elimina ese desperdicio.
-    Default 32 (holgado para 4 palabras es-DO; flash-lite no es thinking-capable
-    → no hay reasoning de por medio). Knob MEALFIT_CHAT_TITLE_MAX_OUTPUT_TOKENS,
-    clamp [8, 256]. Tooltip-anchor: P3-COST-TITLE-OUTPUT-CAP."""
+    Default 96 (suficiente para thinking tokens de modelos GLM + 4 palabras es-DO).
+    Knob MEALFIT_CHAT_TITLE_MAX_OUTPUT_TOKENS, clamp [8, 256]. Tooltip-anchor: P3-COST-TITLE-OUTPUT-CAP."""
     return _env_int(
         "MEALFIT_CHAT_TITLE_MAX_OUTPUT_TOKENS",
-        32,
+        96,
         validator=lambda v: 8 <= v <= 256,
     )
 
@@ -5816,6 +5815,15 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             # Truncar amablemente hasta el último espacio para no dejar palabras a medias
             if " " in title:
                 title = title.rsplit(" ", 1)[0]
+        
+        if not title:
+            _raw = first_message.split("\n")[0].strip() if first_message else ""
+            if _raw and _raw != "Consulta nueva" and not _raw.startswith("El usuario"):
+                title = _raw[:28].strip()
+                if " " in title and len(title) >= 20:
+                    title = title.rsplit(" ", 1)[0]
+            else:
+                title = "Consulta de nutrición"
         
         logger.debug(f"[chat_title bg] session={session_id} - Inserting SYSTEM_TITLE msg into DB")
         save_message(session_id, "model", f"[SYSTEM_TITLE] {title}")
