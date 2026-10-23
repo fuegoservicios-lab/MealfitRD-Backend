@@ -402,16 +402,40 @@ def should_extract_facts(user_message: str, user_id: Optional[str] = None) -> bo
     `llm_usage_events` (node `fact_extractor_router`)."""
     if not user_message or len(user_message.strip()) < 5:
         return False
+
+    clean_msg = user_message.strip().lower()
+
+    # [AI-30: Fast-path filtro de consumo de comida puntual]
+    # Si es claramente un registro de consumo del diario sin señales clínicas ni preferencias permanentes,
+    # descartar de inmediato sin gastar LLM ni latencia.
+    _DIARY_LOG_PREFIXES = (
+        "desayuné", "desayune", "almorcé", "almorce", "cené", "cene",
+        "merendé", "merende", "comí", "comi", "me comí", "me comi",
+        "me bebí", "me bebi", "me tomé", "me tome", "anoté", "anote",
+        "anota", "registra", "hoy comí", "hoy comi", "hoy me tomé", "hoy me tome",
+        "de desayuno", "de almuerzo", "de cena"
+    )
+    _FACT_SIGNALS = (
+        "alerg", "intoleran", "medic", "enferm", "diagnos", "nunca", "jamás", "jamas",
+        "odio", "no me gusta", "no puedo comer", "no tolero", "peso", "kilos", "libras",
+        "embaraz", "lactan", "cirug", "operac", "diabet", "hipertens", "prefiero", "siempre"
+    )
+    if any(clean_msg.startswith(p) for p in _DIARY_LOG_PREFIXES):
+        if not any(s in clean_msg for s in _FACT_SIGNALS):
+            logger.info(f"⏭️ [FACT ROUTER FAST-PATH] Registro de consumo puntual descartado: '{user_message[:40]}'")
+            return False
         
     prompt = f"""
     Analiza este mensaje y responde True SOLO si el usuario menciona algo sobre:
-    - Preferencias alimenticias (gustos, rechazos)
-    - Hábitos de consumo o registro de comidas recientes (qué comió o qué bebió)
-    - Alergias o condiciones médicas
+    - Preferencias alimenticias estables o permanentes (gustos duraderos, alimentos que ama o rechaza siempre)
+    - Alergias o condiciones médicas diagnosticadas (ej: diabetes, celiaquía, hipertensión)
     - Síntomas temporales o estado de salud
-    - Objetivos de salud, condición física o peso
+    - Objetivos duraderos de salud, condición física o peso
     
-    Responde False si es conversación general, saludos, agradecimientos o texto sin datos útiles sobre el perfil del usuario.
+    IMPORTANTE: Responde False si el usuario simplemente está informando o registrando lo que comió o bebió en una comida puntual
+    (ej: 'desayuné 2 huevos con plátano', 'me comí un sándwich', 'almorcé pollo con arroz', 'hoy me tomé una malta').
+    Los registros de comidas consumidas pertenecen al diario de comidas, NO son hechos permanentes del perfil.
+    Responde False si es conversación general, saludos, agradecimientos o registros de comidas diarias.
     
     ES VITAL que también asignes un 'confidence_score' del 1 al 10. Si el mensaje es ambiguo, sarcástico, o no estás 100% seguro de si contiene un hecho médico velado, asigna un score bajo (ej. 1 a 6).
     
@@ -515,16 +539,15 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
     prompt = f"""
     Eres un Analista Nutricional que extrae "Hechos" (Facts) de los mensajes de los pacientes y los clasifica.
     Tu objetivo es leer un mensaje y determinar si contiene información útil para el perfil del usuario:
-    - Preferencias alimenticias (gustos, rechazos fuertes) -> category: 'preferencia' o 'rechazo'
-    - Hábitos de consumo o registro de comidas recientes -> category: 'dieta' o 'preferencia'
-    - Alergias o condiciones crónicas -> category: 'alergia' o 'condicion_medica'
+    - Preferencias alimenticias duraderas (gustos o rechazos estables) -> category: 'preferencia' o 'rechazo'
+    - Alergias o condiciones crónicas diagnosticadas -> category: 'alergia' o 'condicion_medica'
     - Síntomas o estados pasajeros (ej. "estómago revuelto esta semana", "estoy resfriado") -> category: 'sintoma_temporal'
-    - Objetivos o rutinas -> category: 'objetivo'
+    - Objetivos o rutinas permanentes de salud -> category: 'objetivo'
     
     Además, clasifica la 'intensidad' (del 1 al 5) del sentimiento si aplica:
     - 1: Odio absoluto, rechazo frontal ("no soporto el brócoli")
     - 2: Desagrado leve ("no me gusta mucho el pescado")
-    - 3: Neutral o dato médico objetivo ("tengo diabetes", "peso 80kg", "ayer comí arroz")
+    - 3: Neutral o dato médico objetivo ("tengo diabetes", "peso 80kg")
     - 4: Le gusta bastante ("qué buena la pasta")
     - 5: Pasión o adicción ("amo el plátano", "no puedo vivir sin café")
 
@@ -538,6 +561,7 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
     
     Usa el contexto reciente SOLO para entender a qué se refiere el mensaje actual (ej. si dice "y también me dio alergia", el contexto te dirá a qué alimento). Pero EXTRAE hechos principalmente basados en el último mensaje.
     REGLAS DE PRECISIÓN:
+    - NO extraigas como hecho permanente lo que el usuario comió en una comida puntual o en un día específico (ej: "hoy desayuné 2 huevos con plátano", "me comí un pica pollo", "almorcé salmón"): el registro de comidas consumidas pertenece al diario alimentario, NO a los hechos permanentes del perfil. Para simples reportes de comidas consumidas sin preferencias duraderas declaradas, responde con facts: [].
     - NO confundas una corrección o aclaración puntual de lo que llevaba o NO llevaba un plato («no hubo ni salchicha ni pan, fue solo cereal», «hoy fue sin queso») con un 'rechazo' permanente: aclarar qué comió en esa comida NO significa que rechace ni odie ese ingrediente (no extraigas 'rechazo' por eso).
     - Junto a huevos o claras («2 huevos hervidos claros y 2 completos», «huevos completos»), «completos» significa huevos enteros (con clara y yema), nunca pan con salchicha.
     Si el mensaje NO contiene hechos importantes (ej. "hola", "gracias", "ok"), devuelve una lista vacía [].

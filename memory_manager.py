@@ -746,18 +746,20 @@ _USER_MODEL_CACHE: dict = {}
 
 
 def _get_user_model_block(user_id: Optional[str]) -> str:
-    """Devuelve el bloque de texto del user_model para anteponer al prompt, o ''.
-    Gateado por MEALFIT_DREAMING_RETRIEVAL_ENABLED (default OFF → '' → prompt
-    idéntico a hoy). Cacheado TTL corto. Fail-open: cualquier error → ''."""
+    """[AI-31: Dreaming Retrieval Activo] Devuelve el bloque del user_model para anteponer al prompt.
+    Gateado por MEALFIT_CHAT_INJECT_USER_MODEL (default True) o MEALFIT_DREAMING_RETRIEVAL_ENABLED.
+    Cacheado TTL corto. Fail-open: cualquier error → ''."""
     if not user_id:
         return ""
+    from knobs import _env_bool, _env_int
+    retrieval_on = _env_bool("MEALFIT_CHAT_INJECT_USER_MODEL", True)
     try:
         import dreaming
-        if not dreaming._dreaming_retrieval_enabled():
+        if not (retrieval_on or dreaming._dreaming_retrieval_enabled()):
             return ""
     except Exception:
-        return ""
-    from knobs import _env_int
+        if not retrieval_on:
+            return ""
     ttl = _env_int("MEALFIT_DREAMING_USER_MODEL_CACHE_TTL_S", 300,
                    validator=lambda v: 0 <= v <= 3600)
     now = time.time()
@@ -767,10 +769,11 @@ def _get_user_model_block(user_id: Optional[str]) -> str:
             return ent[1]
     block = ""
     try:
+        import dreaming
         prof = dreaming.get_user_memory_profile(user_id)
         model = (prof or {}).get("user_model") if prof else None
         if model:
-            cap = _env_int("MEALFIT_DREAMING_PROMPT_MAX_CHARS", 1200,
+            cap = _env_int("MEALFIT_DREAMING_PROMPT_MAX_CHARS", 800,
                            validator=lambda v: 0 <= v <= 4000)
             block = ("\n--- MODELO DEL USUARIO (síntesis consolidada de su memoria) ---\n"
                      + str(model)[:cap]

@@ -86,6 +86,7 @@ def test_crear_sesion_pide_delegacion_al_cliente_y_no_expone_la_clave(habilitado
         return _R()
 
     monkeypatch.setattr(httpx, "post", _post)
+    monkeypatch.setattr(coach_live, "_session_http", lambda: type("C", (), {"post": staticmethod(_post)})())
     monkeypatch.setattr(coach_live, "gastado_usd", lambda: 1000.0)
     monkeypatch.setattr(coach_live.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
     live_id, sdp = coach_live.crear_sesion("u-nuevo", "oferta", "s1")

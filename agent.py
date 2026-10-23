@@ -4447,6 +4447,70 @@ def _build_chat_fallback_llm(model: str):
     return build_chat_llm(model, **kwargs)
 
 
+def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
+    """[AI-41: Tool Gating Dinamico]
+    Para consultas cotidianas vincula las 7 Core Tools reduciendo miles de tokens de schema.
+    Si el turno menciona suplementos, compras, nevera, ajustes o perfil, activa las Extended Tools pertinentes.
+    Gateado por MEALFIT_CHAT_TOOL_GATING_ENABLED (default True).
+    """
+    from knobs import _env_bool
+    if not _env_bool("MEALFIT_CHAT_TOOL_GATING_ENABLED", True):
+        return base_tools
+
+    # Si hay fotos o flags de foto, mantener todas
+    if state.get("turn_plate_photos") or state.get("turn_photo_to_log"):
+        return base_tools
+
+    messages = state.get("messages", [])
+    # Si el ultimo mensaje ya fue un tool call, mantener todas para dar seguimiento a la ejecucion
+    if messages and getattr(messages[-1], "type", None) == "tool":
+        return base_tools
+
+    last_user_text = ""
+    for m in reversed(messages):
+        t = getattr(m, "type", None) or getattr(m, "role", None)
+        if t in ("human", "user"):
+            c = getattr(m, "content", "")
+            if isinstance(c, list):
+                c = " ".join(str(p.get("text", "") if isinstance(p, dict) else p) for p in c)
+            last_user_text = str(c).lower()
+            break
+
+    if not last_user_text:
+        return base_tools
+
+    _CORE_NAMES = {
+        "log_consumed_meal",
+        "correct_consumed_meal",
+        "check_hydration_today",
+        "log_water_glass",
+        "proponer_comida",
+        "consultar_dia_del_plan",
+        "search_deep_memory",
+    }
+    needed = set(_CORE_NAMES)
+
+    if any(k in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno")):
+        needed.update({"analizar_suplemento", "guardar_suplemento"})
+    if any(k in last_user_text for k in ("comprar", "supermercado", "compra", "lista", "colmado", "bravo", "sirena", "nacional", "precio")):
+        needed.update({"check_shopping_list", "mark_shopping_list_purchased"})
+    if any(k in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel")):
+        needed.update({"check_current_pantry", "modify_pantry_inventory"})
+    if any(k in last_user_text for k in ("ajuste", "notificac", "recordatorio", "configura", "pantalla", "abrir", "modo oscuro", "idioma")):
+        needed.update({"cambiar_ajuste_de_la_app", "abrir_pantalla_de_la_app"})
+    if any(k in last_user_text for k in ("nutriente", "hierro", "potasio", "magnesio", "calcio", "zinc", "vitamina")):
+        needed.update({"suggest_foods_for_nutrient"})
+    if any(k in last_user_text for k in ("alergia", "medico", "clinico", "enfermedad", "diagnost", "intoleranc")):
+        needed.update({"check_clinical_profile"})
+    if any(k in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil")):
+        needed.update({"update_form_field"})
+    if any(k in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):
+        needed.update({"buscar_etiqueta_en_internet"})
+
+    selected = [t for t in base_tools if getattr(t, "name", "") in needed]
+    return selected if len(selected) >= 5 else base_tools
+
+
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
@@ -4469,7 +4533,9 @@ def call_model(state: ChatState):
         **_primary_retry_kwargs,
         **_kwargs_de_razonamiento_modo_voz(state),
     )
-    llm_with_tools = chat_llm.bind_tools(agent_tools)
+    # [AI-41: Tool Gating Dinamico]
+    active_tools = _select_tools_for_turn(agent_tools, state)
+    llm_with_tools = chat_llm.bind_tools(active_tools)
 
     # [P1-CHAT-CB · 2026-05-19] Gate per-modelo. Si el breaker está abierto
     # (failures >= MEALFIT_CB_FAILURE_THRESHOLD dentro de la ventana
@@ -4578,7 +4644,7 @@ def call_model(state: ChatState):
         try:
             chat_llm = _build_chat_fallback_llm(_fallback_model)
             _chat_invoke_start = _time_chat.time()
-            response = chat_llm.bind_tools(agent_tools).invoke(llm_messages)
+            response = chat_llm.bind_tools(active_tools).invoke(llm_messages)
             _cb_model = _fallback_model
         except Exception as _fb_exc:
             logger.error(
@@ -6504,6 +6570,86 @@ def _conversacion_de_dias_anteriores(session_id, local_date, tz_offset) -> str:
         return ""
 
 
+def _contexto_sesion_previa(user_id: Optional[str], session_id: Optional[str]) -> str:
+    """[AI-32] Recuerdo de sesión previa (cross-session bridge).
+    Recupera el último intercambio relevante de la sesión anterior (si fue en los últimos 7 días)
+    para que el coach mantenga continuidad conversacional sin alucinar ni perder el hilo."""
+    if not user_id or user_id == "guest" or not session_id:
+        return ""
+    try:
+        from db import execute_sql_query as _esq
+        rows = _esq(
+            """
+            WITH prev_session AS (
+                SELECT session_id, MAX(created_at) as last_act
+                FROM agent_messages
+                WHERE user_id = %s
+                  AND session_id != %s
+                  AND created_at >= NOW() - INTERVAL '7 days'
+                  AND role IN ('user', 'assistant')
+                GROUP BY session_id
+                ORDER BY last_act DESC
+                LIMIT 1
+            )
+            SELECT role, content, created_at
+            FROM agent_messages
+            WHERE session_id = (SELECT session_id FROM prev_session)
+              AND role IN ('user', 'assistant')
+              AND content IS NOT NULL
+              AND LENGTH(TRIM(content)) > 0
+              AND content NOT LIKE '{"%%'
+              AND content NOT LIKE '[SYSTEM%%'
+            ORDER BY created_at DESC
+            LIMIT 4;
+            """,
+            (str(user_id), str(session_id)),
+            fetch_all=True
+        )
+        if not rows:
+            return ""
+
+        user_msg = None
+        assistant_msg = None
+        fecha_str = ""
+
+        for r in rows:
+            role = r.get("role")
+            content = (r.get("content") or "").strip()
+            if not content or content.startswith("{") or content.startswith("["):
+                continue
+            if role == "user" and not user_msg:
+                user_msg = content
+                c_at = r.get("created_at")
+                if c_at:
+                    fecha_str = str(c_at)[:10]
+            elif role == "assistant" and not assistant_msg:
+                assistant_msg = content
+
+        if not user_msg and not assistant_msg:
+            return ""
+
+        def _snippet(text, max_len=140):
+            if not text:
+                return ""
+            t = " ".join(text.split())
+            return t[:max_len] + "..." if len(t) > max_len else t
+
+        u_snip = _snippet(user_msg) if user_msg else ""
+        a_snip = _snippet(assistant_msg) if assistant_msg else ""
+        f_part = f" (el {fecha_str})" if fecha_str else ""
+
+        out = f"\n\n💬 SESIÓN ANTERIOR RECIENTE{f_part}:\n"
+        if user_msg:
+            out += f"- Usuario dijo: \"{u_snip}\"\n"
+        if assistant_msg:
+            out += f"- Coach respondió: \"{a_snip}\"\n"
+        out += "(Úsalo SOLO si el usuario hace referencia a algo que hablaron antes; si viene con un tema nuevo, enfócate en el tema actual)."
+        return out
+    except Exception as e:
+        logger.warning(f"[AI-32] No se pudo recuperar contexto de sesión previa: {e}")
+        return ""
+
+
 def _day_gap_context_for_chat(form_data, plan_vigente, diario_de_hoy, tz_offset, schedule_type) -> str:
     """[P1-PLAN-LOTE-132 · 2026-09-20] El bloque «LO QUE LE FALTA HOY»: kcal y gramos que faltan (la resta hecha, no
     delegada al modelo), la hora, y cómo se cierra un día A ESA HORA. El motor es `coach_day_context`; aquí solo se
@@ -7287,6 +7433,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
         # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
         system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
+        # [AI-32] Puente con la sesión anterior reciente si aplica.
+        system_prompt += _contexto_sesion_previa(user_id, session_id)
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
         # viva si el toggle está activo.
         # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
@@ -7600,11 +7748,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _do_rag = bool(user_id) and user_id != "guest" and _memoria_on
     _do_rag_router = _do_rag
     rag_decision = None
-    # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz (para TODOS los tiers: la paridad de arriba no cambia): ni clasificador
-    # de sentimiento (el prompt de voz ya fija el tono, y es solo tono: no tiene papel de seguridad) ni el LLM del
-    # router de RAG (`_rag_sin_router` decide sin él). Medido en el turno de voz del dueño: 1,00 s y 1,75 s en
-    # paralelo antes del primer token.
-    if is_call_mode:
+    # [AI-42: Short-circuit en chats simples/saludos] Salta sentimiento y router LLM para mensajes casuales cortos
+    _es_simple_casual = not vision and _rag_es_casual(prompt)
+    if _es_simple_casual:
+        _do_sentiment = False
+        _do_rag_router = False
+        rag_decision = {"skip": True}
+    elif is_call_mode:
+        # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz (para TODOS los tiers: la paridad de arriba no cambia): ni clasificador
+        # de sentimiento (el prompt de voz ya fija el tono, y es solo tono: no tiene papel de seguridad) ni el LLM del
+        # router de RAG (`_rag_sin_router` decide sin él). Medido en el turno de voz del dueño: 1,00 s y 1,75 s en
+        # paralelo antes del primer token.
         _do_sentiment = False
         _do_rag_router = False
         rag_decision = _rag_sin_router(prompt) if _do_rag else None
@@ -7929,6 +8083,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
         # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
         system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
+        # [AI-32] Puente con la sesión anterior reciente si aplica.
+        system_prompt += _contexto_sesion_previa(user_id, session_id)
         # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
         # viva si el toggle está activo. El stream path SÍ recibe
         # `local_date` del cliente, que pasamos al helper para mayor

@@ -29,8 +29,8 @@ MIN_DIAS = 5
 TONO_SE_LA_SALTA = (
     "Esta comida casi nunca la registra: la salta la mayoría de los días. No le preguntes qué está fallando ni por qué: "
     "dale UNA opción muy fácil y rápida para esa comida y, en una frase final opcional, dile que si algo se le complica "
-    "(el tiempo, que no le apetece o que está fuera) te lo cuente y se la adaptas. Si no suele comer esa comida, "
-    "puede apagar solo ese recordatorio en Configuración → Recordatorios de comida: díselo en media frase."
+    "(el tiempo, que no le apetece o que está fuera) te lo cuente y se la adaptas. Sé muy breve y cercano; "
+    "PROHIBIDO incluir coletillas sobre cómo apagar recordatorios en Configuración ni hablar como un menú de ajustes."
 )
 TONO_POCA_RESPUESTA = (
     "Últimamente casi no contesta los avisos. Sé muy breve y sin presión: una invitación concreta y ya. No le preguntes "

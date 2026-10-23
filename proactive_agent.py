@@ -626,6 +626,8 @@ def get_active_users_for_proactive() -> list:
         # siendo la más reciente del usuario (también la del aviso de hoy), para que el segundo aviso del día caiga
         # en el mismo chat que el primero y no abra otro. tooltip-anchor: P1-PLAN-LOTE-161-ACTIVO-POR-PERSONA
         if not connection_pool: return []
+        # [AI-10: Anti-Inanicion Fair Rotation] Ordenar por antiguedad de last_nudge (nudge_outcomes)
+        # para que usuarios no atendidos o atendidos hace mas tiempo roten al frente sin sesgo de UUID.
         query = (
             "WITH activos AS ("
             " SELECT DISTINCT s.user_id FROM agent_sessions s"
@@ -634,10 +636,19 @@ def get_active_users_for_proactive() -> list:
             " AND s.created_at >= NOW() - INTERVAL '3 days'"
             " AND (EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id AND m.role = 'user')"
             " OR NOT EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id))"
+            "), "
+            "last_nudge AS ("
+            " SELECT user_id::text as user_id, MAX(sent_at) as last_sent"
+            " FROM nudge_outcomes"
+            " GROUP BY user_id"
+            "), "
+            "deduped AS ("
+            " SELECT DISTINCT ON (s.user_id) s.id, s.user_id, COALESCE(l.last_sent, '1970-01-01'::timestamptz) as last_sent"
+            " FROM agent_sessions s JOIN activos a ON a.user_id = s.user_id "
+            " LEFT JOIN last_nudge l ON l.user_id = s.user_id::text "
+            " ORDER BY s.user_id, s.created_at DESC"
             ") "
-            "SELECT DISTINCT ON (s.user_id) s.id, s.user_id "
-            "FROM agent_sessions s JOIN activos a ON a.user_id = s.user_id "
-            "ORDER BY s.user_id, s.created_at DESC"
+            "SELECT id, user_id FROM deduped ORDER BY last_sent ASC, user_id ASC"
         )
         res = execute_sql_query(query, fetch_all=True)
         res = list(res) if res else []
@@ -768,6 +779,48 @@ def get_daily_nudge_count(user_id: str) -> int:
     except Exception as e:
         logger.error(f"Error getting daily nudge count: {e}")
         return 0
+
+
+def _dias_inactivo_usuario(user_id: str) -> int:
+    """[AI-20: Backoff] Dias transcurridos desde la ultima accion del usuario (mensaje propio o comida registrada)."""
+    try:
+        from db import execute_sql_query
+        query = (
+            "SELECT GREATEST("
+            "  (SELECT MAX(created_at) FROM agent_messages WHERE user_id = %s AND role = 'user'),"
+            "  (SELECT MAX(consumed_at) FROM consumed_meals WHERE user_id = %s)"
+            ") as last_act"
+        )
+        row = execute_sql_query(query, (user_id, user_id), fetch_one=True)
+        if not row or not row.get("last_act"):
+            return 999  # Sin actividad registrada previa
+        last_dt = row["last_act"]
+        if getattr(last_dt, "tzinfo", None) is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        delta_dias = (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400.0
+        return max(0, int(delta_dias))
+    except Exception as e:
+        logger.debug(f"[PROACTIVE-BACKOFF] Error calculando inactividad para {user_id}: {e}")
+        return 0
+
+
+def _horas_desde_ultimo_nudge(user_id: str) -> float:
+    """[AI-20: Backoff] Horas transcurridas desde el ultimo nudge registrado en nudge_outcomes."""
+    try:
+        from db import execute_sql_query
+        row = execute_sql_query(
+            "SELECT MAX(sent_at) as last_sent FROM nudge_outcomes WHERE user_id = %s",
+            (user_id,), fetch_one=True
+        )
+        if not row or not row.get("last_sent"):
+            return 9999.0
+        last_dt = row["last_sent"]
+        if getattr(last_dt, "tzinfo", None) is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+    except Exception as e:
+        logger.debug(f"[PROACTIVE-BACKOFF] Error calculando ultimo nudge para {user_id}: {e}")
+        return 9999.0
 
 
 def classify_nudge_sentiment(user_reply: str) -> dict:
@@ -953,9 +1006,33 @@ def run_proactive_checks():
         if daily_nudges >= _tope_diario:
             logger.info(f"🛑 [CRON] Usuario {user_id} ya agotó su presupuesto de nudges hoy ({daily_nudges}/{_tope_diario}). Saltando.")
             continue
+
+        # [AI-20: Backoff Progresivo por Inactividad]
+        dias_inactivo = _dias_inactivo_usuario(user_id)
+        if dias_inactivo >= 7:
+            # Usuario inactivo hace 7+ dias: no enviar 4 avisos diarios de comida
+            horas_ult = _horas_desde_ultimo_nudge(user_id)
+            if horas_ult < 168.0:
+                logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias. Cooldown semanal ({horas_ult:.1f}h < 168h). Saltando.")
+                continue
+            if daily_nudges >= 1:
+                continue
+            logger.info(f"🕊️ [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias. Permitiendo unico check-in semanal.")
+        elif dias_inactivo >= 3:
+            # Inactivo entre 3 y 6 dias: maximo 1 aviso al dia
+            if daily_nudges >= 1:
+                logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias (tope 1/dia alcanzado: {daily_nudges}). Saltando.")
+                continue
             
         # Global stats para el tono base
         global_rate, global_total = get_nudge_response_rate(user_id)
+
+        # [AI-20: Cooldown de fatiga tras 5 avisos completamente ignorados]
+        if global_total >= 5 and global_rate == 0.0:
+            horas_ult_ign = _horas_desde_ultimo_nudge(user_id)
+            if horas_ult_ign < 48.0:
+                logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} ignoro 5+ avisos sin respuesta. Cooldown de fatiga (48h). Saltando.")
+                continue
         
         base_tone_instruction = "Usa un tono amistoso y motivacional, nunca de regaño, ni parezcas un robot asustadizo."
         send_push = True
@@ -1237,6 +1314,24 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 tone_instruction = elegida["tono"]
                 meal_rate, meal_total = elegida["meal_rate"], elegida["meal_total"]
 
+                # [AI-22: Rescate de Proteina al atardecer]
+                if meal_to_check == "Cena" and consumed:
+                    try:
+                        _p_cons = sum(float(c.get("protein") or 0) for c in consumed)
+                        _p_target = float(health.get("target_protein") or health.get("protein") or 0)
+                        if _p_target <= 0 and health.get("weight"):
+                            _p_target = float(health["weight"]) * 1.6
+                        if _p_target > 0:
+                            _p_gap = max(0.0, _p_target - _p_cons)
+                            if _p_gap >= 30.0:
+                                tone_instruction = (
+                                    (tone_instruction or "") +
+                                    f"\nRESCATE DE PROTEINA: son las {trigger_time_str} y al usuario le faltan unos ~{int(_p_gap)}g de proteina para su meta diaria. "
+                                    f"Proponle una cena con buena proteina (pechuga, atun, huevos, queso cottage o de su nevera) para cerrar el dia."
+                                )
+                    except Exception as _p_err:
+                        logger.debug(f"[AI-22] error calculando rescate de proteina: {_p_err}")
+
                 # ESTADO: olvido registrar. Generar mensaje proactivo.
                 logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
                 _ia_ok = permite_ia(user_id, "coach_proactivo")  # [P1-PLAN-LOTE-843] junto al embedding y al prompt
@@ -1268,18 +1363,13 @@ No uses demasiados emojis. Sé directo, breve y empático.
                                 sn for sn in successful_nudges
                                 if detect_message_locale(sn.get("nudge_content") or "") != "en-US"
                             ]
+                        # [AI-12: Anonimizacion y Privacidad Cross-User]
                         if successful_nudges:
-                            proven_strategies_text = "Estrategias previas que funcionaron con usuarios en situaciones emocionales idénticas:\n"
+                            proven_strategies_text = "Estrategias de formato que resultaron exitosas:\n"
                             for sn in successful_nudges:
-                                n_content = sn.get("nudge_content", "")
+                                n_style = sn.get("nudge_style", "empatico")
                                 n_sentiment = sn.get("response_sentiment", "motivado")
-                                proven_strategies_text += f"- (Éxito: sintió {n_sentiment}): \"{n_content}\"\n"
-                            proven_strategies_text += (
-                                "\nInspírate SOLO en el TONO de estas estrategias — PROHIBIDO copiar o repetir los "
-                                "alimentos o platos que mencionan (cada comida lleva una idea propia de su franja: "
-                                "para Almuerzo o Cena propón comida salada real como pollo, carne, pescado o huevos, "
-                                "nunca yogur ni avena).\n"
-                            )
+                                proven_strategies_text += f"- (Formato comprobado: estilo {n_style}, tono motivador)\n"
                 except Exception as emb_err:
                     logger.error(f"Error en embedding de nudge: {emb_err}")
                 
@@ -1303,9 +1393,10 @@ No uses demasiados emojis. Sé directo, breve y empático.
                         if _nevera_aviso:   # [P1-PLAN-LOTE-960] los de su Nevera ya pasaron el backstop clínico
                             style_instruction = style_instruction[:-1] + " salvo los de SU NEVERA listados abajo."
                 elif nudge_style == "gamificado":
+                    # [AI-21: Erradicacion de cliches gamificados forzados]
                     style_instruction = (
-                        "Usa un tono motivador y dinámico (como un impulso amistoso o reto, pero variando el inicio y vocabulario: "
-                        "NO repitas siempre 'desbloquea el reto' o 'challenge'). Haz una propuesta concreta o pregunta proactiva para animarle a comer."
+                        "Usa un tono energizante y positivo (como un impulso amistoso para animarle a comer). Haz una propuesta concreta y rica. "
+                        "PROHIBIDO usar las palabras 'reto', 'challenge' o 'desbloquea'. Habla como una persona real."
                     )
                 
                 prompt = PROACTIVE_PROMPT.format(
