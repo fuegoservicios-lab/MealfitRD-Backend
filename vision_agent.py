@@ -359,6 +359,9 @@ _MEAL_VISION_PROMPT = (
     "UNTABLES EN PAN/TOSTADAS: si hay pan con un untable blanco o crema, considera siempre 'queso cottage' (especialmente si se ve "
     "grumoso, con cuajada o textura cortada, tipico en fitness), 'queso crema' o 'mantequilla'. En las opciones de untables para tostadas "
     "incluye 'Queso cottage' si la textura no es totalmente lisa. "
+    "VIVERES HERVIDOS / PLATANO: si hay viveres hervidos en ruedas o trozos (amarillos o verdosos), en las opciones de duda "
+    "sobre el tipo de base o vianda incluye siempre 'Platano maduro' junto a 'Platano verde' y 'Guineito verde' (el platano maduro "
+    "es amarillo/dorado, mas dulce y con mas carbohidratos). Si se ve claramente amarillo o traslucido al hervir, es probable que sea platano maduro. "
     # [P1-PLAN-LOTE-322 · 2026-09-25] El dueño: «una forma más fácil de responder esas preguntas».
     "OPCIONES: cada duda lleva en 'opciones' de 2 a 5 respuestas cortas que el usuario toca (ej: '2 huevos', '3 huevos', "
     "'4 huevos'; 'Panecillo', 'Arepa', 'Galleta'; 'Frito', 'A la plancha'). Marca con supuesta=true la que usaste para "

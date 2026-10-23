@@ -26,6 +26,14 @@ def test_meal_scan_prompt_teaches_guineo():
     assert _MEAL_VISION_PROMPT.isascii(), "el prompt sigue 100% ASCII (transporte Ollama)"
 
 
+def test_meal_scan_prompt_teaches_platano_maduro_in_viandas():
+    assert "Platano maduro" in _MEAL_VISION_PROMPT
+    assert "Platano verde" in _MEAL_VISION_PROMPT
+    assert "Guineito verde" in _MEAL_VISION_PROMPT
+    assert "viveres hervidos" in _MEAL_VISION_PROMPT.lower()
+    assert _MEAL_VISION_PROMPT.isascii(), "el prompt sigue 100% ASCII (transporte Ollama)"
+
+
 def test_pantry_scan_prompt_teaches_guineo():
     with open(os.path.join(_BACKEND, "routers", "user_data.py"), encoding="utf-8") as f:
         ud = f.read()
