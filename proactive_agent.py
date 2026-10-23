@@ -1124,6 +1124,30 @@ def run_proactive_checks():
             # fallback explícito 'es-DO'; `build_language_directive` colapsa cualquier valor
             # no reconocido a "" (byte-idéntico a hoy).
             _nudge_locale = profile.get("locale") or "es-DO"
+            # [P1-I18N-PROACTIVE-CHAT-LANG-OVERRIDE · 2026-10-23]
+            # Si el perfil dice en-US u otro idioma (frecuente por detección de navegador en teléfonos/PCs),
+            # pero el usuario escribe en español en su chat, el idioma REAL de la conversación es español.
+            # Enviar recordatorios en inglés genera Spanglish ("huevos revueltos and habichuelas") y frustración.
+            if _nudge_locale and not str(_nudge_locale).lower().startswith("es"):
+                from prompts.chat_agent import is_spanish_message
+                user_texts = [
+                    str(m.get("content") or "").strip()
+                    for m in (recent or [])
+                    if m.get("role") == "user" and m.get("content")
+                ]
+                if not user_texts and session_id:
+                    try:
+                        _u_msgs = execute_sql_query(
+                            "SELECT content FROM public.agent_messages WHERE user_id = %s AND role = 'user' ORDER BY created_at DESC LIMIT 3",
+                            (user_id,),
+                            fetch_all=True
+                        )
+                        user_texts = [str(r.get("content") or "").strip() for r in (_u_msgs or []) if r.get("content")]
+                    except Exception as _q_err:
+                        logger.debug(f"[CRON] Error consultando mensajes previos de usuario {user_id}: {_q_err}")
+                if user_texts and any(is_spanish_message(t) for t in user_texts):
+                    logger.info(f"🌐 [CRON] Usuario {user_id} tiene locale={_nudge_locale} pero su historial es en español. Usando es-DO para avisos.")
+                    _nudge_locale = "es-DO"
             schedule = health.get("scheduleType", "standard")
             if schedule == "night_shift" or schedule == "variable":
                 logger.info(f"🚫 [CRON] Usuario {user_id}: turno {schedule}. Saltando.")
@@ -1268,9 +1292,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # con lo que tiene. Se calcula antes del estilo porque, con restricciones, son lo único que puede nombrar.
                 _nevera_aviso = __import__("nevera_del_coach").para_aviso(user_id, health, consumed, meal_to_check) if _ia_ok else ""
                 if nudge_style == "directo":
-                    style_instruction = "Haz una pregunta directa y al grano sin rodeos."
+                    style_instruction = "Haz una pregunta o propuesta directa, proactiva y al grano sin rodeos sobre qué va a comer o preparar."
                 elif nudge_style == "sugestivo":
-                    style_instruction = "Haz una sugerencia suave y comprensiva, aportando opciones."
+                    style_instruction = "Haz una sugerencia suave y comprensiva, aportando opciones o una pregunta abierta sobre qué se le antoja comer ahora."
                     # [P1-PLAN-LOTE-161] «Aportando opciones» es pedirle al modelo que nombre comida. Con alergias, una
                     # dieta restrictiva o una condición declaradas, el aviso anima sin nombrar platos: es el único
                     # texto del coach que no pasa por ningún filtro determinista, así que la regla es no darle ocasión.
@@ -1279,7 +1303,10 @@ No uses demasiados emojis. Sé directo, breve y empático.
                         if _nevera_aviso:   # [P1-PLAN-LOTE-960] los de su Nevera ya pasaron el backstop clínico
                             style_instruction = style_instruction[:-1] + " salvo los de SU NEVERA listados abajo."
                 elif nudge_style == "gamificado":
-                    style_instruction = "Usa un tono de reto amistoso, motivando como si fuera un logro a desbloquear."
+                    style_instruction = (
+                        "Usa un tono motivador y dinámico (como un impulso amistoso o reto, pero variando el inicio y vocabulario: "
+                        "NO repitas siempre 'desbloquea el reto' o 'challenge'). Haz una propuesta concreta o pregunta proactiva para animarle a comer."
+                    )
                 
                 prompt = PROACTIVE_PROMPT.format(
                     **palabras_de_la_comida(meal_to_check, _nudge_locale),   # [P1-PLAN-LOTE-622] en su idioma

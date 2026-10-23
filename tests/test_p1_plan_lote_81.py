@@ -37,6 +37,18 @@ def test_la_directiva_solo_cuando_el_idioma_del_mensaje_no_es_el_de_la_app():
     assert build_message_language_directive("hi! what's for dinner today?", "en-US") == ""     # ya la manda el locale
     assert build_message_language_directive("qué me toca hoy", "es-DO") == ""
     assert build_message_language_directive(None, "es-DO") == ""
+    # [P1-I18N-SPANISH-OVERRIDE] Usuario con app en en-US pero escribe en español
+    d_es = build_message_language_directive("me equivoque, eso es para el desayuno de hoy", "en-US")
+    assert d_es and "ESPAÑOL" in d_es
+
+
+def test_is_spanish_message():
+    from prompts.chat_agent import is_spanish_message
+    assert is_spanish_message("me equivoque, eso es para el desayuno de hoy") is True
+    assert is_spanish_message("Desayuné 2 huevos con pan") is True
+    assert is_spanish_message("I had 2 eggs and toast") is False
+    assert is_spanish_message("what is for lunch?") is False
+    assert is_spanish_message(None) is False
 
 
 def test_los_cuatro_call_sites_y_el_marcador():

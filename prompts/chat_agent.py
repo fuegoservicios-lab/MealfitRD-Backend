@@ -1442,6 +1442,27 @@ _MESSAGE_LANG_MARKERS = {
 _MESSAGE_LANG_TOKEN_RX = re.compile(r"[a-záéíóúàèìòùâêôãõçñ'’?-]+")
 
 
+_SPANISH_MESSAGE_MARKERS = frozenset({
+    "de", "la", "el", "en", "los", "del", "las", "por", "un", "para", "con", "una",
+    "al", "lo", "como", "pero", "este", "esta", "esto", "comi", "comí", "desayune",
+    "desayuné", "almorce", "almorcé", "cene", "cené", "desayuno", "almuerzo", "cena",
+    "merienda", "hoy", "ayer", "mañana", "manana", "huevos", "huevo", "arroz", "pollo",
+    "anotar", "registra", "plato", "queso", "carne", "habichuelas", "equivoque", "equivoqué",
+    "comida", "tengo", "puedo", "quiero", "comer", "cuenta", "salmón", "salmon", "avena"
+})
+
+
+def is_spanish_message(text: str) -> bool:
+    """Verifica si un texto/mensaje está escrito en español basado en marcadores frecuentes."""
+    if not isinstance(text, str):
+        return False
+    tokens = _MESSAGE_LANG_TOKEN_RX.findall(text.lower().replace("’", "'"))
+    if not tokens:
+        return False
+    hits = sum(1 for t in tokens if t in _SPANISH_MESSAGE_MARKERS)
+    return hits >= 2 or (len(tokens) <= 3 and hits >= 1)
+
+
 def detect_message_locale(text) -> Optional[str]:
     """Locale del idioma en que está escrito `text` (en-US/fr-FR/pt-BR/it-IT) o None si no se reconoce (español incluido)."""
     if not isinstance(text, str):
@@ -1464,6 +1485,12 @@ def build_message_language_directive(prompt, locale) -> str:
     try:
         det = detect_message_locale(prompt)
         if not det or det == locale:
+            # [P1-I18N-SPANISH-OVERRIDE] Si el locale del perfil es no-español (ej. en-US) pero el mensaje es español:
+            if locale and str(locale).lower() != "es-do" and not str(locale).lower().startswith("es") and is_spanish_message(prompt):
+                return (
+                    "\n\n🌐 IDIOMA DE RESPUESTA — OBLIGATORIO: El usuario te ha escrito en ESPAÑOL. "
+                    "Responde a este mensaje en ESPAÑOL. Tu respuesta debe ser 100% en español."
+                )
             return ""
         return build_language_directive(det)
     except Exception:
