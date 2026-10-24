@@ -149,3 +149,25 @@ def test_dreaming_user_model_chat_injection():
         block = _get_user_model_block("00000000-0000-0000-0000-000000000001")
         assert "MODELO DEL USUARIO" in block
         assert "Paciente femenino de 28 años" in block
+
+
+def test_ayuno_and_skipped_meal_handling():
+    """AI-70: Seguimiento inteligente de comidas pasadas con opción de ayuno y regla 8-ter."""
+    import tools
+    from prompts.chat_agent import _CHAT_BREVITY_RULES
+
+    # Regla 8-ter en el system prompt
+    assert "8-ter. AYUNO O COMIDAS OMITIDAS:" in _CHAT_BREVITY_RULES
+    assert "sin sermonear, regañar ni juzgar" in _CHAT_BREVITY_RULES
+    assert "NO inventes alimentos ni registres nada en el diario para esa comida" in _CHAT_BREVITY_RULES
+
+    # Verificación en la nota interna para el asistente
+    _TIPICAS = {"desayuno": 9.0, "almuerzo": 13.0, "merienda": 16.0, "cena": 19.5}
+    with patch.object(tools, "_local_date_str_for_user", lambda _u: "2026-10-24"):
+        with patch.object(tools, "user_tz_offset_min", lambda _u: 240):
+            with patch.object(tools, "get_latest_usable_meal_plan", lambda _u: None):
+                with patch.object(tools, "_horas_tipicas_de_comida", lambda _u: dict(_TIPICAS)):
+                    with patch("db_facts.get_consumed_meals_today", return_value=[{"meal_type": "almuerzo"}]):
+                        nota = tools._nota_comidas_sin_registrar("u-test-ayuno", 0, ahora_local=14.5)
+                        assert "ayunas" in nota
+                        assert "desayuno" in nota

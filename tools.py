@@ -1162,7 +1162,8 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                     if _pasadas:
                         return (f" (Para el asistente: son las {_hora_txt}. Hoy sigue sin registrar {', '.join(_pasadas)}, que ya "
                                 f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta (qué comió para "
-                                f"anotarlo, nunca «cuando la comas» ni «¿te propongo algo?»). "
+                                f"anotarlo o si estuvo en ayunas / no comió esa comida, ej: «¿qué comiste en el desayuno, o estuviste en ayunas?»; "
+                                f"nunca «cuando la comas» ni «¿te propongo algo?»). "
                                 f"{', '.join(_proximas)} aún no toca: no preguntes por ella.{_NO_INSISTAS})")
                     return (f" (Para el asistente: son las {_hora_txt} y hoy ya tiene registrado todo lo que tocaba hasta ahora. "
                             f"La próxima es {_prox} (~{_fmt_hora_float(float(_prox_h))}) y todavía no ha llegado: NO preguntes si "
@@ -1171,11 +1172,11 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                 if _pasadas:
                     return (f" (Para el asistente: son las {_hora_txt}. {_dia_txt} sigue sin registrar {', '.join(_faltan)} "
                             f"(ya pasó su hora) — cierra ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta "
-                            f"sobre qué comió para anotarlo (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
+                            f"sobre qué comió para anotarlo o si estuvo en ayunas (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
                             f"pregunta genérica de si le falta algo).{_NO_INSISTAS})")
         if _faltan:
             return (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
-                    f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta; nunca la pregunta "
+                    f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta (o si estuvo en ayunas / no comió); nunca la pregunta "
                     f"genérica de si le falta algo.{_NO_INSISTAS})")
         _cierre_noche = ""
         if not days_ago:
