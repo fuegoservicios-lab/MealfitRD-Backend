@@ -52,7 +52,8 @@ def _get_classifier_model():
     return ChatGLM(
         model=_sentiment_model_name(),
         temperature=0.0,
-        max_output_tokens=10,
+        max_output_tokens=32,
+        extra_body={"thinking": {"type": "disabled"}},
         # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline duro del request.
         timeout=_sentiment_llm_timeout_s()
     )
@@ -64,7 +65,11 @@ def classify_sentiment(user_message: str) -> dict:
     Retorna un dict con: sentiment, name, emoji, instruction.
     Fallback a 'neutral' si falla.
     """
-    if not user_message or len(user_message.strip()) < 3:
+    clean = (user_message or "").strip()
+    if not clean or len(clean) < 3:
+        return {**PERSONALITY_PROFILES["neutral"], "sentiment": "neutral"}
+    # Fast-path: respuestas de chips de dudas de foto ('1.5 tazas · Con cuerito') no requieren LLM emocional
+    if " · " in clean and len(clean) < 80:
         return {**PERSONALITY_PROFILES["neutral"], "sentiment": "neutral"}
     
     try:

@@ -636,6 +636,10 @@ def get_active_users_for_proactive() -> list:
             " AND s.created_at >= NOW() - INTERVAL '3 days'"
             " AND (EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id AND m.role = 'user')"
             " OR NOT EXISTS (SELECT 1 FROM agent_messages m WHERE m.session_id = s.id))"
+            " UNION "
+            " SELECT DISTINCT c.user_id FROM consumed_meals c"
+            " WHERE c.user_id IS NOT NULL"
+            " AND c.consumed_at >= NOW() - INTERVAL '3 days'"
             "), "
             "last_nudge AS ("
             " SELECT user_id::text as user_id, MAX(sent_at) as last_sent"
@@ -643,10 +647,11 @@ def get_active_users_for_proactive() -> list:
             " GROUP BY user_id"
             "), "
             "deduped AS ("
-            " SELECT DISTINCT ON (s.user_id) s.id, s.user_id, COALESCE(l.last_sent, '1970-01-01'::timestamptz) as last_sent"
-            " FROM agent_sessions s JOIN activos a ON a.user_id = s.user_id "
-            " LEFT JOIN last_nudge l ON l.user_id = s.user_id::text "
-            " ORDER BY s.user_id, s.created_at DESC"
+            " SELECT DISTINCT ON (a.user_id) s.id, a.user_id, COALESCE(l.last_sent, '1970-01-01'::timestamptz) as last_sent"
+            " FROM activos a"
+            " LEFT JOIN agent_sessions s ON s.user_id = a.user_id "
+            " LEFT JOIN last_nudge l ON l.user_id = a.user_id::text "
+            " ORDER BY a.user_id, s.created_at DESC NULLS LAST"
             ") "
             "SELECT id, user_id FROM deduped ORDER BY last_sent ASC, user_id ASC"
         )
@@ -661,6 +666,14 @@ def get_active_users_for_proactive() -> list:
             _subs = execute_sql_query("SELECT DISTINCT user_id FROM push_subscriptions WHERE user_id IS NOT NULL",
                                       fetch_all=True) or []
             for _r in _subs:
+                _uid = str(_r.get("user_id"))
+                if _uid and _uid not in _con_chat:
+                    res.append({"id": None, "user_id": _uid})
+                    _con_chat.add(_uid)
+            # Soporte para app nativa (Android/iOS) cuyos tokens viven en device_push_tokens
+            _native_subs = execute_sql_query("SELECT DISTINCT user_id FROM device_push_tokens WHERE user_id IS NOT NULL",
+                                             fetch_all=True) or []
+            for _r in _native_subs:
                 _uid = str(_r.get("user_id"))
                 if _uid and _uid not in _con_chat:
                     res.append({"id": None, "user_id": _uid})
@@ -841,6 +854,7 @@ Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y
             model=_proactive_model_name(),
             temperature=0.1,
             timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
+            extra_body={"thinking": {"type": "disabled"}},
         )
         res = chat_llm.invoke(prompt)
         text = str(res.content).strip()
@@ -901,6 +915,28 @@ def handle_nudge_response(user_id: str, content: str):
                     
     except Exception as e:
         logger.error(f"Error procesando respuesta al nudge: {e}")
+
+def mark_nudge_logged_from_diary(user_id: str, meal_type: Optional[str] = None) -> None:
+    """Marca como respondido y registrado (`meal_logged = true`) cualquier aviso proactivo
+    reciente cuando el usuario registra su comida directamente desde el Escáner o el Diario."""
+    if not user_id or str(user_id).startswith("guest"):
+        return
+    try:
+        pending = execute_sql_query(
+            "SELECT id, nudge_type FROM nudge_outcomes WHERE user_id = %s AND meal_logged = false "
+            "AND sent_at >= NOW() - make_interval(mins => %s) ORDER BY sent_at DESC LIMIT 1",
+            (str(user_id), _ventana_de_respuesta_min()),
+            fetch_one=True,
+        )
+        if pending and pending.get("id"):
+            execute_sql_write(
+                "UPDATE nudge_outcomes SET responded = true, meal_logged = true, "
+                "response_sentiment = COALESCE(response_sentiment, 'positive') WHERE id = %s",
+                (pending["id"],),
+            )
+            logger.info(f"✅ [NUDGE-DIARY-SYNC] Nudge {pending['id']} marcado meal_logged=True tras registro en diario (user={user_id})")
+    except Exception as e:
+        logger.debug(f"[NUDGE-DIARY-SYNC] No se pudo sincronizar nudge desde diario (no fatal): {e}")
 
 def run_proactive_checks():
     """Esta función será llamada por apscheduler (cron job)."""

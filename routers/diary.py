@@ -1854,6 +1854,58 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+@router.get("/chat-photos")
+async def api_get_chat_photos(
+    tzOffset: Optional[int] = None,
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-PLAN-LOTE-726] Retorna los enlaces entre comidas registradas en el chat y sus adjuntos de foto.
+
+    Permite al frontend (fotosDelChat.js) recuperar y asociar las imágenes de los
+    platos subidos en el chat con sus filas correspondientes en `consumed_meals`.
+    """
+    if not verified_user_id:
+        return {"photos": []}
+
+    try:
+        query = """
+            WITH matched AS (
+                SELECT DISTINCT ON (ca.id)
+                    cm.id AS meal_id,
+                    ca.id AS attachment_id,
+                    ABS(EXTRACT(EPOCH FROM (cm.created_at - ca.created_at))) AS diff_sec
+                FROM chat_attachments ca
+                JOIN consumed_meals cm 
+                  ON cm.user_id = ca.user_id
+                 AND cm.source IN ('chat', 'photo')
+                 AND cm.created_at >= ca.created_at - interval '5 minutes'
+                 AND cm.created_at <= ca.created_at + interval '2 hours'
+                WHERE ca.user_id = %s
+                ORDER BY ca.id, diff_sec ASC
+            )
+            SELECT meal_id, attachment_id FROM matched
+            ORDER BY diff_sec ASC
+            LIMIT 100
+        """
+        rows = await asyncio.to_thread(execute_sql_query, query, (str(verified_user_id),), fetch_all=True)
+        if not rows:
+            return {"photos": []}
+
+        photos = []
+        for r in rows:
+            m_id = str(r["meal_id"])
+            a_id = str(r["attachment_id"])
+            photos.append({
+                "meal_id": m_id,
+                "attachment_id": a_id,
+                "image_url": build_chat_attachment_url(a_id),
+            })
+        return {"photos": photos}
+    except Exception as e:
+        logger.error(f"Error obteniendo chat-photos para {verified_user_id}: {e}")
+        return {"photos": []}
+
+
 @router.get("/meal/{meal_id}")
 def api_get_consumed_meal_detail(
     meal_id: str,

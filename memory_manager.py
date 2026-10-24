@@ -458,7 +458,10 @@ def summarize_and_prune(session_id: str):
         return
 
     try:
-        all_messages = get_memory(session_id)
+        all_messages = [
+            m for m in (get_memory(session_id) or [])
+            if not str(m.get("content") or "").startswith("[SYSTEM_TITLE]")
+        ]
         
         if not all_messages:
             return

@@ -746,14 +746,15 @@ Mensaje del usuario: "{prompt}"
 
 Query optimizada:"""
 
-TITLE_GENERATION_PROMPT = """Actúa como el motor automático que da nombre a los historiales de chat en la barra lateral (como hace ChatGPT).
-Tu tarea es leer el primer mensaje del usuario y generar un título NATURAL, DESCRIPTIVO Y ÚNICO para esa conversación.
+TITLE_GENERATION_PROMPT = """Actúa como el motor que nombra las conversaciones en la barra lateral de una app de nutrición.
+Tu tarea es leer el mensaje o plato del usuario y generar un título CLARO, DIRECTO Y ÚTIL (de 2 a 4 palabras).
 
 REGLAS CRÍTICAS:
-1. SÉ NATURAL, FLUIDO Y SÚPER BREVE: Usa entre 2 y 4 palabras máximo. CERO frases largas. Las palabras deben ser orgánicas y precisas como "Duda sobre el puré" o "Consulta de nutrición".
-2. EXTREMADAMENTE CREATIVO Y VARIADO: NUNCA repitas fórmulas. Si saluda, inventa títulos únicos como "Primer contacto", "Asistencia inicial", "Bienvenida", etc. 
-3. TÍTULOS PROHIBIDOS: Tienes estrictamente prohibido usar o parecerte a estos títulos que ya existen en su historial: [{used_titles}]. ¡Inventa una combinación de palabras completamente nueva!
-4. CERO RELLENO: No uses comillas, puntos finales ni frases como "El título es". DEVUELVE ÚNICAMENTE EL TEXTO DEL TÍTULO.
+1. CLARIDAD ANTE TODO (2 A 4 PALABRAS): Nombra el alimento, comida o tema real de forma directa y natural. Ejemplos buenos: "Almuerzo: cerdo y arroz", "Desayuno con huevos", "Antojo de postre", "Consulta de nevera", "Registro de cápsulas".
+2. CERO PALABRAS REBUSCADAS O RARAS: Prohibido usar sinónimos poéticos o artificiales (NUNCA digas "Provisiones frías" por nevera, ni "Corte vacuno" por res, ni "Bebida láctea" por leche, ni "Consulta fresquita"). Usa las palabras cotidianas del alimento o tema.
+3. SI HAY FOTO O ACLARACIÓN DE PORCIÓN: Prioriza siempre el nombre del plato principal (ej. "Cerdo asado con arroz", "Mangú con huevos") y NUNCA uses las cantidades o fragmentos sueltos como título (prohibido "1.5 tazas", "Con cuerito").
+4. EVITA DUPLICADOS EXACTOS: Si el título exacto ya está en [{used_titles}], añade un matiz simple y natural (ej. "Almuerzo de cerdo", "Plato de res guisada") sin inventar palabras extrañas.
+5. CERO RELLENO: No uses comillas, puntos finales ni prefijos como "Título:". DEVUELVE ÚNICAMENTE EL TEXTO DEL TÍTULO.
 
 Mensaje del usuario:
 "{first_message}"

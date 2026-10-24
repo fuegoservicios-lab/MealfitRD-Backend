@@ -3170,10 +3170,14 @@ FOOD_CONNECTOR_TOKENS = frozenset({
 })
 
 
+_PUNCTUATION_TO_STRIP = str.maketrans("", "", ".,;:!?()[]{}\"'«»·-_/")
+
+
 @lru_cache(maxsize=2048)
 def _significant_food_tokens(name: str) -> tuple:
     """Tokens del nombre que sí distinguen un alimento de otro."""
-    return tuple(t for t in canonical_pantry_key(name).split() if t not in FOOD_CONNECTOR_TOKENS)
+    cleaned = canonical_pantry_key(name).translate(_PUNCTUATION_TO_STRIP)
+    return tuple(t for t in cleaned.split() if t not in FOOD_CONNECTOR_TOKENS)
 
 
 def _food_tokens_covered(needle: tuple, haystack: tuple) -> bool:
@@ -3351,7 +3355,8 @@ def derive_meal_name_from_description(description: str, max_words: int = 8) -> s
 
 
 _MEAL_DESC_FRAME_RE = re.compile(
-    r"^(?:un\s+|una\s+)?(?:plato|porci[oó]n|raci[oó]n|bandeja|comida)\s+(?:servid[oa]\s+)?"
+    r"^(?:un\s+|una\s+)?(?:plato|porci[oó]n|raci[oó]n|bandeja|comida)\s+"
+    r"(?:(?:abundante|grande|peque[ñn]a|mediana|generosa|servid[oa])\s+)*"
     r"(?:compuest[oa]\s+(?:por|de)|con|de)\s+",
     re.IGNORECASE,
 )

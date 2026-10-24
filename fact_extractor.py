@@ -420,7 +420,7 @@ def should_extract_facts(user_message: str, user_id: Optional[str] = None) -> bo
         "odio", "no me gusta", "no puedo comer", "no tolero", "peso", "kilos", "libras",
         "embaraz", "lactan", "cirug", "operac", "diabet", "hipertens", "prefiero", "siempre"
     )
-    if any(clean_msg.startswith(p) for p in _DIARY_LOG_PREFIXES):
+    if any(clean_msg.startswith(p) for p in _DIARY_LOG_PREFIXES) or (" · " in clean_msg and len(clean_msg) < 80):
         if not any(s in clean_msg for s in _FACT_SIGNALS):
             logger.info(f"⏭️ [FACT ROUTER FAST-PATH] Registro de consumo puntual descartado: '{user_message[:40]}'")
             return False
@@ -446,6 +446,7 @@ def should_extract_facts(user_message: str, user_id: Optional[str] = None) -> bo
         model=_fact_extractor_router_model_name(),
         temperature=0.0,
         timeout=_fact_extractor_router_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
+        extra_body={"thinking": {"type": "disabled"}},
     ).with_structured_output(RouterResult, include_raw=True)  # [P1-CHAT-FACTS-AUDIT] tokens
 
     try:

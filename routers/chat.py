@@ -1095,7 +1095,10 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                 # + facts extraction.
                                 def bg_tasks():
                                     try:
-                                        raw_history = get_session_messages(session_id)
+                                        raw_history = [
+                                            m for m in (get_session_messages(session_id) or [])
+                                            if not str(m.get("content") or "").startswith("[SYSTEM_TITLE]")
+                                        ]
                                         recent_history_str = ""
                                         if raw_history:
                                             recent_history_str = "\n".join([f"{m.get('role', 'unknown')}: {m.get('content', '')}" for m in raw_history[-6:]])
@@ -1295,7 +1298,10 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
 
         # === CONTEXTO PARA HECHOS (Debounce Semántico) ===
         # Obtenemos el historial de la sesión para darle contexto al LLM extractor
-        raw_history = get_session_messages(session_id)
+        raw_history = [
+            m for m in (get_session_messages(session_id) or [])
+            if not str(m.get("content") or "").startswith("[SYSTEM_TITLE]")
+        ]
         recent_history_str = ""
         if raw_history:
             # Tomar solo los últimos 6 mensajes para contexto rápido

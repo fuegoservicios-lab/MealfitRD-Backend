@@ -45,7 +45,7 @@ from memory_manager import build_memory_context
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from langgraph.checkpoint.postgres import PostgresSaver
-from db import get_user_ingredient_frequencies, get_latest_usable_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today
+from db import get_user_ingredient_frequencies, get_latest_usable_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today, update_session_title
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -5714,6 +5714,20 @@ chat_builder.add_edge("nudge_photo_to_log", "call_model")
 # CHAT CON AGENTE (Wrapper Principal)
 # ============================================================
 
+_TITLE_DANGLING_WORDS = {
+    "y", "e", "o", "u", "de", "del", "con", "sin", "en", "para", "por",
+    "sobre", "desde", "hacia", "hasta",
+    "a", "al", "el", "la", "los", "las", "un", "una", "unos", "unas", "·", "-", ":"
+}
+
+def _trim_dangling_title_words(text_val: str) -> str:
+    """Elimina conjunciones o conectores que queden colgando al final de un título."""
+    words = str(text_val or "").rstrip(".,;:·- ").split()
+    while len(words) > 1 and words[-1].lower().strip(".,;:·-") in _TITLE_DANGLING_WORDS:
+        words.pop()
+    return " ".join(words).rstrip(".,;:·- ").strip()
+
+
 _generating_titles = set()
 
 def generate_chat_title_background(user_id: str, session_id: str, first_message_text: str = None):
@@ -5758,39 +5772,69 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
     try:
         _generating_titles.add(session_id)
 
-        # Check if a title already exists for this session
+        # Check if a non-empty title already exists for this session
         res_data = get_session_messages(session_id)
-        if res_data and any(str(m.get("content", "")).startswith("[SYSTEM_TITLE]") for m in res_data):
+        if res_data and any(
+            str(m.get("content", "")).startswith("[SYSTEM_TITLE]")
+            and len(str(m.get("content", "")).replace("[SYSTEM_TITLE]", "").strip()) > 0
+            for m in res_data
+        ):
             logger.debug(f"[chat_title bg] session={session_id} - Title exists, returning")
             return
-            
+
+        def _clean_user_msg_for_title(raw_text: str, attachments_list=None) -> str:
+            txt = str(raw_text or "")
+            txt = re.sub(r'\[?\(Hora actual del usuario:[^)]*\)\]?', '', txt, flags=re.IGNORECASE | re.DOTALL)
+            txt = re.sub(r'\[Sistema:[^\]]*\]', '', txt, flags=re.IGNORECASE)
+            txt = re.sub(r'Instrucción:.*?$', '', txt, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            txt = re.sub(r'\[IMAGE:[^\]]*\]', '', txt, flags=re.IGNORECASE)
+            txt = re.sub(r'Mensaje del usuario:\s*', '', txt, flags=re.IGNORECASE | re.DOTALL)
+            if '[El usuario subió una imagen.' in txt:
+                txt = re.sub(r'\[El usuario subió una imagen\..+?\]', '', txt, flags=re.DOTALL)
+            txt = txt.strip()
+            att_descs = []
+            if isinstance(attachments_list, list):
+                for att in attachments_list:
+                    if isinstance(att, dict):
+                        d = str(att.get("description") or "").strip()
+                        if d:
+                            d = re.split(r'\bDUDAS\s*\(|\(Estimaci[oó]n:', d, maxsplit=1)[0].strip()
+                            if d:
+                                att_descs.append(d)
+            if att_descs:
+                dish_summary = "; ".join(att_descs)
+                return f"Foto de comida: {dish_summary}. Nota del usuario: {txt}" if txt else f"Foto de comida: {dish_summary}"
+            return txt
+
         first_message = ""
-        # Garantizar que siempre se use el primer mensaje histórico real, no el prompt actual
+        # Buscar el primer mensaje sustantivo del usuario (saltando saludos puros como 'hola')
         if res_data:
+            user_candidates = []
             for m in res_data:
                 msg_role = str(m.get("role", "")).lower()
-                if msg_role == "user" or msg_role == "human":
-                    first_message = m.get("content", "")
+                if msg_role in ("user", "human"):
+                    cleaned = _clean_user_msg_for_title(m.get("content", ""), m.get("attachments"))
+                    if cleaned:
+                        user_candidates.append(cleaned)
+            for cand in user_candidates:
+                if not _rag_es_casual(cand):
+                    first_message = cand
                     break
-                    
+            if not first_message and user_candidates:
+                if len(user_candidates) == 1 and _rag_es_casual(user_candidates[0]):
+                    logger.debug(f"[chat_title bg] session={session_id} - Only casual greeting so far, deferring title")
+                    return
+                first_message = user_candidates[0]
+
         if not first_message and first_message_text:
-            first_message = first_message_text
-        elif not first_message:
-            first_message = "Consulta nueva"
-            
-        first_message = re.sub(r'\[?\(Hora actual del usuario:[^)]*\)\]?', '', first_message, flags=re.IGNORECASE|re.DOTALL)
-        first_message = re.sub(r'\[Sistema:[^\]]*\]', '', first_message, flags=re.IGNORECASE)
-        first_message = re.sub(r'Instrucción:.*?$', '', first_message, flags=re.IGNORECASE|re.MULTILINE|re.DOTALL)
-        first_message = re.sub(r'\[IMAGE:[^\]]*\]', '', first_message, flags=re.IGNORECASE)
-        first_message = re.sub(r'Mensaje del usuario:\s*', '', first_message, flags=re.IGNORECASE|re.DOTALL)
-        
-        if '[El usuario subió una imagen.' in first_message:
-            first_message = re.sub(r'\[El usuario subió una imagen\..+?\]', '', first_message, flags=re.DOTALL)
-            
-        first_message = first_message.strip()
+            cleaned_arg = _clean_user_msg_for_title(first_message_text, None)
+            if cleaned_arg and _rag_es_casual(cleaned_arg):
+                logger.debug(f"[chat_title bg] session={session_id} - Casual prompt arg, deferring title")
+                return
+            first_message = cleaned_arg
         if not first_message:
-            first_message = "El usuario acaba de subir una fotografía (probablemente de su comida o progreso físico) para ser analizada."
-        
+            first_message = "Consulta de nutrición"
+
         logger.debug(f"[chat_title bg] session={session_id} - Initializing LLM client")
 
         # Obtener títulos recientes para evitar repetirlos
@@ -5822,7 +5866,13 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             )
             return
 
-        title_llm = ChatGLM(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
+        title_llm = ChatGLM(
+            model=_chat_title_model_name(),
+            temperature=0.3,
+            timeout=_chat_title_llm_timeout_s(),
+            max_output_tokens=_chat_title_max_output_tokens(),
+            extra_body={"thinking": {"type": "disabled"}},
+        )  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
         # [P1-CHAT-TITLE-LOCALE · 2026-08-19 · round 2] Directiva de idioma ESPECÍFICA del
         # título (`build_title_language_directive`): la conversacional del round 1 no vencía
         # a los ejemplos españoles del template — ver el bloque en prompts/chat_agent.py.
@@ -5874,25 +5924,30 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             title = title[7:].strip()
         elif lower_t.startswith("title:"):
             title = title[6:].strip()
-            
+
         # Hard limit para evitar que rompa la UI
         if len(title) > 32:
             title = title[:32]
             # Truncar amablemente hasta el último espacio para no dejar palabras a medias
             if " " in title:
                 title = title.rsplit(" ", 1)[0]
-        
+        title = _trim_dangling_title_words(title)
+
         if not title:
-            _raw = first_message.split("\n")[0].strip() if first_message else ""
-            if _raw and _raw != "Consulta nueva" and not _raw.startswith("El usuario"):
+            _raw = first_message.replace("Foto de comida:", "").split("\n")[0].strip() if first_message else ""
+            if "·" in _raw and len(_raw.split("·")[0].strip()) <= 12:
+                _parts = [p.strip() for p in _raw.split("·") if p.strip()]
+                _raw = _parts[-1] if len(_parts) > 1 else _raw
+            if _raw and _raw not in ("Consulta nueva", "Consulta de nutrición") and not _raw.startswith("El usuario"):
                 title = _raw[:28].strip()
                 if " " in title and len(title) >= 20:
                     title = title.rsplit(" ", 1)[0]
-            else:
+                title = _trim_dangling_title_words(title)
+            if not title:
                 title = "Consulta de nutrición"
-        
+
         logger.debug(f"[chat_title bg] session={session_id} - Inserting SYSTEM_TITLE msg into DB")
-        save_message(session_id, "model", f"[SYSTEM_TITLE] {title}")
+        update_session_title(session_id, title)
         _elapsed_s = time.monotonic() - _t0
         logger.info(f"✅ Título generado para sesión {session_id}: {title} (elapsed={_elapsed_s:.2f}s)")
     except Exception as e:
@@ -5939,6 +5994,11 @@ def _rag_es_casual(prompt: str) -> bool:
     from coach_voz import es_charla_corta
     if es_charla_corta(prompt):
         logger.info(f"⏭️ [RAG ROUTER] Charla corta detectada: '{prompt[:30]}' → Saltando RAG.")
+        return True
+
+    # Paso 2c: Respuestas de chips de dudas de foto ('1.5 tazas · Con cuerito y grasa')
+    if " · " in clean and len(clean) < 80:
+        logger.info(f"⏭️ [RAG ROUTER] Aclaración de foto detectada: '{prompt[:30]}' → Saltando RAG.")
         return True
     return False
 
@@ -5993,6 +6053,7 @@ def rag_query_router(prompt: str) -> dict:
             model=_chat_router_model_name(),
             temperature=0.0,
             timeout=_chat_router_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+            extra_body={"thinking": {"type": "disabled"}},
         )
 
         rewrite_prompt = RAG_ROUTER_PROMPT.format(prompt=prompt)

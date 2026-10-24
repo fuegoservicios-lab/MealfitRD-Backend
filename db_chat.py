@@ -789,7 +789,11 @@ def _process_and_sort_sessions(sessions: list):
             s_msgs = messages_by_session[s["id"]]
             
             if s_msgs and len(s_msgs) > 0:
-                title_msgs = [m for m in s_msgs if str(m.get("content", "")).startswith("[SYSTEM_TITLE] ")]
+                title_msgs = [
+                    m for m in s_msgs
+                    if str(m.get("content", "")).startswith("[SYSTEM_TITLE]")
+                    and len(str(m.get("content", "")).replace("[SYSTEM_TITLE]", "").strip()) > 0
+                ]
                 user_msgs = [m for m in s_msgs if m.get("role") == "user"]
                 
                 # [P1-I18N-CHAT-TITULOS-SERVIDOR · 2026-08-22] El backend deja de decidir el
@@ -807,7 +811,7 @@ def _process_and_sort_sessions(sessions: list):
                 # activo en ese instante (el perfil puede haber cambiado desde el último
                 # mensaje). `title: None` + `title_key` deja esa decisión donde corresponde.
                 if title_msgs:
-                    s["title"] = str(title_msgs[0].get("content", "")).replace("[SYSTEM_TITLE] ", "")
+                    s["title"] = str(title_msgs[0].get("content", "")).replace("[SYSTEM_TITLE]", "", 1).strip()
                     s["title_key"] = None
                     s["is_fallback"] = False
                 elif user_msgs:
@@ -1396,10 +1400,11 @@ def delete_summaries(summary_ids: list):
         return None
 
 def delete_old_messages(session_id: str, before_timestamp: str):
-    """Elimina mensajes de agent_messages anteriores o iguales al timestamp dado."""
+    """Elimina mensajes de agent_messages anteriores o iguales al timestamp dado, preservando [SYSTEM_TITLE]."""
     if not connection_pool: return None
     res = execute_sql_write(
-        "DELETE FROM public.agent_messages WHERE session_id = %s AND created_at <= %s RETURNING id",
+        "DELETE FROM public.agent_messages WHERE session_id = %s AND created_at <= %s "
+        "AND (content IS NULL OR content NOT LIKE '[SYSTEM_TITLE]%%') RETURNING id",
         (session_id, before_timestamp),
         returning=True,
     )
@@ -1414,28 +1419,12 @@ def delete_old_messages(session_id: str, before_timestamp: str):
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 def get_recent_messages(session_id: str, limit: int = 10):
-    """Obtiene solo los N mensajes más recientes de una sesión (los no resumidos).
-
-    [P1-CHAT-SUPABASE-RETRY · 2026-05-20] Retry 2 intentos con backoff 0.3-1.5s
-    para cubrir el caso `httpx.RemoteProtocolError: Server disconnected`
-    cuando el gateway/PostgREST cerraba la conexión HTTP/2 idle (proveedor
-    legado). La primera request post-idle fallaba pero httpx abría socket nuevo
-    para la segunda. Tenacity re-raise tras agotar intentos para que callers
-    (build_memory_context → chat_with_agent_stream) puedan propagar la
-    excepción si persiste.
-
-    Conservador: retry_if_exception_type=Exception es amplio pero stop=2
-    limita el blast radius (max 1 reintento). Si el error es genuino (parse,
-    schema mismatch), el segundo intento también falla y el caller lo sabe.
-
-    [P1-NEON-DB-MIGRATION · 2026-06-12] Post-migración a SQL directo el
-    retry sigue siendo útil: cubre blips transient del pool psycopg contra
-    Neon (connection reset, pooler EOF) con la misma semántica.
-    """
+    """Obtiene solo los N mensajes más recientes de una sesión (los no resumidos), excluyendo mensajes de sistema."""
     if not connection_pool: return []
     res = execute_sql_query(
         f"SELECT {_AGENT_MESSAGE_COLS_SQL} FROM public.agent_messages "
-        "WHERE session_id = %s ORDER BY created_at DESC LIMIT %s",
+        "WHERE session_id = %s AND (content IS NULL OR content NOT LIKE '[SYSTEM_TITLE]%%') "
+        "ORDER BY created_at DESC LIMIT %s",
         (session_id, limit),
         fetch_all=True,
     )
