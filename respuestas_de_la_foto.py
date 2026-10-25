@@ -171,7 +171,7 @@ def instruccion(vision) -> str:
     if vision.get("_ajuste_aplicado"):
         cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
     else:
-        cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: ajusta sobre la «Estimación» del PLATO COMPLETO "
+        cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: recalcula y ajusta sobre la «Estimación» del PLATO COMPLETO "
                   "incorporando el alimento, proteína o porción indicado (ej. salmón en lugar de pollo, más porción, etc.), "
                   "pero JAMÁS descartes el resto del plato visible (arroz, ensalada, etc.) para registrar solo ese ingrediente")
 
@@ -287,14 +287,30 @@ def _platos_claros(vision) -> bool:
     return bool(platos) and not any(_MARCA_DUDAS.strip() in str(i.get("description")) for i in platos)
 
 
+_NUMEROS_PALABRA = {
+    "medio": "0.5", "media": "0.5",
+    "un": "1", "uno": "1", "una": "1",
+    "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5",
+    "seis": "6", "siete": "7", "ocho": "8", "nueve": "9", "diez": "10",
+}
+
+
+def _plano_numeros(texto) -> str:
+    p = _plano(texto)
+    p = re.sub(r"\b1/2\b", "0.5", p)
+    p = re.sub(r"(\d),(\d)", r"\1.\2", p)
+    tokens = [_NUMEROS_PALABRA.get(w, w) for w in re.split(r"[^a-z0-9.]+", p) if w]
+    return " ".join(tokens)
+
+
 def extraer_respuesta_de_prompt(vision, prompt) -> str | None:
     """[P1-PHOTO-ANSWER-EXTRACT · 2026-10-21] Si el prompt del usuario contesta una de las opciones de DUDAS de la foto
-    (ej. «2 huevos» ante «¿Cuántos huevos fritos tiene el plato? (opciones: 2 huevos (supuesto) · 1 huevo)»), extrae
+    (ej. «2 huevos» o «un huevo» ante «¿Cuántos huevos fritos tiene el plato? (opciones: 2 huevos (supuesto) · 1 huevo)»), extrae
     esa respuesta para que el turno la trate como contestada sin descartar el resto del plato."""
     if not prompt or not isinstance(vision, dict):
         return None
-    p_norm = _plano(prompt)
-    if not p_norm or len(p_norm) > 80:
+    p_norm = _plano_numeros(prompt)
+    if not p_norm or len(p_norm) > 120:
         return None
     items = vision.get("items") if vision.get("kind") == "multi" else [vision]
     for it in (items or []):
@@ -315,7 +331,7 @@ def extraer_respuesta_de_prompt(vision, prompt) -> str | None:
             op_content = q_text[op_idx + len("(opciones:"):].rstrip("). ")
             opciones = [re.sub(r"\s*\([^)]*\)", "", x).strip() for x in re.split(r"[\u00b7\xb7\u2022]", op_content)]
             for o in opciones:
-                o_norm = _plano(o)
+                o_norm = _plano_numeros(o)
                 if o_norm and (p_norm == o_norm or p_norm in o_norm or o_norm in p_norm):
                     return o
     return None
@@ -326,7 +342,7 @@ def es_respuesta_supuesto(vision, ans: str) -> bool:
     en el análisis, la estimación del plato ya incluye esa cantidad (ajuste 0)."""
     if not ans or not isinstance(vision, dict):
         return False
-    ans_norm = _plano(ans)
+    ans_norm = _plano_numeros(ans)
     items = vision.get("items") if vision.get("kind") == "multi" else [vision]
     for it in (items or []):
         if not isinstance(it, dict) or not it.get("description"):
@@ -344,7 +360,7 @@ def es_respuesta_supuesto(vision, ans: str) -> bool:
             for raw_op in re.split(r"[\u00b7\xb7\u2022]", op_content):
                 if "(supuesto)" in raw_op.lower():
                     clean_op = re.sub(r"\s*\([^)]*\)", "", raw_op).strip()
-                    clean_norm = _plano(clean_op)
+                    clean_norm = _plano_numeros(clean_op)
                     if clean_norm and (ans_norm == clean_norm or ans_norm in clean_norm or clean_norm in ans_norm):
                         return True
     return False
@@ -401,20 +417,23 @@ def marcar_rotulo(vision, prompt):
     ellas manda su propia regla). Sin rótulo, el MISMO objeto."""
     if not isinstance(vision, dict):
         return vision
+    _extraida_del_prompt = False
     if not respuestas_de(vision):
         ans = extraer_respuesta_de_prompt(vision, prompt)
         if ans:
+            _extraida_del_prompt = True
             vision = dict(vision, respuestas=ans)
             if es_respuesta_supuesto(vision, ans):
                 vision["_ajuste_aplicado"] = True
     if not foto_para_anotar(vision, prompt):
         return vision
     if respuestas_de(vision):
-        # [P1-PLAN-LOTE-694] Si el mensaje aclara dudas Y además dice la comida (ej. «Desayuné\n2 huevos»),
-        # preservamos el rótulo para que el system prompt sepa exactamente el meal_type.
-        tipo = rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt)
-        if tipo:
-            return dict(vision, rotulo=tipo)
+        # [P1-PLAN-LOTE-694] Si el mensaje aclara dudas directamente en el prompt Y además dice la comida
+        # (ej. «Desayuné\n2 huevos»), preservamos el rótulo para que el system prompt sepa el meal_type.
+        if _extraida_del_prompt:
+            tipo = rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt)
+            if tipo:
+                return dict(vision, rotulo=tipo)
         return vision
     if es_solo_foto(prompt):   # [P1-PLAN-LOTE-687] sin texto no hay rótulo: la foto sola manda
         return dict(vision, solo_foto=True)

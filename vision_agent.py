@@ -596,7 +596,101 @@ def _duda_para_el_coach(d: dict) -> str:
     return d["pregunta"] + " (opciones: " + " · ".join(o["texto"] + (" (supuesto)" if o["supuesta"] else "") for o in ops) + ")"
 
 
-def _coerce_meal_scan(data: dict) -> dict:
+_NUMEROS_PALABRA_DUDA = {
+    "medio": "0.5", "media": "0.5",
+    "un": "1", "uno": "1", "una": "1",
+    "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5",
+    "seis": "6", "siete": "7", "ocho": "8", "nueve": "9", "diez": "10",
+}
+_PALABRAS_GENERICAS_DUDA = {
+    "pequena", "pequeno", "mediana", "mediano", "grande", "normal",
+    "regular", "poco", "poca", "mucho", "mucha", "otro", "otra", "si", "no",
+}
+
+
+def _normalizar_texto_duda(texto: str) -> str:
+    import re as _re
+    import unicodedata as _ud
+    t = _ud.normalize("NFKD", str(texto or "").lower())
+    t = "".join(c for c in t if not _ud.combining(c))
+    t = _re.sub(r"\b1/2\b", "0.5", t)
+    t = _re.sub(r"(\d),(\d)", r"\1.\2", t)
+    t = _re.sub(r"[^a-z0-9.]+", " ", t)
+    tokens = [_NUMEROS_PALABRA_DUDA.get(w, w) for w in t.split() if w]
+    return " ".join(tokens)
+
+
+def _patron_opcion_duda(op_norm: str) -> str:
+    import re as _re
+    partes = []
+    for w in op_norm.split():
+        if _re.fullmatch(r"\d+(?:\.\d+)?", w):
+            partes.append(_re.escape(w))
+        elif len(w) >= 3:
+            stem = w[:-2] if w.endswith("es") and len(w) > 4 else (w[:-1] if w.endswith("s") and len(w) > 3 else w)
+            partes.append(_re.escape(stem) + r"(?:es|s)?")
+        else:
+            partes.append(_re.escape(w))
+    return r"\b" + r"\s+".join(partes) + r"\b"
+
+
+def _opcion_coincide_con_aclaracion(op_texto: str, acl_norm: str, duda: dict) -> bool:
+    import re as _re
+    sin_paren = _re.sub(r"\s*\([^)]*\)", "", str(op_texto or "")).strip()
+    op_norm = _normalizar_texto_duda(sin_paren)
+    if not op_norm or not acl_norm:
+        return False
+    if op_norm == acl_norm:
+        return True
+    palabras = op_norm.split()
+    if len(palabras) == 1:
+        w = palabras[0]
+        if w in _PALABRAS_GENERICAS_DUDA:
+            return False
+        if _re.fullmatch(r"\d+(?:\.\d+)?", w):
+            sobre_norm = _normalizar_texto_duda(duda.get("sobre") or "")
+            sustantivos = [s for s in sobre_norm.split() if len(s) >= 3 and s not in _PALABRAS_GENERICAS_DUDA]
+            if not sustantivos:
+                return False
+            return any(_re.search(_patron_opcion_duda(f"{w} {s}"), acl_norm) is not None for s in sustantivos)
+    return _re.search(_patron_opcion_duda(op_norm), acl_norm) is not None
+
+
+def _resolver_dudas_con_aclaracion(dudas: list, aclaracion: Optional[str], result: dict) -> list:
+    """[P1-PHOTO-CAPTION-DOUBT-RESOLVE · 2026-10-25] Si el pie de foto del usuario (`aclaracion`) ya responde una duda
+    (ej. «Ayer cené este ramen con un huevo» frente a «¿Cuántos huevos le echaste a la sopa? [1 huevo · 2 huevos]»),
+    aplica el ajuste de esa opción cuando no era la supuesta y retira la duda para no preguntar lo que ya dijo."""
+    acl_norm = _normalizar_texto_duda(aclaracion or "")
+    if not acl_norm or not dudas:
+        return dudas
+    import re as _re
+    restantes = []
+    for d in dudas:
+        ops = d.get("opciones") or []
+        coincidencias = [op for op in ops if _opcion_coincide_con_aclaracion(op.get("texto", ""), acl_norm, d)]
+        if len(coincidencias) == 1:
+            elegida = coincidencias[0]
+            if not elegida.get("supuesta"):
+                aj = elegida.get("ajuste") or {}
+                for k in ("calories", "protein", "carbs", "healthy_fats"):
+                    nuevo = int(round(float(result.get(k) or 0) + float(aj.get(k) or 0)))
+                    result[k] = max(0, min(_MEAL_MACRO_CAPS[k], nuevo))
+                if elegida.get("nombre_plato"):
+                    result["meal_name"] = str(elegida["nombre_plato"])[:120]
+                sup_ops = [op for op in ops if op.get("supuesta")]
+                if sup_ops:
+                    sup_txt = _re.sub(r"\s*\([^)]*\)", "", str(sup_ops[0].get("texto") or "")).strip()
+                    el_txt = _re.sub(r"\s*\([^)]*\)", "", str(elegida.get("texto") or "")).strip()
+                    if sup_txt and el_txt and sup_txt.lower() != el_txt.lower():
+                        result["description"] = _re.sub(_re.escape(sup_txt), el_txt.lower(), result.get("description") or "", flags=_re.IGNORECASE)
+                        if result.get("meal_name"):
+                            result["meal_name"] = _re.sub(_re.escape(sup_txt), el_txt.lower(), result["meal_name"], flags=_re.IGNORECASE)[:120]
+            continue
+        restantes.append(d)
+    return restantes
+
+
+def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None) -> dict:
     """Normaliza la salida cruda de gemma al contrato de process_image_with_vision.
     Pura (sin IO) para testearla directo: clamps, is_food=False ⇒ macros 0,
     strings capadas, items sanitizados. Fail-open a 0 en macros no numéricas."""
@@ -780,7 +874,7 @@ def _coerce_meal_scan(data: dict) -> dict:
     # Sin desglose usable no se inventa: los componentes van sin `macros` y el modal registra el total.
     # [P1-PLAN-LOTE-305 · 2026-09-25] Las dudas (solo en un plato): máx. 2, cortas, sin basura. Viajan estructuradas
     # (el escáner las muestra) y también en la `description`, que es lo que el coach lee de la foto.
-    result["dudas"] = _dudas_del_plato(data) if kind == "plato" else []
+    result["dudas"] = _resolver_dudas_con_aclaracion(_dudas_del_plato(data), aclaracion, result) if kind == "plato" else []
     if result["dudas"]:
         result["description"] += " DUDAS (pregúntale solo esto): " + " ".join(_duda_para_el_coach(d) for d in result["dudas"])
     _repartidas = _repartir_macros_del_plato(crudas, result)
@@ -1087,7 +1181,7 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
             _MealVisionResult,
         )
         data = response.model_dump() if response else {}
-        return _coerce_meal_scan(data)
+        return _coerce_meal_scan(data, aclaracion=aclaracion)
 
     except Exception as e:
         # [P3-VISION-FAIL-ERROR-LOG · 2026-05-30] error-level (NO warning) para

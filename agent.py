@@ -7912,7 +7912,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
     # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
     from respuestas_de_la_foto import marcar_rotulo, preparar_vision, foto_para_anotar as _foto_para_anotar
-    vision = preparar_vision(marcar_rotulo(vision, prompt))
+    vision = marcar_rotulo(vision, prompt)
+    vision = preparar_vision(vision)
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
     # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`

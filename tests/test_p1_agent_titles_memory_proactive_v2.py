@@ -92,3 +92,53 @@ def test_log_consumed_meal_syncs_proactive_nudge():
     import db_facts
     src = inspect.getsource(db_facts.log_consumed_meal)
     assert "mark_nudge_logged_from_diary" in src
+
+
+def test_photo_caption_resolves_matching_doubt_and_removes_card():
+    from vision_agent import _coerce_meal_scan
+    import respuestas_de_la_foto as rf
+
+    raw = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Ramen con huevo",
+        "description": "Sopa de fideos instantáneos en caldo con trozos de huevo revuelto integrado.",
+        "calories": 452,
+        "protein": 13,
+        "carbs": 52,
+        "healthy_fats": 21,
+        "dudas": [{
+            "sobre": "huevos",
+            "pregunta": "¿Cuántos huevos le echaste a la sopa?",
+            "opciones": [
+                {"texto": "1 huevo", "supuesta": True, "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}},
+                {"texto": "2 huevos", "supuesta": False, "ajuste": {"calories": 70, "protein": 6, "carbs": 0, "healthy_fats": 5}},
+            ],
+        }],
+    }
+    out_1 = _coerce_meal_scan(raw, aclaracion="Ayer cene este ramen con un huevo")
+    assert out_1["dudas"] == []
+    assert "DUDAS (" not in out_1["description"]
+    assert out_1["calories"] == 452
+
+    out_2 = _coerce_meal_scan(raw, aclaracion="Ayer cene este ramen con dos huevos")
+    assert out_2["dudas"] == []
+    assert "DUDAS (" not in out_2["description"]
+    assert out_2["calories"] == 522
+    assert out_2["protein"] == 19
+
+    # También en respuestas_de_la_foto cuando una descripción previa ya traía DUDAS
+    v = {
+        "kind": "multi",
+        "items": [{
+            "kind": "plato",
+            "description": (
+                "Sopa de fideos instantáneos en caldo con trozos de huevo revuelto integrado. "
+                "DUDAS (pregúntale solo esto): ¿Cuántos huevos le echaste a la sopa? (opciones: 1 huevo (supuesto) · 2 huevos) "
+                "(Estimación: Calorías: 452, Proteína: 13g, Carbohidratos: 52g, Grasas Saludables: 21g)"
+            ),
+        }],
+        "has_text": True,
+    }
+    assert rf.extraer_respuesta_de_prompt(v, "Ayer cene este ramen con un huevo") == "1 huevo"
+    assert rf.es_respuesta_supuesto(v, "un huevo") is True
