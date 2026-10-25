@@ -50,6 +50,12 @@ def test_derive_meal_name_from_description_strips_frame():
     assert not derived.lower().startswith("plato")
     assert "arroz blanco" in derived.lower()
 
+    nested_desc = "Plato servido con una porción abundante de arroz blanco, trozos de cerdo asado con cuerito crocante."
+    derived_nested = derive_meal_name_from_description(nested_desc, max_words=8)
+    assert not derived_nested.lower().startswith("plato")
+    assert not derived_nested.lower().startswith("una porción")
+    assert derived_nested.lower().startswith("arroz blanco")
+
 
 def test_trim_dangling_title_words():
     assert _trim_dangling_title_words("1.5 tazas · Con cuerito y") == "1.5 tazas · Con cuerito"

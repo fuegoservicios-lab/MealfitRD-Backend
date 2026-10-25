@@ -4115,6 +4115,17 @@ def _try_claim_title_lock_cross_worker(session_id: str) -> bool:
         return True
 
 
+def _release_title_lock_cross_worker(session_id: str) -> None:
+    """Libera el lock en app_kv_store cuando se difiere la generación del título
+    (ej. cuando el primer mensaje fue solo un saludo casual como 'hola'), para que
+    el siguiente turno real del usuario pueda generar el título sin esperar el TTL de 5 min."""
+    try:
+        from db_core import execute_sql_write
+        execute_sql_write("DELETE FROM app_kv_store WHERE key = %s", (f"title_gen_inflight:{session_id}",))
+    except Exception:
+        pass
+
+
 def _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, source):
     """[P3-CHAT-OBSERVABILITY · 2026-05-20] Persiste a `pipeline_metrics`
     cuando el RAG embedding falla (catch broad en los 2 callsites de
@@ -5823,6 +5834,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             if not first_message and user_candidates:
                 if len(user_candidates) == 1 and _rag_es_casual(user_candidates[0]):
                     logger.debug(f"[chat_title bg] session={session_id} - Only casual greeting so far, deferring title")
+                    _release_title_lock_cross_worker(session_id)
                     return
                 first_message = user_candidates[0]
 
@@ -5830,6 +5842,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             cleaned_arg = _clean_user_msg_for_title(first_message_text, None)
             if cleaned_arg and _rag_es_casual(cleaned_arg):
                 logger.debug(f"[chat_title bg] session={session_id} - Casual prompt arg, deferring title")
+                _release_title_lock_cross_worker(session_id)
                 return
             first_message = cleaned_arg
         if not first_message:

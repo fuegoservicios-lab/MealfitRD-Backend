@@ -3357,7 +3357,8 @@ def derive_meal_name_from_description(description: str, max_words: int = 8) -> s
 _MEAL_DESC_FRAME_RE = re.compile(
     r"^(?:un\s+|una\s+)?(?:plato|porci[oó]n|raci[oó]n|bandeja|comida)\s+"
     r"(?:(?:abundante|grande|peque[ñn]a|mediana|generosa|servid[oa])\s+)*"
-    r"(?:compuest[oa]\s+(?:por|de)|con|de)\s+",
+    r"(?:compuest[oa]\s+(?:por|de)|con|de)\s+"
+    r"(?:(?:un|una)\s+(?:porci[oó]n|raci[oó]n|plato)\s+(?:(?:abundante|grande|peque[ñn]a|mediana|generosa)\s+)?de\s+)?",
     re.IGNORECASE,
 )
 _MEAL_NAME_DANGLING_TAIL = frozenset({

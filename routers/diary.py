@@ -1864,7 +1864,7 @@ async def api_get_chat_photos(
     Permite al frontend (fotosDelChat.js) recuperar y asociar las imágenes de los
     platos subidos en el chat con sus filas correspondientes en `consumed_meals`.
     """
-    if not verified_user_id:
+    if not verified_user_id or str(verified_user_id).startswith("guest"):
         return {"photos": []}
 
     try:
@@ -1881,6 +1881,7 @@ async def api_get_chat_photos(
                  AND cm.created_at >= ca.created_at - interval '5 minutes'
                  AND cm.created_at <= ca.created_at + interval '2 hours'
                 WHERE ca.user_id = %s
+                  AND ca.claimed_at IS NOT NULL
                 ORDER BY ca.id, diff_sec ASC
             )
             SELECT meal_id, attachment_id FROM matched

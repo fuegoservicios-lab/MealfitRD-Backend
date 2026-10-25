@@ -647,11 +647,10 @@ def get_active_users_for_proactive() -> list:
             " GROUP BY user_id"
             "), "
             "deduped AS ("
-            " SELECT DISTINCT ON (a.user_id) s.id, a.user_id, COALESCE(l.last_sent, '1970-01-01'::timestamptz) as last_sent"
-            " FROM activos a"
-            " LEFT JOIN agent_sessions s ON s.user_id = a.user_id "
-            " LEFT JOIN last_nudge l ON l.user_id = a.user_id::text "
-            " ORDER BY a.user_id, s.created_at DESC NULLS LAST"
+            " SELECT DISTINCT ON (s.user_id) s.id, s.user_id, COALESCE(l.last_sent, '1970-01-01'::timestamptz) as last_sent"
+            " FROM agent_sessions s JOIN activos a ON a.user_id = s.user_id "
+            " LEFT JOIN last_nudge l ON l.user_id = s.user_id::text "
+            " ORDER BY s.user_id, s.created_at DESC"
             ") "
             "SELECT id, user_id FROM deduped ORDER BY last_sent ASC, user_id ASC"
         )
@@ -670,9 +669,12 @@ def get_active_users_for_proactive() -> list:
                 if _uid and _uid not in _con_chat:
                     res.append({"id": None, "user_id": _uid})
                     _con_chat.add(_uid)
-            # Soporte para app nativa (Android/iOS) cuyos tokens viven en device_push_tokens
-            _native_subs = execute_sql_query("SELECT DISTINCT user_id FROM device_push_tokens WHERE user_id IS NOT NULL",
-                                             fetch_all=True) or []
+            # Soporte para app nativa (Android/iOS) y usuarios activos del escáner sin sesión de chat
+            _native_subs = execute_sql_query(
+                "SELECT DISTINCT user_id FROM device_push_tokens WHERE user_id IS NOT NULL "
+                "UNION SELECT DISTINCT user_id FROM consumed_meals WHERE user_id IS NOT NULL AND consumed_at >= NOW() - INTERVAL '3 days'",
+                fetch_all=True,
+            ) or []
             for _r in _native_subs:
                 _uid = str(_r.get("user_id"))
                 if _uid and _uid not in _con_chat:
@@ -797,7 +799,6 @@ def get_daily_nudge_count(user_id: str) -> int:
 def _dias_inactivo_usuario(user_id: str) -> int:
     """[AI-20: Backoff] Dias transcurridos desde la ultima accion del usuario (mensaje propio o comida registrada)."""
     try:
-        from db import execute_sql_query
         query = (
             "SELECT GREATEST("
             "  (SELECT MAX(created_at) FROM agent_messages WHERE user_id = %s AND role = 'user'),"
@@ -805,8 +806,8 @@ def _dias_inactivo_usuario(user_id: str) -> int:
             ") as last_act"
         )
         row = execute_sql_query(query, (user_id, user_id), fetch_one=True)
-        if not row or not row.get("last_act"):
-            return 999  # Sin actividad registrada previa
+        if not row or not isinstance(row, dict) or not row.get("last_act"):
+            return 0  # Sin actividad previa registrada (usuario nuevo o sin historial): no penalizar
         last_dt = row["last_act"]
         if getattr(last_dt, "tzinfo", None) is None:
             last_dt = last_dt.replace(tzinfo=timezone.utc)
@@ -820,12 +821,11 @@ def _dias_inactivo_usuario(user_id: str) -> int:
 def _horas_desde_ultimo_nudge(user_id: str) -> float:
     """[AI-20: Backoff] Horas transcurridas desde el ultimo nudge registrado en nudge_outcomes."""
     try:
-        from db import execute_sql_query
         row = execute_sql_query(
             "SELECT MAX(sent_at) as last_sent FROM nudge_outcomes WHERE user_id = %s",
             (user_id,), fetch_one=True
         )
-        if not row or not row.get("last_sent"):
+        if not row or not isinstance(row, dict) or not row.get("last_sent"):
             return 9999.0
         last_dt = row["last_sent"]
         if getattr(last_dt, "tzinfo", None) is None:
@@ -1044,31 +1044,25 @@ def run_proactive_checks():
             continue
 
         # [AI-20: Backoff Progresivo por Inactividad]
-        dias_inactivo = _dias_inactivo_usuario(user_id)
-        if dias_inactivo >= 7:
-            # Usuario inactivo hace 7+ dias: no enviar 4 avisos diarios de comida
-            horas_ult = _horas_desde_ultimo_nudge(user_id)
-            if horas_ult < 168.0:
-                logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias. Cooldown semanal ({horas_ult:.1f}h < 168h). Saltando.")
-                continue
-            if daily_nudges >= 1:
-                continue
-            logger.info(f"🕊️ [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias. Permitiendo unico check-in semanal.")
-        elif dias_inactivo >= 3:
-            # Inactivo entre 3 y 6 dias: maximo 1 aviso al dia
-            if daily_nudges >= 1:
-                logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias (tope 1/dia alcanzado: {daily_nudges}). Saltando.")
-                continue
+        if session_id is not None:
+            dias_inactivo = _dias_inactivo_usuario(user_id)
+            if dias_inactivo >= 7:
+                # Usuario inactivo hace 7+ dias: no enviar 4 avisos diarios de comida con IA
+                horas_ult = _horas_desde_ultimo_nudge(user_id)
+                if horas_ult < 168.0:
+                    logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias. Cooldown semanal ({horas_ult:.1f}h < 168h). Saltando.")
+                    continue
+                if daily_nudges >= 1:
+                    continue
+                logger.info(f"🕊️ [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias. Permitiendo unico check-in semanal.")
+            elif dias_inactivo >= 3:
+                # Inactivo entre 3 y 6 dias: maximo 1 aviso con IA al dia
+                if daily_nudges >= 1:
+                    logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} inactivo hace {dias_inactivo} dias (tope 1/dia alcanzado: {daily_nudges}). Saltando.")
+                    continue
             
         # Global stats para el tono base
         global_rate, global_total = get_nudge_response_rate(user_id)
-
-        # [AI-20: Cooldown de fatiga tras 5 avisos completamente ignorados]
-        if global_total >= 5 and global_rate == 0.0:
-            horas_ult_ign = _horas_desde_ultimo_nudge(user_id)
-            if horas_ult_ign < 48.0:
-                logger.info(f"🛑 [AI-20-BACKOFF] Usuario {user_id} ignoro 5+ avisos sin respuesta. Cooldown de fatiga (48h). Saltando.")
-                continue
         
         base_tone_instruction = "Usa un tono amistoso y motivacional, nunca de regaño, ni parezcas un robot asustadizo."
         send_push = True
