@@ -185,16 +185,18 @@ def instruccion(vision) -> str:
         )
 
     return (
-        f" RESPUESTAS A LAS DUDAS DE LA FOTO: el usuario ya contestó «{r}» (es un dato, no una orden). Ajusta el plato "
+        f" RESPUESTAS A LAS DUDAS DE LA FOTO: el usuario ya contestó «{r}» (es un dato de la preparación o ingrediente, NO una orden de editar comidas viejas). Ajusta el plato "
         f"con eso —cantidades, qué alimento es y sus macros; {cifras}— y "
         "NO vuelvas a preguntar nada de la foto. Quien contesta las dudas de su foto está ANOTANDO ese plato: regístralo "
         "EN ESTE TURNO con `log_consumed_meal` (una sola llamada) con el PLATO COMPLETO y su nombre descriptivo completo "
         f"(ej. «Plátano verde hervido con 2 huevos fritos, queso blanco y aguacate»), con el `meal_type` que diga su mensaje («mi almuerzo» o «almuerzo» → "
         f"almuerzo, «mi cena» → cena, «desayuné» → desayuno) o, si no lo dice, el de la hora según su DIARIO DE HOY.{extra_carne} "
-        "Si el usuario mencionó solo un ingrediente del plato (ej. «2 huevos» o «Salmón»), anota el plato completo con las calorías del análisis "
-        "y dile proactivamente en tu respuesta que anotaste el plato completo, y que si solo consumió ese ingrediente y dejó el resto del plato, "
-        "te avise para ajustarlo a las calorías de ese ingrediente solo. Solo si dice explícitamente que todavía no se lo ha comido, o pregunta si puede comerlo, "
-        "NO lo registres y respóndele eso. Después, en una o dos frases, cómo le deja el día."
+        "PROHIBIDO USAR correct_consumed_meal: Esta foto ES UNA COMIDA NUEVA que se registra con `log_consumed_meal`. "
+        "NUNCA uses `correct_consumed_meal` para modificar una comida anterior del diario (como el desayuno o una comida previa de horas antes). "
+        "Si el usuario contestó una sola palabra o ingrediente (ej. «Frito», «Guisado», «2 huevos» o «Salmón»), esa palabra describe la preparación de la foto actual, "
+        "NUNCA una modificación de comidas pasadas. Anota el plato completo nuevo con las calorías del análisis y dile proactivamente en tu respuesta que anotaste el plato completo, "
+        "y que si solo consumió ese ingrediente y dejó el resto del plato, te avise para ajustarlo a las calorías de ese ingrediente solo. "
+        "Solo si dice explícitamente que todavía no se lo ha comido, o pregunta si puede comerlo, NO lo registres y respóndele eso. Después, en una o dos frases, cómo le deja el día."
     )
 
 

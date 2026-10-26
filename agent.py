@@ -4826,6 +4826,34 @@ def _form_field_updates_after_write(field: str, parsed_value, user_id: Optional[
     return {field: parsed_value}
 
 
+def _es_solicitud_explicita_de_corregir_diario(messages: list) -> bool:
+    """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] ¿El usuario pidió explícitamente corregir o borrar una comida del diario?"""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            t = str(msg.content or "").lower()
+            return any(w in t for w in (
+                "borra", "borrar", "bórralo", "bórrala", "elimina", "eliminar", "elimínalo", "elimínala",
+                "corrige", "corregir", "corrijas", "corrección", "correccion",
+                "no me comí", "no me comi", "no comí", "no comi",
+                "era un ejemplo", "quita", "quitar", "quítalo", "deshaz", "deshacer", "cambia el desayuno",
+                "cambia el almuerzo", "cambia la cena"
+            ))
+    return False
+
+
+def _meals_created_this_turn(messages: list) -> set[str]:
+    """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] IDs de comidas que fueron creadas en este mismo turno."""
+    created = set()
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            break
+        content = getattr(msg, "content", "") or ""
+        if isinstance(content, str) and "[ID_REGISTRO_DIARIO:" in content:
+            for match in re.finditer(r"\[ID_REGISTRO_DIARIO:\s*([a-zA-Z0-9_\-]+)", content, re.IGNORECASE):
+                created.add(match.group(1))
+    return created
+
+
 def execute_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -4936,6 +4964,25 @@ def execute_tools(state: ChatState):
                     logger.warning(f"🛡️ [P1-PLAN-LOTE-168] {tool_name} force=true sin confirmación de "
                                    f"otra porción consumida → force=false")
                     tool_args["force"] = False
+
+                # [P1-PHOTO-DIARY-PROTECT · 2026-10-26] Prohibir que un turno con foto de plato nueva
+                # (o con respuesta rápida a sus dudas) altere comidas anteriores del diario con correct_consumed_meal.
+                if tool_name == "correct_consumed_meal" and (state.get("turn_photo_to_log") or state.get("turn_plate_photos")):
+                    created_this_turn = _meals_created_this_turn(messages)
+                    target_id = str(tool_args.get("meal_id") or "").strip()
+                    if target_id not in created_this_turn and not _es_solicitud_explicita_de_corregir_diario(messages):
+                        logger.warning(
+                            f"🛡️ [P1-PHOTO-DIARY-PROTECT] Bloqueado correct_consumed_meal sobre comida previa ({target_id}) "
+                            f"en turno con foto de plato (user={str(state.get('user_id'))[:8]})."
+                        )
+                        tool_result = (
+                            "ERROR: En este turno el usuario envió una FOTO DE PLATO NUEVA (o contestó una duda de su foto). "
+                            "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario. "
+                            "Esta foto ES UNA COMIDA NUEVA que debes registrar con `log_consumed_meal` usando las cifras del "
+                            "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`."
+                        )
+                        tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
+                        continue
 
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
@@ -5805,9 +5852,10 @@ def route_tools(state: ChatState):
     if not state.get("plate_photo_retried") and _plate_photos_unlogged(state):
         return "nudge_plate_photo"
 
-    # [P1-PLAN-LOTE-694] ¿El turno era ANOTAR la foto y acabó sin ningún registro? («¿Ya te lo comiste?»)
+    # [P1-PLAN-LOTE-694] ¿El turno era ANOTAR la foto y acabó sin registro de la comida nueva? («¿Ya te lo comiste?»)
+    # Un correct_consumed_meal sobre una comida anterior NO satisface el registro de una foto nueva.
     if (state.get("turn_photo_to_log") and not state.get("photo_log_retried")
-            and not _diary_tool_called_this_turn(messages)):
+            and not _tool_called_this_turn(messages, ("log_consumed_meal",))):
         return "nudge_photo_to_log"
 
     return END
