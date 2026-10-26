@@ -41,6 +41,10 @@ def test_es_solicitud_explicita_de_corregir_diario():
     assert _es_solicitud_explicita_de_corregir_diario([HumanMessage(content="No me comí eso, era un ejemplo")])
     assert _es_solicitud_explicita_de_corregir_diario([HumanMessage(content="Quita la cena")])
     assert _es_solicitud_explicita_de_corregir_diario([HumanMessage(content="Cambia el desayuno por favor")])
+    # Fusión / agregado a comida existente: SÍ son
+    assert _es_solicitud_explicita_de_corregir_diario([HumanMessage(content="Fue parte del almuerzo")])
+    assert _es_solicitud_explicita_de_corregir_diario([HumanMessage(content="Agrégalo al almuerzo")])
+    assert _es_solicitud_explicita_de_corregir_diario([HumanMessage(content="Se me quedó de la cena")])
 
 
 def test_meals_created_this_turn():
@@ -132,3 +136,58 @@ def test_route_tools_nudges_if_only_correct_consumed_meal_called_on_photo_turn()
         AIMessage(content="Anoté tu almuerzo."),
     ]
     assert route_tools(state) == END
+
+
+def test_fusion_intent_detection():
+    from agent import _detectar_intencion_parte_de_comida
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="Fue parte del almuerzo")]) == "almuerzo"
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="agrégalo al desayuno porfa")]) == "desayuno"
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="esto fue parte de la cena")]) == "cena"
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="se me quedó del almuerzo")]) == "almuerzo"
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="lo comí junto con el almuerzo")]) == "almuerzo"
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="Hola qué tal")]) is None
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="Quiero comer pollo para el almuerzo")]) is None
+
+
+def test_fusion_into_existing_meal_slot(monkeypatch):
+    from agent import _intentar_fusionar_alimento_en_comida_existente
+    import db_facts
+
+    mock_meals = [{
+        "id": "62b04607-952e-49b1-ab92-b8461a2d736f",
+        "meal_name": "Arroz blanco con habichuelas rojas y pollo frito",
+        "meal_type": "almuerzo",
+        "calories": 630,
+        "protein": 41,
+        "carbs": 65,
+        "healthy_fats": 20,
+        "ingredients": ["arroz blanco (≈150 g)", "habichuelas rojas guisadas (≈100 g)", "pollo frito (≈150 g)"],
+        "nutrition": {"attachment_ids": ["dd32eeb3-104e-492f-859d-cfa1410fcb0f"]},
+        "created_at": "2026-10-26T17:08:27Z",
+    }]
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda user_id: mock_meals)
+
+    tool_args = {
+        "meal_name": "1 guineo maduro mediano",
+        "meal_type": "almuerzo",
+        "calories": 105,
+        "protein": 1,
+        "carbs": 27,
+        "healthy_fats": 0,
+        "ingredients": ["1 guineo maduro mediano (≈118 g)"],
+    }
+    messages = [HumanMessage(content="Fue parte del almuerzo")]
+    plate_photos = [{"attachment_id": "0054ec80-9496-4c7d-b7a3-8ba74e94662a"}]
+
+    fused = _intentar_fusionar_alimento_en_comida_existente("user-123", tool_args, messages, plate_photos)
+    assert fused is not None
+    assert fused["meal_id"] == "62b04607-952e-49b1-ab92-b8461a2d736f"
+    assert "guineo" in fused["meal_name"]
+    assert fused["calories"] == 735
+    assert fused["protein"] == 42
+    assert fused["carbs"] == 92
+    assert fused["healthy_fats"] == 20
+    assert "1 guineo maduro mediano (≈118 g)" in fused["ingredients"]
+    assert "0054ec80-9496-4c7d-b7a3-8ba74e94662a" in fused["nutrition"]["attachment_ids"]
+    assert "dd32eeb3-104e-492f-859d-cfa1410fcb0f" in fused["nutrition"]["attachment_ids"]
+

@@ -945,7 +945,7 @@ def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     try:
         from db import execute_sql_query as _esq_fd
         return _esq_fd(
-            "SELECT id, meal_type, consumed_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats "
+            "SELECT id, meal_type, consumed_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats, ingredients, nutrition "
             "FROM consumed_meals WHERE id = %s AND user_id = %s",
             (meal_id, user_id), fetch_one=True,
         ) or None
@@ -1378,7 +1378,7 @@ def _dias_atras_de_fila(user_id: str, consumed_at) -> Optional[int]:
 from food_label_nutrients import FoodLabel
 
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None, food_facts: FoodLabel = None, label_servings: float = None) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None, food_facts: FoodLabel = None, label_servings: float = None, nutrition: dict = None) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
@@ -1483,7 +1483,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
     from food_label_nutrients import snapshot
     try:
-        _nutrition = snapshot(food_facts, label_servings)
+        _nutrition = snapshot(food_facts, label_servings) if food_facts is not None else nutrition
     except (TypeError, ValueError) as error:
         return f"NO REGISTRADO: {error}. Aclara etiqueta y porción antes de registrar."
     has_ingredients = bool(ingredients)
@@ -1771,6 +1771,7 @@ def correct_consumed_meal(
     food_facts: FoodLabel = None,
     label_servings: float = None,
     delete: bool = False,
+    nutrition: dict = None,
 ) -> str:
     """
     Corrige EN SITIO o ELIMINA una comida que YA está en el diario del usuario
@@ -1941,7 +1942,7 @@ def correct_consumed_meal(
 
     from food_label_nutrients import snapshot
     try:
-        _nutrition = snapshot(food_facts, label_servings)
+        _nutrition = snapshot(food_facts, label_servings) if food_facts is not None else nutrition
     except (TypeError, ValueError) as error:
         return f"NO CORREGIDO: {error}."
     updated_id = db_update_consumed_meal(

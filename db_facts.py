@@ -1092,10 +1092,13 @@ def update_consumed_meal(
             params.append(Jsonb(nutrition))
         elif any(v is not None for v in (meal_name, calories, protein, carbs, healthy_fats, ingredients)):
             # A changed food/quantity invalidates its old label snapshot. Never retain stale micros.
-            # Keep inventory ingredients for audit, but don't reuse them as nutrient evidence when
-            # only the macros/name changed. New ingredient quantities can resolve the catalog again.
-            set_parts.append("nutrition = NULL" if ingredients is not None else
-                             "nutrition = '{\"source\":\"unavailable\",\"reason\":\"food_corrected\"}'::jsonb")
+            # Preserve existing attachment_ids if present so photo associations are never lost on edit.
+            set_parts.append(
+                "nutrition = CASE "
+                "WHEN nutrition IS NOT NULL AND nutrition ? 'attachment_ids' "
+                "THEN jsonb_build_object('attachment_ids', nutrition->'attachment_ids') "
+                "ELSE NULL END"
+            )
 
         if not set_parts:
             # Nada que corregir — no ejecutar un UPDATE vacío/no-op.

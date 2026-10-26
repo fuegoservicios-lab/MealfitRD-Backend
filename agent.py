@@ -4288,6 +4288,7 @@ class ChatState(MessagesState):
     # `abrir_pantalla_de_la_app`): {hidratacion: bool, tema: 'dark', pantalla: 'nevera', …}. Viaja en el `done` como
     # `ajustes_de_app` y la pantalla lo aplica (`utils/ajustesDelCoach.js`). Fuera del schema LangGraph lo descarta.
     ajustes_de_app: dict | None
+    diary_corrected_meal_ids: list
     # [P1-DIARY-CLAIM-VERIFY · 2026-07-31] Tope del reintento cuando el modelo
     # afirma haber registrado una comida sin llamar `log_consumed_meal`
     # (ver `route_tools` / `nudge_diary_tool`).
@@ -4827,16 +4828,26 @@ def _form_field_updates_after_write(field: str, parsed_value, user_id: Optional[
 
 
 def _es_solicitud_explicita_de_corregir_diario(messages: list) -> bool:
-    """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] ¿El usuario pidió explícitamente corregir o borrar una comida del diario?"""
+    """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] ¿El usuario pidió explícitamente corregir, borrar o fusionar una comida del diario?"""
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
-            t = str(msg.content or "").lower()
+            c = msg.content
+            t = (c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict))).lower()
             return any(w in t for w in (
                 "borra", "borrar", "bórralo", "bórrala", "elimina", "eliminar", "elimínalo", "elimínala",
                 "corrige", "corregir", "corrijas", "corrección", "correccion",
                 "no me comí", "no me comi", "no comí", "no comi",
                 "era un ejemplo", "quita", "quitar", "quítalo", "deshaz", "deshacer", "cambia el desayuno",
-                "cambia el almuerzo", "cambia la cena"
+                "cambia el almuerzo", "cambia la cena",
+                "parte de", "parte del", "parte de la",
+                "agrégalo", "agregalo", "añádelo", "añadelo",
+                "agrega al", "agrega a la", "añade al", "añade a la",
+                "sumar al", "súmalo", "sumalo", "junto con el", "junto con la",
+                "se me quedó", "se me quedo", "se me olvidó del", "se me olvido del",
+                "se me olvidó en el", "se me olvido en el", "se me olvidó en la", "se me olvido en la",
+                "también comí en el", "tambien comi en el", "también comí en la", "tambien comi en la",
+                "lo comí en el", "lo comi en el", "lo comí en la", "lo comi en la",
             ))
     return False
 
@@ -4873,6 +4884,7 @@ def execute_tools(state: ChatState):
     # (LLM puede emitir múltiples tool_calls; concatenamos).
     pantry_depleted_items = list(state.get("pantry_depleted_items") or [])
     ajustes_de_app = dict(state.get("ajustes_de_app") or {})   # [P1-PLAN-LOTE-900] se acumulan en el turno
+    diary_corrected_meal_ids = list(state.get("diary_corrected_meal_ids") or [])
 
     tool_messages = []
     
@@ -4957,6 +4969,32 @@ def execute_tools(state: ChatState):
                         )
                         tool_name = "correct_consumed_meal"
                         tool_args = _merged_args
+
+                # [P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una
+                # comida ya registrada hoy (ej. 'fue parte del almuerzo', 'agrégalo al almuerzo'), fusionar en
+                # la fila existente sumando calorías, macros, ingredientes y adjuntos de foto.
+                if tool_name == "log_consumed_meal":
+                    _fused_part_args = _intentar_fusionar_alimento_en_comida_existente(
+                        _trusted_uid, tool_args, state.get("messages") or [], state.get("turn_plate_photos") or []
+                    )
+                    if _fused_part_args is not None:
+                        logger.info(
+                            f"🔗 [PART-OF-MEAL-MERGE] Fusionando alimento en comida existente "
+                            f"{_fused_part_args['meal_id']} ('{_fused_part_args['meal_name']}', {_fused_part_args['calories']} kcal)"
+                        )
+                        tool_name = "correct_consumed_meal"
+                        tool_args = _fused_part_args
+
+                if tool_name == "correct_consumed_meal":
+                    _adjusted_fusion = _ajustar_args_fusion_correct_consumed_meal(
+                        _trusted_uid, tool_args, state.get("messages") or [], state.get("turn_plate_photos") or []
+                    )
+                    if _adjusted_fusion is not None:
+                        logger.info(
+                            f"🔗 [PART-OF-MEAL-ADJUST] Ajustando fusión sobre comida correcta "
+                            f"{_adjusted_fusion['meal_id']} ('{_adjusted_fusion['meal_name']}', {_adjusted_fusion['calories']} kcal)"
+                        )
+                        tool_args = _adjusted_fusion
                 if tool_name == "log_consumed_meal" and _repeat_confirmed:
                     tool_args["force"] = True
                 if (tool_name in ("log_consumed_meal", "correct_consumed_meal") and tool_args.get("force")
@@ -5316,6 +5354,12 @@ def execute_tools(state: ChatState):
                     "pudo completar ahora y que lo intente de nuevo en un momento."
                 )
 
+            if tool_name == "correct_consumed_meal" and "[ID_REGISTRO_DIARIO:" in str(tool_result):
+                for match in re.finditer(r"\[ID_REGISTRO_DIARIO:\s*([a-zA-Z0-9_\-]+)", str(tool_result), re.IGNORECASE):
+                    cid = match.group(1)
+                    if cid and cid not in diary_corrected_meal_ids:
+                        diary_corrected_meal_ids.append(cid)
+
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
             
     return {
@@ -5337,6 +5381,7 @@ def execute_tools(state: ChatState):
         # SSE `done` lo emite; AgentPage.jsx merge a localStorage.
         "pantry_depleted_items": pantry_depleted_items if pantry_depleted_items else None,
         "ajustes_de_app": ajustes_de_app or None,
+        "diary_corrected_meal_ids": diary_corrected_meal_ids,
     }
 
 # ============================================================
@@ -5517,6 +5562,181 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
         return out
     except Exception:
         return None
+
+
+def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
+    """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Detecta si el usuario indica que la comida/foto
+    fue parte de un slot de comida existente (ej. 'fue parte del almuerzo', 'agrégalo al desayuno').
+    Retorna el slot canon: 'desayuno', 'almuerzo', 'cena', 'merienda', o None."""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            c = msg.content
+            t = (c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict))).lower()
+            phrases = (
+                "parte de", "parte del", "parte de la", "agrega al", "agrega a la",
+                "agrégalo al", "agregalo al", "agrégalo a la", "agregalo a la",
+                "añade al", "añade a la", "añádelo al", "añadelo al", "añádelo a la", "añadelo a la",
+                "sumar al", "súmalo al", "sumalo al", "sumar a la", "súmalo a la", "sumalo a la",
+                "junto con el", "junto con la", "con el almuerzo", "con el desayuno", "con la cena",
+                "se me quedó del", "se me quedo del", "se me quedó de la", "se me quedo de la",
+                "se me olvidó del", "se me olvido del", "se me olvidó de la", "se me olvido de la",
+                "se me olvidó en el", "se me olvido en el", "se me olvidó en la", "se me olvido en la",
+                "también comí en el", "tambien comi en el", "también comí en la", "tambien comi en la",
+                "lo comí en el", "lo comi en el", "lo comí en la", "lo comi en la",
+            )
+            if not any(w in t for w in phrases):
+                return None
+            if "almuerzo" in t:
+                return "almuerzo"
+            if "desayuno" in t:
+                return "desayuno"
+            if "cena" in t:
+                return "cena"
+            if "merienda" in t or "snack" in t:
+                return "merienda"
+            return None
+    return None
+
+
+def _buscar_comida_previa_del_slot(user_id: str, slot: str) -> Optional[dict]:
+    """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Busca la comida registrada más reciente de hoy en el slot indicado."""
+    try:
+        from db_facts import get_consumed_meals_today
+        today_meals = get_consumed_meals_today(user_id) or []
+        candidates = [m for m in today_meals if str(m.get("meal_type") or "").strip().lower() == slot]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda m: str(m.get("created_at") or ""), reverse=True)
+        return candidates[0]
+    except Exception as e:
+        logger.warning(f"Error buscando comida previa de {slot}: {e}")
+        return None
+
+
+def _intentar_fusionar_alimento_en_comida_existente(
+    user_id: str,
+    tool_args: dict,
+    messages: list,
+    plate_photos: Optional[list] = None
+) -> Optional[dict]:
+    """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una
+    comida ya registrada hoy y el LLM llamó a `log_consumed_meal`, fusiona en la fila existente
+    sumando calorías, macros, ingredientes y unificando fotos en `nutrition['attachment_ids']`."""
+    target_slot = _detectar_intencion_parte_de_comida(messages)
+    if not target_slot:
+        return None
+    orig = _buscar_comida_previa_del_slot(user_id, target_slot)
+    if not orig:
+        return None
+    
+    orig_id = str(orig.get("id"))
+    orig_name = str(orig.get("meal_name") or "").strip()
+    new_name = str(tool_args.get("meal_name") or "").strip()
+
+    clean_new = new_name
+    for prefix in ("1 ", "un ", "una ", "el ", "la "):
+        if clean_new.lower().startswith(prefix):
+            clean_new = clean_new[len(prefix):]
+            break
+    
+    if clean_new.lower() in orig_name.lower():
+        merged_name = orig_name
+    elif orig_name:
+        merged_name = f"{orig_name} y 1 {clean_new}" if not re.match(r"^\s*[0-9]", clean_new) else f"{orig_name} y {clean_new}"
+    else:
+        merged_name = new_name
+
+    orig_cal = int(orig.get("calories") or 0)
+    orig_prot = int(orig.get("protein") or 0)
+    orig_carbs = int(orig.get("carbs") or 0)
+    orig_fats = int(orig.get("healthy_fats") or 0)
+
+    add_cal = int(tool_args.get("calories") or 0)
+    add_prot = int(tool_args.get("protein") or 0)
+    add_carbs = int(tool_args.get("carbs") or 0)
+    add_fats = int(tool_args.get("healthy_fats") or 0)
+
+    if add_cal >= orig_cal and orig_cal > 0:
+        tot_cal, tot_prot, tot_carbs, tot_fats = add_cal, add_prot, add_carbs, add_fats
+    else:
+        tot_cal = orig_cal + add_cal
+        tot_prot = orig_prot + add_prot
+        tot_carbs = orig_carbs + add_carbs
+        tot_fats = orig_fats + add_fats
+
+    orig_ing = orig.get("ingredients") or []
+    if isinstance(orig_ing, str):
+        try:
+            orig_ing = json.loads(orig_ing)
+        except Exception:
+            orig_ing = [orig_ing]
+    if not isinstance(orig_ing, list):
+        orig_ing = []
+    new_ing = tool_args.get("ingredients") or []
+    if isinstance(new_ing, str):
+        try:
+            new_ing = json.loads(new_ing)
+        except Exception:
+            new_ing = [new_ing]
+    if not isinstance(new_ing, list):
+        new_ing = []
+    
+    merged_ingredients = list(orig_ing)
+    for item in new_ing:
+        if item and item not in merged_ingredients:
+            merged_ingredients.append(item)
+
+    existing_nutrition = orig.get("nutrition") or {}
+    if isinstance(existing_nutrition, str):
+        try:
+            existing_nutrition = json.loads(existing_nutrition)
+        except Exception:
+            existing_nutrition = {}
+    if not isinstance(existing_nutrition, dict):
+        existing_nutrition = {}
+    
+    att_ids = list(existing_nutrition.get("attachment_ids") or [])
+    if plate_photos:
+        for p in plate_photos:
+            a_id = p.get("attachment_id") if isinstance(p, dict) else getattr(p, "attachment_id", None)
+            if a_id and str(a_id) not in att_ids:
+                att_ids.append(str(a_id))
+
+    merged_nutrition = dict(existing_nutrition)
+    if att_ids:
+        merged_nutrition["attachment_ids"] = att_ids
+
+    return {
+        "user_id": user_id,
+        "meal_id": orig_id,
+        "meal_name": merged_name,
+        "calories": tot_cal,
+        "protein": tot_prot,
+        "carbs": tot_carbs,
+        "healthy_fats": tot_fats,
+        "meal_type": target_slot,
+        "ingredients": merged_ingredients,
+        "nutrition": merged_nutrition,
+    }
+
+
+def _ajustar_args_fusion_correct_consumed_meal(
+    user_id: str,
+    tool_args: dict,
+    messages: list,
+    plate_photos: Optional[list] = None
+) -> Optional[dict]:
+    """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una comida
+    y el LLM llamó a `correct_consumed_meal` (posiblemente con el meal_id equivocado o sin sumar),
+    redirige a la comida correcta de ese slot y asegura la suma de macros y la foto."""
+    target_slot = _detectar_intencion_parte_de_comida(messages)
+    if not target_slot:
+        return None
+    orig = _buscar_comida_previa_del_slot(user_id, target_slot)
+    if not orig:
+        return None
+    return _intentar_fusionar_alimento_en_comida_existente(user_id, tool_args, messages, plate_photos)
 
 
 def _days_ago_named_by_user(messages: list):
@@ -7757,6 +7977,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
         "modo_voz": False,            # [P1-PLAN-LOTE-686] el chat sin stream nunca es modo voz
         "ajustes_de_app": None,       # [P1-PLAN-LOTE-900] del turno
+        "diary_corrected_meal_ids": [],
         "photo_log_retried": False,
         "plate_photo_retried": False,
     }
@@ -8406,6 +8627,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "pantry_depleted_items": None,
         "ajustes_de_app": None,
         "diary_claim_retried": False,
+        "diary_corrected_meal_ids": [],
         # [P1-PLAN-LOTE-168] las fotos de plato de ESTE turno y el tope de su reintento
         "turn_plate_photos": _plate_photos_from_vision(vision),
         "plate_photo_retried": False,
@@ -8816,6 +9038,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # Default None — sin items agotados, frontend no toca localStorage.
     pantry_depleted_items = None
     ajustes_de_app = None   # [P1-PLAN-LOTE-900]
+    diary_corrected_meal_ids = []
 
     if final_state_snapshot and final_state_snapshot.values:
         updated_fields = final_state_snapshot.values.get("updated_fields", {})
@@ -8824,6 +9047,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         pantry_modified_at = final_state_snapshot.values.get("pantry_modified_at")
         pantry_depleted_items = final_state_snapshot.values.get("pantry_depleted_items")
         ajustes_de_app = final_state_snapshot.values.get("ajustes_de_app")
+        diary_corrected_meal_ids = final_state_snapshot.values.get("diary_corrected_meal_ids") or []
         final_messages = final_state_snapshot.values.get("messages", [])
         if final_messages:
             # [P1-CHAT-NARRATION-KEPT · 2026-07-28] Antes solo
@@ -8840,4 +9064,4 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
-    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"

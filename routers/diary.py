@@ -1869,7 +1869,19 @@ async def api_get_chat_photos(
 
     try:
         query = """
-            WITH matched AS (
+            WITH explicit_matched AS (
+                SELECT 
+                    cm.id AS meal_id,
+                    ca.id AS attachment_id,
+                    0.0 AS diff_sec
+                FROM chat_attachments ca
+                JOIN consumed_meals cm 
+                  ON cm.user_id = ca.user_id
+                 AND cm.nutrition IS NOT NULL
+                 AND (cm.nutrition->'attachment_ids') ? (ca.id::text)
+                WHERE ca.user_id = %s
+            ),
+            time_matched AS (
                 SELECT DISTINCT ON (ca.id)
                     cm.id AS meal_id,
                     ca.id AS attachment_id,
@@ -1882,13 +1894,16 @@ async def api_get_chat_photos(
                  AND cm.created_at <= ca.created_at + interval '2 hours'
                 WHERE ca.user_id = %s
                   AND ca.claimed_at IS NOT NULL
+                  AND ca.id NOT IN (SELECT attachment_id FROM explicit_matched)
                 ORDER BY ca.id, diff_sec ASC
             )
-            SELECT meal_id, attachment_id FROM matched
+            SELECT meal_id, attachment_id, diff_sec FROM explicit_matched
+            UNION ALL
+            SELECT meal_id, attachment_id, diff_sec FROM time_matched
             ORDER BY diff_sec ASC
             LIMIT 100
         """
-        rows = await asyncio.to_thread(execute_sql_query, query, (str(verified_user_id),), fetch_all=True)
+        rows = await asyncio.to_thread(execute_sql_query, query, (str(verified_user_id), str(verified_user_id)), fetch_all=True)
         if not rows:
             return {"photos": []}
 
