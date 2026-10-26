@@ -515,6 +515,36 @@ def _comida_ya_registrada(consumed, meal: str) -> bool:
     return False
 
 
+def _almuerzo_muy_reciente(consumed, ahora_utc, min_horas: float = 2.0) -> bool:
+    """¿El usuario registró el almuerzo hace menos de `min_horas` horas respecto a `ahora_utc`?
+    Evita disparar el recordatorio de Merienda ~1h después de haber almorzado tarde (ej. almuerzo a las 14:34 y
+    merienda a las 15:45); el aviso de Merienda espera a un tick posterior dentro de su ventana de reintento."""
+    if not consumed or not isinstance(ahora_utc, datetime):
+        return False
+    for m in consumed:
+        if not isinstance(m, dict):
+            continue
+        mt = str(m.get("meal_type") or "").lower()
+        mn = str(m.get("meal_name") or "").lower()
+        if "almuerzo" not in mt and "almuerzo" not in mn:
+            continue
+        ts = m.get("consumed_at")
+        if ts is None:
+            continue
+        try:
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if isinstance(ts, datetime):
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                delta_s = (ahora_utc - ts).total_seconds()
+                if 0 <= delta_s < min_horas * 3600.0:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def _local_hour_float_for_offset(now_utc, tz_offset_min) -> float:
     """[P1-NUDGE-TZ-PER-USER · 2026-08-21] Hora local del usuario como float (13.5 = 13:30).
 
@@ -1334,6 +1364,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 for cand in candidatas:
                     if _comida_ya_registrada(consumed, cand["meal"]):
                         logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {cand['meal']}. Todo ok.")
+                        continue
+                    if cand["meal"] == "Merienda" and _almuerzo_muy_reciente(consumed, _now_utc):
+                        logger.info(f"⏳ [CRON] Usuario {user_id}: almuerzo muy reciente (< 2h). Pospone Merienda al próximo tick.")
                         continue
                     elegida = cand
                     break

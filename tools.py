@@ -19,6 +19,7 @@ from db import (
     update_meal_plan_data, search_deep_memory as db_search_deep_memory,
     log_consumed_meal as db_log_consumed_meal,
     update_consumed_meal as db_update_consumed_meal,
+    delete_consumed_meal as db_delete_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
     get_latest_usable_meal_plan, user_tz_offset_min
 )
@@ -944,7 +945,7 @@ def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     try:
         from db import execute_sql_query as _esq_fd
         return _esq_fd(
-            "SELECT meal_name, meal_type, calories, protein, carbs, healthy_fats, consumed_at, inventory_synced_at "
+            "SELECT meal_type, consumed_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats "
             "FROM consumed_meals WHERE id = %s AND user_id = %s",
             (meal_id, user_id), fetch_one=True,
         ) or None
@@ -1557,31 +1558,44 @@ def correct_consumed_meal(
     force: bool = False,
     food_facts: FoodLabel = None,
     label_servings: float = None,
+    delete: bool = False,
 ) -> str:
     """
-    Corrige EN SITIO una comida que YA está en el diario del usuario porque
-    quedó mal registrada (día equivocado, comida equivocada, macros
-    equivocados). Es un UPDATE sobre la MISMA fila — NUNCA crea una fila
-    nueva, así que NUNCA duplica el conteo calórico.
+    Corrige EN SITIO o ELIMINA una comida que YA está en el diario del usuario
+    porque quedó mal registrada (día equivocado, comida equivocada, macros
+    equivocados) o porque el usuario pide borrarla («bórralo», «elimínalo»,
+    «era un ejemplo, no me comí eso»). Es un UPDATE o DELETE sobre la MISMA
+    fila — NUNCA crea una fila nueva, así que NUNCA duplica el conteo calórico.
     - meal_id: OBLIGATORIO. El 'ID_REGISTRO_DIARIO' EXACTO que recibiste en
       el ToolMessage de la llamada a `log_consumed_meal` (o de una
       corrección previa) que registró esa comida, DENTRO DE ESTA MISMA
       CONVERSACIÓN. NUNCA inventes ni adivines un id — si no lo tienes en tu
       contexto, pregúntale al usuario a cuál comida se refiere en vez de
       llamar esta herramienta a ciegas.
+    - delete: Pasa `delete=True` cuando el usuario diga que NO se comió ese
+      plato («era un ejemplo», «no me comí eso») o te pida explícitamente
+      borrarlo/eliminarlo/quitarlo del diario. Con `delete=True` solo necesitas
+      `user_id`, `meal_id` y `delete=True`.
     - Pasa SOLO los campos que hay que cambiar (deja el resto en None/sin
-      mencionar) — no hace falta reenviar lo que ya estaba bien.
+      mencionar) — no hace falta reenviar lo que ya estaba bien. PERO si el
+      usuario aclara ingredientes, preparación o estilo culinario que cambia
+      el aporte nutricional (ej. «tiene cosas como de chofán», «llevaba queso
+      o jamón», «era frito», «con más aceite/salsa»), RECALCULA y pasa SIEMPRE
+      `calories`, `protein`, `carbs`, `healthy_fats` e `ingredients`
+      actualizados junto con `meal_name` (infiriendo los ingredientes típicos
+      de ese estilo/foto sin dejar los macros anteriores intactos ni pedirle
+      al usuario que enumere cada ingrediente).
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'.
       Pásalo SOLO si el usuario está corrigiendo A QUÉ COMIDA fue.
     - days_ago: 0=hoy, 1=ayer, 2=antier (máx 7). Pásalo SOLO si el usuario
       está corrigiendo A QUÉ DÍA fue. El día y la comida deben salir de lo
       que el USUARIO dijo explícitamente — NUNCA de qué estabas preguntando
       TÚ justo antes; si no está claro, pregunta primero.
-    - Si la corrección tiene éxito, dile al usuario en una frase qué quedó
-      corregido. Si la herramienta responde ERROR, NO digas que corregiste
-      nada — dile la verdad y pregúntale a cuál comida se refiere; usa
-      `log_consumed_meal` solo si de verdad es una comida DISTINTA que aún
-      no está registrada.
+    - Si la corrección o el borrado tiene éxito, dile al usuario en una frase
+      qué quedó corregido o eliminado. Si la herramienta responde ERROR, NO
+      digas que corregiste ni borraste nada — dile la verdad y pregúntale a
+      cuál comida se refiere; usa `log_consumed_meal` solo si de verdad es
+      una comida DISTINTA que aún no está registrada.
     - Mover la comida a otro día conserva su hora. Otros registros del mismo
       tipo/día no impiden corregir esta fila; desayuno/almuerzo/cena admiten varias filas.
     - ingredients: si cambian, la Nevera se ajusta (devuelve lo anterior y
@@ -1607,7 +1621,7 @@ def correct_consumed_meal(
     logger.debug(
         f"🔧 [TOOL EXECUTION] Corrigiendo comida consumida user={user_id} "
         f"meal_id={meal_id!r} meal_name={meal_name!r} meal_type={meal_type!r} "
-        f"days_ago={days_ago!r}"
+        f"days_ago={days_ago!r} delete={delete!r}"
     )
 
     if not meal_id or not str(meal_id).strip():
@@ -1616,6 +1630,32 @@ def correct_consumed_meal(
             "corregir una comida que TÚ mismo registraste en esta conversación con "
             "`log_consumed_meal` (o una corrección previa) — usa el "
             "ID_REGISTRO_DIARIO que esa llamada te devolvió, nunca lo inventes."
+        )
+
+    _mid = str(meal_id).strip()
+    _fila = _leer_fila_diario(user_id, _mid)
+
+    if delete:
+        _orig_name = str((_fila or {}).get("meal_name") or "").strip()
+        _dias_fila = _dias_atras_de_fila(user_id, (_fila or {}).get("consumed_at"))
+        _rev = {}
+        try:
+            import db_inventory
+            _rev = db_inventory.revert_consumption_events(user_id, _mid) or {}
+        except Exception:
+            logger.exception("[correct_consumed_meal] revert_consumption_events falló al eliminar meal_id=%s", _mid)
+        if db_delete_consumed_meal(user_id, _mid):
+            _nota_nevera_del = ""
+            if nevera_activa(user_id) and isinstance(_rev, dict) and (_rev.get("reverted") or []):
+                _nota_nevera_del = f" Nevera ajustada: se devolvió lo descontado ({len(_rev.get('reverted') or [])} ítem(s))."
+            _nota_total = _nota_total_del_dia(user_id, _dias_fila if _dias_fila is not None else 0)
+            _etiqueta = f"'{_orig_name}'" if _orig_name else f"el registro {_mid}"
+            return f"¡Eliminado! Borré {_etiqueta} del diario.{_nota_nevera_del}{_nota_total}"
+        return (
+            "ERROR: no encontré esa fila del diario para eliminar (puede que el id "
+            "no exista, ya haya sido borrada, o no sea de este usuario). NO digas que "
+            "la borraste — dile la verdad al usuario y que si aún la ve puede quitarla "
+            "con «Deshacer registro»."
         )
 
     # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Tipo de comida multi-idioma. Lo que NO se reconoce se
@@ -1634,9 +1674,6 @@ def correct_consumed_meal(
         return f"ERROR: {_err_macros} No se corrigió nada; confirma el valor con el usuario."
     calories, protein, carbs, healthy_fats = (
         _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
-
-    _mid = str(meal_id).strip()
-    _fila = _leer_fila_diario(user_id, _mid)
 
     # [P1-SUPPLEMENT-DIARY-GUARD · 2026-10-20] Guard bidireccional comida ↔ suplemento:
     # 1. Un suplemento NUNCA debe convertirse en una comida regular ni ser sobreescrito

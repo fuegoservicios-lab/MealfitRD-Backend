@@ -516,6 +516,20 @@ def test_corregir_ingredientes_sin_rastro_no_toca_la_nevera_y_lo_dice(diario):
     assert "NO se ajustó" in out
 
 
+def test_borrar_registro_con_delete_true_revierte_nevera_y_elimina_fila(diario, monkeypatch):
+    import tools
+    borrados = []
+    monkeypatch.setattr(tools, "db_delete_consumed_meal", lambda uid, mid: borrados.append((uid, mid)) or True)
+    diario["fila"] = {"meal_name": "2 huevos con pan", "meal_type": "desayuno",
+                      "consumed_at": _hace(0, 8, 30), "inventory_synced_at": datetime.now(timezone.utc)}
+    out = _corregir(delete=True)
+    assert out.startswith("¡Eliminado!")
+    assert "2 huevos con pan" in out
+    assert diario["reverts"] == ["m1"]
+    assert borrados == [(_UID, "m1")]
+    assert diario["updates"] == []
+
+
 # ══════════════════════════════ 7. suggest_foods_for_nutrient ══════════════════════════════
 
 def test_perfil_ilegible_no_se_presenta_como_sin_alergias(monkeypatch):
