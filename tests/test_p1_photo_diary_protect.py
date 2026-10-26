@@ -145,8 +145,25 @@ def test_fusion_intent_detection():
     assert _detectar_intencion_parte_de_comida([HumanMessage(content="esto fue parte de la cena")]) == "cena"
     assert _detectar_intencion_parte_de_comida([HumanMessage(content="se me quedó del almuerzo")]) == "almuerzo"
     assert _detectar_intencion_parte_de_comida([HumanMessage(content="lo comí junto con el almuerzo")]) == "almuerzo"
+    assert _detectar_intencion_parte_de_comida([HumanMessage(content="Me comí otro guineo más en el almuerzo")]) == "almuerzo"
     assert _detectar_intencion_parte_de_comida([HumanMessage(content="Hola qué tal")]) is None
     assert _detectar_intencion_parte_de_comida([HumanMessage(content="Quiero comer pollo para el almuerzo")]) is None
+
+
+def test_sumar_unidades_nombre():
+    from agent import _sumar_unidades_nombre
+    # 1 banana + 1 banana -> 2 bananas
+    res = _sumar_unidades_nombre("Arroz blanco con habichuelas rojas, pollo frito y 1 guineo maduro", "1 guineo maduro")
+    assert "2 guineos maduros" in res
+    assert "1 guineo maduro y 1 guineo maduro" not in res
+
+    # 2 tostadas + 1 tostada -> 3 tostadas
+    res2 = _sumar_unidades_nombre("Huevos revueltos y 2 tostadas", "1 tostada")
+    assert "3 tostadas" in res2
+
+    # Different item -> joins with "y"
+    res3 = _sumar_unidades_nombre("Arroz con pollo", "1 manzana")
+    assert res3 == "Arroz con pollo y 1 manzana"
 
 
 def test_fusion_into_existing_meal_slot(monkeypatch):
