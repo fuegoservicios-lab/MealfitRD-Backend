@@ -172,7 +172,7 @@ def instruccion(vision) -> str:
         cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
     else:
         cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: recalcula y ajusta sobre la «Estimación» del PLATO COMPLETO "
-                  "incorporando el alimento, proteína o porción indicado (ej. salmón en lugar de pollo, más porción, etc.), "
+                  "incorporando el alimento, proteína o porción indicado (ej. salmón en lugar de pollo, más porción, o ×2 si dijo «me comí otro aparte de eso» / «otro igual»), "
                   "pero JAMÁS descartes el resto del plato visible (arroz, ensalada, etc.) para registrar solo ese ingrediente")
 
     extra_carne = ""
@@ -412,6 +412,16 @@ NOTA_REINTENTO = (
 )
 
 
+_RE_PORCION_EXTRA_FOTO = re.compile(
+    r"\b(?:otro\s+aparte|otra\s+aparte|otro\s+igual|otra\s+igual|otro\s+mas|otra\s+mas|"
+    r"me\s+comi\s+otro|me\s+comi\s+otra|fueron\s+(?:dos|2|tres|3)|(?:dos|2|tres|3)\s+de\s+es(?:o|os|e|a|as|to|tos))\b"
+)
+
+
+def _prompt_indica_porcion_extra(prompt) -> bool:
+    return bool(_RE_PORCION_EXTRA_FOTO.search(_plano(prompt)))
+
+
 def marcar_rotulo(vision, prompt):
     """El `vision` con `rotulo` cuando el texto del turno es el rótulo de una foto de plato (y no hay respuestas: con
     ellas manda su propia regla). Sin rótulo, el MISMO objeto."""
@@ -423,8 +433,10 @@ def marcar_rotulo(vision, prompt):
         if ans:
             _extraida_del_prompt = True
             vision = dict(vision, respuestas=ans)
-            if es_respuesta_supuesto(vision, ans):
+            if es_respuesta_supuesto(vision, ans) and not _prompt_indica_porcion_extra(prompt):
                 vision["_ajuste_aplicado"] = True
+    elif _prompt_indica_porcion_extra(prompt):
+        vision = dict(vision, _ajuste_aplicado=False)
     if not foto_para_anotar(vision, prompt):
         return vision
     if respuestas_de(vision):

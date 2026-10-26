@@ -1543,6 +1543,98 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 # genérico de `execute_tools` (agent.py) la cubre automáticamente, igual que
 # a `log_consumed_meal`. Ver entry #13 en
 # `backend/docs/agent_tools_user_id_table.md`.
+def _ejecutar_borrado_diario(user_id: str, _mid: str, _fila: Optional[dict]) -> str:
+    _orig_name = str((_fila or {}).get("meal_name") or "").strip()
+    _dias_fila = _dias_atras_de_fila(user_id, (_fila or {}).get("consumed_at"))
+    _rev = {}
+    try:
+        import db_inventory
+        _rev = db_inventory.revert_consumption_events(user_id, _mid) or {}
+    except Exception:
+        logger.exception("[correct_consumed_meal] revert_consumption_events falló al eliminar meal_id=%s", _mid)
+    if db_delete_consumed_meal(user_id, _mid):
+        _nota_nevera_del = ""
+        if nevera_activa(user_id) and isinstance(_rev, dict) and (_rev.get("reverted") or []):
+            _nota_nevera_del = f" Nevera ajustada: se devolvió lo descontado ({len(_rev.get('reverted') or [])} ítem(s))."
+        _nota_total = _nota_total_del_dia(user_id, _dias_fila if _dias_fila is not None else 0)
+        _etiqueta = f"'{_orig_name}'" if _orig_name else f"el registro {_mid}"
+        return f"¡Eliminado! Borré {_etiqueta} del diario.{_nota_nevera_del}{_nota_total}"
+    return (
+        "ERROR: no encontré esa fila del diario para eliminar (puede que el id "
+        "no exista, ya haya sido borrada, o no sea de este usuario). NO digas que "
+        "la borraste — dile la verdad al usuario y que si aún la ve puede quitarla "
+        "con «Deshacer registro»."
+    )
+
+
+def _verificar_guard_suplemento_correccion(
+    user_id: str, meal_id: str, _fila: Optional[dict], meal_name: Optional[str],
+    _meal_type: Optional[str], ingredients: Optional[list[str]], calories: Optional[int],
+) -> Optional[str]:
+    # [P1-SUPPLEMENT-DIARY-GUARD · 2026-10-20] Guard bidireccional comida ↔ suplemento
+    if _fila is None:
+        return None
+    _orig_type = (_fila.get("meal_type") or "").strip().lower()
+    _orig_name = str(_fila.get("meal_name") or "").strip()
+    _norm_orig_name = _norm_txt(_orig_name)
+    _norm_new_name = _norm_txt(meal_name or "")
+    _es_suplemento_orig = (
+        _orig_type == "suplemento"
+        or any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS)
+    )
+    if _es_suplemento_orig:
+        _intenta_cambiar_a_comida = False
+        _motivo = ""
+        if _meal_type in ("desayuno", "almuerzo", "cena", "merienda", "snack"):
+            _intenta_cambiar_a_comida = True
+            _motivo = f"el nuevo tipo de comida es '{_meal_type}'"
+        elif meal_name is not None and not any(kw in _norm_new_name for kw in _SUPPLEMENT_KEYWORDS):
+            _intenta_cambiar_a_comida = True
+            _motivo = f"el nuevo plato ('{meal_name}') es comida real y no un suplemento"
+        elif ingredients is not None and len(ingredients) > 0 and not any(
+            kw in _norm_txt(" ".join(ingredients)) for kw in _SUPPLEMENT_KEYWORDS
+        ):
+            _intenta_cambiar_a_comida = True
+            _motivo = "los ingredientes corresponden a comida y no a un suplemento"
+        elif calories is not None and calories > 100 and any(
+            kw in _norm_orig_name for kw in ("creatina", "creatine", "vitamina", "vitamin", "magnesio", "zinc", "melatonina")
+        ):
+            _intenta_cambiar_a_comida = True
+            _motivo = f"un suplemento no calórico como '{_orig_name}' no aporta {calories} kcal"
+        if _intenta_cambiar_a_comida:
+            logger.warning(
+                f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir suplemento {meal_id} ('{_orig_name}') "
+                f"con comida ('{meal_name}', tipo='{_meal_type}') para user={user_id}. RECHAZADO."
+            )
+            return (
+                f"RECHAZADO: El registro {meal_id} corresponde a un SUPLEMENTO ('{_orig_name}', tipo='{_orig_type or 'suplemento'}'), "
+                f"NO a un plato de comida. Una comida o foto nueva ({_motivo}) NUNCA debe sobreescribir ni reemplazar un "
+                f"suplemento en el diario. "
+                f"Para registrar esta comida, DEBES llamar a `log_consumed_meal` como un registro nuevo "
+                f"(con su propio meal_type y macros) sin alterar el suplemento existente."
+            )
+    if _orig_type in ("desayuno", "almuerzo", "cena"):
+        _intenta_cambiar_a_supl = (
+            _meal_type == "suplemento"
+            or (
+                meal_name is not None
+                and any(kw in _norm_new_name for kw in _SUPPLEMENT_KEYWORDS)
+                and not any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS)
+            )
+        )
+        if _intenta_cambiar_a_supl:
+            logger.warning(
+                f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir comida principal {meal_id} ('{_orig_name}', tipo='{_orig_type}') "
+                f"con suplemento ('{meal_name}', tipo='{_meal_type}') para user={user_id}. RECHAZADO."
+            )
+            return (
+                f"RECHAZADO: El registro {meal_id} corresponde a una comida principal ('{_orig_name}', tipo='{_orig_type}'). "
+                f"Un suplemento NUNCA debe sobreescribir una comida existente en el diario. "
+                f"Para registrar el suplemento, llama a `log_consumed_meal` con `meal_type='suplemento'` como un registro nuevo."
+            )
+    return None
+
+
 @tool
 def correct_consumed_meal(
     user_id: str,
@@ -1636,27 +1728,7 @@ def correct_consumed_meal(
     _fila = _leer_fila_diario(user_id, _mid)
 
     if delete:
-        _orig_name = str((_fila or {}).get("meal_name") or "").strip()
-        _dias_fila = _dias_atras_de_fila(user_id, (_fila or {}).get("consumed_at"))
-        _rev = {}
-        try:
-            import db_inventory
-            _rev = db_inventory.revert_consumption_events(user_id, _mid) or {}
-        except Exception:
-            logger.exception("[correct_consumed_meal] revert_consumption_events falló al eliminar meal_id=%s", _mid)
-        if db_delete_consumed_meal(user_id, _mid):
-            _nota_nevera_del = ""
-            if nevera_activa(user_id) and isinstance(_rev, dict) and (_rev.get("reverted") or []):
-                _nota_nevera_del = f" Nevera ajustada: se devolvió lo descontado ({len(_rev.get('reverted') or [])} ítem(s))."
-            _nota_total = _nota_total_del_dia(user_id, _dias_fila if _dias_fila is not None else 0)
-            _etiqueta = f"'{_orig_name}'" if _orig_name else f"el registro {_mid}"
-            return f"¡Eliminado! Borré {_etiqueta} del diario.{_nota_nevera_del}{_nota_total}"
-        return (
-            "ERROR: no encontré esa fila del diario para eliminar (puede que el id "
-            "no exista, ya haya sido borrada, o no sea de este usuario). NO digas que "
-            "la borraste — dile la verdad al usuario y que si aún la ve puede quitarla "
-            "con «Deshacer registro»."
-        )
+        return _ejecutar_borrado_diario(user_id, _mid, _fila)
 
     # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Tipo de comida multi-idioma. Lo que NO se reconoce se
     # RECHAZA: en una corrección, caer a «snack» sería reescribir la fila con un dato inventado.
@@ -1675,75 +1747,11 @@ def correct_consumed_meal(
     calories, protein, carbs, healthy_fats = (
         _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
 
-    # [P1-SUPPLEMENT-DIARY-GUARD · 2026-10-20] Guard bidireccional comida ↔ suplemento:
-    # 1. Un suplemento NUNCA debe convertirse en una comida regular ni ser sobreescrito
-    #    por un plato nuevo (ej. arroz con carne «Res») enviado después por foto o texto.
-    # 2. Una comida principal NUNCA debe ser sobreescrita por un suplemento.
-    if _fila is not None:
-        _orig_type = (_fila.get("meal_type") or "").strip().lower()
-        _orig_name = str(_fila.get("meal_name") or "").strip()
-        _norm_orig_name = _norm_txt(_orig_name)
-        _norm_new_name = _norm_txt(meal_name or "")
-
-        _es_suplemento_orig = (
-            _orig_type == "suplemento"
-            or any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS)
-        )
-
-        if _es_suplemento_orig:
-            _intenta_cambiar_a_comida = False
-            _motivo = ""
-
-            if _meal_type in ("desayuno", "almuerzo", "cena", "merienda", "snack"):
-                _intenta_cambiar_a_comida = True
-                _motivo = f"el nuevo tipo de comida es '{_meal_type}'"
-            elif meal_name is not None and not any(kw in _norm_new_name for kw in _SUPPLEMENT_KEYWORDS):
-                _intenta_cambiar_a_comida = True
-                _motivo = f"el nuevo plato ('{meal_name}') es comida real y no un suplemento"
-            elif ingredients is not None and len(ingredients) > 0 and not any(
-                kw in _norm_txt(" ".join(ingredients)) for kw in _SUPPLEMENT_KEYWORDS
-            ):
-                _intenta_cambiar_a_comida = True
-                _motivo = "los ingredientes corresponden a comida y no a un suplemento"
-            elif calories is not None and calories > 100 and any(
-                kw in _norm_orig_name for kw in ("creatina", "creatine", "vitamina", "vitamin", "magnesio", "zinc", "melatonina")
-            ):
-                _intenta_cambiar_a_comida = True
-                _motivo = f"un suplemento no calórico como '{_orig_name}' no aporta {calories} kcal"
-
-            if _intenta_cambiar_a_comida:
-                logger.warning(
-                    f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir suplemento {meal_id} ('{_orig_name}') "
-                    f"con comida ('{meal_name}', tipo='{_meal_type}') para user={user_id}. RECHAZADO."
-                )
-                return (
-                    f"RECHAZADO: El registro {meal_id} corresponde a un SUPLEMENTO ('{_orig_name}', tipo='{_orig_type or 'suplemento'}'), "
-                    f"NO a un plato de comida. Una comida o foto nueva ({_motivo}) NUNCA debe sobreescribir ni reemplazar un "
-                    f"suplemento en el diario. "
-                    f"Para registrar esta comida, DEBES llamar a `log_consumed_meal` como un registro nuevo "
-                    f"(con su propio meal_type y macros) sin alterar el suplemento existente."
-                )
-
-        _es_comida_orig = _orig_type in ("desayuno", "almuerzo", "cena")
-        if _es_comida_orig:
-            _intenta_cambiar_a_supl = False
-            if _meal_type == "suplemento":
-                _intenta_cambiar_a_supl = True
-            elif meal_name is not None and any(kw in _norm_new_name for kw in _SUPPLEMENT_KEYWORDS) and not any(
-                kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS
-            ):
-                _intenta_cambiar_a_supl = True
-
-            if _intenta_cambiar_a_supl:
-                logger.warning(
-                    f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir comida principal {meal_id} ('{_orig_name}', tipo='{_orig_type}') "
-                    f"con suplemento ('{meal_name}', tipo='{_meal_type}') para user={user_id}. RECHAZADO."
-                )
-                return (
-                    f"RECHAZADO: El registro {meal_id} corresponde a una comida principal ('{_orig_name}', tipo='{_orig_type}'). "
-                    f"Un suplemento NUNCA debe sobreescribir una comida existente en el diario. "
-                    f"Para registrar el suplemento, llama a `log_consumed_meal` con `meal_type='suplemento'` como un registro nuevo."
-                )
+    _err_guard_sup = _verificar_guard_suplemento_correccion(
+        user_id, meal_id, _fila, meal_name, _meal_type, ingredients, calories
+    )
+    if _err_guard_sup:
+        return _err_guard_sup
 
     def _tz_off() -> int:
         try:

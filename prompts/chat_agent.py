@@ -1169,7 +1169,13 @@ _PLATO_INSTRUCCION = (
     "registra el plato completo con el plátano, queso y los 2 huevos con las calorías del plato completo, JAMÁS descartes el resto para registrar solo 2 huevos hervidos). "
     "Si el usuario mencionó un solo ingrediente visible en la foto (ej. «2 huevos»), anota el plato completo con el análisis de la foto y di proactivamente: "
     "«Anoté tu [nombre del plato completo] (~X kcal, Y g proteína). Si solo te comiste los huevos y dejaste el resto del plato, avísame para ajustarlo.» "
-    "Solo registra una comida por texto como una comida APARTE si el usuario dice explícitamente que comió otra cosa fuera de la foto "
+    "CANTIDAD ADICIONAL DEL MISMO PLATO/UNIDAD («me comí otro aparte de eso/ese», «me comí otro igual», «me comí otro más», «fueron 2 de estos»): "
+    "si la foto muestra 1 unidad o porción (ej. 1 pan, 1 sándwich, 1 taco, 1 empanada) y el usuario dice en su mensaje que se comió OTRO aparte del de la foto "
+    "o indica una cantidad total mayor a la visible en la foto, significa que consumió EL DE LA FOTO + EL ADICIONAL (ej. 1 en la foto + «otro aparte de eso» = 2 unidades en total). "
+    "En ese caso, registra EL TOTAL CONSUMIDO en una sola llamada (ej. «2 panes de agua tostados con queso mozzarella») MULTIPLICANDO proporcionalmente "
+    "las calorías, proteína, carbohidratos, grasas e ingredientes del análisis por el número total de unidades consumidas (×2 si dijo «otro aparte de eso»), "
+    "y NUNCA lo anotes como 1 sola unidad ni como «una cena aparte». "
+    "Solo registra una comida por texto como una comida APARTE si el usuario dice explícitamente que comió un plato o alimento DISTINTO fuera de la foto "
     "(ej. «y después me comí una manzana»)."
 )
 # La regla de dudas va SOLO cuando el análisis trae dudas: una foto clara no paga ese texto en el prompt.
