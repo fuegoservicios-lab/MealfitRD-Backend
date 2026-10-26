@@ -5568,13 +5568,21 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
 
 def _sumar_unidades_nombre(orig_name: str, new_name: str) -> str:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el plato ya contiene el alimento (ej. '1 guineo maduro' y sumamos '1 guineo maduro'),
-    incrementa el contador (ej. '2 guineos maduros') en vez de repetir el nombre."""
+    incrementa el contador (ej. '2 guineos maduros') en vez de repetir el nombre. Si el modelo ya preparó el nombre
+    completo actualizado (comparte la base principal del plato), retorna directamente el nuevo nombre sin duplicar."""
     orig = str(orig_name or "").strip()
     new = str(new_name or "").strip()
     if not orig:
         return new
     if not new:
         return orig
+
+    # 1. Si new_name ya es una descripción completa del plato (comparte la base principal)
+    orig_words = set(w.lower() for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", orig))
+    new_words = set(w.lower() for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", new))
+    overlap = orig_words & new_words
+    if len(orig_words) >= 3 and len(overlap) / len(orig_words) >= 0.5:
+        return new
 
     clean_new = re.sub(r"^(?:1|un|una|otro|otra)\s+", "", new, flags=re.IGNORECASE).strip()
     primera_palabra = clean_new.split()[0].lower() if clean_new else ""
@@ -5607,6 +5615,53 @@ def _sumar_unidades_nombre(orig_name: str, new_name: str) -> str:
         return f"{partes[0]}, {partes[1]} y {clean_new_label}"
     else:
         return f"{orig} y {clean_new_label}"
+
+
+def _fusionar_ingredientes(orig_list: list, new_list: list) -> list:
+    """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Fusiona listas de ingredientes evitando duplicar líneas
+    del mismo alimento (ej. '2 guineos maduros medianos (≈238 g)' + '1 guineo maduro (≈120 g)' ->
+    '3 guineos maduros medianos (≈358 g)')."""
+    result = list(orig_list)
+    for new_item in (new_list or []):
+        if not new_item or not isinstance(new_item, str):
+            continue
+        clean_new = re.sub(r"^\d+\s*(?:piezas?|unidades?|porciones?)?\s*(?:de\s+)?", "", new_item, flags=re.IGNORECASE).strip()
+        clean_new = re.sub(r"\(.*?\)", "", clean_new).strip()
+        words = [w.lower() for w in clean_new.split() if len(w) >= 4]
+        
+        found = False
+        for i, existing in enumerate(result):
+            if not isinstance(existing, str):
+                continue
+            ex_clean = re.sub(r"^\d+\s*(?:piezas?|unidades?|porciones?)?\s*(?:de\s+)?", "", existing, flags=re.IGNORECASE).strip()
+            ex_clean = re.sub(r"\(.*?\)", "", ex_clean).strip()
+            
+            if words and any(w[:5] in ex_clean.lower() for w in words):
+                m1 = re.search(r"^(\d+)", existing)
+                m2 = re.search(r"^(\d+)", new_item)
+                c1 = int(m1.group(1)) if m1 else 1
+                c2 = int(m2.group(1)) if m2 else 1
+                tot_c = c1 + c2
+                
+                g1 = re.search(r"(\d+)\s*g\b", existing)
+                g2 = re.search(r"(\d+)\s*g\b", new_item)
+                tot_g = (int(g1.group(1)) if g1 else 0) + (int(g2.group(1)) if g2 else 0)
+                
+                base_noun = words[0] if words else "unidad"
+                plural_noun = base_noun if base_noun.endswith("s") else base_noun + "s"
+                
+                label = f"{tot_c} {plural_noun} maduros" if "maduro" in existing.lower() else f"{tot_c} {plural_noun}"
+                if "mediano" in existing.lower():
+                    label += " medianos"
+                if tot_g > 0:
+                    label += f" (≈{tot_g} g)"
+                
+                result[i] = label
+                found = True
+                break
+        if not found:
+            result.append(new_item)
+    return result
 
 
 def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
@@ -5751,10 +5806,7 @@ def _intentar_fusionar_alimento_en_comida_existente(
     if not isinstance(new_ing, list):
         new_ing = []
     
-    merged_ingredients = list(orig_ing)
-    for item in new_ing:
-        if item and item not in merged_ingredients:
-            merged_ingredients.append(item)
+    merged_ingredients = _fusionar_ingredientes(orig_ing, new_ing)
 
     existing_nutrition = orig.get("nutrition") or {}
     if isinstance(existing_nutrition, str):

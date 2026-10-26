@@ -151,7 +151,7 @@ def test_fusion_intent_detection():
 
 
 def test_sumar_unidades_nombre():
-    from agent import _sumar_unidades_nombre
+    from agent import _sumar_unidades_nombre, _fusionar_ingredientes
     # 1 banana + 1 banana -> 2 bananas
     res = _sumar_unidades_nombre("Arroz blanco con habichuelas rojas, pollo frito y 1 guineo maduro", "1 guineo maduro")
     assert "2 guineos maduros" in res
@@ -164,6 +164,27 @@ def test_sumar_unidades_nombre():
     # Different item -> joins with "y"
     res3 = _sumar_unidades_nombre("Arroz con pollo", "1 manzana")
     assert res3 == "Arroz con pollo y 1 manzana"
+
+    # Full meal title passed by model -> does NOT duplicate title
+    res4 = _sumar_unidades_nombre(
+        "Arroz blanco con habichuelas rojas, pollo frito y 2 guineos maduros",
+        "Arroz blanco con habichuelas rojas, pollo frito y 3 guineos maduros"
+    )
+    assert res4 == "Arroz blanco con habichuelas rojas, pollo frito y 3 guineos maduros"
+    assert "y 1 Arroz blanco" not in res4
+
+    # Fusionar ingredientes
+    orig_ing = [
+        "arroz blanco (≈150 g)",
+        "habichuelas rojas guisadas (≈100 g)",
+        "2 piezas de pollo frito (≈150 g)",
+        "2 guineos maduros medianos (≈238 g)"
+    ]
+    new_ing = ["1 guineo maduro (≈120 g)"]
+    fused_ing = _fusionar_ingredientes(orig_ing, new_ing)
+    assert len(fused_ing) == 4
+    assert any("3 guineos maduros" in item for item in fused_ing)
+    assert any("≈358 g" in item for item in fused_ing)
 
 
 def test_fusion_into_existing_meal_slot(monkeypatch):
