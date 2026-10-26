@@ -5569,7 +5569,7 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
 def _sumar_unidades_nombre(orig_name: str, new_name: str) -> str:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el plato ya contiene el alimento (ej. '1 guineo maduro' y sumamos '1 guineo maduro'),
     incrementa el contador (ej. '2 guineos maduros') en vez de repetir el nombre. Si el modelo ya preparó el nombre
-    completo actualizado (comparte la base principal del plato), retorna directamente el nuevo nombre sin duplicar."""
+    completo actualizado o es una extensión del plato existente, retorna directamente el nuevo nombre sin duplicar jamás."""
     orig = str(orig_name or "").strip()
     new = str(new_name or "").strip()
     if not orig:
@@ -5577,11 +5577,15 @@ def _sumar_unidades_nombre(orig_name: str, new_name: str) -> str:
     if not new:
         return orig
 
-    # 1. Si new_name ya es una descripción completa del plato (comparte la base principal)
+    # 1. Si uno contiene al otro por completo (ej. new es una extensión natural de orig)
+    if orig.lower() in new.lower():
+        return new
+
+    # 2. Si new_name comparte la base principal del plato (>= 50% de palabras clave)
     orig_words = set(w.lower() for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", orig))
     new_words = set(w.lower() for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", new))
     overlap = orig_words & new_words
-    if len(orig_words) >= 3 and len(overlap) / len(orig_words) >= 0.5:
+    if len(orig_words) >= 2 and (len(overlap) / len(orig_words) >= 0.5 or len(overlap) >= 3):
         return new
 
     clean_new = re.sub(r"^(?:1|un|una|otro|otra)\s+", "", new, flags=re.IGNORECASE).strip()
@@ -5609,7 +5613,12 @@ def _sumar_unidades_nombre(orig_name: str, new_name: str) -> str:
         elif clean_new.lower() in orig.lower():
             return orig
 
-    clean_new_label = f"1 {clean_new}" if not re.match(r"^\d", clean_new) else clean_new
+    # Formateo seguro para unir el nuevo item evitando anteponer '1' a platos compuestos
+    if re.match(r"^\d", clean_new) or len(clean_new.split()) > 2 or " con " in clean_new.lower():
+        clean_new_label = clean_new
+    else:
+        clean_new_label = f"1 {clean_new}"
+
     if " y " in orig:
         partes = orig.rsplit(" y ", 1)
         return f"{partes[0]}, {partes[1]} y {clean_new_label}"
