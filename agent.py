@@ -114,6 +114,7 @@ def _sanitize_chat_output_for_wire(text):
 #
 # Tooltip-anchor: P1-CHAT-UI-ACTION-INVENTORY.
 _UI_ACTION_TAG_RE = re.compile(r"\[UI_ACTION:\s*[A-Z_]+\]", re.IGNORECASE)
+_DIARY_ID_TAG_RE = re.compile(r"\[(?:id|ID_REGISTRO_DIARIO):\s*[^\]]+\]", re.IGNORECASE)
 
 
 def strip_ui_action_tags_for_persist(text):
@@ -123,6 +124,7 @@ def strip_ui_action_tags_for_persist(text):
     if not text or not isinstance(text, str):
         return text
     cleaned = _UI_ACTION_TAG_RE.sub("", text)
+    cleaned = _DIARY_ID_TAG_RE.sub("", cleaned)
     # Collapse blank lines surplus que pueden quedar tras strip.
     cleaned = re.sub(r"\n\s*\n\s*\n+", "\n\n", cleaned)
     return cleaned.strip()
@@ -4468,8 +4470,8 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     if not _env_bool("MEALFIT_CHAT_TOOL_GATING_ENABLED", True):
         return base_tools
 
-    # Si hay fotos o flags de foto, mantener todas
-    if state.get("turn_plate_photos") or state.get("turn_photo_to_log"):
+    # Si hay fotos, flags de foto, o modo voz, mantener todas las herramientas disponibles (poder total)
+    if state.get("turn_plate_photos") or state.get("turn_photo_to_log") or state.get("modo_voz"):
         return base_tools
 
     messages = state.get("messages", [])
@@ -4505,15 +4507,15 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
         needed.update({"analizar_suplemento", "guardar_suplemento"})
     if any(k in last_user_text for k in ("comprar", "supermercado", "compra", "lista", "colmado", "bravo", "sirena", "nacional", "precio")):
         needed.update({"check_shopping_list", "mark_shopping_list_purchased"})
-    if any(k in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel")):
+    if any(k in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel", "bota", "bote", "daño", "acabo", "gast", "compre", "quedan", "falta")):
         needed.update({"check_current_pantry", "modify_pantry_inventory"})
-    if any(k in last_user_text for k in ("ajuste", "notificac", "recordatorio", "configura", "pantalla", "abrir", "modo oscuro", "idioma")):
+    if any(k in last_user_text for k in ("ajuste", "notificac", "recordatorio", "configura", "pantalla", "abrir", "modo oscuro", "idioma", "tema", "activar", "desactivar", "navegar", "ir a", "mostrar")):
         needed.update({"cambiar_ajuste_de_la_app", "abrir_pantalla_de_la_app"})
     if any(k in last_user_text for k in ("nutriente", "hierro", "potasio", "magnesio", "calcio", "zinc", "vitamina")):
         needed.update({"suggest_foods_for_nutrient"})
     if any(k in last_user_text for k in ("alergia", "medico", "clinico", "enfermedad", "diagnost", "intoleranc")):
         needed.update({"check_clinical_profile"})
-    if any(k in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil")):
+    if any(k in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil", "peso", "pese", "libras", "kilos", "kg", "lb")):
         needed.update({"update_form_field"})
     if any(k in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):
         needed.update({"buscar_etiqueta_en_internet"})
@@ -7559,7 +7561,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
-                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)"
+                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)" + (f" [id: {m.get('id')}]" if m.get('id') else "")
                     for m in consumed_today
                 ])
                 
@@ -8213,7 +8215,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
-                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)"
+                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)" + (f" [id: {m.get('id')}]" if m.get('id') else "")
                     for m in consumed_today
                 ])
                 

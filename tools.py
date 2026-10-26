@@ -945,13 +945,133 @@ def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     try:
         from db import execute_sql_query as _esq_fd
         return _esq_fd(
-            "SELECT meal_type, consumed_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats "
+            "SELECT id, meal_type, consumed_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats "
             "FROM consumed_meals WHERE id = %s AND user_id = %s",
             (meal_id, user_id), fetch_one=True,
         ) or None
     except Exception as _e_fd:
         logger.warning(f"[P1-CHAT-TOOLS-AUDIT] lectura de la fila del diario falló: {type(_e_fd).__name__}")
         return None
+
+
+def _resolver_fila_diario_flexible(
+    user_id: str,
+    meal_id: Optional[str] = None,
+    meal_name: Optional[str] = None,
+    meal_type: Optional[str] = None,
+    days_ago: Optional[int] = None,
+) -> tuple[Optional[str], Optional[dict]]:
+    """Busca y resuelve una fila de `consumed_meals` de forma flexible.
+
+    Permite corregir o eliminar comidas cuando el LLM no tiene el UUID exacto
+    (ej: en modo voz, o si el usuario dice «elimina el desayuno», «bórralo», «borra la cena»,
+    «era un ejemplo, no me comí eso», o pasa meal_id='ultimo').
+    """
+    _mid = str(meal_id or "").strip()
+
+    # 1. Si meal_id parece un UUID o prefijo
+    if _mid and len(_mid) >= 6:
+        f = _leer_fila_diario(user_id, _mid)
+        if f:
+            return (_mid, f)
+
+    # 2. Obtener comidas candidatas recientes
+    from datetime import datetime, timezone, timedelta
+    from db_facts import get_consumed_meals_today, get_consumed_meals_since
+    candidates: list[dict] = []
+    try:
+        if days_ago is not None and days_ago > 0:
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=max(days_ago + 1, 3))).isoformat()
+            candidates = get_consumed_meals_since(user_id, since_iso_date=since_iso) or []
+        else:
+            candidates = get_consumed_meals_today(user_id) or []
+            if not candidates:
+                since_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+                candidates = get_consumed_meals_since(user_id, since_iso_date=since_iso) or []
+    except Exception as e_cand:
+        logger.warning(f"[_resolver_fila_diario_flexible] no se pudieron obtener comidas: {e_cand}")
+
+    if not candidates:
+        return (None, None)
+
+    def _sort_key(c):
+        return str(c.get("consumed_at") or c.get("id") or "")
+    candidates.sort(key=_sort_key, reverse=True)
+
+    norm_mid = _norm_txt(_mid)
+    norm_mname = _norm_txt(meal_name or "")
+    norm_mtype = _norm_txt(meal_type or "")
+
+    ultimas_palabras = {
+        "ultimo", "ultima", "el ultimo", "la ultima", "reciente", "last",
+        "ese", "eso", "el anterior", "la anterior", "borralo", "eliminalo"
+    }
+
+    # 3. Si coincide con un UUID completo o prefijo en candidates
+    if _mid:
+        for c in candidates:
+            cid = str(c.get("id") or "")
+            if cid == _mid or (len(_mid) >= 6 and cid.startswith(_mid)):
+                return (cid, c)
+
+    # 4. Si el usuario se refiere a la última comida o no especificó nada
+    es_ultimo = (
+        norm_mid in ultimas_palabras
+        or norm_mname in ultimas_palabras
+        or (not _mid and not meal_name and not meal_type)
+        or (norm_mid == "" and norm_mname == "" and norm_mtype == "")
+    )
+    if es_ultimo and candidates:
+        elegida = candidates[0]
+        return (str(elegida.get("id")), elegida)
+
+    # 5. Coincidencia por tokens significativos de comida
+    stopwords = {
+        "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+        "con", "y", "en", "por", "para", "mi", "mis", "plato", "comida",
+        "registro", "desayuno", "almuerzo", "cena", "merienda", "snack"
+    }
+    tokens_buscar = set()
+    for fuente in (norm_mname, norm_mid):
+        if fuente and fuente not in ultimas_palabras:
+            for tok in fuente.split():
+                if len(tok) >= 3 and tok not in stopwords:
+                    tokens_buscar.add(tok)
+
+    if tokens_buscar:
+        mejor_cand = None
+        max_matches = 0
+        for c in candidates:
+            c_name_norm = _norm_txt(c.get("meal_name") or "")
+            c_tokens = set(c_name_norm.split())
+            matches = len(tokens_buscar.intersection(c_tokens))
+            if any(tok in c_name_norm for tok in tokens_buscar):
+                matches += 1
+            if matches > max_matches:
+                max_matches = matches
+                mejor_cand = c
+        if mejor_cand and max_matches > 0:
+            return (str(mejor_cand.get("id")), mejor_cand)
+
+    # 6. Si coincide con un meal_type (desayuno, almuerzo, cena, merienda, snack)
+    target_slot = None
+    if _resolver_meal_type(norm_mtype):
+        target_slot = _resolver_meal_type(norm_mtype)
+    elif _resolver_meal_type(norm_mid):
+        target_slot = _resolver_meal_type(norm_mid)
+    elif _resolver_meal_type(norm_mname):
+        target_slot = _resolver_meal_type(norm_mname)
+
+    if target_slot:
+        for c in candidates:
+            if (c.get("meal_type") or "").strip().lower() == target_slot:
+                return (str(c.get("id")), c)
+
+    # 7. Si solo hay una comida candidata hoy
+    if len(candidates) == 1:
+        return (str(candidates[0].get("id")), candidates[0])
+
+    return (None, None)
 
 
 def _consumed_at_para_dia(original_at, days_ago: int, tz_off_min: int) -> str:
@@ -1638,7 +1758,7 @@ def _verificar_guard_suplemento_correccion(
 @tool
 def correct_consumed_meal(
     user_id: str,
-    meal_id: str,
+    meal_id: str = None,
     meal_name: str = None,
     calories: int = None,
     protein: int = None,
@@ -1658,16 +1778,14 @@ def correct_consumed_meal(
     equivocados) o porque el usuario pide borrarla («bórralo», «elimínalo»,
     «era un ejemplo, no me comí eso»). Es un UPDATE o DELETE sobre la MISMA
     fila — NUNCA crea una fila nueva, así que NUNCA duplica el conteo calórico.
-    - meal_id: OBLIGATORIO. El 'ID_REGISTRO_DIARIO' EXACTO que recibiste en
-      el ToolMessage de la llamada a `log_consumed_meal` (o de una
-      corrección previa) que registró esa comida, DENTRO DE ESTA MISMA
-      CONVERSACIÓN. NUNCA inventes ni adivines un id — si no lo tienes en tu
-      contexto, pregúntale al usuario a cuál comida se refiere en vez de
-      llamar esta herramienta a ciegas.
+    - meal_id: El 'ID_REGISTRO_DIARIO' que recibiste en el ToolMessage (o de
+      una corrección previa), o 'ultimo' si el usuario pide borrar/corregir
+      la última comida registrada. Si delete=True y no tienes el id, pasa
+      meal_id="ultimo" o meal_name con el plato a borrar.
     - delete: Pasa `delete=True` cuando el usuario diga que NO se comió ese
       plato («era un ejemplo», «no me comí eso») o te pida explícitamente
       borrarlo/eliminarlo/quitarlo del diario. Con `delete=True` solo necesitas
-      `user_id`, `meal_id` y `delete=True`.
+      `user_id`, `delete=True` y opcionalmente `meal_name` o `meal_id`.
     - Pasa SOLO los campos que hay que cambiar (deja el resto en None/sin
       mencionar) — no hace falta reenviar lo que ya estaba bien. PERO si el
       usuario aclara ingredientes, preparación o estilo culinario que cambia
@@ -1716,16 +1834,32 @@ def correct_consumed_meal(
         f"days_ago={days_ago!r} delete={delete!r}"
     )
 
-    if not meal_id or not str(meal_id).strip():
+    _mid = str(meal_id or "").strip()
+    _fila = None
+    if _mid and _mid.lower() not in ("ultimo", "ultima", "last", "reciente", "ese", "eso", "none", "null"):
+        _fila = _leer_fila_diario(user_id, _mid)
+
+    if _fila is None:
+        _resolved_id, _resolved_fila = _resolver_fila_diario_flexible(
+            user_id, meal_id=_mid, meal_name=meal_name, meal_type=meal_type, days_ago=days_ago
+        )
+        if _resolved_id:
+            _mid = _resolved_id
+            _fila = _resolved_fila
+
+    if not _mid or _mid.lower() in ("ultimo", "ultima", "last", "reciente", "ese", "eso", "none", "null"):
+        if delete:
+            return (
+                "ERROR: no encontré esa fila del diario para eliminar (puede que el registro "
+                "no exista, ya haya sido borrado o no sea de hoy). NO digas que la borraste — "
+                "dile la verdad al usuario y que si aún la ve puede quitarla con «Deshacer registro»."
+            )
         return (
             "ERROR: falta el ID_REGISTRO_DIARIO de la fila a corregir. Solo puedes "
             "corregir una comida que TÚ mismo registraste en esta conversación con "
             "`log_consumed_meal` (o una corrección previa) — usa el "
             "ID_REGISTRO_DIARIO que esa llamada te devolvió, nunca lo inventes."
         )
-
-    _mid = str(meal_id).strip()
-    _fila = _leer_fila_diario(user_id, _mid)
 
     if delete:
         return _ejecutar_borrado_diario(user_id, _mid, _fila)

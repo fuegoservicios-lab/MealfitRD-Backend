@@ -606,3 +606,69 @@ def test_log_consumed_meal_bullet_ties_slot_to_user_words_not_topic(prompts_src:
         "se esperaba el marker [P1-CHAT-DIARY-CORRECT] en AMBOS bullets de "
         "`log_consumed_meal` (inline + stream)."
     )
+
+
+# ===========================================================================
+# 6. Flexible meal resolution & deletion in voice/chat without exact UUID
+# ===========================================================================
+
+def test_flexible_resolver_resolves_last_meal(monkeypatch):
+    import tools
+    import db_facts
+
+    sample_meals = [
+        {"id": "uuid-cena-1", "meal_name": "Mangú con salami", "meal_type": "cena", "calories": 650, "consumed_at": "2026-10-25T20:00:00+00:00"},
+        {"id": "uuid-alm-2", "meal_name": "Pollo guisado con arroz", "meal_type": "almuerzo", "calories": 750, "consumed_at": "2026-10-25T13:00:00+00:00"},
+    ]
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid: list(sample_meals))
+
+    # Resolving "ultimo" or "bórralo" matches newest meal
+    mid, fila = tools._resolver_fila_diario_flexible("user-1", meal_id="ultimo")
+    assert mid == "uuid-cena-1"
+    assert fila["meal_name"] == "Mangú con salami"
+
+    # Resolving with no meal_id (or "bórralo")
+    mid2, fila2 = tools._resolver_fila_diario_flexible("user-1", meal_name="borralo")
+    assert mid2 == "uuid-cena-1"
+
+
+def test_flexible_resolver_resolves_by_name_and_slot(monkeypatch):
+    import tools
+    import db_facts
+
+    sample_meals = [
+        {"id": "uuid-cena-1", "meal_name": "Batida de proteína", "meal_type": "cena", "calories": 250, "consumed_at": "2026-10-25T21:00:00+00:00"},
+        {"id": "uuid-alm-2", "meal_name": "Pollo guisado con arroz y habichuelas", "meal_type": "almuerzo", "calories": 750, "consumed_at": "2026-10-25T13:00:00+00:00"},
+    ]
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid: list(sample_meals))
+
+    # Match by food name
+    mid, fila = tools._resolver_fila_diario_flexible("user-1", meal_name="arroz")
+    assert mid == "uuid-alm-2"
+
+    # Match by slot
+    mid_slot, _ = tools._resolver_fila_diario_flexible("user-1", meal_type="almuerzo")
+    assert mid_slot == "uuid-alm-2"
+
+
+def test_correct_consumed_meal_delete_flexible_execution(monkeypatch):
+    import tools
+    import db_facts
+
+    sample_meals = [
+        {"id": "uuid-ejemplo-1", "meal_name": "Pizza", "meal_type": "cena", "calories": 800, "consumed_at": "2026-10-25T20:00:00+00:00"},
+    ]
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid: list(sample_meals))
+    deleted_ids = []
+    monkeypatch.setattr(tools, "db_delete_consumed_meal", lambda uid, mid: deleted_ids.append((uid, mid)) or True)
+
+    # Calling with delete=True and meal_id="ultimo"
+    res = tools.correct_consumed_meal.func(
+        user_id="user-1",
+        meal_id="ultimo",
+        delete=True,
+    )
+    assert "¡Eliminado!" in res
+    assert "Pizza" in res
+    assert deleted_ids == [("user-1", "uuid-ejemplo-1")]
+
