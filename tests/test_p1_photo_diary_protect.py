@@ -173,7 +173,7 @@ def test_sumar_unidades_nombre():
     assert res4 == "Arroz blanco con habichuelas rojas, pollo frito y 3 guineos maduros"
     assert "y 1 Arroz blanco" not in res4
 
-    # Fusionar ingredientes
+    # Fusionar ingredientes: caso delta individual
     orig_ing = [
         "arroz blanco (≈150 g)",
         "habichuelas rojas guisadas (≈100 g)",
@@ -185,6 +185,19 @@ def test_sumar_unidades_nombre():
     assert len(fused_ing) == 4
     assert any("3 guineos maduros" in item for item in fused_ing)
     assert any("≈358 g" in item for item in fused_ing)
+
+    # Fusionar ingredientes: caso reemplazo completo (NO duplicar arroz ni guineos)
+    full_new_ing = [
+        "arroz blanco (≈150 g)",
+        "habichuelas rojas guisadas (≈100 g)",
+        "2 piezas de pollo frito (≈150 g)",
+        "4 guineos maduros medianos (≈476 g)"
+    ]
+    fused_full = _fusionar_ingredientes(orig_ing, full_new_ing)
+    assert len(fused_full) == 4
+    assert any("4 guineos maduros" in item for item in fused_full)
+    assert not any("7 guineos" in item for item in fused_full)
+    assert not any("arrozs" in item for item in fused_full)
 
 
 def test_fusion_into_existing_meal_slot(monkeypatch):

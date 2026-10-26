@@ -5629,7 +5629,29 @@ def _sumar_unidades_nombre(orig_name: str, new_name: str) -> str:
 def _fusionar_ingredientes(orig_list: list, new_list: list) -> list:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Fusiona listas de ingredientes evitando duplicar líneas
     del mismo alimento (ej. '2 guineos maduros medianos (≈238 g)' + '1 guineo maduro (≈120 g)' ->
-    '3 guineos maduros medianos (≈358 g)')."""
+    '3 guineos maduros medianos (≈358 g)'). Si new_list ya es una lista completa actualizada de la comida,
+    la retorna directamente sin sumar ingredientes base consigo mismos."""
+    if not new_list:
+        return orig_list or []
+    if not orig_list:
+        return new_list
+
+    # Si new_list ya describe el plato completo actualizado (tiene múltiples ingredientes y comparte la base)
+    if len(new_list) >= 2 and len(orig_list) >= 2:
+        def _get_words(items):
+            words = set()
+            for it in items:
+                if isinstance(it, str):
+                    for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", it.lower()):
+                        if w not in ("piezas", "unidades", "porciones", "gramos", "medianos", "mediano", "maduros", "maduro"):
+                            words.add(w)
+            return words
+        orig_w = _get_words(orig_list)
+        new_w = _get_words(new_list)
+        common = orig_w & new_w
+        if len(orig_w) >= 2 and (len(common) / len(orig_w) >= 0.4 or len(common) >= 2):
+            return new_list
+
     result = list(orig_list)
     for new_item in (new_list or []):
         if not new_item or not isinstance(new_item, str):
@@ -5866,6 +5888,34 @@ def _ajustar_args_fusion_correct_consumed_meal(
     orig = _buscar_comida_previa_del_slot(user_id, target_slot)
     if not orig:
         return None
+    
+    orig_id = str(orig.get("id"))
+    tool_meal_id = str(tool_args.get("meal_id") or "")
+    orig_cal = int(orig.get("calories") or 0)
+    tool_cal = int(tool_args.get("calories") or 0)
+
+    # Si la llamada ya apunta al meal_id correcto y el modelo ya computó el nuevo total de calorías (>= orig_cal):
+    # El modelo ya calculó el plato completo. Solo aseguramos preservar fotos de hoy y meal_id.
+    if tool_meal_id == orig_id and tool_cal >= orig_cal and orig_cal > 0:
+        existing_nutrition = orig.get("nutrition") or {}
+        if isinstance(existing_nutrition, str):
+            try:
+                existing_nutrition = json.loads(existing_nutrition)
+            except Exception:
+                existing_nutrition = {}
+        att_ids = list((existing_nutrition or {}).get("attachment_ids") or [])
+        if plate_photos:
+            for p in plate_photos:
+                a_id = p.get("attachment_id") if isinstance(p, dict) else getattr(p, "attachment_id", None)
+                if a_id and str(a_id) not in att_ids:
+                    att_ids.append(str(a_id))
+        res = dict(tool_args)
+        res_nut = dict(res.get("nutrition") or {})
+        if att_ids:
+            res_nut["attachment_ids"] = att_ids
+            res["nutrition"] = res_nut
+        return res
+
     return _intentar_fusionar_alimento_en_comida_existente(user_id, tool_args, messages, plate_photos)
 
 
