@@ -4912,10 +4912,21 @@ def execute_tools(state: ChatState):
                                        f"{tool_args.get('days_ago')!r} → {_dias} (el usuario nombró el día)")
                         tool_args["days_ago"] = _dias
                 # Repeat permission comes from a human statement, never the model's choice of slot.
-                from meal_registration_time import confirmed_repeat_consumption
+                from meal_registration_time import confirmed_repeat_consumption, explicit_repeat_consumption
                 _repeat_confirmed = confirmed_repeat_consumption(
                     state.get("messages") or [],
                     previous_warning=_duplicado_avisado_en_turno_previo(state.get("messages") or []))
+                if tool_name == "log_consumed_meal" and explicit_repeat_consumption(state.get("messages") or []):
+                    _merged_args = _intentar_fusionar_repeticion_en_fila_previa(
+                        _trusted_uid, tool_args, state.get("messages") or []
+                    )
+                    if _merged_args is not None:
+                        logger.info(
+                            f"🔗 [REPEAT-MERGE] Fusionando porción adicional en fila existente "
+                            f"{_merged_args['meal_id']} ('{_merged_args['meal_name']}', {_merged_args['calories']} kcal)"
+                        )
+                        tool_name = "correct_consumed_meal"
+                        tool_args = _merged_args
                 if tool_name == "log_consumed_meal" and _repeat_confirmed:
                     tool_args["force"] = True
                 if (tool_name in ("log_consumed_meal", "correct_consumed_meal") and tool_args.get("force")
@@ -5359,6 +5370,104 @@ def _reply_claims_diary_write(text: str) -> bool:
 _RE_DIA_ANTEAYER = re.compile(r"\b(?:anteayer|antier|antes de ayer)\b", re.IGNORECASE)
 _RE_DIA_AYER = re.compile(r"\b(?:ayer|anoche)\b", re.IGNORECASE)
 _RE_DIA_HOY = re.compile(r"\b(?:hoy|esta mañana|ahorita)\b", re.IGNORECASE)
+
+
+_RE_ID_REGISTRO_DIARIO = re.compile(r"\[ID_REGISTRO_DIARIO:\s*([0-9a-fA-F-]{8,64})\b")
+
+
+def _ultimo_id_registro_diario_previo(messages: list) -> Optional[str]:
+    """Busca el último ID_REGISTRO_DIARIO emitido en un ToolMessage ANTES del último mensaje del usuario."""
+    if not messages:
+        return None
+    ultimo_human_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            ultimo_human_idx = i
+            break
+    scan = messages[:ultimo_human_idx] if ultimo_human_idx is not None else messages
+    for msg in reversed(scan):
+        if isinstance(msg, ToolMessage):
+            m = _RE_ID_REGISTRO_DIARIO.search(str(msg.content or ""))
+            if m:
+                return m.group(1)
+    return None
+
+
+def _pluralizar_nombre_fusionado(prev_name: str, new_name: str) -> str:
+    """Devuelve un nombre fusionado claro para 2 (o N+1) porciones del mismo plato."""
+    pn = str(prev_name or "").strip()
+    nn = str(new_name or "").strip()
+    if re.match(r"^(?:[2-9]|\d{2,}|dos|tres|cuatro)\b", nn, re.IGNORECASE):
+        return nn
+    m_num = re.match(r"^(\d+)\s+(.+)$", pn)
+    if m_num:
+        n = int(m_num.group(1)) + 1
+        resto = m_num.group(2)
+        if n == 2 and resto.lower().startswith("pan "):
+            resto = "panes " + resto[4:]
+        return f"{n} {resto}"
+    m_un = re.match(r"^(?:un|una)\s+(.+)$", pn, re.IGNORECASE)
+    base = m_un.group(1) if m_un else pn
+    low = base.lower()
+    if low.startswith("pan "):
+        return "2 panes " + base[4:]
+    if low.startswith(("sándwich ", "sandwich ")):
+        return "2 sándwiches " + base.split(" ", 1)[1]
+    if low.startswith("taco "):
+        return "2 tacos " + base[5:]
+    if low.startswith("huevo "):
+        return "2 huevos " + base[6:]
+    if low.startswith("empanada "):
+        return "2 empanadas " + base[9:]
+    if low.startswith("arepa "):
+        return "2 arepas " + base[6:]
+    return f"2 porciones de {base}"
+
+
+def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, messages: list) -> Optional[dict]:
+    """Si el usuario dice «me comí otro» / «repetí» sobre el plato recién registrado y el LLM llamó a
+    `log_consumed_meal`, devuelve los args para `correct_consumed_meal` fusionando ambas porciones en la
+    misma fila (conservando su foto y evitando dos tarjetas sueltas de la misma comida)."""
+    try:
+        from tools import _leer_fila_diario
+        prev_mid = _ultimo_id_registro_diario_previo(messages)
+        if not prev_mid:
+            return None
+        fila = _leer_fila_diario(user_id, prev_mid)
+        if not isinstance(fila, dict):
+            return None
+        orig_type = str(fila.get("meal_type") or "").strip().lower()
+        if orig_type == "suplemento":
+            return None
+        prev_name = str(fila.get("meal_name") or "").strip()
+        new_name = str(tool_args.get("meal_name") or "").strip()
+        if not (_tokens_de_comida(prev_name) & _tokens_de_comida(new_name)):
+            return None
+        prev_cal = int(fila.get("calories") or 0)
+        add_cal = int(tool_args.get("calories") or 0)
+        if prev_cal <= 0 or add_cal <= 0:
+            return None
+        # Si el LLM pasó 1 porción adicional (~igual a la anterior), sumamos; si ya pasó el doble, usamos ese total.
+        es_una_porcion = add_cal <= int(prev_cal * 1.45)
+        tot_cal = (prev_cal + add_cal) if es_una_porcion else add_cal
+        tot_prot = (int(fila.get("protein") or 0) + int(tool_args.get("protein") or 0)) if es_una_porcion else int(tool_args.get("protein") or 0)
+        tot_carbs = (int(fila.get("carbs") or 0) + int(tool_args.get("carbs") or 0)) if es_una_porcion else int(tool_args.get("carbs") or 0)
+        tot_fats = (int(fila.get("healthy_fats") or 0) + int(tool_args.get("healthy_fats") or 0)) if es_una_porcion else int(tool_args.get("healthy_fats") or 0)
+        merged_name = _pluralizar_nombre_fusionado(prev_name, new_name)
+        out = {
+            "user_id": user_id,
+            "meal_id": prev_mid,
+            "meal_name": merged_name,
+            "calories": tot_cal,
+            "protein": tot_prot,
+            "carbs": tot_carbs,
+            "healthy_fats": tot_fats,
+        }
+        if tool_args.get("ingredients"):
+            out["ingredients"] = [f"2× {ing}" if not re.match(r"^\s*[2-9]", str(ing)) else str(ing) for ing in tool_args["ingredients"]]
+        return out
+    except Exception:
+        return None
 
 
 def _days_ago_named_by_user(messages: list):
