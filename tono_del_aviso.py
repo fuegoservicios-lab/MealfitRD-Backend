@@ -28,12 +28,15 @@ MIN_DIAS = 5
 
 TONO_SE_LA_SALTA = (
     "Esta comida casi nunca la registra: la salta la mayoría de los días. No le preguntes qué está fallando ni por qué: "
-    "dale UNA opción muy fácil y rápida para esa comida y, en una frase final opcional, dile que si algo se le complica "
-    "(el tiempo, que no le apetece o que está fuera) te lo cuente y se la adaptas. Sé muy breve y cercano; "
+    "dale UNA opción práctica y apetitosa para esa comida, con cero presión. "
+    "PROHIBIDO usar muletillas como 'sin complicarte', 'rápido y sin complicarte' o 'algo sencillo'. "
+    "PROHIBIDO repetir coletillas fijas como 'cuéntame y te busco otra opción' o 'si no te apetece avísame'. "
+    "Sé muy breve, fresco y cercano; "
     "PROHIBIDO incluir coletillas sobre cómo apagar recordatorios en Configuración ni hablar como un menú de ajustes."
 )
 TONO_POCA_RESPUESTA = (
-    "Últimamente casi no contesta los avisos. Sé muy breve y sin presión: una invitación concreta y ya. No le preguntes "
+    "Últimamente casi no contesta los avisos. Sé muy breve y sin presión: una invitación concreta y ya. "
+    "PROHIBIDO usar muletillas como 'sin complicarte'. No le preguntes "
     "por obstáculos, estrés ni por qué no registra, y no asumas que se le olvidó."
 )
 

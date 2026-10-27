@@ -1228,7 +1228,14 @@ def run_proactive_checks():
             # Los mensajes del usuario NO bloquean recordatorios — chatear no impide recibir nudges.
             recent = get_recent_messages(session_id, limit=5) if session_id else None
             spam_blocked = False
+            unanswered_model_nudges = 0
             if recent:
+                for msg in reversed(recent):
+                    if msg.get("role") == "model":
+                        unanswered_model_nudges += 1
+                    else:
+                        break
+
                 for msg in recent:
                     if msg.get("role") != "model":
                         continue  # Solo nos importan mensajes del modelo
@@ -1244,6 +1251,14 @@ def run_proactive_checks():
                             break
             
             if spam_blocked:
+                continue
+
+            # Backoff proactivo: si el usuario no ha contestado los últimos avisos, no saturar
+            if unanswered_model_nudges >= 2 and meal_to_check in ("Merienda", "Snack"):
+                logger.info(f"🚫 [CRON] Backoff: Usuario {user_id} tiene {unanswered_model_nudges} avisos seguidos sin respuesta. Omitiendo {meal_to_check} para no saturar.")
+                continue
+            if unanswered_model_nudges >= 3:
+                logger.info(f"🚫 [CRON] Backoff: Usuario {user_id} ya tiene {unanswered_model_nudges} avisos seguidos sin respuesta. Pausando avisos de hoy.")
                 continue
                 
             # La evaluación de send_push ya se hizo al inicio del bucle por la Mejora 3
@@ -1486,7 +1501,15 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     _prev_model = [p for p in _prev_model if detect_message_locale(p) != "en-US"]
                 if _prev_model:
                     _prev_joined = " | ".join(f"\"{p[:160]}\"" for p in _prev_model[:5])
-                    prompt += f"\nUltimo aviso enviado en este chat (NO repitas el mismo alimento/plato ni el mismo arranque): {_prev_joined}\n"
+                    prompt += (
+                        f"\nAvisos anteriores enviados en este chat: {_prev_joined}\n"
+                        "REGLA OBLIGATORIA DE VARIEDAD: NO repitas ninguno de los alimentos mencionados en esos avisos previos "
+                        "(si sugeriste guineo, yogur, pollo, etc., sugiere alimentos completamente distintos). "
+                        "NO uses el mismo arranque ni la misma estructura. "
+                        "PROHIBIDO repetir muletillas como 'sin complicarte', 'rápido y sin complicarte' o 'para no complicarte'. "
+                        "PROHIBIDO repetir coletillas como 'cuéntame y te busco otra opción' o 'si andas con poco tiempo'. "
+                        "Haz un mensaje fresco, directo y natural.\n"
+                    )
 
                 if _es_espanol:
                     prompt += (
