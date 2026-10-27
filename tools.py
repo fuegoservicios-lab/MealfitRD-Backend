@@ -939,6 +939,32 @@ def _validar_macros_comida(**campos):
     return out, None
 
 
+def _es_cero_calorias_valido(meal_name: str, meal_type: str = None, suplemento: str = None) -> bool:
+    """Verifica si un ítem puede legítimamente tener 0 kcal (agua, café negro, té, bebidas zero,
+    sal o suplementos en cápsula/pastilla sin aporte calórico como creatina o vitaminas)."""
+    if bool(suplemento):
+        return True
+    _n_name = _norm_txt(meal_name or "")
+    _n_type = _norm_txt(meal_type or "")
+    if _n_type in ("suplemento", "supplement", "suplementos", "supplements"):
+        return True
+    _supp_keywords = (
+        "creatina", "creatine", "capsula", "pastilla", "multivitamin", "vitamina",
+        "mineral", "magnesio", "colageno", "omega 3", "omega3", "bcaa", "zinc"
+    )
+    if any(k in _n_name for k in _supp_keywords):
+        return True
+    _cero_cal_keywords = (
+        "agua", "water", "cafe negro", "cafe solo", "black coffee", "cafe sin azucar",
+        "te verde", "te negro", "infusion", "te sin azucar", "sal", "sal marina",
+        "coca cola zero", "coca cola light", "coke zero", "diet coke",
+        "pepsi zero", "pepsi black", "pepsi light", "diet pepsi",
+        "sprite zero", "seven up free", "7up free", "refresco zero", "refresco light",
+        "soda de dieta", "bebida zero"
+    )
+    return any(k in _n_name for k in _cero_cal_keywords)
+
+
 def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     """Fila original de `consumed_meals` (`AND user_id`, I2). Best-effort: None si no se pudo leer;
     el caller degrada a la conducta previa, nunca inventa la fila."""
@@ -1443,6 +1469,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     calories, protein, carbs, healthy_fats = (
         _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
 
+    # [P1-ZERO-CALORIE-GUARD · 2026-10-27] Ningún alimento real, comida o snack puede registrarse con 0 kcal
+    # (caso vivo Darián Bobea: subió foto de crema de maní diciendo 'Creamy' y el coach lo registró en 0 kcal
+    # diciendo «no sé qué alimento o bebida es»). Si no sabe qué es, debe preguntar o estimar, nunca ensuciar el diario con 0 kcal.
+    if calories <= 0 and not _es_cero_calorias_valido(meal_name, meal_type, suplemento):
+        return (f"⚠️ NO REGISTRADO: '{meal_name}' no puede registrarse con 0 kcal si es un alimento o comida real. "
+                f"Estima sus calorías y macros basados en una porción razonable o en la etiqueta/foto, "
+                f"o si no sabes qué alimento es, pregúntale primero al usuario qué consumió antes de llamar. "
+                f"NO digas que quedó registrado.")
+
     # [P1-CONSUMED-BACKDATE · 2026-07-12] Fecha real de consumo + guard dup.
     from datetime import datetime, timezone as _tz, timedelta as _td
     _days_ago = _clamp_days_ago(days_ago)
@@ -1881,6 +1916,14 @@ def correct_consumed_meal(
         return f"ERROR: {_err_macros} No se corrigió nada; confirma el valor con el usuario."
     calories, protein, carbs, healthy_fats = (
         _macros["calories"], _macros["protein"], _macros["carbs"], _macros["healthy_fats"])
+
+    # [P1-ZERO-CALORIE-GUARD · 2026-10-27] Ningún alimento real, comida o snack puede corregirse a 0 kcal.
+    if calories is not None and calories <= 0:
+        _eff_name = meal_name or (_fila.get("meal_name") if _fila else "")
+        _eff_type = _meal_type or (_fila.get("meal_type") if _fila else "")
+        if not _es_cero_calorias_valido(_eff_name, _eff_type):
+            return (f"ERROR: '{_eff_name}' no puede corregirse a 0 kcal si es un alimento o comida real. "
+                    f"Estima calorías y macros reales o confirma con el usuario.")
 
     _err_guard_sup = _verificar_guard_suplemento_correccion(
         user_id, meal_id, _fila, meal_name, _meal_type, ingredients, calories

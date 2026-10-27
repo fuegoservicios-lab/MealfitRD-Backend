@@ -254,7 +254,7 @@ def test_las_reglas_de_resolver_van_en_las_cuatro_constantes():
     from prompts import chat_agent as ca
     for base in (ca.CHAT_SYSTEM_PROMPT_BASE, ca.CHAT_STREAM_SYSTEM_PROMPT_BASE, ca.CHAT_AGENT_INLINE_PROMPT,
                  ca.CHAT_STREAM_INLINE_PROMPT):
-        assert base.endswith(ca._CHAT_RESOLVE_RULES), "que una edición no pueda arreglar 3 de 4"
+        assert base.endswith(ca._CHAT_RESOLVE_RULES + ca.HEALTH_EVIDENCE_RULES), "que una edición no pueda arreglar 3 de 4"
     r = ca._CHAT_RESOLVE_RULES
     assert "Q. COMIDA O RECETA A PEDIDO" in r and "llama `proponer_comida` EN ESE TURNO" in r
     assert "S. PRUEBA ANTES DE ANOTAR UN PRODUCTO DE PROTEÍNA DE ENVASE" in r
