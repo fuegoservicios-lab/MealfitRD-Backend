@@ -515,34 +515,76 @@ def _comida_ya_registrada(consumed, meal: str) -> bool:
     return False
 
 
-def _almuerzo_muy_reciente(consumed, ahora_utc, min_horas: float = 2.0) -> bool:
-    """¿El usuario registró el almuerzo hace menos de `min_horas` horas respecto a `ahora_utc`?
-    Evita disparar el recordatorio de Merienda ~1h después de haber almorzado tarde (ej. almuerzo a las 14:34 y
-    merienda a las 15:45); el aviso de Merienda espera a un tick posterior dentro de su ventana de reintento."""
+def _min_horas_separacion_comida(meal: str) -> float:
+    """[P1-MIN-MEAL-GAP] Mínimo de horas entre una comida registrada y el recordatorio de la siguiente.
+    Evita enviar recordatorios de Cena/Almuerzo/Merienda cuando el usuario acaba de comer."""
+    meal_l = str(meal or "").strip().lower()
+    if "cena" in meal_l:
+        return _env_float("MEALFIT_PROACTIVE_MIN_GAP_CENA_H", 2.5, validator=lambda v: 1.0 <= v <= 6.0)
+    elif "merienda" in meal_l:
+        return _env_float("MEALFIT_PROACTIVE_MIN_GAP_MERIENDA_H", 2.0, validator=lambda v: 1.0 <= v <= 6.0)
+    elif "almuerzo" in meal_l:
+        return _env_float("MEALFIT_PROACTIVE_MIN_GAP_ALMUERZO_H", 2.0, validator=lambda v: 1.0 <= v <= 6.0)
+    return 2.0
+
+
+def _comida_muy_reciente(consumed, ahora_utc, min_horas: float = 2.0, tipo: str = None) -> bool:
+    """[P1-MIN-MEAL-GAP] ¿El usuario registró una comida hace menos de `min_horas` horas respecto a `ahora_utc`?
+    Si `tipo` se especifica, solo considera comidas cuyo meal_type o meal_name contenga `tipo`.
+    Si `tipo` es None, considera cualquier comida real registrada (excluyendo suplementos y tomas menores).
+    Evita disparar avisos de Cena/Almuerzo/Merienda poco después de haber comido (ej. almorzar a las 18:23
+    y recibir aviso de Cena a las 19:30). El aviso espera a un tick posterior dentro de su ventana de reintento."""
     if not consumed or not isinstance(ahora_utc, datetime):
         return False
+    if ahora_utc.tzinfo is None:
+        ahora_utc = ahora_utc.replace(tzinfo=timezone.utc)
+    objetivo = str(tipo or "").strip().lower()
     for m in consumed:
         if not isinstance(m, dict):
             continue
-        mt = str(m.get("meal_type") or "").lower()
-        mn = str(m.get("meal_name") or "").lower()
-        if "almuerzo" not in mt and "almuerzo" not in mn:
+        mt = str(m.get("meal_type") or "").strip().lower()
+        mn = str(m.get("meal_name") or "").strip().lower()
+        # Suplementos (vitaminas, pastillas) no son comidas y no desplazan recordatorios
+        if mt == "suplemento" or "suplemento" in mn:
             continue
-        ts = m.get("consumed_at")
+        # Descartar registros con calorías insignificantes (< 20 kcal) que no sean una comida formal
+        try:
+            cal = float(m.get("calories") or 0)
+        except Exception:
+            cal = 0
+        if not objetivo and cal < 20 and mt not in ("desayuno", "almuerzo", "cena", "merienda", "snack"):
+            continue
+        if objetivo:
+            if objetivo not in mt and objetivo not in mn:
+                continue
+        ts = m.get("consumed_at") or m.get("created_at")
         if ts is None:
             continue
         try:
             if isinstance(ts, str):
-                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                ts = ts.replace("Z", "+00:00")
+                try:
+                    ts = datetime.fromisoformat(ts)
+                except Exception:
+                    ts = datetime.strptime(ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
+                    ts = ts.replace(tzinfo=timezone.utc)
             if isinstance(ts, datetime):
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
                 delta_s = (ahora_utc - ts).total_seconds()
-                if 0 <= delta_s < min_horas * 3600.0:
+                # Consideramos reciente si ocurrió hace menos de min_horas (con margen de -300s por leve clock skew)
+                if -300.0 <= delta_s < min_horas * 3600.0:
                     return True
         except Exception:
             continue
     return False
+
+
+def _almuerzo_muy_reciente(consumed, ahora_utc, min_horas: float = 2.0) -> bool:
+    """¿El usuario registró el almuerzo hace menos de `min_horas` horas respecto a `ahora_utc`?
+    Evita disparar el recordatorio de Merienda ~1h después de haber almorzado tarde (ej. almuerzo a las 14:34 y
+    merienda a las 15:45); el aviso de Merienda espera a un tick posterior dentro de su ventana de reintento."""
+    return _comida_muy_reciente(consumed, ahora_utc, min_horas=min_horas, tipo="almuerzo")
 
 
 def _local_hour_float_for_offset(now_utc, tz_offset_min) -> float:
@@ -1380,8 +1422,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     if _comida_ya_registrada(consumed, cand["meal"]):
                         logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {cand['meal']}. Todo ok.")
                         continue
-                    if cand["meal"] == "Merienda" and _almuerzo_muy_reciente(consumed, _now_utc):
-                        logger.info(f"⏳ [CRON] Usuario {user_id}: almuerzo muy reciente (< 2h). Pospone Merienda al próximo tick.")
+                    _gap_h = _min_horas_separacion_comida(cand["meal"])
+                    if cand["meal"] in ("Almuerzo", "Merienda", "Cena") and _comida_muy_reciente(consumed, _now_utc, min_horas=_gap_h):
+                        logger.info(f"⏳ [CRON] Usuario {user_id}: comida reciente (< {_gap_h}h). Pospone {cand['meal']} al próximo tick.")
                         continue
                     elegida = cand
                     break
