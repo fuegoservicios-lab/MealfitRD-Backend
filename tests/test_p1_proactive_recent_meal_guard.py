@@ -201,3 +201,12 @@ def test_seleccion_candidata_dispara_cena_cuando_paso_umbral():
 
     assert elegida is not None
     assert elegida["meal"] == "Cena"
+
+
+def test_proactive_prompt_variedad_reglas_anti_plantilla():
+    from prompts.proactive import PROACTIVE_PROMPT
+    assert "PROHIBIDO arrancar repetitivamente con plantillas como «Ya puedes" in PROACTIVE_PROMPT
+    assert "PROHIBIDO terminar todos los avisos con fórmulas clónicas" in PROACTIVE_PROMPT
+    assert "¡Que lo disfrutes!" in PROACTIVE_PROMPT
+    assert "VARIEDAD DE APERTURAS:" in PROACTIVE_PROMPT
+

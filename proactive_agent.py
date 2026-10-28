@@ -1268,7 +1268,7 @@ def run_proactive_checks():
         try:
             # Regla Anti-Spam: Solo bloquear si ya enviamos un mensaje PROACTIVO (model) en la última hora.
             # Los mensajes del usuario NO bloquean recordatorios — chatear no impide recibir nudges.
-            recent = get_recent_messages(session_id, limit=5) if session_id else None
+            recent = get_recent_messages(session_id, limit=10) if session_id else None
             spam_blocked = False
             unanswered_model_nudges = 0
             if recent:
@@ -1545,13 +1545,17 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 if _prev_model:
                     _prev_joined = " | ".join(f"\"{p[:160]}\"" for p in _prev_model[:5])
                     prompt += (
-                        f"\nAvisos anteriores enviados en este chat: {_prev_joined}\n"
-                        "REGLA OBLIGATORIA DE VARIEDAD: NO repitas ninguno de los alimentos mencionados en esos avisos previos "
-                        "(si sugeriste guineo, yogur, pollo, etc., sugiere alimentos completamente distintos). "
-                        "NO uses el mismo arranque ni la misma estructura. "
-                        "PROHIBIDO repetir muletillas como 'sin complicarte', 'rápido y sin complicarte' o 'para no complicarte'. "
-                        "PROHIBIDO repetir coletillas como 'cuéntame y te busco otra opción' o 'si andas con poco tiempo'. "
-                        "Haz un mensaje fresco, directo y natural.\n"
+                        f"\nAvisos anteriores enviados en este chat hoy:\n{_prev_joined}\n"
+                        "REGLA OBLIGATORIA DE VARIEDAD Y NATURALIDAD (¡CERO PLANTILLAS!):\n"
+                        "1. NO repitas ninguno de los alimentos mencionados en esos avisos previos "
+                        "(si sugeriste guineo, yogur, pollo, etc., sugiere alimentos completamente distintos).\n"
+                        "2. PROHIBIDO repetir la misma frase de arranque o estructura de los avisos anteriores "
+                        "(si alguno empezó con 'Ya puedes...', 'Aprovecha para...', o similar, está TERMINANTEMENTE PROHIBIDO "
+                        "empezar de esa forma). Usa una apertura totalmente distinta (ej. una sugerencia directa del plato, una opción ligera, o una pregunta corta).\n"
+                        "3. PROHIBIDO repetir cierres como '¡Que lo disfrutes!', '¡Que la disfrutes!' o '¡Que disfrutes tu cena/comida!' si ya se usaron antes. "
+                        "Termina naturalmente con el plato o con un tip práctico, sin muletillas de despedida forzadas.\n"
+                        "4. PROHIBIDO usar muletillas como 'sin complicarte', 'rápido y sin complicarte', 'para no complicarte' ni 'algo sencillo'.\n"
+                        "Haz un mensaje fresco, directo, humano y espontáneo.\n"
                     )
 
                 if _es_espanol:
