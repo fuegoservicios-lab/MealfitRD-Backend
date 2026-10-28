@@ -75,10 +75,10 @@ def test_los_ocho_del_dueno_y_el_sodio_como_techo():
 
 def test_el_diario_de_hoy_lleva_micros_y_no_los_ingredientes():
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
-    assert 'm["micros"] = micros_de_ingredientes(m.pop("ingredients", None), _ndb)' in diary
+    assert 'm["micros"] = micros_from_snapshot(nutrition) or micros_de_ingredientes(ingredients, _ndb)' in diary
     assert '"micros_coverage": _resumen["micros_coverage"],' in diary
     dbf = (_BACKEND / "db_facts.py").read_text(encoding="utf-8")
-    assert '"consumed_at, meal_type, ingredients"' in dbf
+    assert '"consumed_at, meal_type, ingredients, nutrition"' in dbf
     ud = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
     assert '"micros": _metas_micros_de(hp),' in ud
 

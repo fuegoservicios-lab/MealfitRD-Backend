@@ -65,8 +65,8 @@ class FoodDiaryTests(unittest.TestCase):
         env = {'Optional': __import__('typing').Optional,'connection_pool':True,'Jsonb':lambda x:x,
                'execute_sql_write':Mock(return_value=[{'id':'meal'}]),'logger':logging.getLogger('test')}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'<db-function>','exec'),env)
-        for kwargs, expected in [({'calories':170},'food_corrected'),
-                                 ({'ingredients':['34 g galletas']},'nutrition = NULL'),
+        for kwargs, expected in [({'calories':170},'attachment_ids'),
+                                 ({'ingredients':['34 g galletas']},'ELSE NULL END'),
                                  ({'nutrition':snapshot(LABEL,2)},'nutrition = %s')]:
             env['update_consumed_meal']('owner','meal',**kwargs)
             sql, params = env['execute_sql_write'].call_args.args
@@ -75,6 +75,12 @@ class FoodDiaryTests(unittest.TestCase):
             self.assertEqual(params[-2:],('meal','owner'))
         env['update_consumed_meal']('owner','meal',meal_type='cena')
         self.assertNotIn('nutrition',env['execute_sql_write'].call_args.args[0])
+
+    def test_nutrition_with_attachment_ids_only_returns_none_for_label_micros(self):
+        # [P1-ATTACHMENT-MICROS-FALLBACK · 2026-10-27] Comidas con adjuntos de foto guardan
+        # nutrition = {'attachment_ids': [...]}. micros_from_snapshot debe dar None para que el diario
+        # recurra limpiamente a los micros de los ingredientes del plato.
+        self.assertIsNone(micros_from_snapshot({'attachment_ids': ['fake-uuid-1', 'fake-uuid-2']}))
 
     def test_insert_persists_snapshot_atomically(self):
         source = ast.parse((Path(__file__).parents[1]/'db_facts.py').read_text(encoding='utf-8'))

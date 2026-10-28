@@ -107,7 +107,7 @@ def test_la_memoria_de_avisos_tiene_tope(monkeypatch):
 
 def test_el_endpoint_del_dia_aplica_la_guarda():
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
-    ancla = 'm["micros"] = micros_from_snapshot(nutrition) if nutrition is not None else micros_de_ingredientes(ingredients, _ndb)'
+    ancla = 'm["micros"] = micros_from_snapshot(nutrition) or micros_de_ingredientes(ingredients, _ndb)'
     i = diary.index(ancla)
     assert 'm["micros"] = micros_plausibles(m["micros"], m.get("calories"))' in diary[i:i + 500]
 
