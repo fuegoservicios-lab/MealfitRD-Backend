@@ -4914,6 +4914,11 @@ def execute_tools(state: ChatState):
     )
 
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        _assigned_attachment_ids = set()
+        _meal_calls_count = sum(
+            1 for tc in last_message.tool_calls
+            if (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)) == "log_consumed_meal"
+        )
         for tool_call in last_message.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
@@ -4997,6 +5002,29 @@ def execute_tools(state: ChatState):
                             f"{_adjusted_fusion['meal_id']} ('{_adjusted_fusion['meal_name']}', {_adjusted_fusion['calories']} kcal)"
                         )
                         tool_args = _adjusted_fusion
+
+                # [P1-MULTI-PHOTO-MATCH · 2026-10-27] Asignar el adjunto correspondiente de este turno
+                # a la comida registrada en el diario para que su foto quede enlazada con exactitud.
+                if tool_name == "log_consumed_meal":
+                    _matched_att_ids = _asociar_adjuntos_a_comida(
+                        tool_args,
+                        state.get("turn_plate_photos") or [],
+                        assigned_ids=_assigned_attachment_ids,
+                        allow_multiple=(_meal_calls_count <= 1),
+                    )
+                    if _matched_att_ids:
+                        _cur_nutrition = tool_args.get("nutrition")
+                        if not isinstance(_cur_nutrition, dict):
+                            _cur_nutrition = {}
+                        else:
+                            _cur_nutrition = dict(_cur_nutrition)
+                        _cur_att_ids = list(_cur_nutrition.get("attachment_ids") or [])
+                        for _aid in _matched_att_ids:
+                            if _aid not in _cur_att_ids:
+                                _cur_att_ids.append(_aid)
+                            _assigned_attachment_ids.add(_aid)
+                        _cur_nutrition["attachment_ids"] = _cur_att_ids
+                        tool_args["nutrition"] = _cur_nutrition
                 if tool_name == "log_consumed_meal" and _repeat_confirmed:
                     tool_args["force"] = True
                 if (tool_name in ("log_consumed_meal", "correct_consumed_meal") and tool_args.get("force")
@@ -6108,7 +6136,7 @@ def _tokens_de_comida(texto) -> set:
 
 
 def _plate_photos_from_vision(vision) -> list:
-    """Las fotos de PLATO del turno como `[{"desc", "kcal"}]` (el `vision` que manda el cliente: `multi` o suelto).
+    """Las fotos de PLATO del turno como `[{"desc", "kcal", "attachment_id"}]` (el `vision` que manda el cliente: `multi` o suelto).
     Solo `kind == "plato"` con descripción: compra, etiqueta, «sin comida» o sin análisis no son un plato comido."""
     if not isinstance(vision, dict):
         return []
@@ -6124,7 +6152,12 @@ def _plate_photos_from_vision(vision) -> list:
         m = _RE_KCAL_FOTO.search(desc)
         kcal = float(m.group(1) or m.group(2)) if m else None
         corte = _RE_CORTE_ESTIMACION.search(desc)
-        out.append({"desc": (desc[:corte.start()] if corte else desc).strip()[:220], "kcal": kcal})
+        att_id = item.get("attachment_id") or item.get("id")
+        out.append({
+            "desc": (desc[:corte.start()] if corte else desc).strip()[:220],
+            "kcal": kcal,
+            "attachment_id": str(att_id) if att_id else None,
+        })
     return out
 
 
@@ -6148,6 +6181,96 @@ def _registro_es_la_foto(args: dict, foto: dict) -> bool:
     if _tokens_de_comida(args.get("meal_name")) & _tokens_de_comida(foto.get("desc")):
         return True
     return kcal > 0 and kcal_foto > 0 and abs(kcal - kcal_foto) <= 0.30 * kcal_foto
+
+
+def _asociar_adjuntos_a_comida(
+    tool_args: dict,
+    plate_photos: list,
+    assigned_ids: Optional[set] = None,
+    allow_multiple: bool = False,
+) -> list:
+    """[P1-MULTI-PHOTO-MATCH · 2026-10-27] Asocia de forma 1-a-1 cada comida registrada (`log_consumed_meal`)
+    con su adjunto de foto correspondiente en turnos donde el usuario subió una o más fotos.
+    Evita que un turno con múltiples fotos (ej. guineo de desayuno + sancocho de almuerzo)
+    asigne todas las fotos a la primera comida registrada o las mezcle."""
+    if not isinstance(tool_args, dict) or not plate_photos:
+        return []
+
+    assigned = assigned_ids if assigned_ids is not None else set()
+    candidatas = [
+        p for p in plate_photos
+        if isinstance(p, dict) and p.get("attachment_id") and str(p["attachment_id"]) not in assigned
+    ]
+    if not candidatas:
+        return []
+
+    # Si se permite múltiple (solo 1 comida registrada en el turno con galería de fotos del mismo plato)
+    if allow_multiple and len(plate_photos) > 1:
+        coincidentes = [
+            str(f["attachment_id"]) for f in candidatas
+            if _registro_es_la_foto(tool_args, f)
+        ]
+        if coincidentes:
+            return coincidentes
+
+    # Si solo hay 1 foto disponible:
+    if len(candidatas) == 1:
+        f = candidatas[0]
+        # Si el turno originalmente solo trajo 1 foto:
+        if len(plate_photos) == 1:
+            return [str(f["attachment_id"])]
+        tokens_comida = _tokens_de_comida(tool_args.get("meal_name")) | _tokens_de_comida(" ".join(tool_args.get("ingredients") or []))
+        tokens_foto = _tokens_de_comida(f.get("desc"))
+        if (tokens_comida & tokens_foto) or _registro_es_la_foto(tool_args, f):
+            return [str(f["attachment_id"])]
+        return []
+
+    # Si hay múltiples fotos candidatas disponibles: rankear por tokens de alimento y cercanía calórica
+    meal_name = tool_args.get("meal_name") or ""
+    ingredients_str = " ".join(tool_args.get("ingredients") or [])
+    tokens_name = _tokens_de_comida(meal_name)
+    tokens_ing = _tokens_de_comida(ingredients_str)
+
+    try:
+        kcal = float(tool_args.get("calories") or 0)
+    except (TypeError, ValueError):
+        kcal = 0.0
+
+    mejor_foto = None
+    mejor_score = -1
+
+    for f in candidatas:
+        f_desc = f.get("desc") or ""
+        tokens_f = _tokens_de_comida(f_desc)
+        try:
+            f_kcal = float(f.get("kcal") or 0)
+        except (TypeError, ValueError):
+            f_kcal = 0.0
+
+        score = 0
+        overlap_name = len(tokens_name & tokens_f)
+        overlap_ing = len(tokens_ing & tokens_f)
+        score += overlap_name * 100
+        score += overlap_ing * 20
+
+        if kcal > 0 and f_kcal > 0:
+            diff_ratio = abs(kcal - f_kcal) / max(kcal, f_kcal)
+            if diff_ratio <= 0.30:
+                score += 30
+            elif diff_ratio <= 0.50:
+                score += 15
+
+        if _registro_es_la_foto(tool_args, f):
+            score += 50
+
+        if score > mejor_score:
+            mejor_score = score
+            mejor_foto = f
+
+    if mejor_foto and mejor_score > 0:
+        return [str(mejor_foto["attachment_id"])]
+
+    return []
 
 
 def _plate_photos_unlogged(state) -> list:

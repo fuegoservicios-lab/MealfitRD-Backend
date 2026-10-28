@@ -1895,6 +1895,7 @@ async def api_get_chat_photos(
                 WHERE ca.user_id = %s
                   AND ca.claimed_at IS NOT NULL
                   AND ca.id NOT IN (SELECT attachment_id FROM explicit_matched)
+                  AND cm.id NOT IN (SELECT meal_id FROM explicit_matched)
                 ORDER BY ca.id, diff_sec ASC
             )
             SELECT meal_id, attachment_id, diff_sec FROM explicit_matched
