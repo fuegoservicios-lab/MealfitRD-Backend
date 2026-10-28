@@ -4941,16 +4941,21 @@ def execute_tools(state: ChatState):
                     )
                 tool_args["user_id"] = _trusted_uid
                 # Unspecified meals use the user's clock, never an LLM guess based on food size.
-                if tool_name == "log_consumed_meal" and not tool_args.get("days_ago"):
-                    from meal_registration_time import infer_current_meal_slot
-                    from prompts.chat_agent import hora_local_del_chat
-                    from tools import _hora_local_float
-                    _hora_registro = (hora_local_del_chat(state["tz_offset"])
-                                      if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
-                    _slot_registro = infer_current_meal_slot(
-                        messages, _hora_registro, (state.get("form_data") or {}).get("scheduleType"))
-                    if _slot_registro:
-                        tool_args["meal_type"] = _slot_registro
+                if tool_name == "log_consumed_meal":
+                    from meal_registration_time import explicit_slot_named_by_user
+                    _user_named_slot = explicit_slot_named_by_user(state.get("messages") or [])
+                    if _user_named_slot:
+                        tool_args["explicit_slot"] = True
+                    elif not tool_args.get("days_ago"):
+                        from meal_registration_time import infer_current_meal_slot
+                        from prompts.chat_agent import hora_local_del_chat
+                        from tools import _hora_local_float
+                        _hora_registro = (hora_local_del_chat(state["tz_offset"])
+                                          if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
+                        _slot_registro = infer_current_meal_slot(
+                            messages, _hora_registro, (state.get("form_data") or {}).get("scheduleType"))
+                        if _slot_registro:
+                            tool_args["meal_type"] = _slot_registro
                 # [P1-PLAN-LOTE-56] «ayer me comí un chimi» → days_ago=0 y la respuesta decía «quedó
                 # como la cena de ayer»: el diario de HOY se llevó 750 kcal. El día que el usuario
                 # NOMBRA manda (regla 8 del prompt), así que no depende de que el modelo lo copie.
@@ -5984,7 +5989,7 @@ def _duplicado_avisado_en_turno_previo(messages: list) -> bool:
 _OTHER_WRITE_TOOLS = ("log_water_glass", "modify_pantry_inventory", "mark_shopping_list_purchased",
                       "update_form_field")
 _RE_MEAL_WORDS = re.compile(
-    r"\b(?:desayun\w*|almorz\w*|almuerzo|cena|cenas|cené|cenaste|cenado|merienda\w*|snack|"
+    r"\b(?:desayun\w*|almor[zc]\w*|almuer[zc]\w*|cena|cenas|cené|cenaste|cenado|mer(?:i)?end\w*|snack|"
     r"comida\w*|plato\w*|diario|kcal|calor[ií]as)\b",
     re.IGNORECASE,
 )

@@ -61,6 +61,22 @@ def normalize_live_offset(value, convention=None):
     return int(value) if convention == 'utc_minus_local' else -int(value)
 
 
+_RE_EXPLICIT_MEAL_SLOT = re.compile(
+    r'\b(desayun\w*|almor[zc]\w*|almuer[zc]\w*|cen\w*|mer(?:i)?end\w*|snack\w*|'
+    r'breakfast|lunch|dinner|supper|cafe da manha|almo[cç]o|jantar|lanch\w*|'
+    r'petit.dejeuner|dejeuner|diner|gout\w*|colazione|pranzo)\b',
+    re.IGNORECASE,
+)
+
+
+def explicit_slot_named_by_user(messages) -> bool:
+    """Returns True if the user explicitly named the meal slot (e.g. 'Merendé esto', 'mi cena', 'almorcé')."""
+    text = _latest_human_text(messages)
+    if not text:
+        return False
+    return bool(_RE_EXPLICIT_MEAL_SLOT.search(text))
+
+
 def infer_current_meal_slot(messages, local_hour, schedule_type=None):
     """Only a fresh, unqualified consumption statement gets the clock default.
 
@@ -81,9 +97,7 @@ def infer_current_meal_slot(messages, local_hour, schedule_type=None):
     # A negation, an explicitly named slot or a past/future time is not "just eaten".
     if re.search(r'\b(no (?:me )?(?:comi|he comido|tome|bebi)|didn.t|nao|ne .{0,20} pas)\b', text):
         return None
-    if re.search(r'\b(desayun\w*|almorz\w*|almuerz\w*|cen(?:a|e|ar|ando)|meriend\w*|snack\w*|'
-                 r'breakfast|lunch|dinner|supper|cafe da manha|almo[cç]o|jantar|lanche|'
-                 r'petit.dejeuner|dejeuner|diner|gouter|colazione|pranzo)\b', text):
+    if _RE_EXPLICIT_MEAL_SLOT.search(text):
         return None
     if re.search(r'\b(ayer|anteayer|antier|anoche|madrugada|manana|yesterday|last night|earlier|'
                  r'ontem|hier|ieri|lunes|martes|miercoles|jueves|viernes|sabado|domingo|'

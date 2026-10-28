@@ -1404,7 +1404,7 @@ def _dias_atras_de_fila(user_id: str, consumed_at) -> Optional[int]:
 from food_label_nutrients import FoodLabel
 
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None, food_facts: FoodLabel = None, label_servings: float = None, nutrition: dict = None) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False, suplemento: str = None, porciones: float = None, food_facts: FoodLabel = None, label_servings: float = None, nutrition: dict = None, explicit_slot: bool = False) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
@@ -1486,7 +1486,10 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     _mt_reconocido = meal_type is None or _resolver_meal_type(meal_type) is not None
     _meal_type = _normalize_meal_type(meal_type)
     # A substantial meal can still recover its inferred dinner slot; the slot never limits diary rows.
-    _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
+    # [P1-EXPLICIT-SLOT-RESPECT · 2026-10-27] Si el usuario nombró explícitamente la franja ("Merendé esto",
+    # "mi merienda", "un snack", etc.), NUNCA debe sobreescribirse con la cena.
+    if not explicit_slot:
+        _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
 
     # [P1-SUPPLEMENT-SLOT-GUARD · 2026-10-19] Una toma de suplemento (o producto no calórico como creatina,
     # pastillas, vitaminas o minerales) NUNCA debe ocupar una comida principal (desayuno/almuerzo/cena). Un
