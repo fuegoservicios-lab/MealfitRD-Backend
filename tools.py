@@ -1310,7 +1310,8 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                         return (f" (Para el asistente: son las {_hora_txt}. Hoy sigue sin registrar {', '.join(_pasadas)}, que ya "
                                 f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta (qué comió para "
                                 f"anotarlo o si estuvo en ayunas / no comió esa comida, ej: «¿qué comiste en el desayuno, o estuviste en ayunas?»; "
-                                f"nunca «cuando la comas» ni «¿te propongo algo?»). "
+                                f"nunca «cuando la comas» ni «¿te propongo algo?»). PROHIBIDO llamar a log_consumed_meal para esa comida en este turno: "
+                                f"la comida del usuario YA quedó anotada; solo pregúntale en texto qué comió. "
                                 f"{', '.join(_proximas)} aún no toca: no preguntes por ella.{_NO_INSISTAS})")
                     return (f" (Para el asistente: son las {_hora_txt} y hoy ya tiene registrado todo lo que tocaba hasta ahora. "
                             f"La próxima es {_prox} (~{_fmt_hora_float(float(_prox_h))}) y todavía no ha llegado: NO preguntes si "

@@ -922,23 +922,42 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             _dedup_win = 60
         if _dedup_win > 0 and not allow_repeat:
             try:
+                # [P1-PHOTO-DEDUP · 2026-10-29] Una misma foto nunca puede registrarse como dos comidas distintas hoy.
+                if nutrition and isinstance(nutrition, dict) and nutrition.get("attachment_ids"):
+                    _att_ids = [str(a) for a in nutrition["attachment_ids"] if a]
+                    if _att_ids:
+                        _dup_att = execute_sql_query(
+                            "SELECT id, meal_name FROM consumed_meals WHERE user_id = %s "
+                            "AND nutrition IS NOT NULL AND (nutrition->'attachment_ids') ?| %s "
+                            "AND created_at > NOW() - interval '24 hours' LIMIT 1",
+                            (user_id, _att_ids),
+                            fetch_one=True,
+                        )
+                        if _dup_att:
+                            logger.info(
+                                f"[P2-CONSUMED-DEDUP] skip foto ya registrada: {_dup_att['id']} ({_dup_att.get('meal_name')})"
+                            )
+                            return "deduped"
+
                 # [P1-PLAN-LOTE-381] la ventana es de cuándo SE ESCRIBIÓ la fila (`created_at`): una comida de
                 # «Ayer» nace con `consumed_at` en el pasado y `consumed_at > NOW() - 60 s` no la veía nunca (un
                 # doble toque o el reintento tras un timeout la duplicaban). Y el mismo día de consumo (±12 h del
                 # que se va a insertar), para no tomar el café de hoy por un doble toque del de ayer.
+                # [P1-ANTI-CLONE · 2026-10-29] Si los macros e ingredientes son idénticos dentro de la ventana,
+                # es un doble-submit/clon aunque el LLM haya variado ligeramente el nombre (ej. 'Desayuno con ...').
                 _dup = execute_sql_query(
-                    "SELECT id FROM consumed_meals WHERE user_id = %s AND meal_name = %s "
+                    "SELECT id FROM consumed_meals WHERE user_id = %s "
                     "AND calories = %s AND protein = %s AND carbs = %s AND healthy_fats = %s "
                     "AND ingredients = %s AND created_at > NOW() - make_interval(secs => %s) "
                     "AND consumed_at BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours' LIMIT 1",
-                    (user_id, meal_name, calories, protein, carbs, healthy_fats,
+                    (user_id, calories, protein, carbs, healthy_fats,
                      Jsonb(ingredients if ingredients is not None else []), _dedup_win, now, now),
                     fetch_one=True,
                 )
                 if _dup:
                     logger.info(
-                        f"[P2-CONSUMED-DEDUP] skip doble-tap: '{meal_name}' ({meal_type}) "
-                        f"ya registrado en los últimos {_dedup_win}s."
+                        f"[P2-CONSUMED-DEDUP] skip doble-tap/clon: '{meal_name}' ({meal_type}) "
+                        f"macros e ingredientes idénticos ya registrados en los últimos {_dedup_win}s."
                     )
                     # [P2-CONSUMED-DEDUP-INVENTORY · 2026-05-30] Retornar un
                     # sentinel DISTINGUIBLE (no `True`) para que el caller

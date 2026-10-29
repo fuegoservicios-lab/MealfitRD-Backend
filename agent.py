@@ -5057,6 +5057,36 @@ def execute_tools(state: ChatState):
                         tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
                         continue
 
+                # [P1-ANTI-CLONE-GUARD · 2026-10-29] Prohibir clonar/duplicar comidas en el mismo turno
+                # (ej. el modelo anota un plato como almuerzo y en el siguiente loop lo anota como desayuno).
+                if tool_name == "log_consumed_meal":
+                    created_this_turn = _meals_created_this_turn(messages)
+                    if created_this_turn:
+                        _num_fotos = len(state.get("turn_plate_photos") or [])
+                        _user_text = ""
+                        for _m in reversed(messages):
+                            if getattr(_m, "type", None) in ("human", "user") or _m.__class__.__name__ == "HumanMessage":
+                                _user_text = getattr(_m, "content", "") or ""
+                                break
+                        if isinstance(_user_text, list):
+                            _user_text = " ".join(str(p.get("text", "")) for p in _user_text if isinstance(p, dict))
+                        from meal_registration_time import _RE_EXPLICIT_MEAL_SLOT
+                        _slots_en_texto = len(_RE_EXPLICIT_MEAL_SLOT.findall(str(_user_text)))
+                        if _num_fotos <= 1 and _slots_en_texto < 2:
+                            logger.warning(
+                                f"🛡️ [P1-ANTI-CLONE-GUARD] Bloqueado log_consumed_meal duplicado en el mismo turno "
+                                f"(ya se creó {created_this_turn}) para user={str(state.get('user_id'))[:8]}."
+                            )
+                            tool_result = (
+                                "ERROR: Ya registraste la comida de este turno. "
+                                "Está TERMINANTEMENTE PROHIBIDO registrar el mismo plato o foto en una segunda franja "
+                                "(ej. duplicarlo como almuerzo y desayuno). Si falta otra comida por registrar en el día, "
+                                "SOLO debes preguntarle al usuario al cerrar qué comió o si estuvo en ayunas; "
+                                "NO llames a log_consumed_meal de nuevo."
+                            )
+                            tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
+                            continue
+
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
 

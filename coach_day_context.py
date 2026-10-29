@@ -368,9 +368,12 @@ def franja_por_hora(hora: Optional[float], faltan=None) -> str:
     """La franja más probable cuando el usuario no la nombra: la primera SIN registrar cuya hora ya llegó o está cerca;
     si no hay dato, la de la hora."""
     h = 12.0 if hora is None else float(hora) % 24
+    pendientes = [f for f in (faltan or []) if f in FRANJAS]
+    # [P1-LATE-BREAKFAST] Si aún no hay desayuno registrado y es antes de las 12:00 PM, es desayuno (ej. brunch a las 11:30)
+    if pendientes and "desayuno" in pendientes and 4.5 <= h < 12.0:
+        return "desayuno"
     por_hora = ("desayuno" if 4.5 <= h < 11.0 else "almuerzo" if 11.0 <= h < 15.5 else
                 "merienda" if 15.5 <= h < 18.5 else "cena")
-    pendientes = [f for f in (faltan or []) if f in FRANJAS]
     if pendientes and por_hora not in pendientes:
         orden = list(FRANJAS)
         despues = [f for f in pendientes if orden.index(f) >= orden.index(por_hora)]

@@ -482,7 +482,11 @@ _REGLA_UNA_LLAMADA_POR_COMIDA = (
     "`log_consumed_meal` otra vez. "
     "EXCEPCIÓN CRÍTICA CON SUPLEMENTOS: Un suplemento (creatina, proteínas, vitaminas, magnesio, etc.) NUNCA se aclara ni se reemplaza "
     "con una comida posterior ni con una foto de plato («Res», arroz, almuerzo): para cualquier comida posterior o foto, usa SIEMPRE "
-    "`log_consumed_meal` como registro nuevo; NUNCA uses `correct_consumed_meal` sobre un suplemento para meter una comida."
+    "`log_consumed_meal` como registro nuevo; NUNCA uses `correct_consumed_meal` sobre un suplemento para meter una comida. "
+    "PROHIBIDO DUPLICAR O CLONAR UNA COMIDA EN MÚLTIPLES FRANJAS: Un mismo plato, alimento o foto NUNCA se registra en dos comidas a la vez "
+    "(ej. registrar la misma foto o comida como almuerzo y como desayuno). En un turno con un solo plato o foto, solo se llama `log_consumed_meal` "
+    "UNA sola vez. Si la herramienta te indica que falta otra comida del día por registrar (ej. el desayuno), NUNCA llames a `log_consumed_meal` "
+    "para anotarla con los datos del plato actual; SOLO pregúntale al usuario al cerrar qué comió en esa franja o si estuvo en ayunas."
 )
 
 
