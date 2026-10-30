@@ -43,9 +43,22 @@ def bloque_del_dia(consumed, health) -> str:
         lineas.append("- Todavía no registró nada hoy.")
     else:
         partes = []
+        alimentos_detallados = []
         for m in comidas[:6]:
             tipo = str(m.get("meal_type") or m.get("meal_name") or "comida").strip().lower()
-            partes.append(f"{tipo} ({int(round(_n(m.get('calories'))))} kcal)")
+            kcal_m = int(round(_n(m.get('calories'))))
+            partes.append(f"{tipo} ({kcal_m} kcal)")
+            nombre = str(m.get("meal_name") or "").strip()
+            if nombre and nombre.lower() != tipo:
+                alimentos_detallados.append(f"{tipo}: {nombre}")
+            elif nombre:
+                alimentos_detallados.append(nombre)
+        if alimentos_detallados:
+            lineas.append(
+                "- Consumido hoy (ofrece variedad culinaria, NO repitas estos alimentos ni sus fuentes proteicas): "
+                + "; ".join(alimentos_detallados)
+                + "."
+            )
         lineas.append("- Registró: " + ", ".join(partes) + ".")
         kcal = int(round(sum(_n(m.get("calories")) for m in comidas)))
         prot = int(round(sum(_n(m.get("protein")) for m in comidas)))
