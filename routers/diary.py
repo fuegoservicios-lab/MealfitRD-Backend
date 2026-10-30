@@ -2001,10 +2001,10 @@ def api_get_consumed_range(
         if not user_id or user_id == "guest":
             return {"days": []}
 
-        # Clamp defensivo: `days` viene del cliente. Sin tope, un `days=99999`
-        # convierte un endpoint de UI en un escaneo de tabla.
+        # Clamp defensivo: `days` viene del cliente. Soporta hasta 365 días (1 año)
+        # para que la vista de calendario mensual pueda navegar meses pasados.
         try:
-            n_days = max(1, min(int(days), 90))
+            n_days = max(1, min(int(days), 365))
         except (TypeError, ValueError):
             n_days = 14
 
