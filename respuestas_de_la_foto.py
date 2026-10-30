@@ -379,8 +379,8 @@ def tipo_de_comida_en_texto(texto) -> str | None:
 
 
 def foto_para_anotar(vision, prompt) -> bool:
-    """¿Este turno es el de ANOTAR un plato de la foto? Con las dudas contestadas, con el texto como rótulo o con la
-    foto SOLA de un plato sin dudas (P1-PLAN-LOTE-687)."""
+    """¿Este turno es el de ANOTAR un plato de la foto? Con las dudas contestadas, con el texto como rótulo o alimentos,
+    o con la foto de un plato servido (P1-PLAN-LOTE-687/694)."""
     if not isinstance(vision, dict) or not vision.get("kind"):
         return False
     items = vision.get("items") if vision.get("kind") == "multi" else [vision]
@@ -388,9 +388,19 @@ def foto_para_anotar(vision, prompt) -> bool:
                     for i in (items or []))
     if not hay_plato:
         return False
-    if respuestas_de(vision) or rotulo_de_comida(prompt) is not None or extraer_respuesta_de_prompt(vision, prompt) is not None:
-        return True
-    return es_solo_foto(prompt) and _platos_claros(vision)
+    
+    t = str(prompt or "").strip()
+    if "?" in t or "¿" in t:
+        return False
+    p_norm = _plano(t)
+    if any(q in p_norm for q in ("puedo comer", "debo comer", "cuantas calorias", "cuanto engorda", "que tiene", "es saludable", "sirve para", "receta de")):
+        return False
+    
+    # Si el usuario mandó SOLO la foto (sin texto) y el análisis tiene dudas, manda la regla de dudas (no registrar aún)
+    if es_solo_foto(prompt) and not _platos_claros(vision):
+        return False
+
+    return True
 
 
 def instruccion_solo_foto(vision) -> str:

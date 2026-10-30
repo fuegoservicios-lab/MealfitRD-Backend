@@ -242,3 +242,42 @@ def test_fusion_into_existing_meal_slot(monkeypatch):
     assert "0054ec80-9496-4c7d-b7a3-8ba74e94662a" in fused["nutrition"]["attachment_ids"]
     assert "dd32eeb3-104e-492f-859d-cfa1410fcb0f" in fused["nutrition"]["attachment_ids"]
 
+
+def test_independent_meals_same_slot_never_fused():
+    """Dos comidas distintas en la misma franja (ej. cenó a las 5pm y luego a las 10pm manda otra cena)
+    NUNCA deben fusionarse si el usuario no dice explícitamente que fue parte de la comida previa."""
+    from agent import _detectar_slot_para_fusion, _intentar_fusionar_alimento_en_comida_existente
+    # El usuario responde "si, como cena" a una pregunta o manda un plato
+    messages = [HumanMessage(content="si, como cena")]
+    tool_args = {"meal_name": "Mangú con salchicha", "meal_type": "cena", "calories": 490}
+    # No debe detectar slot para fusión
+    assert _detectar_slot_para_fusion(messages, tool_args) is None
+    assert _intentar_fusionar_alimento_en_comida_existente("user-123", tool_args, messages) is None
+
+
+def test_meals_created_in_previous_turn_allows_rectification():
+    """Si el usuario mandó una foto y 1 minuto después aclara el ingrediente (ej. 'Bistec de res'),
+    _meals_created_in_previous_turn debe capturar el ID de la comida recién anotada."""
+    from agent import _meals_created_in_previous_turn
+    messages = [
+        HumanMessage(content="Pechuga de pollo · Pechuga de pollo"),
+        AIMessage(content="", tool_calls=[{"name": "log_consumed_meal", "args": {}, "id": "t1"}]),
+        ToolMessage(content="¡Éxito! [ID_REGISTRO_DIARIO: meal-abc-123] registrada", tool_call_id="t1"),
+        AIMessage(content="Anoté tu cena."),
+        HumanMessage(content="Bistec de res · Pechuga de pollo"),
+    ]
+    prev_ids = _meals_created_in_previous_turn(messages)
+    assert "meal-abc-123" in prev_ids
+
+
+def test_foto_para_anotar_identifies_composite_dish_names():
+    """Textos con nombres de platos o ingredientes sobre fotos de plato deben marcarse como fotos para anotar."""
+    from respuestas_de_la_foto import foto_para_anotar
+    vision = {"kind": "multi", "items": [{"kind": "plato", "description": "Plato de mangú con salchicha"}]}
+    assert foto_para_anotar(vision, "Guineito verde · Salchicha") is True
+    assert foto_para_anotar(vision, "Pechuga de pollo · Pechuga de pollo") is True
+    assert foto_para_anotar(vision, "Cerdo") is True
+    # Consultas o preguntas siguen siendo NO para anotar
+    assert foto_para_anotar(vision, "¿Cuánto engorda esto?") is False
+
+

@@ -1181,6 +1181,12 @@ _PLATO_INSTRUCCION = (
     "Llama a `correct_consumed_meal` sobre el ID de la comida correspondiente (ej. el almuerzo existente), SUMANDO las calorías y macros del alimento nuevo a los valores que ya tenía ese plato, "
     "y anexando el ingrediente al plato. Dile al usuario que lo sumaste al almuerzo indicando las calorías agregadas y el nuevo total. "
     "Fuera de esta excepción, solo se usa correct_consumed_meal si el usuario pide explícitamente corregir o borrar una comida anterior por texto sin enviar ninguna foto nueva. "
+    "MÚLTIPLES COMIDAS EN LA MISMA FRANJA: El usuario puede registrar dos platos o comidas distintas en la misma franja (ej. cenó algo a las 5 p.m. y luego a las 10 p.m. cena otro plato). "
+    "NUNCA fusiones dos comidas de horas distintas en una sola fila: regístralas como comidas separadas con `log_consumed_meal`. "
+    "La fusión solo aplica si el usuario aclara explícitamente que fue parte de la misma comida («fue parte del almuerzo», «se me quedó de la cena»). "
+    "ACLARACIÓN O RECTIFICACIÓN INMEDIATA DEL PLATO RECIÉN ANOTADO: Si el usuario en el turno inmediatamente siguiente aclara o rectifica qué alimento era "
+    "(ej. de «pechuga de pollo» a «bistec de res»), actualiza ese plato recién anotado recalculando los macros con `correct_consumed_meal` de forma transparente y natural, "
+    "sin dar excusas técnicas ni decir que no pudiste actualizarlo. "
     "NUNCA descartes el resto del plato visible (ej. si la foto tiene plátano verde o mangú con queso y huevos y el texto dice «2 huevos» o «desayuné 2 huevos», "
     "registra el plato completo con el plátano, queso y los 2 huevos con las calorías del plato completo, JAMÁS descartes el resto para registrar solo 2 huevos hervidos). "
     "Si el usuario mencionó un solo ingrediente visible en la foto (ej. «2 huevos» o «Cerdo»), anota el plato completo con el análisis de la foto y di proactivamente nombrando SIEMPRE la franja: "
@@ -1340,17 +1346,13 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         return (base + " Responde a su mensaje teniendo en cuenta la foto. " + _PLATO_INSTRUCCION   # [P1-PLAN-LOTE-168]
                 + _con_dudas(desc) + _respuestas)   # [P1-PLAN-LOTE-305] [P1-PLAN-LOTE-690]
     return base + (
-        " Actúa proactivamente. Menciona amigablemente lo que ves en la foto. REGLA VISUAL DE "
-        "FORMATO: Usa SIEMPRE una lista con viñetas para desglosar sus macros y usa **negritas** para "
-        "resaltarlos. Revisa detalladamente tu 'DIARIO DE HOY' en el system prompt: SI el usuario YA "
-        "tiene registrada la comida principal de esta hora (ej: si ya cenó), NO le preguntes si esto "
-        "es su cena, asume que es un snack extra o pregúntale por qué está comiendo algo adicional; "
-        "si NO tiene nada registrado para esta hora, entonces SÍ pregúntale brevemente si esta foto "
-        "corresponde a su comida del momento (ej: su cena). [P1-CHAT-ACT-DONT-ASK] Si el usuario ya "
-        "dijo en pasado que se la comió ('me comí esto', 'fue mi cena'), esa frase ES la confirmación: "
-        "registra EN ESE TURNO con log_consumed_meal usando los macros del análisis, pasando "
-        "meal_type; si dice que fue de OTRO día (ej: 'es el almuerzo de ayer'), pasa también days_ago "
-        "(1=ayer) para que NO cuente en las macros de hoy. Sólo responde directo y conversacional."
+        " FOTO DE PLATO SERVIDO: Anótala INMEDIATAMENTE en este mismo turno con `log_consumed_meal` usando los "
+        "macros del análisis del plato completo y el meal_type correspondiente según la hora del día (desayuno, "
+        "almuerzo, cena o merienda). PROHIBIDO pedir permiso («¿lo comiste?», «¿quieres que lo registre?») y "
+        "PROHIBIDO preguntar la franja («¿es tu cena?», «¿lo comiste como cena?»): regístrala de una vez y confírmalo "
+        "claramente nombrando la franja (ej. «Anoté tu cena...»). Si dice que fue de OTRO día (ej: 'es el almuerzo de "
+        "ayer'), pasa también days_ago (1=ayer) para que NO cuente en las macros de hoy. Sólo responde directo y "
+        "conversacional."
     ) + _con_dudas(desc) + _respuestas   # [P1-PLAN-LOTE-305] [P1-PLAN-LOTE-690]
 
 

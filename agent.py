@@ -4858,12 +4858,30 @@ def _meals_created_this_turn(messages: list) -> set[str]:
     """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] IDs de comidas que fueron creadas en este mismo turno."""
     created = set()
     for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
             break
         content = getattr(msg, "content", "") or ""
         if isinstance(content, str) and "[ID_REGISTRO_DIARIO:" in content:
             for match in re.finditer(r"\[ID_REGISTRO_DIARIO:\s*([a-zA-Z0-9_\-]+)", content, re.IGNORECASE):
                 created.add(match.group(1))
+    return created
+
+
+def _meals_created_in_previous_turn(messages: list) -> set[str]:
+    """IDs de comidas creadas en el turno de asistente inmediatamente anterior al actual."""
+    created = set()
+    human_count = 0
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            human_count += 1
+            if human_count > 2:
+                break
+            continue
+        if human_count == 1:
+            content = getattr(msg, "content", "") or ""
+            if isinstance(content, str) and "[ID_REGISTRO_DIARIO:" in content:
+                for match in re.finditer(r"\[ID_REGISTRO_DIARIO:\s*([a-zA-Z0-9_\-]+)", content, re.IGNORECASE):
+                    created.add(match.group(1))
     return created
 
 
@@ -5039,20 +5057,23 @@ def execute_tools(state: ChatState):
                     tool_args["force"] = False
 
                 # [P1-PHOTO-DIARY-PROTECT · 2026-10-26] Prohibir que un turno con foto de plato nueva
-                # (o con respuesta rápida a sus dudas) altere comidas anteriores del diario con correct_consumed_meal.
+                # altere comidas anteriores del diario con correct_consumed_meal (salvo que sea la recién creada en el turno previo para rectificar).
                 if tool_name == "correct_consumed_meal" and (state.get("turn_photo_to_log") or state.get("turn_plate_photos")):
                     created_this_turn = _meals_created_this_turn(messages)
+                    created_prev_turn = _meals_created_in_previous_turn(messages)
+                    recent_created = created_this_turn | created_prev_turn
                     target_id = str(tool_args.get("meal_id") or "").strip()
-                    if target_id not in created_this_turn and not _es_solicitud_explicita_de_corregir_diario(messages):
+                    if target_id not in recent_created and not _es_solicitud_explicita_de_corregir_diario(messages):
                         logger.warning(
                             f"🛡️ [P1-PHOTO-DIARY-PROTECT] Bloqueado correct_consumed_meal sobre comida previa ({target_id}) "
                             f"en turno con foto de plato (user={str(state.get('user_id'))[:8]})."
                         )
                         tool_result = (
                             "ERROR: En este turno el usuario envió una FOTO DE PLATO NUEVA (o contestó una duda de su foto). "
-                            "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario. "
+                            "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario de horas antes. "
                             "Esta foto ES UNA COMIDA NUEVA que debes registrar con `log_consumed_meal` usando las cifras del "
-                            "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`."
+                            "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`. "
+                            "(Esta nota es interna: NUNCA le digas al usuario que no pudiste actualizar el registro ni le pidas permiso para intentar corregir)."
                         )
                         tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
                         continue
@@ -5808,10 +5829,11 @@ def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
 
 def _detectar_slot_para_fusion(messages: list, tool_args: dict = None) -> Optional[str]:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Detecta a qué slot principal ('desayuno', 'almuerzo', 'cena')
-    pertenece la comida a registrar o corregir.
+    pertenece la comida que el usuario afirma explícitamente haber comido como parte de una comida existente.
     
-    1. Revisa primero si el usuario expresó intención en su mensaje (ej. 'en el almuerzo me comí otro...').
-    2. Si no, si tool_args trae meal_type ('almuerzo', 'desayuno', 'cena') y days_ago es 0 o None.
+    CRÍTICO: Solo se fusiona si el USUARIO expresó intención en su mensaje (ej. 'fue parte del almuerzo',
+    'agrégalo a la cena', 'se me quedó del desayuno'). Un nuevo plato o comida registrado con meal_type='cena'
+    es una comida independiente y NUNCA debe fusionarse automáticamente con una comida previa de ese slot.
     """
     days = (tool_args or {}).get("days_ago")
     if days is not None and int(days) > 0:
@@ -5820,10 +5842,6 @@ def _detectar_slot_para_fusion(messages: list, tool_args: dict = None) -> Option
     slot_msg = _detectar_intencion_parte_de_comida(messages)
     if slot_msg:
         return slot_msg
-
-    mt = str((tool_args or {}).get("meal_type") or "").strip().lower()
-    if mt in ("almuerzo", "desayuno", "cena"):
-        return mt
 
     return None
 
