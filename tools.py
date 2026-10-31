@@ -1375,7 +1375,7 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
             except Exception as _mg_err:
                 logger.warning(f"[P1-PLAN-LOTE-226] margen tras el registro no calculado: {_mg_err!r}")
             return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "
-                    f"ve en «Tus macros y micros de hoy». Si hablas del total del día o de lo que le falta, usa ESTA "
+                    f"ve en su diario de hoy. Si hablas del total del día o de lo que le falta, usa ESTA "
                     f"suma: lo que le falta es la meta del bloque «LO QUE LE FALTA HOY» menos esta suma (ese bloque se "
                     f"calculó ANTES de este registro). NUNCA partas de un total dicho en mensajes anteriores de la "
                     f"conversación: pueden ser de otro día.{_margen})")
