@@ -4830,7 +4830,7 @@ def _form_field_updates_after_write(field: str, parsed_value, user_id: Optional[
 def _es_solicitud_explicita_de_corregir_diario(messages: list) -> bool:
     """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] ¿El usuario pidió explícitamente corregir, borrar o fusionar una comida del diario?"""
     for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
             c = msg.content
             t = (c if isinstance(c, str) else " ".join(
                 p.get("text", "") for p in (c or []) if isinstance(p, dict))).lower()
@@ -4846,6 +4846,8 @@ def _es_solicitud_explicita_de_corregir_diario(messages: list) -> bool:
                 "sumar al", "súmalo", "sumalo", "junto con el", "junto con la",
                 "se me quedó", "se me quedo", "se me olvidó del", "se me olvido del",
                 "se me olvidó en el", "se me olvido en el", "se me olvidó en la", "se me olvido en la",
+                "se me olvidó", "se me olvido", "olvidé", "olvide", "faltó", "falto",
+                "extra", "de extra", "además", "ademas", "y también", "y tambien",
                 "también comí en el", "tambien comi en el", "también comí en la", "tambien comi en la",
                 "lo comí en el", "lo comi en el", "lo comí en la", "lo comi en la",
                 "en el almuerzo", "en el desayuno", "en la cena", "para el almuerzo", "para la cena", "para el desayuno",
@@ -5779,12 +5781,50 @@ def _fusionar_ingredientes(orig_list: list, new_list: list) -> list:
     return result
 
 
+def _slot_comida_turno_previo(messages: list) -> Optional[tuple[str, Optional[str]]]:
+    """[P1-PHOTO-DIARY-FUSION · 2026-10-30] Devuelve (slot, meal_id) de la comida registrada
+    o modificada en el turno de asistente inmediatamente anterior al actual."""
+    human_count = 0
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            human_count += 1
+            if human_count > 2:
+                break
+            continue
+        if human_count == 1:
+            # 1. Revisar ToolMessage
+            content = getattr(msg, "content", "") or ""
+            if isinstance(content, str):
+                match_id = re.search(r"\[ID_REGISTRO_DIARIO:\s*([a-zA-Z0-9_\-]+)", content, re.IGNORECASE)
+                match_slot = re.search(r"como\s+(desayuno|almuerzo|cena|merienda|snack|suplemento)", content, re.IGNORECASE)
+                if match_slot:
+                    mid = match_id.group(1) if match_id else None
+                    return (match_slot.group(1).lower(), mid)
+                if match_id:
+                    mid = match_id.group(1)
+                    for s in ("desayuno", "almuerzo", "cena", "merienda", "snack"):
+                        if s in content.lower():
+                            return (s, mid)
+            # 2. Revisar tool_calls en AIMessage
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            for tc in tool_calls:
+                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                if name in ("log_consumed_meal", "correct_consumed_meal"):
+                    args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
+                    if isinstance(args, dict):
+                        mt = str(args.get("meal_type") or "").strip().lower()
+                        mid = str(args.get("meal_id") or "").strip() or None
+                        if mt in ("desayuno", "almuerzo", "cena", "merienda", "snack"):
+                            return (mt, mid)
+    return None
+
+
 def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Detecta si el usuario indica que la comida/foto
     fue parte de un slot de comida existente (ej. 'fue parte del almuerzo', 'agrégalo al desayuno',
-    'me comí otro guineo más en el almuerzo'). Retorna el slot: 'desayuno', 'almuerzo', 'cena', 'merienda', o None."""
+    'me comí otro guineo más en el almuerzo', o adición inmediata como 'extra lata de atun'). Retorna el slot: 'desayuno', 'almuerzo', 'cena', 'merienda', o None."""
     for msg in reversed(messages or []):
-        if isinstance(msg, HumanMessage):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
             c = msg.content
             t = (c if isinstance(c, str) else " ".join(
                 p.get("text", "") for p in (c or []) if isinstance(p, dict))).lower()
@@ -5813,16 +5853,44 @@ def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
             es_intencion = any(w in t for w in phrases) or (
                 any(s in t for s in slots_phrases) and any(c in t for c in consumption_triggers)
             )
-            if not es_intencion:
-                return None
-            if "almuerzo" in t or "lunch" in t:
-                return "almuerzo"
-            if "desayuno" in t or "breakfast" in t:
-                return "desayuno"
-            if "cena" in t or "dinner" in t:
-                return "cena"
-            if "merienda" in t or "snack" in t:
-                return "merienda"
+            if es_intencion:
+                if "almuerzo" in t or "lunch" in t:
+                    return "almuerzo"
+                if "desayuno" in t or "breakfast" in t:
+                    return "desayuno"
+                if "cena" in t or "dinner" in t:
+                    return "cena"
+                if "merienda" in t or "snack" in t:
+                    return "merienda"
+
+            # [P1-PHOTO-DIARY-FUSION · 2026-10-30] Adición inmediata al turno previo (ej: "Extra lata de atun genova", "Además un café")
+            addition_patterns = (
+                r"^(?:de\s+)?extra\b",
+                r"^y\s+de\s+extra\b",
+                r"^(?:y\s+)?adem[aá]s\b",
+                r"^(?:y\s+)?tambi[eé]n\b",
+                r"^(?:se\s+me\s+)?(?:qued[oó]|olvid[oó])\b",
+                r"^olvid[eé](?:\s+poner|\s+decir(?:te)?)?\b",
+                r"^falt[oó]\b",
+                r"^(?:agr[eé]ga(?:le)?|a[nñ][aá]de(?:le)?|s[uú]ma(?:le)?)\b",
+                r"^(?:y|con)\s+(?:una?|dos|2|tres|3|medio|media|otro|otra|un\s+poco\s+de)\b",
+            )
+            clean_t = t.strip()
+            es_adicion_inmediata = any(re.search(pat, clean_t, re.IGNORECASE) for pat in addition_patterns)
+            if es_adicion_inmediata:
+                if "almuerzo" in t or "lunch" in t:
+                    return "almuerzo"
+                if "desayuno" in t or "breakfast" in t:
+                    return "desayuno"
+                if "cena" in t or "dinner" in t:
+                    return "cena"
+                if "merienda" in t or "snack" in t:
+                    return "merienda"
+                prev = _slot_comida_turno_previo(messages)
+                if prev:
+                    slot, _ = prev
+                    return slot
+
             return None
     return None
 
@@ -5873,7 +5941,22 @@ def _intentar_fusionar_alimento_en_comida_existente(
     target_slot = _detectar_slot_para_fusion(messages, tool_args)
     if not target_slot:
         return None
-    orig = _buscar_comida_previa_del_slot(user_id, target_slot)
+    
+    # [P1-PHOTO-DIARY-FUSION · 2026-10-30] Priorizar el ID exacto del turno previo si coincide con target_slot
+    prev_info = _slot_comida_turno_previo(messages)
+    orig = None
+    if prev_info and prev_info[0] == target_slot and prev_info[1]:
+        try:
+            from db_facts import get_consumed_meals_today
+            today_meals = get_consumed_meals_today(user_id) or []
+            for m in today_meals:
+                if str(m.get("id")) == str(prev_info[1]):
+                    orig = m
+                    break
+        except Exception as e:
+            logger.debug(f"Error buscando comida por id previo: {e}")
+    if not orig:
+        orig = _buscar_comida_previa_del_slot(user_id, target_slot)
     if not orig:
         return None
     
@@ -5893,7 +5976,15 @@ def _intentar_fusionar_alimento_en_comida_existente(
     add_carbs = int(tool_args.get("carbs") or 0)
     add_fats = int(tool_args.get("healthy_fats") or 0)
 
-    if add_cal >= orig_cal and orig_cal > 0:
+    orig_words = set(w.lower() for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", orig_name))
+    new_words = set(w.lower() for w in re.findall(r"\b[a-záéíóúñ]{4,}\b", new_name))
+    overlap = orig_words & new_words
+    es_reemplazo_completo = (
+        orig_name.lower() in new_name.lower()
+        or (len(orig_words) >= 2 and len(overlap) / len(orig_words) >= 0.5)
+    )
+
+    if es_reemplazo_completo and add_cal >= orig_cal and orig_cal > 0:
         tot_cal, tot_prot, tot_carbs, tot_fats = add_cal, add_prot, add_carbs, add_fats
     else:
         tot_cal = orig_cal + add_cal

@@ -281,3 +281,68 @@ def test_foto_para_anotar_identifies_composite_dish_names():
     assert foto_para_anotar(vision, "¿Cuánto engorda esto?") is False
 
 
+def test_extra_food_immediate_addition_inherits_previous_meal_slot():
+    """Si el usuario registra desayuno y 1 minuto después escribe 'Extra lata de atun genova',
+    el slot destino debe heredar 'desayuno' de forma inmediata."""
+    from agent import _detectar_slot_para_fusion, _slot_comida_turno_previo
+    messages = [
+        HumanMessage(content="Desayune 1 rodaja de pan con queso cottage y mantequilla de mani"),
+        AIMessage(content="", tool_calls=[{"name": "log_consumed_meal", "args": {"meal_type": "desayuno", "meal_name": "1 rodaja de pan con queso cottage"}, "id": "t1"}]),
+        ToolMessage(content="¡Éxito! Se ha registrado el consumo de '1 rodaja de pan con queso cottage' (230 kcal, 11g proteína) como desayuno en tu diario. [ID_REGISTRO_DIARIO: meal-desayuno-789]", tool_call_id="t1"),
+        AIMessage(content="Anoté tu desayuno..."),
+        HumanMessage(content="Extra lata de atun genova"),
+    ]
+    slot, mid = _slot_comida_turno_previo(messages)
+    assert slot == "desayuno"
+    assert mid == "meal-desayuno-789"
+
+    tool_args = {"meal_name": "lata de atun genova", "meal_type": "almuerzo", "calories": 190, "protein": 24}
+    assert _detectar_slot_para_fusion(messages, tool_args) == "desayuno"
+
+
+def test_extra_food_fuses_into_previous_meal_sums_calories(monkeypatch):
+    """La lata de atún extra (190 kcal, 24g prot) debe sumarse al desayuno previo (230 kcal, 11g prot)
+    totalizando 420 kcal y 35g proteína en la misma fila."""
+    from agent import _intentar_fusionar_alimento_en_comida_existente
+    import db_facts
+
+    mock_meals = [{
+        "id": "meal-desayuno-789",
+        "meal_name": "1 rodaja de pan con queso cottage y mantequilla de maní",
+        "meal_type": "desayuno",
+        "calories": 230,
+        "protein": 11,
+        "carbs": 25,
+        "healthy_fats": 9,
+        "ingredients": ["1 rodaja de pan", "queso cottage (30 g)", "mantequilla de maní (15 g)"],
+        "nutrition": {},
+        "created_at": "2026-10-30T12:51:00Z",
+    }]
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda user_id: mock_meals)
+
+    messages = [
+        HumanMessage(content="Desayune 1 rodaja de pan con queso cottage y mantequilla de mani"),
+        AIMessage(content="", tool_calls=[{"name": "log_consumed_meal", "args": {"meal_type": "desayuno", "meal_name": "1 rodaja de pan con queso cottage y mantequilla de maní"}, "id": "t1"}]),
+        ToolMessage(content="¡Éxito! Se ha registrado el consumo como desayuno en tu diario. [ID_REGISTRO_DIARIO: meal-desayuno-789]", tool_call_id="t1"),
+        AIMessage(content="Anoté tu desayuno..."),
+        HumanMessage(content="Extra lata de atun genova"),
+    ]
+    tool_args = {
+        "meal_name": "lata de atún Genova",
+        "meal_type": "almuerzo",  # El LLM o reloj intentó marcarlo como almuerzo
+        "calories": 190,
+        "protein": 24,
+        "carbs": 0,
+        "healthy_fats": 10,
+        "ingredients": ["1 lata de atún Genova (140 g)"],
+    }
+    fused = _intentar_fusionar_alimento_en_comida_existente("user-123", tool_args, messages)
+    assert fused is not None
+    assert fused["meal_id"] == "meal-desayuno-789"
+    assert fused["meal_type"] == "desayuno"
+    assert fused["calories"] == 420  # 230 + 190
+    assert fused["protein"] == 35   # 11 + 24
+    assert "atún" in fused["meal_name"].lower() or "atun" in fused["meal_name"].lower()
+
+
+
