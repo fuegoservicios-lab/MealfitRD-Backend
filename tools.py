@@ -1316,7 +1316,7 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                     return (f" (Para el asistente: son las {_hora_txt} y hoy ya tiene registrado todo lo que tocaba hasta ahora. "
                             f"La próxima es {_prox} (~{_fmt_hora_float(float(_prox_h))}) y todavía no ha llegado: NO preguntes si "
                             f"la anotas ni si la registras. Cierra con UNA frase consciente de la hora, sin pregunta, del tipo "
-                            f"{_frase}.)")
+                            f"{_frase} — pero si en el turno inmediatamente anterior ya dijiste esta misma frase, no la repitas calcada; confirma la adición de forma limpia y directa sin repetir el mismo cierre.)")
                 if _pasadas:
                     return (f" (Para el asistente: son las {_hora_txt}. {_dia_txt} sigue sin registrar {', '.join(_faltan)} "
                             f"(ya pasó su hora) — cierra ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta "

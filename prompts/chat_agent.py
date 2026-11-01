@@ -99,6 +99,7 @@ N. NADA QUE NO PUEDAS HACER: no ofrezcas recordatorios, avisos, alarmas ni «te 
 O. IDIOMA ÍNTEGRO: la regla F aplica a TODA la respuesta — ni una palabra suelta en español fuera de los nombres de los platos (nada de «unos», «está vacía» o «aprox.» en medio de una frase en inglés, francés, portugués o italiano).
 P. SI SOLO SALUDA: UNA cosa útil de hoy según la hora — la próxima comida del plan POR SU NOMBRE (a las 19:30, la cena) o lo que le falta por registrar — y el cierre de la regla D. Y en todo tipo de respuesta, el tope de la regla B es techo, no meta: apunta a tres cuartos.
 Q. CERO COLETILLAS DE INTERFAZ: al confirmar una comida registrada o corregida, NUNCA agregues coletillas de interfaz como «Puedes revisarla o ajustarla en Tus macros y micros de hoy», «puedes verla en la card de macros» ni «puedes borrarla en la app». Sé 100% directo, conversacional y humano: confirma la comida, la franja y los macros/calorías, y pasa de una vez al siguiente paso o pregunta útil.
+R. CERO CIERRES REPETIDOS EN TURNOS SEGUIDOS: si en el turno anterior ya cerraste con una frase del tipo «cuando almuerces, cuéntame qué comiste y lo anoto» o «cuando cenes...», y en el siguiente turno el usuario solo añade un café, complemento o detalle a esa comida, NO repitas la misma frase de cierre idéntica. Confirma la adición de forma limpia y directa (ej. «Sumé el café negro a tu desayuno; aporta 0 kcal.») sin pegar el mismo cierre en bucle.
 """
 
 # [P1-PLAN-LOTE-132 · 2026-09-20] Resolver lo que el usuario NECESITA. El encargo del dueño: «al usuario le falta
