@@ -4908,6 +4908,68 @@ def _meals_created_in_previous_turn(messages: list) -> set[str]:
     return created
 
 
+def _rectificar_proteina_especifica_en_args(tool_args: dict, messages: list) -> dict:
+    """[P1-SPECIFIC-PROTEIN · 2026-10-31] Si el usuario especificó una proteína concreta (ej. 'pollo guisado', 'cerdo')
+    pero el análisis o el LLM usó genérico 'carne' o defaulted a 'carne de res', rectificar a la proteína dicha."""
+    if not isinstance(tool_args, dict):
+        return tool_args
+    user_text = ""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            c = msg.content
+            user_text = (c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict))).lower()
+            break
+    if not user_text:
+        return tool_args
+
+    # Caso 1: Usuario indicó pollo/pechuga y no mencionó res
+    if any(k in user_text for k in ("pollo guisado", "pollo", "pechuga")) and not any(k in user_text for k in ("res", "bistec", "churrasco")):
+        name = tool_args.get("meal_name") or ""
+        if "carne guisada" in name.lower() or "carne de res" in name.lower():
+            sub = "pollo guisado" if "guisad" in name.lower() else "pollo"
+            tool_args["meal_name"] = re.sub(r"carne\s+(de\s+res\s+)?guisada", sub, name, flags=re.I)
+            tool_args["meal_name"] = re.sub(r"carne\s+de\s+res", "pollo", tool_args["meal_name"], flags=re.I)
+        ings = tool_args.get("ingredients")
+        if isinstance(ings, list):
+            new_ings = []
+            for ing in ings:
+                ing_str = str(ing)
+                if re.search(r"carne\s+(de\s+res\s+)?guisada", ing_str, re.I):
+                    new_ings.append(re.sub(r"carne\s+(de\s+res\s+)?guisada", "pollo guisado", ing_str, flags=re.I))
+                elif re.search(r"carne\s+de\s+res", ing_str, re.I):
+                    new_ings.append(re.sub(r"carne\s+de\s+res", "pollo", ing_str, flags=re.I))
+                elif re.search(r"salsa\s+de\s+carne", ing_str, re.I):
+                    new_ings.append(re.sub(r"salsa\s+de\s+carne", "salsa de pollo guisado", ing_str, flags=re.I))
+                else:
+                    new_ings.append(ing_str)
+            tool_args["ingredients"] = new_ings
+
+    # Caso 2: Usuario indicó cerdo/puerco/chuleta y no mencionó res
+    elif any(k in user_text for k in ("cerdo guisado", "cerdo", "puerco", "chuleta")) and not any(k in user_text for k in ("res", "bistec", "churrasco", "pollo")):
+        name = tool_args.get("meal_name") or ""
+        if "carne guisada" in name.lower() or "carne de res" in name.lower():
+            sub = "cerdo guisado" if "guisad" in name.lower() else "cerdo"
+            tool_args["meal_name"] = re.sub(r"carne\s+(de\s+res\s+)?guisada", sub, name, flags=re.I)
+            tool_args["meal_name"] = re.sub(r"carne\s+de\s+res", "cerdo", tool_args["meal_name"], flags=re.I)
+        ings = tool_args.get("ingredients")
+        if isinstance(ings, list):
+            new_ings = []
+            for ing in ings:
+                ing_str = str(ing)
+                if re.search(r"carne\s+(de\s+res\s+)?guisada", ing_str, re.I):
+                    new_ings.append(re.sub(r"carne\s+(de\s+res\s+)?guisada", "cerdo guisado", ing_str, flags=re.I))
+                elif re.search(r"carne\s+de\s+res", ing_str, re.I):
+                    new_ings.append(re.sub(r"carne\s+de\s+res", "cerdo", ing_str, flags=re.I))
+                elif re.search(r"salsa\s+de\s+carne", ing_str, re.I):
+                    new_ings.append(re.sub(r"salsa\s+de\s+carne", "salsa de cerdo", ing_str, flags=re.I))
+                else:
+                    new_ings.append(ing_str)
+            tool_args["ingredients"] = new_ings
+
+    return tool_args
+
+
 def execute_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -5071,6 +5133,12 @@ def execute_tools(state: ChatState):
                             _assigned_attachment_ids.add(_aid)
                         _cur_nutrition["attachment_ids"] = _cur_att_ids
                         tool_args["nutrition"] = _cur_nutrition
+
+                # [P1-SPECIFIC-PROTEIN · 2026-10-31] Rectificar si el usuario especificó una proteína
+                # concreta (ej. "pollo guisado") pero el tool_args trajo el genérico "carne de res".
+                if tool_name in ("log_consumed_meal", "correct_consumed_meal"):
+                    tool_args = _rectificar_proteina_especifica_en_args(tool_args, messages)
+
                 if tool_name == "log_consumed_meal" and _repeat_confirmed:
                     tool_args["force"] = True
                 if (tool_name in ("log_consumed_meal", "correct_consumed_meal") and tool_args.get("force")

@@ -1167,7 +1167,11 @@ _DUDAS_INSTRUCCION = (
     "haz UNA sola pregunta, la primera de las DUDAS, tal cual o más natural. Cuando conteste, corrige ESE registro con "
     "`correct_consumed_meal` (con su ID_REGISTRO_DIARIO), nunca registres otro. Excepción: si la duda es QUÉ plato o "
     "alimento principal es (no una cantidad ni el aceite), pregunta ANTES de registrar. Sin DUDAS, no preguntes nada "
-    "de la foto: registra y sigue."
+    "de la foto: registra y sigue. "
+    "DUDA YA RESPONDIDA POR EL USUARIO EN EL MISMO MENSAJE: Si el texto que acompaña la foto ya especifica o aclara esa duda "
+    "(ej. la duda dice «¿Qué tipo de carne es? opciones: Pollo guisado · Res · Cerdo» y el usuario escribió «Pollo guisado» o «de pollo»), "
+    "la duda YA QUEDÓ RESUELTA: NO preguntes la duda en tu respuesta. Registra directamente con la proteína o variante que el usuario indicó, "
+    "reflejándola en el nombre del plato, en los ingredientes y en tu confirmación."
 )
 _PLATO_INSTRUCCION = (
     "FOTO DE PLATO (PRIORIDAD MÁXIMA): cuando el mensaje incluya la foto de un plato servido, esa foto ES la comida "
@@ -1175,6 +1179,7 @@ _PLATO_INSTRUCCION = (
     "(ej. «2 huevos», «con mangú», «pechuga a la plancha», «con poco aceite», «mi desayuno», «desayuné 2 huevos»), ese texto ESPECIFICA, "
     "RESPONDE DUDAS O AJUSTA el plato de la foto — NUNCA es un snack aislado ni reemplaza el plato. Regístralo SIEMPRE con "
     "`log_consumed_meal` usando las cifras del análisis del PLATO COMPLETO (incorporando la aclaración del usuario). "
+    "PROTEÍNA O ALIMENTO ESPECÍFICO MANDA SOBRE TÉRMINOS GENÉRICOS [P1-SPECIFIC-PROTEIN · 2026-10-31]: Si el texto del usuario menciona un tipo específico de proteína o carne (ej. «pollo guisado», «pollo», «pechuga», «res», «cerdo», «pescado», «chivo», «pavo») junto a palabras genéricas como «carne», «comida» o las dudas de la foto («¿qué tipo de carne es?»): la proteína específica que el usuario nombró TIENE PRIORIDAD ABSOLUTA. Nómbrala SIEMPRE explícitamente en el `meal_name` (ej. «Arroz blanco con pollo guisado y ensalada»), ponla en la lista de `ingredients` (ej. «pollo guisado (≈120 g)», JAMÁS «carne de res guisada») y nómbrala en tu respuesta. Nunca degrades un alimento específico a un genérico («carne guisada») ni asumas res cuando el usuario dijo pollo. "
     "PROHIBIDO USAR correct_consumed_meal EN UN TURNO CON FOTO DE PLATO: Una foto de plato servido (o una respuesta a dudas de la foto como «Frito», «Guisado», «2 huevos») "
     "ES UNA COMIDA NUEVA que se registra SIEMPRE con `log_consumed_meal`. NUNCA llames a `correct_consumed_meal` sobre una comida anterior del diario (como el desayuno o una comida previa de horas antes): "
     "eso corrompería el diario del usuario. "
