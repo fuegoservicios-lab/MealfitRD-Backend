@@ -1822,10 +1822,11 @@ def correct_consumed_meal(
       una corrección previa), o 'ultimo' si el usuario pide borrar/corregir
       la última comida registrada. Si delete=True y no tienes el id, pasa
       meal_id="ultimo" o meal_name con el plato a borrar.
-    - delete: Pasa `delete=True` cuando el usuario diga que NO se comió ese
+    - delete: Pasa `delete=True` ÚNICAMENTE cuando el usuario diga que NO se comió ese
       plato («era un ejemplo», «no me comí eso») o te pida explícitamente
-      borrarlo/eliminarlo/quitarlo del diario. Con `delete=True` solo necesitas
-      `user_id`, `delete=True` y opcionalmente `meal_name` o `meal_id`.
+      borrarlo/eliminarlo/quitarlo del diario. NUNCA pases `delete=True` si el usuario
+      no usó palabras explícitas de borrado (jamás borres por nombres raros o erratas).
+      Con `delete=True` solo necesitas `user_id`, `delete=True` y opcionalmente `meal_name` o `meal_id`.
     - Pasa SOLO los campos que hay que cambiar (deja el resto en None/sin
       mencionar) — no hace falta reenviar lo que ya estaba bien. PERO si el
       usuario aclara ingredientes, preparación o estilo culinario que cambia

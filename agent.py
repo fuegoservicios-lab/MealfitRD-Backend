@@ -4856,6 +4856,27 @@ def _es_solicitud_explicita_de_corregir_diario(messages: list) -> bool:
     return False
 
 
+def _es_solicitud_explicita_de_borrado_diario(messages: list) -> bool:
+    """[P1-DELETE-GUARD · 2026-10-31] ¿El usuario pidió explícitamente borrar, eliminar o deshacer un registro del diario, o dijo que no se lo comió?"""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            c = msg.content
+            t = (c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict))).lower()
+            return any(w in t for w in (
+                "borra", "borrar", "bórralo", "borralo", "bórrala", "borrala", "bórralas", "borralos",
+                "elimina", "eliminar", "elimínalo", "eliminalo", "elimínala", "eliminala",
+                "quita", "quitar", "quítalo", "quitalo", "quítala", "quitala",
+                "deshaz", "deshacer", "deshazlo", "deshazla", "deshacerlo",
+                "no me comí", "no me comi", "no comí", "no comi", "no me lo comí", "no me lo comi",
+                "no me la comí", "no me la comi", "no lo comí", "no lo comi", "no lo he comido", "no me lo he comido",
+                "era un ejemplo", "es un ejemplo", "solo un ejemplo", "sólo un ejemplo",
+                "era broma", "es broma", "no lo anotes", "no lo registres", "cancela el registro",
+                "anula el registro", "cancélalo", "cancelalo",
+            ))
+    return False
+
+
 def _meals_created_this_turn(messages: list) -> set[str]:
     """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] IDs de comidas que fueron creadas en este mismo turno."""
     created = set()
@@ -5057,6 +5078,25 @@ def execute_tools(state: ChatState):
                     logger.warning(f"🛡️ [P1-PLAN-LOTE-168] {tool_name} force=true sin confirmación de "
                                    f"otra porción consumida → force=false")
                     tool_args["force"] = False
+
+                # [P1-DELETE-GUARD · 2026-10-31] Prohibir correct_consumed_meal con delete=True
+                # si el usuario NO ha pedido borrar ni ha declarado que no se comió el alimento.
+                # Evita que el agente borre unilateralmente comidas ante erratas de teclado ("Tsurus blanca")
+                # o elimine comidas recién creadas en el mismo turno.
+                if tool_name == "correct_consumed_meal" and bool(tool_args.get("delete")):
+                    if not _es_solicitud_explicita_de_borrado_diario(messages):
+                        logger.warning(
+                            f"🛡️ [P1-DELETE-GUARD] Bloqueado correct_consumed_meal(delete=True) sin solicitud explícita "
+                            f"del usuario (user={str(state.get('user_id'))[:8]})."
+                        )
+                        tool_result = (
+                            "ERROR: El usuario NO ha pedido borrar ni eliminar ninguna comida del diario, "
+                            "ni ha dicho que no se la comió. Está TERMINANTEMENTE PROHIBIDO borrar comidas del diario "
+                            "salvo que el usuario lo pida explícitamente («bórralo», «elimina», «no me comí eso», «era un ejemplo»). "
+                            "Mantén la comida registrada en el diario y confirma de inmediato al usuario qué quedó anotado."
+                        )
+                        tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
+                        continue
 
                 # [P1-PHOTO-DIARY-PROTECT · 2026-10-26] Prohibir que un turno con foto de plato nueva
                 # altere comidas anteriores del diario con correct_consumed_meal (salvo que sea la recién creada en el turno previo para rectificar).
