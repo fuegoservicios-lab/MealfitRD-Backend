@@ -4740,6 +4740,12 @@ def call_model(state: ChatState):
             _fallback_locale = None
         from prompts.chat_agent import empty_response_fallback as _empty_response_fallback
         response = AIMessage(content=_empty_response_fallback(_fallback_locale))
+    elif _resp_content_str and not _resp_tool_calls and isinstance(getattr(response, "content", None), str):
+        # [BB-014 · 2026-11-01] Si el asistente ya preguntó por una comida faltante (ej. desayuno/ayunas)
+        # en un turno previo de esta conversación, recortar si intentó repetir esa pregunta al cierre.
+        _cleaned_resp = _strip_repeated_missing_meal_question(response.content, messages)
+        if _cleaned_resp != response.content:
+            response.content = _cleaned_resp
 
     # [P2-CHAT-TOKEN-TELEMETRY · 2026-05-19] Best-effort post-invoke.
     # Importa lazy para evitar acoplamiento module-init con graph_orchestrator
@@ -4968,6 +4974,192 @@ def _rectificar_proteina_especifica_en_args(tool_args: dict, messages: list) -> 
             tool_args["ingredients"] = new_ings
 
     return tool_args
+
+
+_STOPWORDS_PLATO_TURNO = {
+    "desayuno", "desayune", "desayunar", "almuerzo", "almorce", "almorzar",
+    "cena", "cene", "cenar", "merienda", "merende", "merendar", "snack",
+    "comida", "plato", "porcion", "racion", "taza", "tazas", "vaso", "vasos",
+    "gramos", "hervido", "hervida", "hervidos", "hervidas", "frito", "frita",
+    "fritos", "fritas", "asado", "asada", "cocido", "cocida", "guisado",
+    "guisada", "plancha", "para", "como", "con", "sin", "una", "uno", "unos",
+    "unas", "del", "las", "los", "por", "que", "esto", "esta", "este", "hoy",
+}
+
+
+def _tokens_alimento_plato(text: str) -> set[str]:
+    import unicodedata as _ud
+    norm = "".join(c for c in _ud.normalize("NFD", str(text or "").lower()) if not _ud.combining(c))
+    words = re.findall(r"[a-z]{3,}", norm)
+    return {w for w in words if w not in _STOPWORDS_PLATO_TURNO}
+
+
+def _es_segundo_plato_distinto_del_turno(
+    tool_args: dict, messages: list, user_text: str, current_tool_id: Optional[str] = None
+) -> bool:
+    """[BB-014 · 2026-11-01] Determina si una segunda llamada a `log_consumed_meal` en el mismo
+    turno registra un segundo plato genuinamente distinto mencionado por el usuario en su mensaje
+    (ej. 'De comida un bowl de pasta con pollo y de cena un steak de res'), en vez de clonar
+    el mismo plato en otra franja."""
+    if not isinstance(tool_args, dict):
+        return False
+    new_name = str(tool_args.get("meal_name") or "").strip()
+    new_type = str(tool_args.get("meal_type") or "").strip().lower()
+    if not new_name:
+        return False
+
+    new_tokens = _tokens_alimento_plato(new_name)
+    user_tokens = _tokens_alimento_plato(user_text)
+    if not new_tokens or not user_tokens:
+        return False
+
+    prev_names: list[str] = []
+    prev_types: set[str] = set()
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            break
+        tcs = getattr(msg, "tool_calls", None) or []
+        for tc in tcs:
+            tc_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+            tc_args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)
+            if tc_name != "log_consumed_meal" or (current_tool_id and tc_id == current_tool_id):
+                continue
+            if isinstance(tc_args, dict):
+                pname = str(tc_args.get("meal_name") or "").strip()
+                ptype = str(tc_args.get("meal_type") or "").strip().lower()
+                if pname:
+                    prev_names.append(pname)
+                if ptype:
+                    prev_types.add(ptype)
+
+    if not prev_names:
+        return False
+    if new_type and new_type in prev_types:
+        return False
+
+    prev_tokens: set[str] = set()
+    for pname in prev_names:
+        prev_tokens |= _tokens_alimento_plato(pname)
+    if not prev_tokens:
+        return False
+
+    # El nuevo plato debe aportar palabras de alimento presentes en el texto del usuario
+    # que NO estaban en el primer plato, y el primer plato también debe tener sus propias palabras en el texto.
+    exclusivos_nuevos_en_usuario = (new_tokens - prev_tokens) & user_tokens
+    exclusivos_previos_en_usuario = (prev_tokens - new_tokens) & user_tokens
+    return bool(exclusivos_nuevos_en_usuario and exclusivos_previos_en_usuario)
+
+
+_SLOT_PATTERNS_PREGUNTA = {
+    "desayuno": ("desayuno", "desayunaste", "desayunar"),
+    "almuerzo": ("almuerzo", "almorzaste", "almorzar"),
+    "merienda": ("merienda", "merendaste", "merendar"),
+    "cena": ("cena", "cenaste", "cenar"),
+}
+
+
+def _slots_faltantes_ya_preguntados_en_conversacion(messages: list) -> set[str]:
+    """[BB-014 · 2026-11-01] Devuelve las franjas de comida por las que el asistente YA preguntó
+    en turnos previos de esta conversación (ej. '¿qué comiste en el desayuno, o estuviste en ayunas?')."""
+    import unicodedata as _ud
+    asked: set[str] = set()
+    seen_latest_human = False
+    for msg in reversed(messages or []):
+        is_human = (
+            isinstance(msg, HumanMessage)
+            or getattr(msg, "type", None) in ("human", "user")
+            or msg.__class__.__name__ == "HumanMessage"
+        )
+        if is_human:
+            seen_latest_human = True
+            continue
+        if not seen_latest_human:
+            continue
+        is_ai = (
+            isinstance(msg, AIMessage)
+            or getattr(msg, "type", None) in ("ai", "assistant", "model")
+            or msg.__class__.__name__ == "AIMessage"
+        )
+        if not is_ai:
+            continue
+        raw = getattr(msg, "content", "") or ""
+        if not isinstance(raw, str) or ("?" not in raw and "¿" not in raw):
+            continue
+        norm = "".join(c for c in _ud.normalize("NFD", raw.lower()) if not _ud.combining(c))
+        if not any(k in norm for k in ("que comiste", "ayunas", "no comiste", "saltaste", "desayunaste", "almorzaste", "merendaste", "cenaste", "falta")):
+            continue
+        for slot, pats in _SLOT_PATTERNS_PREGUNTA.items():
+            if any(p in norm for p in pats):
+                asked.add(slot)
+    return asked
+
+
+def _neutralizar_nota_comida_faltante_ya_preguntada(tool_result: str, messages: list) -> str:
+    """[BB-014 · 2026-11-01] Si `tool_result` instruye al asistente a preguntar por una comida
+    sin registrar (ej. desayuno) pero el asistente YA lo preguntó en un turno previo de esta
+    conversación, reemplaza la orden para que NO repita la pregunta."""
+    if not isinstance(tool_result, str) or "sigue sin registrar" not in tool_result:
+        return tool_result
+    asked_slots = _slots_faltantes_ya_preguntados_en_conversacion(messages)
+    if not asked_slots:
+        return tool_result
+
+    m = re.search(
+        r"sigue sin registrar\s+([a-záéíóú,\s]+?)(?:\s*\(|\s*,?\s*que ya|\s*—|\s*-)",
+        tool_result,
+        re.IGNORECASE,
+    )
+    if not m:
+        return tool_result
+    slots_in_note = [s.strip().lower() for s in m.group(1).split(",") if s.strip()]
+    if not slots_in_note:
+        return tool_result
+
+    remaining_slots = [s for s in slots_in_note if s not in asked_slots]
+    if remaining_slots:
+        return tool_result
+
+    # Todos los slots faltantes de la nota ya fueron preguntados antes en este chat.
+    replacement = (
+        " (Para el asistente: Ya le preguntaste antes en esta conversación por "
+        f"{', '.join(slots_in_note)} y no lo contestó. PROHIBIDO volver a preguntar qué comió "
+        f"en {', '.join(slots_in_note)} o si estuvo en ayunas: cierra tu respuesta confirmando "
+        "únicamente el registro actual, sin hacer ninguna pregunta al final.)"
+    )
+    return re.sub(
+        r"\s*\(Para el asistente:[^)]*sigue sin registrar.*?cierra sin volver a nombrarla\.\)",
+        replacement,
+        tool_result,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def _strip_repeated_missing_meal_question(content: str, messages: list) -> str:
+    """[BB-014 · 2026-11-01] Si el LLM aun así repite al final la pregunta sobre una comida
+    faltante que ya preguntó en un turno anterior de la conversación, la recorta limpiamente."""
+    if not isinstance(content, str) or ("?" not in content and "¿" not in content):
+        return content
+    asked_slots = _slots_faltantes_ya_preguntados_en_conversacion(messages)
+    if not asked_slots:
+        return content
+
+    slot_words = []
+    for s in asked_slots:
+        slot_words.extend(_SLOT_PATTERNS_PREGUNTA.get(s, (s,)))
+    slot_alt = "|".join(re.escape(w) for w in slot_words)
+    pattern = re.compile(
+        rf"([;.]?)\s*¿[^?]*\b(?:{slot_alt})\b[^?]*\?\s*(\[UI_ACTION:[^\]]+\])?\s*$",
+        re.IGNORECASE,
+    )
+    m = pattern.search(content)
+    if not m:
+        return content
+    ui_tag = f" {m.group(2)}" if m.group(2) else ""
+    prefix = content[:m.start()].rstrip()
+    if prefix and prefix[-1] not in ".!":
+        prefix += "."
+    return f"{prefix}{ui_tag}"
 
 
 def execute_tools(state: ChatState):
@@ -5218,7 +5410,13 @@ def execute_tools(state: ChatState):
                             _user_text = " ".join(str(p.get("text", "")) for p in _user_text if isinstance(p, dict))
                         from meal_registration_time import _RE_EXPLICIT_MEAL_SLOT
                         _slots_en_texto = len(_RE_EXPLICIT_MEAL_SLOT.findall(str(_user_text)))
-                        if _num_fotos <= 1 and _slots_en_texto < 2:
+                        if (
+                            _num_fotos <= 1
+                            and _slots_en_texto < 2
+                            and not _es_segundo_plato_distinto_del_turno(
+                                tool_args, messages, str(_user_text), current_tool_id=tool_id
+                            )
+                        ):
                             logger.warning(
                                 f"🛡️ [P1-ANTI-CLONE-GUARD] Bloqueado log_consumed_meal duplicado en el mismo turno "
                                 f"(ya se creó {created_this_turn}) para user={str(state.get('user_id'))[:8]}."
@@ -5570,6 +5768,9 @@ def execute_tools(state: ChatState):
                     cid = match.group(1)
                     if cid and cid not in diary_corrected_meal_ids:
                         diary_corrected_meal_ids.append(cid)
+
+            if tool_name in ("log_consumed_meal", "correct_consumed_meal") and isinstance(tool_result, str):
+                tool_result = _neutralizar_nota_comida_faltante_ya_preguntada(tool_result, messages)
 
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
             

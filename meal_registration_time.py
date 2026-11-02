@@ -63,6 +63,7 @@ def normalize_live_offset(value, convention=None):
 
 _RE_EXPLICIT_MEAL_SLOT = re.compile(
     r'\b(desayun\w*|almor[zc]\w*|almuer[zc]\w*|cen\w*|mer(?:i)?end\w*|snack\w*|'
+    r'(?:de|para(?:\s+la)?|en\s+la|mi|como)\s+comida|'
     r'breakfast|lunch|dinner|supper|cafe da manha|almo[cç]o|jantar|lanch\w*|'
     r'petit.dejeuner|dejeuner|diner|gout\w*|colazione|pranzo)\b',
     re.IGNORECASE,
