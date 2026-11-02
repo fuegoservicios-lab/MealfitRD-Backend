@@ -5111,9 +5111,27 @@ def execute_tools(state: ChatState):
                         )
                         tool_args = _adjusted_fusion
 
-                # [P1-MULTI-PHOTO-MATCH · 2026-10-27] Asignar el adjunto correspondiente de este turno
-                # a la comida registrada en el diario para que su foto quede enlazada con exactitud.
+                # [P1-MULTI-PHOTO-MATCH · 2026-10-27] [P1-PHOTO-DEDUP-LEAK · 2026-11-01]
+                # Asignar el adjunto correspondiente de este turno a la comida registrada en el diario.
+                # Sanitización estricta: una comida nueva SOLO puede asociarse a fotos del turno ACTUAL.
+                # Si el LLM arrastró attachment_ids de turnos anteriores del historial, se eliminan para
+                # evitar que el deduplicador de fotos (db_facts) bloquee el registro por choque con comidas previas.
                 if tool_name == "log_consumed_meal":
+                    _valid_turn_ids = {
+                        str(p["attachment_id"])
+                        for p in (state.get("turn_plate_photos") or [])
+                        if isinstance(p, dict) and p.get("attachment_id")
+                    }
+                    _cur_nutrition = tool_args.get("nutrition")
+                    if isinstance(_cur_nutrition, dict):
+                        _cur_nutrition = dict(_cur_nutrition)
+                        _clean_att = [str(a) for a in (_cur_nutrition.get("attachment_ids") or []) if str(a) in _valid_turn_ids]
+                        if _clean_att:
+                            _cur_nutrition["attachment_ids"] = _clean_att
+                        else:
+                            _cur_nutrition.pop("attachment_ids", None)
+                        tool_args["nutrition"] = _cur_nutrition
+
                     _matched_att_ids = _asociar_adjuntos_a_comida(
                         tool_args,
                         state.get("turn_plate_photos") or [],
@@ -5121,11 +5139,8 @@ def execute_tools(state: ChatState):
                         allow_multiple=(_meal_calls_count <= 1),
                     )
                     if _matched_att_ids:
-                        _cur_nutrition = tool_args.get("nutrition")
                         if not isinstance(_cur_nutrition, dict):
                             _cur_nutrition = {}
-                        else:
-                            _cur_nutrition = dict(_cur_nutrition)
                         _cur_att_ids = list(_cur_nutrition.get("attachment_ids") or [])
                         for _aid in _matched_att_ids:
                             if _aid not in _cur_att_ids:
