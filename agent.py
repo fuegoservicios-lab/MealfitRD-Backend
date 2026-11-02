@@ -5136,10 +5136,30 @@ def _neutralizar_nota_comida_faltante_ya_preguntada(tool_result: str, messages: 
 
 
 def _strip_repeated_missing_meal_question(content: str, messages: list) -> str:
-    """[BB-014 · 2026-11-01] Si el LLM aun así repite al final la pregunta sobre una comida
-    faltante que ya preguntó en un turno anterior de la conversación, la recorta limpiamente."""
+    """[BB-014 / BB-015 · 2026-11-01]
+    1. Si el LLM repite al final la pregunta sobre una comida faltante que ya preguntó en un turno
+       anterior de la conversación, la recorta limpiamente.
+    2. Si la pregunta final pregunta por el almuerzo, merienda o cena (sin desayuno) y dice
+       «o estuviste en ayunas?», lo corrige a «o no almorzaste?» / «o no merendaste?» / «o no cenaste?»."""
     if not isinstance(content, str) or ("?" not in content and "¿" not in content):
         return content
+
+    # [BB-015] Evitar «¿Qué comiste en el almuerzo, o estuviste en ayunas?» cuando no se pregunta por desayuno
+    def _fix_ayunas_en_comida_tardia(m_q: re.Match) -> str:
+        q_text = m_q.group(0)
+        q_low = q_text.lower()
+        if "desayun" in q_low:
+            return q_text
+        if "almuerz" in q_low or "almorz" in q_low:
+            return re.sub(r",?\s*o\s+estuviste\s+en\s+ayunas\?", ", o no almorzaste?", q_text, flags=re.IGNORECASE)
+        if "meriend" in q_low or "merend" in q_low:
+            return re.sub(r",?\s*o\s+estuviste\s+en\s+ayunas\?", ", o no merendaste?", q_text, flags=re.IGNORECASE)
+        if "cena" in q_low or "cenaste" in q_low:
+            return re.sub(r",?\s*o\s+estuviste\s+en\s+ayunas\?", ", o no cenaste?", q_text, flags=re.IGNORECASE)
+        return q_text
+
+    content = re.sub(r"¿[^?]+?\?", _fix_ayunas_en_comida_tardia, content)
+
     asked_slots = _slots_faltantes_ya_preguntados_en_conversacion(messages)
     if not asked_slots:
         return content

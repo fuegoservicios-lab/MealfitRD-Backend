@@ -777,9 +777,13 @@ def build_past_diary_block(consumed_rows: Any, today: date,
                 nm = str(r.get("meal_name") or "").strip() or "(sin nombre)"
                 slot = str(r.get("meal_type") or "").strip()
                 cal = r.get("calories")
+                prot = r.get("protein")
                 seg = f"{slot}: {nm}" if slot else nm
                 if isinstance(cal, (int, float)) and cal:
-                    seg += f" ({int(cal)} kcal)"
+                    if isinstance(prot, (int, float)) and prot:
+                        seg += f" ({int(cal)} kcal, {int(prot)}g prot)"
+                    else:
+                        seg += f" ({int(cal)} kcal)"
                 parts.append(seg)
             # [P1-PLAN-LOTE-76] lo que falta de ese día, por su nombre
             _pd = find_plan_day_for_date(plan_data, cursor, today, tz_offset_mins) if isinstance(plan_data, dict) else None

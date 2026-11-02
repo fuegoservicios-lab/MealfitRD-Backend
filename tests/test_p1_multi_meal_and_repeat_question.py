@@ -143,3 +143,33 @@ def test_neutralizar_and_strip_repeated_missing_meal_question():
     cleaned = _strip_repeated_missing_meal_question(repeated_resp, messages)
     assert "¿Qué comiste en el desayuno" not in cleaned
     assert cleaned == "Anoté tu **cena**: filete de carne, aprox. **400 kcal** y **45 g de proteína**. [UI_ACTION: REFRESH_INVENTORY]"
+
+
+def test_bb015_almuerzo_missing_does_not_say_estuviste_en_ayunas():
+    msg_history = [HumanMessage(content="Cené NY steak con pechuga de pollo")]
+    resp = (
+        "Anoté tu **cena** de NY steak, pechuga de pollo a la parrilla, zanahorias y puré de papa: "
+        "aprox. **780 kcal** y **71 g de proteína**. ¿Qué comiste en el **almuerzo** de hoy, o estuviste en ayunas?"
+    )
+    cleaned = _strip_repeated_missing_meal_question(resp, msg_history)
+    assert "estuviste en ayunas" not in cleaned
+    assert "¿Qué comiste en el **almuerzo** de hoy, o no almorzaste?" in cleaned
+
+
+def test_bb015_past_diary_block_includes_protein_when_present():
+    from datetime import date
+    from chat_history_context import build_past_diary_block
+
+    hoy = date(2026, 11, 1)
+    rows = [
+        {
+            "meal_name": "1 lata de atún Genova (estimado, escurrida)",
+            "meal_type": "almuerzo",
+            "calories": 210,
+            "protein": 29,
+            "consumed_at": "2026-10-30T16:52:03+00:00",
+        }
+    ]
+    block = build_past_diary_block(rows, hoy, days_back=3, max_chars=3000)
+    assert "(210 kcal, 29g prot)" in block
+

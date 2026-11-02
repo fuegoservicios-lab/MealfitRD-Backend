@@ -489,8 +489,8 @@ _REGLA_UNA_LLAMADA_POR_COMIDA = (
     "PROHIBIDO DUPLICAR O CLONAR UNA COMIDA EN MÚLTIPLES FRANJAS: Un mismo plato, alimento o foto NUNCA se registra en dos comidas a la vez "
     "(ej. registrar la misma foto o comida como almuerzo y como desayuno). En un turno donde el usuario declara un solo plato o foto, solo se llama `log_consumed_meal` "
     "UNA sola vez (pero si el usuario declara explícitamente dos o más comidas distintas en el mismo mensaje, ej. «de comida pasta con pollo y de cena un steak», "
-    "DEBES llamar a `log_consumed_meal` por cada una con su respectivo `meal_type`). Si la herramienta te indica que falta otra comida del día por registrar (ej. el desayuno), NUNCA llames a `log_consumed_meal` "
-    "para anotarla con los datos del plato actual; SOLO pregúntale al usuario al cerrar qué comió en esa franja o si estuvo en ayunas (y si ya se lo preguntaste antes en esta conversación y no contestó, NO lo repitas)."
+    "DEBES llamar a `log_consumed_meal` por cada una con su respectivo `meal_type`). Si el usuario menciona que comió un plato o alimento «como te lo he enviado antes», «el que siempre te envío» o «como siempre», busca ese plato o marca en su `DIARIO REAL DE DÍAS ANTERIORES` y reutiliza su nombre específico (ej. marca del atún) junto con sus calorías y gramos de proteína registrados previamente. Si la herramienta te indica que falta otra comida del día por registrar (ej. el desayuno), NUNCA llames a `log_consumed_meal` "
+    "para anotarla con los datos del plato actual; SOLO pregúntale al usuario al cerrar qué comió en esa franja (usa «¿o estuviste en ayunas?» únicamente para el desayuno; para el almuerzo, merienda o cena usa «¿o no almorzaste / te lo saltaste?»; y si ya se lo preguntaste antes en esta conversación y no contestó, NO lo repitas)."
 )
 
 

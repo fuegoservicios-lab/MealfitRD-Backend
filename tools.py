@@ -1307,9 +1307,14 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                               f"cuéntame qué comiste y lo anoto»" if _casi else
                               f"«cuando {_CUANDO_COMAS.get(_prox, 'comas')}, cuéntame qué comiste y lo anoto»")
                     if _pasadas:
+                        _omision_ej = (
+                            "o si estuvo en ayunas / no comió esa comida, ej: «¿qué comiste en el desayuno, o estuviste en ayunas?»"
+                            if "desayuno" in _pasadas
+                            else "o si no comió esa comida / se la saltó, ej: «¿qué comiste en el almuerzo de hoy, o no almorzaste?» (NUNCA digas «estuviste en ayunas» si ya desayunó)"
+                        )
                         return (f" (Para el asistente: son las {_hora_txt}. Hoy sigue sin registrar {', '.join(_pasadas)}, que ya "
                                 f"pasó su hora: cierra ofreciendo agregarla por su nombre en una pregunta corta (qué comió para "
-                                f"anotarlo o si estuvo en ayunas / no comió esa comida, ej: «¿qué comiste en el desayuno, o estuviste en ayunas?»; "
+                                f"anotarlo {_omision_ej}; "
                                 f"nunca «cuando la comas» ni «¿te propongo algo?»). PROHIBIDO llamar a log_consumed_meal para esa comida en este turno: "
                                 f"la comida del usuario YA quedó anotada; solo pregúntale en texto qué comió. "
                                 f"{', '.join(_proximas)} aún no toca: no preguntes por ella.{_NO_INSISTAS})")
@@ -1318,13 +1323,19 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                             f"la anotas ni si la registras. Cierra con UNA frase consciente de la hora, sin pregunta, del tipo "
                             f"{_frase} — pero si en el turno inmediatamente anterior ya dijiste esta misma frase, no la repitas calcada; confirma la adición de forma limpia y directa sin repetir el mismo cierre.)")
                 if _pasadas:
+                    _omision_pas = (
+                        "o si estuvo en ayunas"
+                        if "desayuno" in _faltan
+                        else "o si no comió esa comida / se la saltó (ej. «¿qué comiste en el almuerzo de hoy, o no almorzaste?»; NUNCA digas «estuviste en ayunas» si ya desayunó)"
+                    )
                     return (f" (Para el asistente: son las {_hora_txt}. {_dia_txt} sigue sin registrar {', '.join(_faltan)} "
                             f"(ya pasó su hora) — cierra ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta "
-                            f"sobre qué comió para anotarlo o si estuvo en ayunas (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
+                            f"sobre qué comió para anotarlo {_omision_pas} (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
                             f"pregunta genérica de si le falta algo).{_NO_INSISTAS})")
         if _faltan:
+            _omision_gen = "o si estuvo en ayunas / no comió" if "desayuno" in _faltan else "o si no comió esa comida / se la saltó"
             return (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
-                    f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta (o si estuvo en ayunas / no comió); nunca la pregunta "
+                    f"ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta ({_omision_gen}); nunca la pregunta "
                     f"genérica de si le falta algo.{_NO_INSISTAS})")
         _cierre_noche = ""
         if not days_ago:
