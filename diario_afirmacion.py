@@ -36,9 +36,31 @@ _RE_ESTADO_TENER = re.compile(
     r"\b(?:tienes|tiene|tenemos|llevas|lleva|llevamos)\s+(?:ya\s+)?(?:el|la|los|las|tu|tus|su|sus)\s+[^,;:.!?]{0,40}$",
     re.IGNORECASE,
 )
+# [BB-016 · 2026-11-02] Referencia a un registro previo o estado pasivo de la base de datos
+# (ej. «por lo que quedó anotado», «lo que quedó anotado», «lo que mencionaste quedó anotado como...», «según lo que está registrado»).
+_RE_ESTADO_REFERENCIA = re.compile(
+    r"\b(?:(?:por|seg[uú]n|en|de|como)\s+(?:lo\s+)?(?:que\s+)?(?:ya\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron|figura|aparece)|"
+    r"lo\s+que\s+(?:ya\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron|figura|aparece)|"
+    r"que\s+(?:[^,;:.!?]{1,30}\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron)\s*(?:como)?)\s*$",
+    re.IGNORECASE,
+)
 
 # Ruido que el reconocedor de voz manda como mensaje. Sin «sí», «no», «ok» ni «ajá»: pueden contestar «¿lo anoto?».
 _RUIDO = {"ah", "aah", "eh", "ehh", "em", "emm", "mm", "mmm", "hm", "hmm", "oh", "uh", "uhm", "um", "ay"}
+
+# [BB-016 · 2026-11-02] Preguntas o consultas informativas donde el usuario indaga sobre un ingrediente o sobre el diario
+# (ej. «Sabes lo que es lo blanco que está en el pan», «¿Qué tiene el plato?», «¿Qué pusiste en mi desayuno?»),
+# donde NO está declarando una nueva ingesta ni pidiendo registrar nada nuevo.
+_RE_VERBOS_CONSUMO_O_REGISTRO = re.compile(
+    r"\b(?:com[ií]|comiste|comimos|comieron|he\s+comido|desayun[eé]|almor[zc][eé]|cen[eé]|merend[eé]|"
+    r"tom[eé]|beb[ií]|met[ií]|anota|an[oó]talo|an[oó]tame|registra|reg[ií]stralo|reg[ií]strame|apunta|ap[uú]ntalo|sumal[oa]|s[uú]mal[oa])\b",
+    re.IGNORECASE,
+)
+
+_RE_PREGUNTA_CONSULTA = re.compile(
+    r"^(?:[¿?¡!\s])*(?:sabes?\s+(?:lo\s+que|qu[eé])|qu[eé]\s+(?:es|tiene|viste|pusiste|anotaste|registraste|hay|era|ser[aá])|c[oó]mo\s+sabes?|por\s+qu[eé]\s+(?:pusiste|anotaste|registraste)|cu[aá]nt[ao]s?\s+(?:calor[ií]as|gramos|prote[ií]na|carbohidratos|grasas)?\s+(?:tiene|aporta)|puedo\s+comer|qu[eé]\s+me\s+recomiendas?)\b",
+    re.IGNORECASE,
+)
 
 
 def frase_es_solo_de_agua(frase: str, re_comida: re.Pattern) -> bool:
@@ -49,15 +71,21 @@ def frase_es_solo_de_agua(frase: str, re_comida: re.Pattern) -> bool:
 
 def participio_describe_estado(antes: str) -> bool:
     """El texto de la frase ANTES del participio lo convierte en un estado, no en una acción de este turno."""
-    return bool(_RE_ESTADO_CON.search(antes or "") or _RE_ESTADO_TENER.search(antes or ""))
+    return bool(
+        _RE_ESTADO_CON.search(antes or "")
+        or _RE_ESTADO_TENER.search(antes or "")
+        or _RE_ESTADO_REFERENCIA.search(antes or "")
+    )
 
 
 def mensaje_sin_nada_que_registrar(texto: str) -> bool:
-    """Charla corta o ruido: con eso no hay comida que el coach pudiera haber tenido que anotar."""
+    """Charla corta, ruido o preguntas informativas: con eso no hay comida que el coach pudiera haber tenido que anotar."""
     from coach_voz import _normalizar, es_charla_corta
     t = _normalizar(texto)
     if not t:
         return True
     if all(p in _RUIDO for p in t.split()):
+        return True
+    if _RE_PREGUNTA_CONSULTA.search(texto) and not _RE_VERBOS_CONSUMO_O_REGISTRO.search(texto):
         return True
     return es_charla_corta(texto)

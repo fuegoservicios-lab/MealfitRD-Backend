@@ -194,9 +194,11 @@ def instruccion(vision) -> str:
         "PROHIBIDO USAR correct_consumed_meal: Esta foto ES UNA COMIDA NUEVA que se registra con `log_consumed_meal`. "
         "NUNCA uses `correct_consumed_meal` para modificar una comida anterior del diario (como el desayuno o una comida previa de horas antes), "
         "salvo que el usuario aclare explícitamente que este alimento o foto fue parte de una comida ya registrada (ej. «fue parte del almuerzo»), en cuyo caso se suma a esa comida existente con correct_consumed_meal. "
-        "Si el usuario contestó una sola palabra o ingrediente (ej. «Frito», «Guisado», «2 huevos» o «Salmón»), esa palabra describe la preparación de la foto actual, "
-        "NUNCA una modificación de comidas pasadas. Anota el plato completo nuevo con las calorías del análisis y dile proactivamente en tu respuesta que anotaste el plato completo, "
-        "y que si solo consumió ese ingrediente y dejó el resto del plato, te avise para ajustarlo a las calorías de ese ingrediente solo. "
+        "Si el usuario contestó una sola palabra o ingrediente (ej. «Frito», «Guisado», «2 huevos», «Mantequilla de maní» o «Salmón»), esa palabra describe la preparación de la foto actual, "
+        "NUNCA una modificación de comidas pasadas. Anota el plato completo nuevo con las calorías del análisis. AL CONFIRMAR EN TU RESPUESTA VISIBLE, "
+        "menciona los componentes principales del plato completo (ej. «Anoté tu **desayuno**: tostadas con queso cottage, mantequilla de maní y 4 huevos hervidos, aprox. **800 kcal** y **52 g de proteína**»); "
+        "NUNCA nombres únicamente el chip o ingrediente que el usuario contestó (jamás digas solo «Anoté tu desayuno con mantequilla de maní» dejando fuera los demás alimentos principales). "
+        "Y si solo consumió ese ingrediente y dejó el resto del plato, dile que te avise para ajustarlo a las calorías de ese ingrediente solo. "
         "Solo si dice explícitamente que todavía no se lo ha comido, o pregunta si puede comerlo, NO lo registres y respóndele eso. Después, en una o dos frases, cómo le deja el día."
     )
 
