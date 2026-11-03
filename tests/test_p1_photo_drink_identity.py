@@ -144,6 +144,40 @@ def test_coerce_meal_scan_resolved_with_specific_tea_and_honey():
     assert _platos_claros(result) is True
 
 
+def test_es_bebida_no_secuestra_platos_completos_con_bebida_al_lado():
+    """Regresión de la auditoría: un plato completo con jugo/café/té al lado NO es «solo bebida»
+    (si lo fuera, se le preguntaría «¿De qué es el té?» a una bandera dominicana)."""
+    falsos = [
+        ("La bandera", "Arroz, habichuelas, pollo guisado y un vaso de jugo de naranja"),
+        ("Desayuno completo", "Mangu con huevo, salami, queso frito y una taza de cafe"),
+        ("Sandwich", "Pan con jamon y queso, al lado una taza de te"),
+        ("Avena", "Tazon de avena con leche y canela"),
+        ("Sopa de pollo", "Plato hondo con caldo de pollo, fideos y vegetales"),
+        ("Yogurt con granola", "Vaso de yogurt con granola"),
+        ("Desayuno", "Tostadas con aguacate y un vaso de jugo"),
+    ]
+    for nombre, desc in falsos:
+        assert es_bebida(nombre, desc) is False, (nombre, desc)
+
+    # Y las bebidas solas siguen detectándose, también cuando el rótulo es genérico y solo la descripción dice qué es
+    assert es_bebida("Bebida", "Taza de porcelana con te verde caliente") is True
+    assert es_bebida("Taza de liquido", "Una taza de infusion amarillenta") is True
+    assert es_bebida("Cafe con leche", "Taza de cafe con leche") is True
+
+
+def test_coerce_meal_scan_plato_completo_con_jugo_no_recibe_duda_de_te():
+    raw = {
+        "photo_kind": "plato", "is_food": True, "meal_name": "La bandera",
+        "description": "Arroz, habichuelas y pollo guisado con un vaso de jugo de naranja.",
+        "calories": 750, "protein": 40, "carbs": 90, "healthy_fats": 20,
+        "items": [{"name": "arroz", "calories": 250}, {"name": "pollo guisado", "calories": 300}],
+        "dudas": [],
+    }
+    result = _coerce_meal_scan(raw, aclaracion=None)
+    assert all("té" not in d["pregunta"].lower() for d in result["dudas"])
+    assert all("añadiste" not in d["pregunta"].lower() for d in result["dudas"])
+
+
 def test_cap_max_dos_dudas():
     """Garantiza que nunca se superen 2 dudas en total aunque existan dudas previas."""
     dudas_previas = [

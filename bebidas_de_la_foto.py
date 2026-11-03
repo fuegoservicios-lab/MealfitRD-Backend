@@ -28,17 +28,30 @@ def _normalizar_texto(texto: str) -> str:
     return " ".join(t.split())
 
 
+# Palabras de bebida "fuertes": identifican una bebida en el nombre o en la descripción.
 _PATRON_BEBIDA = re.compile(
-    r"\b(te|infusion|tisana|cafe|jugo|batido|licuado|caldo|consome|chocolate caliente)\b"
-    r"|\b(taza de|vaso de|termo de|copa de)\b",
+    r"\b(infusion|tisana|cafe|jugo|batido|licuado|caldo|consome|chocolate caliente)\b"
+    r"|\bte\b",
+    re.IGNORECASE,
+)
+# En la DESCRIPCIÓN (texto libre del modelo) el pronombre «te» es ruido: solo cuenta «te» como bebida si va
+# en una frase de bebida («taza de te», «te verde», «te de jengibre»...).
+_PATRON_BEBIDA_DESC = re.compile(
+    r"\b(infusion|tisana|cafe|jugo|batido|licuado|caldo|consome|chocolate caliente)\b"
+    r"|\b(?:taza|vaso|termo|jarra)\s+de\s+te\b|\bte\s+(?:verde|negro|herbal|de|con|helado|frio|caliente)\b",
     re.IGNORECASE,
 )
 
-_PATRON_ALIMENTOS_SOLIDOS = re.compile(
-    r"\b(arroz|mangu|platano|guineo|pollo|carne|filete|res|cerdo|pescado|tostada|pan|"
-    r"arepa|huevo|huevos|ensalada|habichuela|habichuelas|pasta|spaghetti|salami|queso frito)\b",
-    re.IGNORECASE,
+# Cualquier alimento sólido (en nombre o descripción) descarta la foto como «solo bebida»: un plato completo con un
+# vaso de jugo o una taza de café al lado se analiza con sus dudas normales, no con la duda de identidad de la bebida.
+_SOLIDOS = (
+    "arroz", "mangu", "platano", "guineo", "pollo", "carne", "filete", "res", "cerdo", "pescado", "tostada", "pan",
+    "arepa", "huevo", "ensalada", "habichuela", "pasta", "spaghetti", "salami", "queso", "jamon", "granola",
+    "avena", "yogurt", "yogur", "galleta", "sandwich", "sopa", "fideo", "vegetal", "fruta", "cereal", "tostone",
+    "yuca", "papa", "atun", "pavo", "aguacate", "tortilla", "panqueque", "pancake", "wrap", "hamburguesa", "pizza",
+    "bandera", "mondongo", "sancocho", "locrio", "moro", "chofan", "pastelon", "empanada",
 )
+_PATRON_ALIMENTOS_SOLIDOS = re.compile(r"\b(?:" + "|".join(_SOLIDOS) + r")(?:s|es)?\b", re.IGNORECASE)
 
 _NOMBRES_GENERICOS_BEBIDA = {
     "te", "te herbal", "te de hierbas", "infusion", "infusion herbal",
@@ -58,31 +71,23 @@ def es_bebida(meal_name: str, description: str = "", items: Optional[List[Dict[s
     """
     n_norm = _normalizar_texto(meal_name)
     d_norm = _normalizar_texto(description)
-    texto_combinado = f"{n_norm} {d_norm}"
 
-    # Verificación de palabra de bebida
-    if not _PATRON_BEBIDA.search(texto_combinado):
+    # La bebida debe nombrarse en el rótulo, o (rótulo vacío/genérico) en la descripción con una frase de bebida.
+    if not (_PATRON_BEBIDA.search(n_norm) or _PATRON_BEBIDA_DESC.search(d_norm)):
         return False
 
-    # Si hay items estructurados, verificar si hay comida sólida sustancial
+    # Cualquier alimento sólido en el rótulo o en la descripción → es un plato con bebida al lado, no «solo bebida».
+    if _PATRON_ALIMENTOS_SOLIDOS.search(n_norm) or _PATRON_ALIMENTOS_SOLIDOS.search(d_norm):
+        return False
+
+    # Con componentes estructurados: cualquier componente sólido con calorías reales descarta.
     if items and isinstance(items, list):
-        kcal_solidos = 0.0
         for it in items:
             if not isinstance(it, dict):
                 continue
             nombre_it = _normalizar_texto(it.get("name", ""))
-            # Si el item es un alimento sólido conocido y no es bebida
             if _PATRON_ALIMENTOS_SOLIDOS.search(nombre_it) and not _PATRON_BEBIDA.search(nombre_it):
-                kcal_solidos += float(it.get("calories") or 0.0)
-        # Si los sólidos suman 50+ kcal, el plato tiene comida real; la bebida es secundaria
-        if kcal_solidos >= 50.0:
-            return False
-
-    # Verificar si el nombre del plato es predominantemente comida sólida
-    if _PATRON_ALIMENTOS_SOLIDOS.search(n_norm) and not any(
-        n_norm.startswith(b) for b in ("te ", "cafe ", "jugo ", "batido ", "caldo ", "infusion ")
-    ):
-        return False
+                return False
 
     return True
 
@@ -191,7 +196,7 @@ def inyectar_dudas_bebida(result: Dict[str, Any], dudas_crudas: List[Dict[str, A
     # Si vino como 'items' pero es una sola bebida servida en taza/vaso, colapsar a 'plato'
     if result.get("photo_kind") == "items":
         desc = result.get("description", "")
-        if es_bebida(desc, desc, result.get("items")):
+        if es_bebida("", desc, result.get("items")):
             items_list = result.get("items") or []
             if len(items_list) <= 1:
                 result["photo_kind"] = "plato"

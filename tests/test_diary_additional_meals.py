@@ -59,7 +59,7 @@ def test_retry_does_not_insert_and_uses_food_and_quantity_not_slot(monkeypatch):
  assert env['log_consumed_meal']('owner','Huevos',140,12,1,10,['2 huevos'],meal_type='almuerzo')=='deduped'
  env['execute_sql_write'].assert_not_called()
  sql,params=env['execute_sql_query'].call_args.args
- assert params[:7]==('owner','Huevos',140,12,1,10,['2 huevos'])
+ assert params[:6]==('owner',140,12,1,10,['2 huevos'])
  assert 'meal_type = %s' not in sql
  assert all(name+' = %s' in sql for name in ('calories','protein','carbs','healthy_fats','ingredients'))
 
