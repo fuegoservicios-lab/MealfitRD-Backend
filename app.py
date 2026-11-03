@@ -1058,7 +1058,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-MACRO-GAP-DINNER-CRON · 2026-11-03] (backend) Cron de 7:00 PM opera por brecha de macros: cierre/hidratación si >= 95% kcal, proteína magra pura si pocas kcal y mucha proteína.
 # [P1-FUSION-TTL-GUARD · 2026-11-03] (backend) TTL estricto de 30 min en autofusión silenciosa de adiciones (BB-005 vs BB-004).
 # [P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03] (backend) Descontaminación de platos habituales al clonar del historial (BB-014 + BB-005).
-_LAST_KNOWN_PFIX = "P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03"
+# [P1-DIARY-DELTA-CORRECTION · 2026-11-03] (backend) Recálculo de calorías ocultas al editar un ingrediente por diferencial (BB-002 + BB-011).
+_LAST_KNOWN_PFIX = "P1-DIARY-DELTA-CORRECTION · 2026-11-03"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

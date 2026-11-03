@@ -5341,6 +5341,15 @@ def execute_tools(state: ChatState):
                         )
                         tool_args = _adjusted_fusion
 
+                    # [BB-023 / P1-DIARY-DELTA-CORRECTION · 2026-11-03]
+                    # Proteger la calibración criolla (BB-002) operando por diferencial (delta)
+                    # al editar ingredientes o cantidades de un plato registrado.
+                    _delta_adjusted = _ajustar_calorias_por_delta_ingrediente(
+                        _trusted_uid, tool_args, state.get("messages") or []
+                    )
+                    if _delta_adjusted is not None:
+                        tool_args = _delta_adjusted
+
                 # [P1-MULTI-PHOTO-MATCH · 2026-10-27] [P1-PHOTO-DEDUP-LEAK · 2026-11-01]
                 # Asignar el adjunto correspondiente de este turno a la comida registrada en el diario.
                 # Sanitización estricta: una comida nueva SOLO puede asociarse a fotos del turno ACTUAL.
@@ -6647,6 +6656,211 @@ def _ajustar_args_fusion_correct_consumed_meal(
         return res
 
     return _intentar_fusionar_alimento_en_comida_existente(user_id, tool_args, messages, plate_photos)
+
+
+# [BB-023 / P1-DIARY-DELTA-CORRECTION · 2026-11-03]
+# Densidades calóricas y de proteína de referencia para cálculo por diferencial (delta)
+_DENSIDADES_DELTA_INGREDIENTES = {
+    "madur": {"cal": 140, "prot": 1},
+    "platano": {"cal": 130, "prot": 1},
+    "plátano": {"cal": 130, "prot": 1},
+    "toston": {"cal": 60, "prot": 0.5},
+    "tostón": {"cal": 60, "prot": 0.5},
+    "guineo": {"cal": 105, "prot": 1},
+    "guineit": {"cal": 90, "prot": 1},
+    "huevo": {"cal": 75, "prot": 6},
+    "clara": {"cal": 17, "prot": 3.6},
+    "pan": {"cal": 90, "prot": 3},
+    "tostad": {"cal": 85, "prot": 3},
+    "lonja": {"cal": 70, "prot": 5},
+    "rodaja": {"cal": 80, "prot": 2.5},
+    "cucharad": {"cal": 95, "prot": 1},
+    "gallet": {"cal": 50, "prot": 1},
+    "alita": {"cal": 85, "prot": 8.5},
+    "muslo": {"cal": 150, "prot": 15},
+    "chuleta": {"cal": 180, "prot": 20},
+}
+
+
+def _ajustar_calorias_por_delta_ingrediente(
+    user_id: str,
+    tool_args: dict,
+    messages: list,
+) -> Optional[dict]:
+    """[BB-023 / P1-DIARY-DELTA-CORRECTION · 2026-11-03]
+    Si el usuario corrigió la cantidad o porción de un ingrediente en un plato ya registrado
+    (ej. «No eran 3 maduros, era solo 1», «Eran 2 huevos, no 4»), opera por diferencial:
+    Total Nuevo = Total Anterior - Calorías Ítem Anterior + Calorías Ítem Nuevo
+    en lugar de re-estimar desde cero en crudo, preservando la calibración criolla (BB-002)
+    (aceite del sofrito, grasa del guiso o moro).
+    """
+    if not isinstance(tool_args, dict):
+        return None
+    if tool_args.get("delete") is True:
+        return None
+
+    # 1. Extraer el texto del último mensaje humano
+    texto_humano = ""
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            c = getattr(msg, "content", "")
+            texto_humano = c if isinstance(c, str) else " ".join(p.get("text", "") for p in (c or []) if isinstance(p, dict))
+            break
+    if not texto_humano:
+        return None
+    t = texto_humano.lower().strip()
+
+    # 2. Obtener la fila original del diario
+    mid = str(tool_args.get("meal_id") or "").strip()
+    orig = None
+    if mid and len(mid) >= 6 and mid.lower() not in ("ultimo", "ultima", "none", "null"):
+        try:
+            from tools import _leer_fila_diario
+            orig = _leer_fila_diario(user_id, mid)
+        except Exception:
+            orig = None
+    if not orig:
+        prev_mid = _ultimo_id_registro_diario_previo(messages)
+        if prev_mid:
+            try:
+                from tools import _leer_fila_diario
+                orig = _leer_fila_diario(user_id, prev_mid)
+            except Exception:
+                orig = None
+    if not orig:
+        try:
+            from db_facts import get_consumed_meals_today
+            today_meals = get_consumed_meals_today(user_id) or []
+            if today_meals:
+                today_meals.sort(key=lambda m: str(m.get("created_at") or m.get("consumed_at") or ""), reverse=True)
+                orig = today_meals[0]
+        except Exception:
+            orig = None
+
+    if not isinstance(orig, dict):
+        return None
+
+    orig_cal = int(orig.get("calories") or 0)
+    orig_prot = int(orig.get("protein") or 0)
+    orig_name = str(orig.get("meal_name") or "").strip()
+    if orig_cal <= 0:
+        return None
+
+    # 3. Detectar patrones de corrección de cantidad/unidades
+    n_old, n_new, item_word = None, None, None
+
+    # Patrón 1: "no eran 3 maduros, era solo 1" / "no fue 1 maduro, fueron 2" / "no eran 3 maduros, era 1"
+    m1 = re.search(r"\bno\s+(?:eran|fueron|fue)\s+(\d+)\s+([a-záéíóúñ]+).*?(?:(?:era|fueron|fue)\s+)?(?:solo|sólo)?\s*(\d+)\b", t)
+    # Patrón 2: "eran 2 huevos, no 4" / "fueron 2 maduros, no 3"
+    m2 = re.search(r"\b(?:eran|fueron)\s+(\d+)\s+([a-záéíóúñ]+),?\s*no\s+(\d+)\b", t)
+    # Patrón 3: "1 maduro en vez de 3"
+    m3 = re.search(r"\b(\d+)\s+([a-záéíóúñ]+)\s+en\s+vez\s+de\s+(\d+)\b", t)
+    # Patrón 4: "solo comí 1 maduro" / "solo fue 1 maduro" / "era solo 1 maduro"
+    m4 = re.search(r"\b(?:solo|sólo)\s+(?:comí|comi|fue|era|eran|fueron)?\s*(\d+)\s+([a-záéíóúñ]+)\b", t)
+    # Patrón 5: "no comí 3 maduros, solo 1"
+    m5 = re.search(r"\bno\s+com[ií]\s+(\d+)\s+([a-záéíóúñ]+).*?(?:solo|sólo)?\s*(\d+)\b", t)
+
+    if m1:
+        n_old = int(m1.group(1))
+        item_word = m1.group(2).lower()
+        n_new = int(m1.group(3))
+    elif m2:
+        n_new = int(m2.group(1))
+        item_word = m2.group(2).lower()
+        n_old = int(m2.group(3))
+    elif m3:
+        n_new = int(m3.group(1))
+        item_word = m3.group(2).lower()
+        n_old = int(m3.group(3))
+    elif m5:
+        n_old = int(m5.group(1))
+        item_word = m5.group(2).lower()
+        n_new = int(m5.group(3))
+    elif m4:
+        n_new = int(m4.group(1))
+        item_word = m4.group(2).lower()
+        # Buscar n_old en el nombre del plato previo o sus ingredientes
+        texto_previo = (orig_name + " " + " ".join(orig.get("ingredients") or [])).lower()
+        m_prev = re.search(rf"\b(\d+)\s+{re.escape(item_word[:4])}\w*\b", texto_previo)
+        if m_prev:
+            n_old = int(m_prev.group(1))
+
+    if n_old is None or n_new is None or not item_word:
+        return None
+
+    # 4. Encontrar densidad calórica del ítem
+    dens = None
+    for k, d in _DENSIDADES_DELTA_INGREDIENTES.items():
+        if item_word.startswith(k) or k in item_word:
+            dens = d
+            break
+    if not dens:
+        return None
+
+    diff = n_new - n_old
+    if diff == 0:
+        return None
+
+    delta_cal = int(round(diff * dens["cal"]))
+    delta_prot = int(round(diff * dens["prot"]))
+    expected_cal = max(50, orig_cal + delta_cal)
+    expected_prot = max(0, orig_prot + delta_prot)
+
+    tool_cal = tool_args.get("calories")
+    tool_cal_int = int(tool_cal) if tool_cal is not None else None
+
+    # Si el LLM recalculó desde cero en crudo (colapso de calorías > 25 kcal respecto al delta):
+    debe_ajustar = (
+        tool_cal_int is None
+        or (diff < 0 and tool_cal_int < (expected_cal - 25))
+        or (diff > 0 and tool_cal_int < orig_cal)
+    )
+
+    res = dict(tool_args)
+    if debe_ajustar:
+        logger.info(
+            f"🛡️ [P1-DIARY-DELTA-CORRECTION] Corrección por delta protegida sobre '{orig_name}' ({orig_cal} kcal): "
+            f"{item_word} ({n_old} → {n_new}, delta={delta_cal} kcal). LLM propuso {tool_cal_int} kcal; "
+            f"ajustado a {expected_cal} kcal ({expected_prot}g prot) para preservar grasa criolla (BB-002)."
+        )
+        res["calories"] = expected_cal
+        if res.get("protein") is None or int(res.get("protein") or 0) < expected_prot - 3:
+            res["protein"] = expected_prot
+    else:
+        expected_cal = tool_cal_int
+
+    # Asegurar nombre del plato con la cantidad corregida
+    curr_name = str(res.get("meal_name") or orig_name).strip()
+    norm_item = item_word if n_new > 1 else item_word.rstrip("s")
+    if re.search(rf"\b{n_old}\s+{re.escape(item_word)}", curr_name, re.IGNORECASE):
+        res["meal_name"] = re.sub(
+            rf"\b{n_old}\s+{re.escape(item_word)}\b",
+            f"{n_new} {norm_item}",
+            curr_name,
+            flags=re.IGNORECASE,
+        )
+
+    # Mantener sincronizado el array de ingredientes si viene en tool_args o en la fila original
+    curr_ingredients = res.get("ingredients") or orig.get("ingredients")
+    if isinstance(curr_ingredients, list):
+        res["ingredients"] = [
+            re.sub(rf"\b{n_old}\s+{re.escape(item_word)}\b", f"{n_new} {norm_item}", str(ing), flags=re.IGNORECASE)
+            for ing in curr_ingredients
+        ]
+
+    # Metadata de auditoría en nutrition
+    nut = dict(res.get("nutrition") or {})
+    nut["delta_correction"] = {
+        "item": item_word,
+        "old_units": n_old,
+        "new_units": n_new,
+        "delta_calories": delta_cal,
+        "orig_calories": orig_cal,
+        "adjusted_calories": res["calories"],
+        "llm_proposed_calories": tool_cal_int,
+    }
+    res["nutrition"] = nut
+    return res
 
 
 def _days_ago_named_by_user(
