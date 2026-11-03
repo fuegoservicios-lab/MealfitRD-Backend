@@ -853,26 +853,28 @@ def _clamp_days_ago(days_ago) -> int:
 # almuerzo registrado como snack se salta el dup-guard de comida principal y el hueco de la cena.
 # Claves normalizadas (`_norm_txt`: sin acentos, `-`/`_` como espacio). «comida» y «brunch» NO
 # están a propósito: son ambiguas (en México «comida» es el almuerzo; en RD, cualquier comida).
-_MEAL_TYPES_CANON = ("desayuno", "almuerzo", "cena", "merienda", "snack", "suplemento")
+# [P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03] Añadido 'complemento' para bebidas ligeras e infusiones.
+_MEAL_TYPES_CANON = ("desayuno", "almuerzo", "cena", "merienda", "snack", "suplemento", "complemento")
 _MEAL_TYPE_SYNONYMS = {
     # en-US
     "breakfast": "desayuno", "lunch": "almuerzo", "dinner": "cena", "supper": "cena",
     "snacks": "snack", "afternoon snack": "merienda",
     "supplement": "suplemento", "supplements": "suplemento",
+    "complement": "complemento", "complements": "complemento", "beverage": "complemento", "drink": "complemento",
     # pt-BR
     "cafe da manha": "desayuno", "desjejum": "desayuno", "almoco": "almuerzo", "jantar": "cena",
     "ceia": "cena", "lanche": "snack", "lanche da tarde": "merienda",
-    "suplementos": "suplemento",
+    "suplementos": "suplemento", "complemento": "complemento", "complementos": "complemento",
     # fr-FR (en Francia «déjeuner» es el almuerzo)
     "petit dejeuner": "desayuno", "petit dej": "desayuno", "dejeuner": "almuerzo",
     "diner": "cena", "souper": "cena", "gouter": "merienda", "collation": "snack", "en cas": "snack",
-    "complement": "suplemento", "complements": "suplemento",
+    "complement": "complemento", "complements": "complemento", "boisson": "complemento",
     # it-IT («cena» ya es canónica)
     "colazione": "desayuno", "pranzo": "almuerzo", "merenda": "merienda", "spuntino": "snack",
-    "integratore": "suplemento", "integratori": "suplemento",
+    "integratore": "suplemento", "integratori": "suplemento", "bevanda": "complemento",
     # es (variantes)
     "tentempie": "snack", "picadera": "snack", "picoteo": "snack", "media manana": "merienda",
-    "suplementos": "suplemento",
+    "suplementos": "suplemento", "complementos": "complemento", "infusion": "complemento", "te": "complemento",
 }
 
 # [P1-SUPPLEMENT-DIARY-GUARD · 2026-10-20] Palabras clave para distinguir suplementos en el diario
@@ -1526,6 +1528,18 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         if _meal_type != "suplemento":
             logger.info(f"💊 [SUPPLEMENT-SLOT-GUARD] '{meal_name}' reclasificado '{_meal_type}' → 'suplemento' (los suplementos no son comidas ni meriendas)")
             _meal_type = "suplemento"
+
+    # [BB-025 / P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03]
+    # Bebidas ligeras e infusiones aisladas (té, café solo, agua con limón, infusión herbal, caldo ligero <= 50 kcal):
+    # NUNCA deben ocupar franjas principales (desayuno/almuerzo/cena) si se registran solas. Se clasifican como 'complemento'.
+    _es_bebida_ligera_nombre = any(k in _norm_name for k in (
+        "te ", "te,", "té ", "té,", "taza de te", "taza de té", "infusion", "infusión", "cafe negro", "café negro",
+        "cafe solo", "café solo", "espresso", "americano", "agua con limon", "agua con limón", "caldo claro", "caldo ligero"
+    )) or _norm_name.startswith("te ") or _norm_name.startswith("té ") or _norm_name.startswith("infusion") or _norm_name.startswith("infusión")
+    
+    if _meal_type in ("desayuno", "almuerzo", "cena") and calories is not None and calories <= 50 and _es_bebida_ligera_nombre:
+        logger.info(f"🍵 [BB-025 / COMPLEMENT-GUARD] '{meal_name}' ({calories} kcal) reclasificado '{_meal_type}' → 'complemento' (bebida ligera aislada)")
+        _meal_type = "complemento"
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
     # [P1-DIARY-DINNER-SLOT · 2026-07-30] El único log de qué slot se escribe era `logger.debug`, y
     # en producción solo se emite INFO+ — o sea que al revisar el journal NO había forma de saber
