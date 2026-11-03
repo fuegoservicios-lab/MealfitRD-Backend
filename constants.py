@@ -958,6 +958,10 @@ DEFAULT_TZ_OFFSET_MIN = max(-840, min(720, _env_int("MEALFIT_DEFAULT_TZ_OFFSET_M
 # para que cenas y snacks tardíos (1:00 AM, 2:00 AM, 3:30 AM) pertenezcan al día que no ha terminado.
 DIARY_ROLLOVER_HOUR: int = max(0, min(12, _env_int("MEALFIT_DIARY_ROLLOVER_HOUR", 4)))
 
+# [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] Umbral mínimo de kcal acumuladas en un slot para considerarlo
+# como comida principal completa del plan. Un té o café ligero (≤ 50 kcal) no tacha el desayuno/almuerzo/cena.
+SLOT_MIN_KCAL_TO_COUNT: int = max(0, _env_int("MEALFIT_SLOT_MIN_KCAL_TO_COUNT", 50))
+
 
 def tz_offset_min_for_form_data(form_data) -> int:
     """[P1-PLAN-LOTE-8 · 2026-09-11 · G52] Offset del usuario en minutos (convención getTimezoneOffset: +240 = UTC-4)

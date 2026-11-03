@@ -287,7 +287,7 @@ def es_solo_foto(prompt) -> bool:
 
 def _platos_claros(vision) -> bool:
     items = vision.get("items") if vision.get("kind") == "multi" else [vision]
-    platos = [i for i in (items or []) if isinstance(i, dict) and str(i.get("kind") or "") == "plato"
+    platos = [i for i in (items or []) if isinstance(i, dict) and str(i.get("kind") or i.get("photo_kind") or "") == "plato"
               and i.get("description")]
     return bool(platos) and not any(_MARCA_DUDAS.strip() in str(i.get("description")) for i in platos)
 

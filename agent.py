@@ -7719,7 +7719,7 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
 
         # --- (b) comidas del plan que quedan hoy ---
         try:
-            from constants import canonical_slot_key as _canon_slot
+            from constants import canonical_slot_key as _canon_slot, SLOT_MIN_KCAL_TO_COUNT
             day_idx = _resolve_today_plan_day_index(current_plan, local_date_str=local_date_str)
             days = current_plan.get("days") if isinstance(current_plan, dict) else None
             day = days[day_idx] if (day_idx is not None and isinstance(days, list) and 0 <= day_idx < len(days)) else None
@@ -7727,13 +7727,17 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
             if isinstance(day_meals, list) and day_meals:
                 # Slots ya comidos hoy, canonicalizados. Set (no lista): loguear
                 # la misma merienda 2 veces sigue siendo UN solo match de key.
-                eaten_keys = set()
+                # [P1-PHOTO-DRINK-IDENTITY] Una bebida ligera (< 50 kcal) no tacha el slot:
+                # acumulamos las kcal por slot y solo se considera comido si alcanza el umbral.
+                slot_kcals: dict = {}
                 for row in (consumed_today or []):
                     if not isinstance(row, dict):
                         continue
                     k = _canon_slot(row.get("meal_type"))
                     if k:
-                        eaten_keys.add(k)
+                        slot_kcals[k] = slot_kcals.get(k, 0.0) + float(row.get("calories") or 0.0)
+
+                eaten_keys = {k for k, kcal in slot_kcals.items() if kcal >= SLOT_MIN_KCAL_TO_COUNT}
 
                 # Agrupa los índices de los slots del plan de HOY por key canónica.
                 groups: dict = {}

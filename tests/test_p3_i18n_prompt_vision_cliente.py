@@ -32,7 +32,7 @@ def build():
     ({"kind": "otro", "description": "un perro"}, "NO detectó comida"),
     ({"kind": "items", "description": "2 manzanas"}, "ALIMENTOS SUELTOS"),
     ({"kind": "items", "description": "2 manzanas", "has_text": True}, "Responde a su mensaje"),
-    ({"kind": "plato", "description": "arroz con pollo"}, "DIARIO DE HOY"),
+    ({"kind": "plato", "description": "arroz con pollo"}, "FOTO DE PLATO SERVIDO"),
     ({"kind": "plato", "description": "arroz con pollo", "has_text": True}, "teniendo en cuenta la foto"),
 ])
 def test_cada_modo_compone_su_bloque(build, vision, fragmento):

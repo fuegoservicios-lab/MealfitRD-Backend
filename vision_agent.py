@@ -362,14 +362,22 @@ _MEAL_VISION_PROMPT = (
     "VIVERES HERVIDOS / PLATANO: si hay viveres hervidos en ruedas o trozos (amarillos o verdosos), en las opciones de duda "
     "sobre el tipo de base o vianda incluye siempre 'Platano maduro' junto a 'Platano verde' y 'Guineito verde' (el platano maduro "
     "es amarillo/dorado, mas dulce y con mas carbohidratos). Si se ve claramente amarillo o traslucido al hervir, es probable que sea platano maduro. "
-    "PLATOS COMPUESTOS CRIOLLOS (LOCRIOS, MOROS, ARROZ GUISADO/CHOFÁN): en la cocina dominicana, el arroz cocinado "
-    "con sazón, sofrito y aceite (locrio, moro, chofán) aporta típicamente ~220-260 kcal por taza solo el arroz. "
-    "Si es un locrio (arroz cocido junto con carne como cerdo, pollo, longaniza o arenque), suma las calorías del arroz "
-    "MÁS la carne cocida con su grasa: un plato normal de locrio de cerdo con acompañamiento (ej. guineo maduro o plátano "
-    "y ensalada) suele rondar 750-850 kcal y 30-40 g de proteína según la porción visible de carne. "
-    "Si es un moro (de habichuelas o guandules) con carne dorada/guisada y plátano maduro o fritos, no subestimes "
-    "las calorías del aceite de cocción ni del plátano maduro (~130-180 kcal por unidad/ración): un plato completo de moro con carne "
-    "y plátano suele ubicarse entre 700 y 850 kcal. Calibra siempre los componentes individuales con realismo dominicano. "
+    "PLATOS COMPUESTOS CRIOLLOS (LOCRIOS, MOROS, ARROZ GUISADO/CHOFAN): en la cocina dominicana, el arroz cocinado "
+    "con sazon, sofrito y aceite (locrio, moro, chofan) aporta tipicamente ~220-260 kcal por taza solo el arroz. "
+    "Si es un locrio (arroz cocido junto con carne como cerdo, pollo, longaniza o arenque), suma las calorias del arroz "
+    "MAS la carne cocida con su grasa: un plato normal de locrio de cerdo con acompanamiento (ej. guineo maduro o platano "
+    "y ensalada) suele rondar 750-850 kcal y 30-40 g de proteina segun la porcion visible de carne. "
+    "Si es un moro (de habichuelas o guandules) con carne dorada/guisada y platano maduro o fritos, no subestimes "
+    "las calorias del aceite de coccion ni del platano maduro (~130-180 kcal por unidad/racion): un plato completo de moro con carne "
+    "y platano suele ubicarse entre 700 y 850 kcal. Calibra siempre los componentes individuales con realismo dominicano. "
+    # [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] Bebidas en taza, vaso o termo (té, infusión, café, jugo, caldo).
+    "BEBIDAS EN TAZA, VASO O TERMO (te, infusion, cafe, jugo, batido, caldo): la foto NO deja saber de que es la bebida. "
+    "Clasificala como 'plato' y SIEMPRE pon una duda de IDENTIDAD aunque las calorias casi no cambien (ej: 'De que es el te?' con "
+    "opciones 'Jengibre', 'Manzanilla', 'Canela y anis', 'Te verde', 'Limoncillo'; o para un liquido marron 'Cafe solo', 'Cafe con leche', "
+    "'Chocolate'). Si el usuario no dijo con que lo preparo, pon una SEGUNDA duda de lo que se le anade ('Solo', 'Con limon', "
+    "'Con miel (+60 kcal)', 'Con leche (+40 kcal)') con su ajuste real. NUNCA nombres la bebida con un generico ('te herbal', "
+    "'infusion', 'bebida', 'jugo natural'): usa el nombre de la opcion supuesta (la mas probable por el color) y marca supuesta=true. "
+    "Muchos tes dominicanos son mezclas (jengibre con canela y limon): si el color o lo que se ve sugiere una mezcla, ofrecela como opcion. "
     # [P1-PLAN-LOTE-322 · 2026-09-25] El dueño: «una forma más fácil de responder esas preguntas».
     "OPCIONES: cada duda lleva en 'opciones' de 2 a 5 respuestas cortas que el usuario toca (ej: '2 huevos', '3 huevos', "
     "'4 huevos'; 'Panecillo', 'Arepa', 'Galleta'; 'Frito', 'A la plancha'). Marca con supuesta=true la que usaste para "
@@ -648,6 +656,13 @@ def _opcion_coincide_con_aclaracion(op_texto: str, acl_norm: str, duda: dict) ->
     op_norm = _normalizar_texto_duda(sin_paren)
     if not op_norm or not acl_norm:
         return False
+    # [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] Si la aclaración dice explícitamente "sin <alimento>" (ej. "sin azúcar"),
+    # esa opción NO coincide positivamente con la opción que lo incluye (ej. "Con azúcar"), a menos que la opción misma sea "sin ...".
+    negados = set(_re.findall(r"\bsin\s+([a-z]+)", acl_norm))
+    if negados and not op_norm.startswith("sin "):
+        palabras_op = set(op_norm.split())
+        if any(neg in palabras_op for neg in negados):
+            return False
     if op_norm == acl_norm:
         return True
     palabras = op_norm.split()
@@ -882,7 +897,12 @@ def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None) -> dict:
     # Sin desglose usable no se inventa: los componentes van sin `macros` y el modal registra el total.
     # [P1-PLAN-LOTE-305 · 2026-09-25] Las dudas (solo en un plato): máx. 2, cortas, sin basura. Viajan estructuradas
     # (el escáner las muestra) y también en la `description`, que es lo que el coach lee de la foto.
-    result["dudas"] = _resolver_dudas_con_aclaracion(_dudas_del_plato(data), aclaracion, result) if kind == "plato" else []
+    # [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] Bebidas ambiguas (té, café, infusión, jugo): inyectar dudas
+    # de identidad y aditivos antes de resolver con la aclaración.
+    from bebidas_de_la_foto import inyectar_dudas_bebida
+    _dudas_crudas = _dudas_del_plato(data) if kind == "plato" else []
+    _dudas_con_bebida = inyectar_dudas_bebida(result, _dudas_crudas, aclaracion) if kind == "plato" else []
+    result["dudas"] = _resolver_dudas_con_aclaracion(_dudas_con_bebida, aclaracion, result) if kind == "plato" else []
     if result["dudas"]:
         result["description"] += " DUDAS (pregúntale solo esto): " + " ".join(_duda_para_el_coach(d) for d in result["dudas"])
     _repartidas = _repartir_macros_del_plato(crudas, result)

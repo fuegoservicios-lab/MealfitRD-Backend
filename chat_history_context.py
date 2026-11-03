@@ -733,7 +733,18 @@ def comidas_sin_registrar(rows_del_dia: Any, plan_day: Any = None) -> list:
             return False
         return True
 
-    registradas = {slot_canonico(r.get("meal_type")) for r in (rows_del_dia or []) if _es_comida_real(r)}
+    # [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] Acumulamos kcal por slot: una bebida ligera
+    # (≤ 50 kcal, ej. té o café solo) no satisface una comida principal por sí sola.
+    from constants import SLOT_MIN_KCAL_TO_COUNT
+    kcals_por_slot: dict = {}
+    for r in (rows_del_dia or []):
+        if not _es_comida_real(r):
+            continue
+        s = slot_canonico(r.get("meal_type"))
+        if s:
+            kcals_por_slot[s] = kcals_por_slot.get(s, 0.0) + float(r.get("calories") or 0.0)
+
+    registradas = {s for s, kcal in kcals_por_slot.items() if kcal >= SLOT_MIN_KCAL_TO_COUNT}
     slots = set(_SLOTS_PRINCIPALES)
     dia = plan_day.get("day") if isinstance(plan_day, dict) and isinstance(plan_day.get("day"), dict) else plan_day
     meals = dia.get("meals") if isinstance(dia, dict) else None
