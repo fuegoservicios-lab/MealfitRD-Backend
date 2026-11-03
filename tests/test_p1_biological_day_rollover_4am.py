@@ -81,3 +81,21 @@ def test_custom_rollover_hour_knob(monkeypatch):
     # A las 5:00 AM ya es el día nuevo
     t_5am = datetime(2026, 11, 3, 9, 0, 0, tzinfo=timezone.utc)
     assert db_facts.diary_local_date_str(tz_offset_mins=tz_rd, now_utc=t_5am) == "2026-11-03"
+
+
+def test_chat_resolve_local_time_and_prompt_madrugada():
+    """Verifica que `_resolve_chat_local_time` resuelve al día biológico y que
+    `build_temporal_context` incluye la nota de madrugada cuando la hora local es 00:00..03:59."""
+    from prompts import chat_agent
+    from routers import chat as chat_router
+
+    fecha, off = chat_router._resolve_chat_local_time(None, 240, "u-1")
+    assert off == 240
+    assert fecha == db_facts.diary_local_date_str(240)
+
+    ctx = chat_agent.build_temporal_context(fecha, 240)
+    assert "CONTEXTO TEMPORAL ACTUAL:" in ctx
+    hora_local = chat_agent.hora_local_del_chat(240)
+    if 0 <= int(hora_local) < 4:
+        assert "Madrugada antes de las 04:00 AM" in ctx
+

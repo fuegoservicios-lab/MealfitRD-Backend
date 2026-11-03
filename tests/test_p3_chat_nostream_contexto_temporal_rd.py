@@ -126,13 +126,13 @@ def test_cero_es_un_offset_legitimo_y_no_se_reemplaza(monkeypatch):
 
 def test_sin_nada_del_cliente_se_resuelve_del_perfil(perfil_madrid):
     """El caso del hallazgo: cliente mudo, usuario verificado. La fecha sale del huso del PERFIL."""
-    from datetime import datetime, timedelta, timezone
+    from db_facts import diary_local_date_str
 
     fecha, off = chat_router._resolve_chat_local_time(None, None, "u-1")
     assert off == perfil_madrid
-    esperada = (datetime.now(timezone.utc) - timedelta(minutes=perfil_madrid)).date().isoformat()
+    esperada = diary_local_date_str(perfil_madrid)
     assert fecha == esperada, (
-        f"se resolvio {fecha} y el dia local del offset {perfil_madrid} es {esperada}."
+        f"se resolvio {fecha} y el dia biologico local del offset {perfil_madrid} es {esperada}."
     )
 
 
@@ -142,11 +142,11 @@ def test_el_offset_del_cliente_gana_al_del_perfil(perfil_madrid):
     Con `tz_offset=240` (RD) y sin fecha, la fecha derivada tiene que ser la de RD, no la de
     Madrid. Ambas se calculan desde el mismo instante UTC, asi que el assert es valido a
     cualquier hora y en cualquier maquina."""
-    from datetime import datetime, timedelta, timezone
+    from db_facts import diary_local_date_str
 
     fecha, off = chat_router._resolve_chat_local_time(None, 240, "u-1")
     assert off == 240
-    assert fecha == (datetime.now(timezone.utc) - timedelta(minutes=240)).date().isoformat()
+    assert fecha == diary_local_date_str(240)
 
 
 def test_invitado_sin_identidad_conserva_la_conducta_previa(monkeypatch):

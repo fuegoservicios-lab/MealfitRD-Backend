@@ -264,9 +264,14 @@ def build_temporal_context(local_date: Optional[str] = None,
     # la hora en AM/PM dentro de una respuesta en francés. «14:30» es la forma universal —
     # cada idioma la lee igual— y la prosa alrededor sigue en español a propósito: el
     # system prompt es español entero y `build_language_directive` manda la salida.
+    nota_madrugada = (
+        " (Madrugada antes de las 04:00 AM: el día biológico y el contador calórico "
+        "siguen abiertos en HOY; lo comido esta noche o esta madrugada pertenece a HOY con days_ago=0.)"
+        if 0 <= now_chat.hour < 4 else ""
+    )
     return (f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, "
             f"{now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. "
-            f"La hora local es {now_chat.strftime('%H:%M')} (formato 24 h).")
+            f"La hora local es {now_chat.strftime('%H:%M')} (formato 24 h).{nota_madrugada}")
 
 
 def hora_local_del_chat(tz_offset: Optional[int] = None) -> float:

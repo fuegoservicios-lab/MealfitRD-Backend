@@ -262,11 +262,9 @@ def _resolve_chat_local_time(local_date, tz_offset, verified_user_id):
 
     resolved_date = local_date
     if resolved_date is None:
-        from datetime import datetime, timedelta, timezone
+        from db_facts import diary_local_date_str
         try:
-            resolved_date = (
-                datetime.now(timezone.utc) - timedelta(minutes=int(resolved_tz))
-            ).date().isoformat()
+            resolved_date = diary_local_date_str(int(resolved_tz))
         except (TypeError, ValueError, OverflowError):
             return local_date, tz_offset
 

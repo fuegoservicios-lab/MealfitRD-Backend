@@ -167,24 +167,25 @@ def test_tz_zero_is_honoured_not_treated_as_missing(captured_window):
 # ===========================================================================
 
 def test_whole_family_agrees_on_which_day_is_today(captured_window):
-    """`get_consumed_meals_today` (sin args), `tools._local_date_str_for_user`
-    y `chat_history_context.rd_today` deben coincidir. Eran tres derivaciones
-    del mismo concepto y una iba por UTC."""
-    from chat_history_context import rd_today
-    from db_facts import get_consumed_meals_today
-    from tools import _local_date_str_for_user
+    """`get_consumed_meals_today` (sin args), `tools._diary_date_str_for_user`
+    y `routers.chat._resolve_chat_local_time` deben coincidir en el día biológico (corte 04:00 AM).
+    Eran tres derivaciones del mismo concepto y una iba por UTC."""
+    from db_facts import diary_local_date_str, get_consumed_meals_today
+    from routers import chat as chat_router
+    from tools import _diary_date_str_for_user
 
     get_consumed_meals_today("u-1")
     start, _ = _window(captured_window)
     day_from_window = start[:10]
 
-    assert day_from_window == _local_date_str_for_user(), (
+    assert day_from_window == _diary_date_str_for_user(), (
         f"`get_consumed_meals_today` sin args dice que hoy es "
-        f"{day_from_window}, y `tools._local_date_str_for_user` dice "
-        f"{_local_date_str_for_user()}. Dos bloques del MISMO system prompt "
+        f"{day_from_window}, y `tools._diary_date_str_for_user` dice "
+        f"{_diary_date_str_for_user()}. Dos bloques del MISMO system prompt "
         f"afirmando días distintos es el modo de fallo de P1-CHAT-PAST-DAYS."
     )
-    assert day_from_window == rd_today().isoformat()
+    assert day_from_window == diary_local_date_str(240)
+    assert day_from_window == chat_router._resolve_chat_local_time(None, 240, "u-1")[0]
 
 
 def test_source_no_longer_derives_today_from_utc_date(captured_window):

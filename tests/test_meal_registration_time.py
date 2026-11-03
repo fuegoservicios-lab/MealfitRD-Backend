@@ -118,6 +118,7 @@ def test_actual_dispatch_keeps_new_foods_and_real_repeat_intent(monkeypatch, tex
 
 def test_long_live_session_refreshes_local_date_each_turn(monkeypatch):
     import coach_live
+    from db_facts import diary_local_date_str
     from routers import chat
     captured = []
     async def stream():
@@ -128,7 +129,7 @@ def test_long_live_session_refreshes_local_date_each_turn(monkeypatch):
     monkeypatch.setattr(chat, 'api_chat_stream', api)
     session = coach_live.SesionLive('live', 'owner', 'chat', local_date='2020-01-01', tz_offset=240)
     coach_live.correr_turno_del_coach(session, 'Me comí tres pasteles')
-    expected = (datetime.now(timezone.utc) - timedelta(minutes=240)).date().isoformat()
+    expected = diary_local_date_str(240)
     assert captured[0]['local_date'] == expected
     assert captured[0]['tz_offset'] == 240
 
