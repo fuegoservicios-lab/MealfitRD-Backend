@@ -151,6 +151,7 @@ class RepeatMealRequest(BaseModel):
     source_meal_id: str = Field(..., min_length=8, max_length=64)
     meal_type: Optional[str] = Field(default=None, max_length=32)
     days_ago: int = Field(default=0, ge=0, le=7)
+    base_only: bool = Field(default=True, description="[P1-CLONE-HABITUAL-DECONTAMINATE] Si es True, clona solo el plato base excluyendo extras fusionados")
 
 
 from food_label_nutrients import FoodLabel, snapshot as label_snapshot, micros_from_snapshot
@@ -1471,13 +1472,44 @@ def api_repeat_consumed_meal(
         if not row:
             raise HTTPException(status_code=404, detail="Comida no encontrada.")
 
+        meal_name = row["meal_name"]
+        calories = row.get("calories") or 0
+        protein = row.get("protein") or 0
+        carbs = row.get("carbs") or 0
+        healthy_fats = row.get("healthy_fats") or 0
+        ingredients = row.get("ingredients") or None
+        nutrition_out = row.get("nutrition")
+
+        # [BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
+        # Si base_only=True y la comida posee un plato base limpio tras fusiones de extras (BB-005),
+        # repetimos exclusivamente el plato base para no arrastrar cafés/postres circunstanciales.
+        if getattr(payload, "base_only", True) and isinstance(nutrition_out, (dict, str)):
+            nut_dict = nutrition_out
+            if isinstance(nut_dict, str):
+                try:
+                    import json
+                    nut_dict = json.loads(nut_dict)
+                except Exception:
+                    nut_dict = {}
+            if isinstance(nut_dict, dict) and nut_dict.get("base_meal"):
+                base = nut_dict["base_meal"]
+                if isinstance(base, dict) and base.get("meal_name"):
+                    meal_name = base["meal_name"]
+                    calories = base.get("calories") or 0
+                    protein = base.get("protein") or 0
+                    carbs = base.get("carbs") or 0
+                    healthy_fats = base.get("healthy_fats") or 0
+                    ingredients = base.get("ingredients") or ingredients
+                    # Al clonar solo la base, el nuevo registro arranca limpio sin addons heredados
+                    nutrition_out = {k: v for k, v in nut_dict.items() if k not in ("base_meal", "addons", "addon_ingredients")}
+
         return _persist_consumed_meal(
-            user_id=verified_user_id, meal_name=row["meal_name"],
+            user_id=verified_user_id, meal_name=meal_name,
             meal_type=(payload.meal_type or row.get("meal_type") or "extra"),
-            calories=row.get("calories") or 0, protein=row.get("protein") or 0,
-            carbs=row.get("carbs") or 0, healthy_fats=row.get("healthy_fats") or 0,
-            ingredients=(row.get("ingredients") or None),
-            nutrition=row.get("nutrition"),
+            calories=calories, protein=protein,
+            carbs=carbs, healthy_fats=healthy_fats,
+            ingredients=ingredients,
+            nutrition=nutrition_out,
             days_ago=payload.days_ago, background_tasks=background_tasks,
             source="manual", deduct=False, origen="repeat",   # [P1-PLAN-LOTE-720]
         )

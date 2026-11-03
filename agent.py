@@ -6017,6 +6017,48 @@ def _comida_dentro_de_ttl_fusion(comida: dict, ttl_min: float = _FUSION_TTL_MINU
         return False
 
 
+def _extraer_plato_base_de_comida(comida: dict) -> dict:
+    """[BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
+    Extrae la información limpia del plato base de una comida consumida,
+    desacoplando cualquier extra circunstancial que haya entrado por autofusión (BB-005).
+    Retorna un diccionario con:
+    meal_name, calories, protein, carbs, healthy_fats, ingredients, is_decontaminated.
+    """
+    if not isinstance(comida, dict):
+        return {}
+    nut = comida.get("nutrition")
+    if isinstance(nut, str):
+        try:
+            nut = json.loads(nut)
+        except Exception:
+            nut = {}
+    if not isinstance(nut, dict):
+        nut = {}
+
+    base_meal = nut.get("base_meal")
+    if isinstance(base_meal, dict) and base_meal.get("meal_name"):
+        return {
+            "meal_name": str(base_meal.get("meal_name") or "").strip(),
+            "calories": int(base_meal.get("calories") or 0),
+            "protein": int(base_meal.get("protein") or 0),
+            "carbs": int(base_meal.get("carbs") or 0),
+            "healthy_fats": int(base_meal.get("healthy_fats") or 0),
+            "ingredients": list(base_meal.get("ingredients") or []),
+            "is_decontaminated": True,
+        }
+
+    # Fallback si no tiene base_meal explícito en nutrition
+    return {
+        "meal_name": str(comida.get("meal_name") or "").strip(),
+        "calories": int(comida.get("calories") or 0),
+        "protein": int(comida.get("protein") or 0),
+        "carbs": int(comida.get("carbs") or 0),
+        "healthy_fats": int(comida.get("healthy_fats") or 0),
+        "ingredients": list(comida.get("ingredients") or []) if isinstance(comida.get("ingredients"), list) else [],
+        "is_decontaminated": False,
+    }
+
+
 def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, messages: list) -> Optional[dict]:
     """Si el usuario dice «me comí otro» / «repetí» sobre el plato recién registrado y el LLM llamó a
     `log_consumed_meal`, devuelve los args para `correct_consumed_meal` fusionando ambas porciones en la
@@ -6051,6 +6093,38 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
         tot_carbs = (int(fila.get("carbs") or 0) + int(tool_args.get("carbs") or 0)) if es_una_porcion else int(tool_args.get("carbs") or 0)
         tot_fats = (int(fila.get("healthy_fats") or 0) + int(tool_args.get("healthy_fats") or 0)) if es_una_porcion else int(tool_args.get("healthy_fats") or 0)
         merged_name = _pluralizar_nombre_fusionado(prev_name, new_name)
+
+        # [BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
+        # Preservar la porción unitaria como plato base para que en días posteriores clone 1 porción
+        existing_nut = fila.get("nutrition") or {}
+        if isinstance(existing_nut, str):
+            try:
+                existing_nut = json.loads(existing_nut)
+            except Exception:
+                existing_nut = {}
+        if not isinstance(existing_nut, dict):
+            existing_nut = {}
+        merged_nut = dict(existing_nut)
+        if not merged_nut.get("base_meal"):
+            merged_nut["base_meal"] = {
+                "meal_name": prev_name,
+                "calories": prev_cal,
+                "protein": int(fila.get("protein") or 0),
+                "carbs": int(fila.get("carbs") or 0),
+                "healthy_fats": int(fila.get("healthy_fats") or 0),
+                "ingredients": fila.get("ingredients") or [],
+            }
+        addons = list(merged_nut.get("addons") or [])
+        addons.append({
+            "meal_name": f"Porción adicional de {prev_name}",
+            "calories": add_cal if es_una_porcion else (tot_cal - prev_cal),
+            "protein": int(tool_args.get("protein") or 0),
+            "carbs": int(tool_args.get("carbs") or 0),
+            "healthy_fats": int(tool_args.get("healthy_fats") or 0),
+            "ingredients": tool_args.get("ingredients") or [],
+        })
+        merged_nut["addons"] = addons
+
         out = {
             "user_id": user_id,
             "meal_id": prev_mid,
@@ -6059,6 +6133,7 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
             "protein": tot_prot,
             "carbs": tot_carbs,
             "healthy_fats": tot_fats,
+            "nutrition": merged_nut,
         }
         if tool_args.get("ingredients"):
             out["ingredients"] = [f"2× {ing}" if not re.match(r"^\s*[2-9]", str(ing)) else str(ing) for ing in tool_args["ingredients"]]
@@ -6469,6 +6544,50 @@ def _intentar_fusionar_alimento_en_comida_existente(
     merged_nutrition = dict(existing_nutrition)
     if att_ids:
         merged_nutrition["attachment_ids"] = att_ids
+
+    # [BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
+    # Preservar el plato base inmutable para que al clonar en días posteriores ("lo mismo de ayer")
+    # no se arrastren los extras circunstanciales fusionados (café, postre, bebidas, etc.).
+    if es_reemplazo_completo and add_cal >= orig_cal and orig_cal > 0:
+        # Reemplazo completo del plato por parte del usuario: la nueva base es el plato completo
+        merged_nutrition["base_meal"] = {
+            "meal_name": merged_name,
+            "calories": tot_cal,
+            "protein": tot_prot,
+            "carbs": tot_carbs,
+            "healthy_fats": tot_fats,
+            "ingredients": list(merged_ingredients),
+        }
+        merged_nutrition["addons"] = []
+        merged_nutrition["addon_ingredients"] = []
+    else:
+        # Fusión aditiva: preservar base_meal original
+        base_meal = existing_nutrition.get("base_meal")
+        if not isinstance(base_meal, dict) or not base_meal.get("meal_name"):
+            base_meal = {
+                "meal_name": orig_name,
+                "calories": orig_cal,
+                "protein": orig_prot,
+                "carbs": orig_carbs,
+                "healthy_fats": orig_fats,
+                "ingredients": list(orig_ing),
+            }
+        existing_addons = list(existing_nutrition.get("addons") or [])
+        new_addon = {
+            "meal_name": new_name,
+            "calories": add_cal,
+            "protein": add_prot,
+            "carbs": add_carbs,
+            "healthy_fats": add_fats,
+            "ingredients": list(new_ing),
+        }
+        existing_addons.append(new_addon)
+
+        merged_nutrition["base_meal"] = base_meal
+        merged_nutrition["addons"] = existing_addons
+        merged_nutrition["addon_ingredients"] = [
+            str(ing).strip() for a in existing_addons for ing in (a.get("ingredients") or []) if str(ing).strip()
+        ]
 
     return {
         "user_id": user_id,

@@ -791,16 +791,48 @@ def build_past_diary_block(consumed_rows: Any, today: date,
         if rows:
             parts = []
             for r in rows:
-                nm = str(r.get("meal_name") or "").strip() or "(sin nombre)"
                 slot = str(r.get("meal_type") or "").strip()
                 cal = r.get("calories")
                 prot = r.get("protein")
-                seg = f"{slot}: {nm}" if slot else nm
-                if isinstance(cal, (int, float)) and cal:
-                    if isinstance(prot, (int, float)) and prot:
-                        seg += f" ({int(cal)} kcal, {int(prot)}g prot)"
-                    else:
-                        seg += f" ({int(cal)} kcal)"
+
+                # [BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
+                # Desglosar plato base y extras circunstanciales fusionados para evitar contaminación al clonar
+                nut = r.get("nutrition")
+                if isinstance(nut, str):
+                    try:
+                        import json
+                        nut = json.loads(nut)
+                    except Exception:
+                        nut = {}
+                if not isinstance(nut, dict):
+                    nut = {}
+
+                base_info = nut.get("base_meal")
+                addons = nut.get("addons") or []
+                if isinstance(base_info, dict) and base_info.get("meal_name"):
+                    base_nm = str(base_info.get("meal_name")).strip()
+                    b_cal = base_info.get("calories")
+                    b_prot = base_info.get("protein")
+                    seg = f"{slot}: {base_nm}" if slot else base_nm
+                    if isinstance(b_cal, (int, float)) and b_cal:
+                        if isinstance(b_prot, (int, float)) and b_prot:
+                            seg += f" ({int(b_cal)} kcal base, {int(b_prot)}g prot)"
+                        else:
+                            seg += f" ({int(b_cal)} kcal base)"
+                    if addons:
+                        addon_names = ", ".join(
+                            str(a.get("meal_name") or "").strip() for a in addons if a.get("meal_name")
+                        )
+                        extra_cal = sum(int(a.get("calories") or 0) for a in addons)
+                        seg += f" [+ extra fusionado: {addon_names} (+{extra_cal} kcal)]"
+                else:
+                    nm = str(r.get("meal_name") or "").strip() or "(sin nombre)"
+                    seg = f"{slot}: {nm}" if slot else nm
+                    if isinstance(cal, (int, float)) and cal:
+                        if isinstance(prot, (int, float)) and prot:
+                            seg += f" ({int(cal)} kcal, {int(prot)}g prot)"
+                        else:
+                            seg += f" ({int(cal)} kcal)"
                 parts.append(seg)
             # [P1-PLAN-LOTE-76] lo que falta de ese día, por su nombre
             _pd = find_plan_day_for_date(plan_data, cursor, today, tz_offset_mins) if isinstance(plan_data, dict) else None
@@ -835,5 +867,9 @@ def build_past_diary_block(consumed_rows: Any, today: date,
               "algo registrado. Lo registrado hoy es SOLO lo que diga el bloque DIARIO DE HOY, "
               "incluido cuando dice que hoy todavía no hay nada. «sin registrar: …» enumera las comidas de ese "
               "día que faltan en el diario (las tres principales, y la merienda solo si el plan la traía): si "
-              "ofreces completar un día, ofrece ESAS por su nombre.")
+              "ofreces completar un día, ofrece ESAS por su nombre. "
+              "[P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03] Si el usuario pide repetir o clonar una comida "
+              "de días anteriores («lo mismo de ayer», «lo que siempre como»), clona ÚNICAMENTE el plato base "
+              "(kcal y proteínas base). NUNCA arrastres extras circunstanciales ni bebidas marcadas con "
+              "«[+ extra fusionado: ...]» a menos que el usuario los pida expresamente.")
     return _assemble(header, lines, footer, max_chars, "diary")
