@@ -14,6 +14,7 @@ Garantías:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from agent import (
@@ -316,7 +317,7 @@ def test_extra_food_fuses_into_previous_meal_sums_calories(monkeypatch):
         "healthy_fats": 9,
         "ingredients": ["1 rodaja de pan", "queso cottage (30 g)", "mantequilla de maní (15 g)"],
         "nutrition": {},
-        "created_at": "2026-10-30T12:51:00Z",
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }]
     monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda user_id: mock_meals)
 

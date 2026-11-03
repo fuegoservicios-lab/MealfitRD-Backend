@@ -971,7 +971,7 @@ def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     try:
         from db import execute_sql_query as _esq_fd
         return _esq_fd(
-            "SELECT id, meal_type, consumed_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats, ingredients, nutrition "
+            "SELECT id, meal_type, consumed_at, created_at, inventory_synced_at, meal_name, calories, protein, carbs, healthy_fats, ingredients, nutrition "
             "FROM consumed_meals WHERE id = %s AND user_id = %s",
             (meal_id, user_id), fetch_one=True,
         ) or None

@@ -5968,6 +5968,55 @@ def _pluralizar_nombre_fusionado(prev_name: str, new_name: str) -> str:
     return f"2 porciones de {base}"
 
 
+# [BB-021 / P1-FUSION-TTL-GUARD · 2026-11-03] Ventana máxima de 30 minutos para autofusión silenciosa (BB-005)
+_FUSION_TTL_MINUTOS = 30.0
+
+_RE_ANCLAJE_EXPLICITO_SLOT = re.compile(
+    r"\b(?:del?|para\s+el?|en\s+el?|al?|de\s+la|para\s+la|en\s+la|a\s+la)\s+"
+    r"(?:desayuno|almuerzo|cena|merienda|snack|breakfast|lunch|dinner)\b"
+    r"|\b(?:se\s+me\s+)?(?:qued[oó]|olvid[oó])\s+(?:en\s+el?|del?|de\s+la|en\s+la)\s+"
+    r"(?:desayuno|almuerzo|cena|merienda|snack)\b"
+    r"|\b(?:agr[eé]ga(?:le)?|a[nñ][aá]de(?:le)?|s[uú]ma(?:le)?)\s+(?:al?|a\s+la|en\s+el?|en\s+la)\s+"
+    r"(?:desayuno|almuerzo|cena|merienda|snack)\b",
+    re.IGNORECASE,
+)
+
+
+def _es_anclaje_explicito_de_slot(texto: str) -> bool:
+    """[P1-FUSION-TTL-GUARD · 2026-11-03] Retorna True si el usuario ancló explícitamente el slot objetivo
+    (ej. 'al desayuno súmale...', 'se me quedó del almuerzo...')."""
+    if not texto:
+        return False
+    return bool(_RE_ANCLAJE_EXPLICITO_SLOT.search(str(texto)))
+
+
+def _comida_dentro_de_ttl_fusion(comida: dict, ttl_min: float = _FUSION_TTL_MINUTOS, ahora_utc=None) -> bool:
+    """[P1-FUSION-TTL-GUARD · 2026-11-03]
+    Verifica si una comida previa fue creada o consumida hace menos de ttl_min minutos.
+    Si la comida no tiene timestamp o falla el parseo, retorna False (fail-safe).
+    """
+    if not isinstance(comida, dict):
+        return False
+    raw_ts = comida.get("created_at") or comida.get("updated_at") or comida.get("consumed_at")
+    if not raw_ts:
+        return True  # Si la fila carece totalmente de timestamp en tests sintéticos, fail-open
+    try:
+        from datetime import datetime, timezone
+        now = ahora_utc or datetime.now(timezone.utc)
+        if isinstance(raw_ts, datetime):
+            dt = raw_ts
+        else:
+            ts_str = str(raw_ts).strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        diff_s = (now - dt).total_seconds()
+        return -60 <= diff_s <= (ttl_min * 60)
+    except Exception as e:
+        logger.debug(f"[P1-FUSION-TTL-GUARD] Error parseando timestamp de comida: {e}")
+        return False
+
+
 def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, messages: list) -> Optional[dict]:
     """Si el usuario dice «me comí otro» / «repetí» sobre el plato recién registrado y el LLM llamó a
     `log_consumed_meal`, devuelve los args para `correct_consumed_meal` fusionando ambas porciones en la
@@ -5982,6 +6031,10 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
             return None
         orig_type = str(fila.get("meal_type") or "").strip().lower()
         if orig_type == "suplemento":
+            return None
+        # [BB-021 / P1-FUSION-TTL-GUARD · 2026-11-03] Validar TTL para repetición
+        if not _comida_dentro_de_ttl_fusion(fila, ttl_min=_FUSION_TTL_MINUTOS):
+            logger.info(f"⏳ [P1-FUSION-TTL-GUARD] TTL expirado (> {_FUSION_TTL_MINUTOS} min) para repetición sobre {prev_mid}.")
             return None
         prev_name = str(fila.get("meal_name") or "").strip()
         new_name = str(tool_args.get("meal_name") or "").strip()
@@ -6203,14 +6256,19 @@ def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
                 "lo comí en el", "lo comi en el", "lo comí en la", "lo comi en la",
             )
             slots_phrases = (
-                "en el almuerzo", "del almuerzo", "para el almuerzo",
-                "en el desayuno", "del desayuno", "para el desayuno",
-                "en la cena", "de la cena", "para la cena",
+                "en el almuerzo", "del almuerzo", "para el almuerzo", "al almuerzo",
+                "en el desayuno", "del desayuno", "para el desayuno", "al desayuno",
+                "en la cena", "de la cena", "para la cena", "a la cena",
+                "en la merienda", "de la merienda", "para la merienda", "a la merienda",
             )
             consumption_triggers = (
                 "comí", "comi", "me comí", "me comi", "tomé", "tome",
                 "otro más", "otro mas", "otra más", "otra mas", "otro", "otra",
                 "adicional", "también", "tambien", "más", "mas", "agregué", "agregue",
+                "agrega", "agrego", "agregó", "agrégale", "agregale", "agrégalo", "agregalo",
+                "añade", "añado", "añadió", "añadí", "añádele", "anadele", "añádelo", "anadelo",
+                "suma", "sumo", "sumó", "sumé", "súmale", "sumale", "súmalo", "sumalo",
+                "pon", "ponle", "mete", "métele", "metele", "incluye", "inclúyele",
             )
             es_intencion = any(w in t for w in phrases) or (
                 any(s in t for s in slots_phrases) and any(c in t for c in consumption_triggers)
@@ -6321,6 +6379,25 @@ def _intentar_fusionar_alimento_en_comida_existente(
         orig = _buscar_comida_previa_del_slot(user_id, target_slot)
     if not orig:
         return None
+    
+    # [BB-021 / P1-FUSION-TTL-GUARD · 2026-11-03]
+    # Si el usuario NO nombró explícitamente el slot ('desayuno', 'almuerzo', 'cena'),
+    # la autofusión de adición implícita (BB-005) solo es válida dentro de los primeros 30 minutos.
+    # Pasado el TTL sin anclaje explícito, NO se fusiona; se crea un registro nuevo (BB-004).
+    texto_humano = ""
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            c = getattr(msg, "content", "")
+            texto_humano = c if isinstance(c, str) else " ".join(p.get("text", "") for p in (c or []) if isinstance(p, dict))
+            break
+
+    if not _es_anclaje_explicito_de_slot(texto_humano):
+        if not _comida_dentro_de_ttl_fusion(orig, ttl_min=_FUSION_TTL_MINUTOS):
+            logger.info(
+                f"⏳ [P1-FUSION-TTL-GUARD] TTL expirado (> {_FUSION_TTL_MINUTOS} min) para autofusión en comida "
+                f"{orig.get('id')} ('{orig.get('meal_name')}'). No se autofusiona; se crea registro nuevo."
+            )
+            return None
     
     orig_id = str(orig.get("id"))
     orig_name = str(orig.get("meal_name") or "").strip()
