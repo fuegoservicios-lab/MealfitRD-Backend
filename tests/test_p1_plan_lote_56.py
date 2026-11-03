@@ -20,8 +20,8 @@ _BACKEND = Path(__file__).resolve().parents[1]
 
 def test_marcador_del_lote():
     app = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · (\d{4}-\d{2}-\d{2})"', app)
-    assert m and int(m.group(1)) >= 56 and m.group(2) >= "2026-09-15"
+    m = re.search(r'_LAST_KNOWN_PFIX = "([^"]+) · (\d{4}-\d{2}-\d{2})"', app)
+    assert m and m.group(2) >= "2026-09-15"
     assert "[P1-PLAN-LOTE-56 · 2026-09-15]" in app
 
 

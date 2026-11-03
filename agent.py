@@ -5257,16 +5257,16 @@ def execute_tools(state: ChatState):
                 tool_args["user_id"] = _trusted_uid
                 # Unspecified meals use the user's clock, never an LLM guess based on food size.
                 if tool_name == "log_consumed_meal":
+                    from prompts.chat_agent import hora_local_del_chat
+                    from tools import _hora_local_float
+                    _hora_registro = (hora_local_del_chat(state["tz_offset"])
+                                      if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
                     from meal_registration_time import explicit_slot_named_by_user
                     _user_named_slot = explicit_slot_named_by_user(state.get("messages") or [])
                     if _user_named_slot:
                         tool_args["explicit_slot"] = True
                     elif not tool_args.get("days_ago"):
                         from meal_registration_time import infer_current_meal_slot
-                        from prompts.chat_agent import hora_local_del_chat
-                        from tools import _hora_local_float
-                        _hora_registro = (hora_local_del_chat(state["tz_offset"])
-                                          if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
                         _slot_registro = infer_current_meal_slot(
                             messages, _hora_registro, (state.get("form_data") or {}).get("scheduleType"))
                         if _slot_registro:
@@ -5280,6 +5280,24 @@ def execute_tools(state: ChatState):
                         logger.warning(f"🛡️ [P1-PLAN-LOTE-56] log_consumed_meal days_ago "
                                        f"{tool_args.get('days_ago')!r} → {_dias} (el usuario nombró el día)")
                         tool_args["days_ago"] = _dias
+                # [BB-019 / P1-BIO-DATE-RESOLVER · 2026-11-03] Paradoja Ayer/Hoy en madrugada (00:00 - 03:59).
+                # Si el usuario dice "anoche" o "ayer cené..." en madrugada, pertenece al día biológico en curso (days_ago=0).
+                if tool_name == "log_consumed_meal":
+                    from biological_date_resolver import corregir_days_ago_madrugada
+                    _dias_corregido = corregir_days_ago_madrugada(
+                        state.get("messages") or [],
+                        tool_args.get("days_ago"),
+                        hora_local=_hora_registro,
+                        user_id=_trusted_uid,
+                        slot_pedido=tool_args.get("meal_type"),
+                        tz_offset=state.get("tz_offset"),
+                    )
+                    if _dias_corregido is not None and _dias_corregido != tool_args.get("days_ago"):
+                        logger.info(
+                            f"🌙 [P1-BIO-DATE-RESOLVER] Ajuste de madrugada: days_ago "
+                            f"{tool_args.get('days_ago')} → {_dias_corregido} (día biológico activo en curso)"
+                        )
+                        tool_args["days_ago"] = _dias_corregido
                 # Repeat permission comes from a human statement, never the model's choice of slot.
                 from meal_registration_time import confirmed_repeat_consumption, explicit_repeat_consumption
                 _repeat_confirmed = confirmed_repeat_consumption(
@@ -6435,7 +6453,28 @@ def _ajustar_args_fusion_correct_consumed_meal(
     return _intentar_fusionar_alimento_en_comida_existente(user_id, tool_args, messages, plate_photos)
 
 
-def _days_ago_named_by_user(messages: list):
+def _days_ago_named_by_user(
+    messages: list,
+    hora_local: Optional[float] = None,
+    user_id: Optional[str] = None,
+    tz_offset: Optional[int] = None,
+):
+    # [BB-019 / P1-BIO-DATE-RESOLVER · 2026-11-03] En madrugada (00:00 - 03:59), resolver con el reloj biológico.
+    from biological_date_resolver import (
+        es_ventana_madrugada,
+        corregir_days_ago_madrugada,
+        extraer_contexto_temporal_de_mensajes,
+    )
+    if hora_local is None:
+        _h_ext, _ = extraer_contexto_temporal_de_mensajes(messages)
+        if _h_ext is not None:
+            hora_local = _h_ext
+
+    if es_ventana_madrugada(hora_local):
+        return corregir_days_ago_madrugada(
+            messages, None, hora_local=hora_local, user_id=user_id, tz_offset=tz_offset
+        )
+
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             c = msg.content
