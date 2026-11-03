@@ -76,4 +76,14 @@ def bloque_del_dia(consumed, health) -> str:
                     f"- Proteína: {prot} de {meta_prot} g "
                     + (f"(le faltan {falta} g)." if falta > 0 else "(ya la cubrió).")
                 )
+                if quedan < 350 and falta >= 25 and quedan > 0:
+                    lineas.append(
+                        "- REGLA DE PRESUPUESTO: Margen calórico estrecho con proteína pendiente alta. "
+                        "Sugiere únicamente proteína magra pura (claras, atún al agua, batido whey, pechuga limpia)."
+                    )
+            if quedan <= 100 or (meta_kcal > 0 and kcal / meta_kcal >= 0.95):
+                lineas.append(
+                    "- REGLA DE PRESUPUESTO: Margen calórico prácticamente agotado (>= 95%). "
+                    "PROHIBIDO sugerir platos calóricos; enfócate en cierre de jornada, hidratación sin calorías o descanso."
+                )
     return "\n".join(lineas) + "\n"

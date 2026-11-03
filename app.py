@@ -1055,7 +1055,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] (backend + frontend) Fotos de bebidas ambiguas (té, infusión, café, jugo, caldo):
 # dudas obligatorias de identidad y aditivos antes de anotar; una bebida ligera (≤ 50 kcal) no cierra la franja principal del plan.
 # [P1-BIO-DATE-RESOLVER · 2026-11-03] (backend) Paradoja Ayer/Hoy en madrugada (00:00-03:59): anclar 'anoche' y 'ayer cené' al día biológico activo.
-_LAST_KNOWN_PFIX = "P1-BIO-DATE-RESOLVER · 2026-11-03"
+# [P1-MACRO-GAP-DINNER-CRON · 2026-11-03] (backend) Cron de 7:00 PM opera por brecha de macros: cierre/hidratación si >= 95% kcal, proteína magra pura si pocas kcal y mucha proteína.
+_LAST_KNOWN_PFIX = "P1-MACRO-GAP-DINNER-CRON · 2026-11-03"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

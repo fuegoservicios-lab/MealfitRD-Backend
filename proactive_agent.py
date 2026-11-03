@@ -1435,23 +1435,22 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 tone_instruction = elegida["tono"]
                 meal_rate, meal_total = elegida["meal_rate"], elegida["meal_total"]
 
-                # [AI-22: Rescate de Proteina al atardecer]
+                # [P1-MACRO-GAP-DINNER-CRON · 2026-11-03] Brecha de macros a las 7:00 PM (Cena)
                 if meal_to_check == "Cena" and consumed:
                     try:
-                        _p_cons = sum(float(c.get("protein") or 0) for c in consumed)
-                        _p_target = float(health.get("target_protein") or health.get("protein") or 0)
-                        if _p_target <= 0 and health.get("weight"):
-                            _p_target = float(health["weight"]) * 1.6
-                        if _p_target > 0:
-                            _p_gap = max(0.0, _p_target - _p_cons)
-                            if _p_gap >= 30.0:
-                                tone_instruction = (
-                                    (tone_instruction or "") +
-                                    f"\nRESCATE DE PROTEINA: son las {trigger_time_str} y al usuario le faltan unos ~{int(_p_gap)}g de proteina para su meta diaria. "
-                                    f"Proponle una cena con buena proteina (pechuga, atun, huevos, queso cottage o de su nevera) para cerrar el dia."
+                        from macro_gap_evaluator import evaluar_brecha_macros_cena
+                        _gap_eval = evaluar_brecha_macros_cena(consumed, health)
+                        if _gap_eval.instruccion_prompt:
+                            tone_instruction = (tone_instruction or "") + _gap_eval.instruccion_prompt
+                            if _gap_eval.mode == "cierre_hidratacion":
+                                # Con el 95%+ de calorías consumidas, cambiar el estilo a cierre e hidratación
+                                style_instruction = (
+                                    "Saluda de forma breve y empática felicitando el cierre de su jornada. "
+                                    "PROHIBIDO sugerir platos de comida o recetas. Recomienda hidratación ligera "
+                                    "(agua o infusión caliente sin azúcar) o descanso."
                                 )
-                    except Exception as _p_err:
-                        logger.debug(f"[AI-22] error calculando rescate de proteina: {_p_err}")
+                    except Exception as _gap_err:
+                        logger.debug(f"[P1-MACRO-GAP-DINNER-CRON] error evaluando brecha de macros: {_gap_err}")
 
                 # ESTADO: olvido registrar. Generar mensaje proactivo.
                 logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
