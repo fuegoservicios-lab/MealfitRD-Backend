@@ -205,6 +205,26 @@ def _fallback_tz_offset_min() -> int:
         return 240
 
 
+def _diary_rollover_hour() -> int:
+    """[P1-DIARY-ROLLOVER-4AM · 2026-11-02] Retorna la hora de corte del día biológico (default 4)."""
+    try:
+        from constants import DIARY_ROLLOVER_HOUR
+        return int(DIARY_ROLLOVER_HOUR)
+    except Exception:
+        return 4
+
+
+def diary_local_date_str(tz_offset_mins: Optional[int] = None, now_utc: Optional[Any] = None) -> str:
+    """[P1-DIARY-ROLLOVER-4AM · 2026-11-02] Fecha del día biológico del usuario (YYYY-MM-DD).
+    Resta el offset del huso y las horas de rollover (4h) para que 00:00-03:59 AM local
+    corresponda al día despierto previo."""
+    from datetime import datetime, timezone, timedelta
+    _tz = _fallback_tz_offset_min() if tz_offset_mins is None else int(tz_offset_mins)
+    _now = now_utc or datetime.now(timezone.utc)
+    _roll_h = _diary_rollover_hour()
+    return (_now - timedelta(minutes=_tz) - timedelta(hours=_roll_h)).date().isoformat()
+
+
 def _tz_candidate_int(raw) -> Optional[int]:
     """Parsea un candidato crudo de offset (texto de un `->>'clave'`) a int, o `None` si está
     ausente o no es numérico (incluye overflow). Nunca lanza — usado por `user_tz_offset_min`
@@ -1204,16 +1224,17 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             # ninguna de las dos se movia con el knob. `_fb_tz_min` se resuelve UNA vez
             # para que la fecha y el huso no puedan discrepar dentro de la misma llamada.
             _fb_tz_min = _fallback_tz_offset_min()
+            _roll_h = _diary_rollover_hour()
             if not date_str:
-                date_str = (datetime.now(timezone.utc) - timedelta(minutes=_fb_tz_min)).date().isoformat()
+                date_str = diary_local_date_str(_fb_tz_min)
             if tz_offset_mins is None:
                 tz_offset_mins = _fb_tz_min
 
             # El frontend envía tz_offset en minutos (JS: getTimezoneOffset() - diferencia a UTC)
-            # Parsear el inicio del día local
+            # Parsear el inicio del día local (corte biológico a las 04:00 AM)
             try:
-                local_start = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
-                local_end = datetime.strptime(f"{date_str} 23:59:59", "%Y-%m-%d %H:%M:%S")
+                local_start = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S") + timedelta(hours=_roll_h)
+                local_end = datetime.strptime(f"{date_str} 23:59:59", "%Y-%m-%d %H:%M:%S") + timedelta(hours=_roll_h)
 
                 # Convertir local a UTC sumando tz_offset_mins (para UTC-4 el offset es 240)
                 utc_start = local_start + timedelta(minutes=tz_offset_mins)
@@ -1227,12 +1248,10 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
                 # atrás, y encima solo para el usuario que mandó datos malos.
                 logger.error(f"⚠️ Error procesando la zona horaria, usando fallback a fecha local (offset {_fb_tz_min}): {e}")
                 # [P2-TZ-FALLBACK-KNOB-INERTE · 2026-08-23] El dia local del fallback y sus
-                # bordes se derivan del MISMO offset. Antes el dia se calculaba con
-                # `hours=4` y los bordes eran los literales `T04:00:00Z`/`T03:59:59Z`:
-                # tres escrituras del mismo hecho que solo cuadraban en RD.
-                _fb_today = (datetime.now(timezone.utc) - timedelta(minutes=_fb_tz_min)).date()
-                _fb_start = datetime.strptime(f"{_fb_today.isoformat()} 00:00:00", "%Y-%m-%d %H:%M:%S") + timedelta(minutes=_fb_tz_min)
-                _fb_end = datetime.strptime(f"{_fb_today.isoformat()} 23:59:59", "%Y-%m-%d %H:%M:%S") + timedelta(minutes=_fb_tz_min)
+                # bordes se derivan del MISMO offset.
+                _fb_today = diary_local_date_str(_fb_tz_min)
+                _fb_start = datetime.strptime(f"{_fb_today} 00:00:00", "%Y-%m-%d %H:%M:%S") + timedelta(hours=_roll_h) + timedelta(minutes=_fb_tz_min)
+                _fb_end = datetime.strptime(f"{_fb_today} 23:59:59", "%Y-%m-%d %H:%M:%S") + timedelta(hours=_roll_h) + timedelta(minutes=_fb_tz_min)
                 start_str = _fb_start.strftime("%Y-%m-%dT%H:%M:%SZ")
                 end_str = _fb_end.strftime("%Y-%m-%dT%H:%M:%SZ")
 

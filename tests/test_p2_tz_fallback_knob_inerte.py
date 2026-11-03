@@ -221,10 +221,10 @@ def _ventana_capturada(monkeypatch, **kwargs):
 @pytest.mark.parametrize(
     "offset,hhmmss_inicio,hhmmss_fin",
     [
-        (240, "04:00:00", "03:59:59"),   # RD: la conducta previa, byte-identica
-        (-60, "23:00:00", "22:59:59"),   # Espana en invierno
-        (0, "00:00:00", "23:59:59"),     # UTC / Atlantic-Canary en invierno: 0 es un offset legitimo
-        (360, "06:00:00", "05:59:59"),   # Mexico central
+        (240, "08:00:00", "07:59:59"),   # RD: 04:00 AM local + 4h offset = 08:00:00Z
+        (-60, "03:00:00", "02:59:59"),   # Espana en invierno: 04:00 AM local - 1h offset = 03:00:00Z
+        (0, "04:00:00", "03:59:59"),     # UTC / Atlantic-Canary en invierno: 04:00 AM local + 0h = 04:00:00Z
+        (360, "10:00:00", "09:59:59"),   # Mexico central: 04:00 AM local + 6h offset = 10:00:00Z
     ],
 )
 def test_get_consumed_meals_today_default_sigue_al_knob(monkeypatch, offset, hhmmss_inicio, hhmmss_fin):
@@ -259,8 +259,8 @@ def test_get_consumed_meals_today_fecha_y_huso_no_pueden_discrepar(monkeypatch):
     d0 = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
     d1 = datetime.strptime(end, "%Y-%m-%dT%H:%M:%SZ")
     assert d1 - d0 == timedelta(hours=23, minutes=59, seconds=59)
-    local_hoy = (datetime.now(timezone.utc) - timedelta(minutes=offset)).date()
-    assert (d0 - timedelta(minutes=offset)).date() == local_hoy
+    local_hoy = db_facts.diary_local_date_str(offset)
+    assert (d0 - timedelta(minutes=offset) - timedelta(hours=db_facts._diary_rollover_hour())).date().isoformat() == local_hoy
 
 
 def test_get_consumed_meals_today_respeta_los_argumentos_explicitos(monkeypatch):
@@ -268,8 +268,8 @@ def test_get_consumed_meals_today_respeta_los_argumentos_explicitos(monkeypatch)
     y `0` sigue siendo un offset legitimo aunque sea falsy."""
     monkeypatch.setattr(constants, "DEFAULT_TZ_OFFSET_MIN", 240, raising=True)
     start, end = _ventana_capturada(monkeypatch, date_str="2026-03-04", tz_offset_mins=0)
-    assert start == "2026-03-04T00:00:00Z"
-    assert end == "2026-03-04T23:59:59Z"
+    assert start == "2026-03-04T04:00:00Z"
+    assert end == "2026-03-05T03:59:59Z"
 
 
 def test_get_consumed_meals_today_fallback_de_fecha_basura_sigue_al_knob(monkeypatch):
@@ -277,10 +277,10 @@ def test_get_consumed_meals_today_fallback_de_fecha_basura_sigue_al_knob(monkeyp
     `hours=4` para el dia y los bordes literales `T04:00:00Z` / `T03:59:59Z`."""
     monkeypatch.setattr(constants, "DEFAULT_TZ_OFFSET_MIN", -60, raising=True)
     start, end = _ventana_capturada(monkeypatch, date_str="no-soy-fecha")
-    assert start[11:19] == "23:00:00", (
+    assert start[11:19] == "03:00:00", (
         f"la rama de excepcion abrio a {start[11:19]}Z: los bordes literales de RD siguen ahi."
     )
-    assert end[11:19] == "22:59:59"
+    assert end[11:19] == "02:59:59"
 
 
 def test_get_consumed_meals_today_sin_literales_de_rd_en_el_cuerpo():

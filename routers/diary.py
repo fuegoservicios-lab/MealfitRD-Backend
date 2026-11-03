@@ -2017,6 +2017,11 @@ def api_get_consumed_range(
             off_min = 0
         off_min = max(-840, min(off_min, 840))
 
+        # [P1-DIARY-ROLLOVER-4AM · 2026-11-02] Sumar el rollover biológico (4h) para que el
+        # agrupamiento por día concuerde con get_consumed_meals_today.
+        from db_facts import _diary_rollover_hour
+        effective_off_min = off_min + (_diary_rollover_hour() * 60)
+
         rows = execute_sql_query(
             """
             SELECT (consumed_at - make_interval(mins => %s))::date AS dia,
@@ -2031,7 +2036,7 @@ def api_get_consumed_range(
             GROUP BY 1
             ORDER BY 1 DESC
             """,
-            (off_min, user_id, n_days),
+            (effective_off_min, user_id, n_days),
             fetch_all=True,
         ) or []
 

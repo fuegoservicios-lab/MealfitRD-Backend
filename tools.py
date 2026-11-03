@@ -1176,13 +1176,15 @@ def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: i
         # simple/correcto). América/Santo_Domingo no tiene DST (fijo UTC-4): 240 vale los 365
         # días del año.
         _tz_off_ds = user_tz_offset_min(user_id)
+        from db_facts import _diary_rollover_hour
+        _roll_min_ds = _diary_rollover_hour() * 60
         _rows = _esq_ds(
             "SELECT meal_type, MAX(consumed_at) AS ultima FROM consumed_meals "
             "WHERE user_id = %s AND meal_type = ANY(%s) "
             "AND (consumed_at - make_interval(mins => %s))::date "
             "  = (now() - make_interval(mins => %s))::date "
             "GROUP BY meal_type",
-            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES), _tz_off_ds, _tz_off_ds),
+            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES), _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
             fetch_all=True,
         ) or []
         _por_slot = {str(r.get("meal_type")): r.get("ultima") for r in _rows if isinstance(r, dict)}
@@ -1280,7 +1282,7 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
         from chat_history_context import comidas_sin_registrar, find_plan_day_for_date
         from db_facts import get_consumed_meals_today as _gcmt
         _tz_off_f = user_tz_offset_min(user_id)
-        _hoy_local = _date_n.fromisoformat(_local_date_str_for_user(user_id))   # «hoy» del huso del usuario (SSOT)
+        _hoy_local = _date_n.fromisoformat(_diary_date_str_for_user(user_id))   # «hoy» biológico del usuario (SSOT)
         _fecha = _hoy_local - _td_n(days=int(days_ago or 0))
         _rows_dia = list(_gcmt(user_id, date_str=_fecha.isoformat(), tz_offset_mins=_tz_off_f) or [])
         _rows_dia.extend(r for r in (rows_extra or []) if isinstance(r, dict))
@@ -1297,7 +1299,10 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
         if _faltan and not days_ago:
             _ahora = ahora_local if ahora_local is not None else _hora_local_float(user_id)
             if _ahora is not None:
-                _pasadas, _proximas = _comidas_por_hora(_faltan, _ahora, _horas_tipicas_de_comida(user_id))
+                # [P1-DIARY-ROLLOVER-4AM] Entre 00:00 y 04:00 AM es el cierre del día despierto:
+                # desayuno/almuerzo/cena ya pasaron, no son comidas futuras.
+                _ahora_calc = (float(_ahora) + 24.0) if float(_ahora) < 4.0 else float(_ahora)
+                _pasadas, _proximas = _comidas_por_hora(_faltan, _ahora_calc, _horas_tipicas_de_comida(user_id))
                 _hora_txt = _fmt_hora_float(_ahora)
                 if _proximas:
                     _prox = _proximas[0]
@@ -1340,7 +1345,7 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
         _cierre_noche = ""
         if not days_ago:
             _ahora_fin = ahora_local if ahora_local is not None else _hora_local_float(user_id)
-            if _ahora_fin is not None and float(_ahora_fin) >= 21.0:
+            if _ahora_fin is not None and (float(_ahora_fin) >= 21.0 or float(_ahora_fin) < 4.0):
                 _cierre_noche = (f" Son las {_fmt_hora_float(float(_ahora_fin))} y el día ya cerró: NO sugieras comer "
                                  f"nada más ni tomar batidas antes de dormir salvo que el usuario lo pida.")
         return (f" (Para el asistente: {_dia_txt} ya tiene todas sus comidas registradas — NO preguntes si "
@@ -1363,7 +1368,7 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
         from coach_day_context import consumido_hoy
         from db_facts import get_consumed_meals_today as _gcmt
         _dias = int(days_ago or 0)
-        _fecha = _date_t.fromisoformat(_local_date_str_for_user(user_id)) - _td_t(days=_dias)
+        _fecha = _date_t.fromisoformat(_diary_date_str_for_user(user_id)) - _td_t(days=_dias)
         _rows = list(_gcmt(user_id, date_str=_fecha.isoformat(), tz_offset_mins=user_tz_offset_min(user_id)) or [])
         _rows.extend(r for r in (rows_extra or []) if isinstance(r, dict))
         _c = consumido_hoy(_rows)
@@ -1406,8 +1411,10 @@ def _dias_atras_de_fila(user_id: str, consumed_at) -> Optional[int]:
         _at = consumed_at if isinstance(consumed_at, _dt_d) else _dt_d.fromisoformat(str(consumed_at))
         if _at.tzinfo is not None:   # a UTC primero: la sesión de la base podría no estar en UTC
             _at = _at.astimezone(_tz_d.utc).replace(tzinfo=None)
-        _dia_local = (_at - _td_d(minutes=int(user_tz_offset_min(user_id)))).date()
-        _d = (_date_d.fromisoformat(_local_date_str_for_user(user_id)) - _dia_local).days
+        from db_facts import _diary_rollover_hour
+        _roll_min = _diary_rollover_hour() * 60
+        _dia_local = (_at - _td_d(minutes=int(user_tz_offset_min(user_id)) + _roll_min)).date()
+        _d = (_date_d.fromisoformat(_diary_date_str_for_user(user_id)) - _dia_local).days
         return _d if _d >= 0 else None
     except Exception:
         return None
@@ -4687,6 +4694,14 @@ def _tz_offset_para_usuario(user_id: str | None = None) -> int:
         except Exception:
             _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
     return _off
+
+
+def _diary_date_str_for_user(user_id: str | None = None) -> str:
+    """[P1-DIARY-ROLLOVER-4AM · 2026-11-02] Fecha del DÍA BIOLÓGICO del usuario para el diario de comidas.
+    Entre las 00:00 y las 03:59:59 local, el usuario sigue en el día biológico anterior.
+    A las 04:00:00 local pasa al día siguiente."""
+    from db_facts import diary_local_date_str
+    return diary_local_date_str(_tz_offset_para_usuario(user_id))
 
 
 @tool

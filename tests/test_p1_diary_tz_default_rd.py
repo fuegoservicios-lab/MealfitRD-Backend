@@ -45,7 +45,8 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 
 def _rd_today_iso() -> str:
-    return (datetime.now(timezone.utc) - timedelta(hours=4)).date().isoformat()
+    from db_facts import diary_local_date_str
+    return diary_local_date_str(240)
 
 
 @pytest.fixture
@@ -83,52 +84,38 @@ def _window(calls: list) -> tuple:
 
 
 # ===========================================================================
-# 1. El default: fecha local RD, no UTC.
+# 1. El default: fecha local RD, no UTC (corte biológico 04:00 AM).
 # ===========================================================================
 
 def test_no_args_window_starts_at_rd_midnight_not_utc_midnight(captured_window):
-    """El bug exacto: sin argumentos la ventana arrancaba en `00:00Z`, que son
-    las 20:00 RD de AYER."""
+    """Sin argumentos la ventana abre a las 04:00 AM local RD (= 08:00Z con rollover 4h)."""
     from db_facts import get_consumed_meals_today
 
     get_consumed_meals_today("u-1")
     start, end = _window(captured_window)
 
     d = _rd_today_iso()
-    assert start == f"{d}T04:00:00Z", (
+    assert start == f"{d}T08:00:00Z", (
         f"P1-DIARY-TZ-DEFAULT-RD: la ventana sin argumentos debe abrir a las "
-        f"00:00 RD (= {d}T04:00:00Z), no a las 00:00Z. Recibido: {start!r}. "
-        f"Con `{d}T00:00:00Z` entran las comidas de las 20:00-23:59 RD de AYER."
+        f"04:00 AM RD (= {d}T08:00:00Z), no a las 00:00Z. Recibido: {start!r}."
     )
     nxt = (datetime.fromisoformat(d) + timedelta(days=1)).date().isoformat()
-    assert end.startswith(f"{nxt}T03:59"), (
-        f"la ventana debe cerrar al final del día RD (~{nxt}T03:59:59Z), no a "
-        f"las 23:59Z de hoy — si no, se pierde todo lo comido después de las "
-        f"20:00 RD de HOY (el falso-positivo nocturno de P1-PROACTIVE-TZ). "
+    assert end.startswith(f"{nxt}T07:59"), (
+        f"la ventana debe cerrar al final del día biológico RD (~{nxt}T07:59:59Z). "
         f"Recibido: {end!r}"
     )
 
 
 def test_no_args_window_excludes_last_nights_late_meal(captured_window):
-    """La fila real del incidente (`2026-07-30T02:47:20Z` = 22:47 RD del 29)
-    debe quedar FUERA de la ventana de hoy — comprobado por aritmética de la
-    ventana, no por fixture."""
+    """La cena de 22:47 RD de la noche previa cae antes del arranque de la ventana
+    del día biológico siguiente."""
     from db_facts import get_consumed_meals_today
 
     get_consumed_meals_today("u-1")
     start, _ = _window(captured_window)
 
-    # Reproducción de la aritmética con la fecha del incidente.
-    incident_utc = datetime(2026, 7, 30, 2, 47, 20, tzinfo=timezone.utc)
-    rd_local = incident_utc - timedelta(hours=4)
-    assert rd_local.date().isoformat() == "2026-07-29"
-    window_start_for_the_30th = datetime(2026, 7, 30, 4, 0, 0, tzinfo=timezone.utc)
-    assert incident_utc < window_start_for_the_30th, (
-        "la cena de las 22:47 RD del 29 cae ANTES del arranque de la ventana "
-        "del 30 — si este assert falla, la convención UTC-4 se rompió."
-    )
-    # Y la implementación viva usa esa misma convención (offset 04:00).
-    assert start.endswith("T04:00:00Z")
+    # Con rollover 4h + offset 4h, la ventana abre a las 08:00Z.
+    assert start.endswith("T08:00:00Z")
 
 
 # ===========================================================================
@@ -143,11 +130,11 @@ def test_explicit_date_is_preserved_when_tz_is_missing(captured_window):
 
     get_consumed_meals_today("u-1", date_str="2026-07-29")
     start, end = _window(captured_window)
-    assert start == "2026-07-29T04:00:00Z", (
+    assert start == "2026-07-29T08:00:00Z", (
         f"la fecha explícita del caller fue ignorada — recibido {start!r}. "
         f"Defaultear el huso NUNCA debe reescribir el día pedido."
     )
-    assert end.startswith("2026-07-30T03:59")
+    assert end.startswith("2026-07-30T07:59")
 
 
 def test_explicit_date_and_tz_still_win(captured_window):
@@ -157,8 +144,8 @@ def test_explicit_date_and_tz_still_win(captured_window):
 
     get_consumed_meals_today("u-1", date_str="2026-07-29", tz_offset_mins=0)
     start, end = _window(captured_window)
-    assert start == "2026-07-29T00:00:00Z"
-    assert end.startswith("2026-07-29T23:59")
+    assert start == "2026-07-29T04:00:00Z"
+    assert end.startswith("2026-07-30T03:59")
 
 
 def test_tz_zero_is_honoured_not_treated_as_missing(captured_window):
@@ -168,7 +155,7 @@ def test_tz_zero_is_honoured_not_treated_as_missing(captured_window):
 
     get_consumed_meals_today("u-1", date_str="2026-07-29", tz_offset_mins=0)
     start, _ = _window(captured_window)
-    assert start == "2026-07-29T00:00:00Z", (
+    assert start == "2026-07-29T04:00:00Z", (
         "tz_offset_mins=0 (UTC) se está tratando como ausente y sustituyendo "
         "por 240 — resolución por truthiness en vez de `is not None`."
     )

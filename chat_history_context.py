@@ -758,11 +758,17 @@ def build_past_diary_block(consumed_rows: Any, today: date,
         return ""
     floor = today - timedelta(days=days_back)
 
+    try:
+        from db_facts import _diary_rollover_hour
+        _roll_min = _diary_rollover_hour() * 60
+    except Exception:
+        _roll_min = 240
+
     by_date: dict = {}
     for row in (consumed_rows or []):
         if not isinstance(row, dict):
             continue
-        d = _to_local_date(row.get("consumed_at"), tz_offset_mins)
+        d = _to_local_date(row.get("consumed_at"), tz_offset_mins + _roll_min)
         if d is None or not (floor <= d < today):
             continue
         by_date.setdefault(d, []).append(row)
