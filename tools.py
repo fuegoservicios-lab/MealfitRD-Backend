@@ -1011,18 +1011,91 @@ def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
         return None
 
 
+# [BB-031 / P1-CORRECT-MEAL-TARGET-DISAMBIGUATION · 2026-11-04] Stopwords para desambiguación léxica
+_STOPWORDS_RESOLVER = {
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "con", "sin", "y", "o", "en", "por", "para", "mi", "mis", "plato", "comida",
+    "registro", "desayuno", "almuerzo", "cena", "merienda", "snack", "complemento",
+    "rueda", "ruedas", "rodaja", "rodajas", "trozo", "trozos", "pedazo", "pedazos",
+    "taza", "tazas", "vaso", "vasos", "cucharada", "cucharadas", "gramo", "gramos",
+    "unidad", "unidades", "porcion", "porciones", "onza", "onzas", "libra", "libras",
+    "pieza", "piezas", "fresca", "fresco", "frescos", "frescas", "entero", "entera",
+}
+
+
+def _extraer_tokens_texto_resolver(texto: str) -> set[str]:
+    """[BB-031] Extrae tokens significativos descartando stopwords y unidades de medida."""
+    tokens = set()
+    norm = _norm_txt(texto or "")
+    for tok in norm.split():
+        if len(tok) >= 3 and tok not in _STOPWORDS_RESOLVER:
+            tokens.add(tok)
+    return tokens
+
+
+def _extraer_tokens_candidato(c: dict) -> tuple[set[str], str]:
+    """[BB-031] Devuelve (tokens_candidato, texto_completo_normalizado) para un registro del diario."""
+    tokens = set()
+    textos = []
+
+    mname = str(c.get("meal_name") or "").strip()
+    if mname:
+        textos.append(_norm_txt(mname))
+        tokens.update(_extraer_tokens_texto_resolver(mname))
+
+    ings = c.get("ingredients")
+    if isinstance(ings, str):
+        try:
+            import json
+            ings = json.loads(ings)
+        except Exception:
+            ings = [ings]
+    if isinstance(ings, list):
+        for item in ings:
+            if isinstance(item, str):
+                textos.append(_norm_txt(item))
+                tokens.update(_extraer_tokens_texto_resolver(item))
+            elif isinstance(item, dict):
+                for v in item.values():
+                    if isinstance(v, str):
+                        textos.append(_norm_txt(v))
+                        tokens.update(_extraer_tokens_texto_resolver(v))
+
+    texto_completo = " ".join(textos)
+    return tokens, texto_completo
+
+
+def _calcular_score_candidato(c: dict, tokens_buscar: set[str], target_slot: Optional[str] = None) -> int:
+    """[BB-031] Score de intersección léxica entre tokens buscados y el candidato."""
+    if not tokens_buscar:
+        return 0
+    c_tokens, c_texto = _extraer_tokens_candidato(c)
+    score = 0
+    coincidencias = tokens_buscar.intersection(c_tokens)
+    score += len(coincidencias) * 3
+    for tok in tokens_buscar:
+        if tok in c_texto and tok not in coincidencias:
+            score += 1
+    if target_slot and (c.get("meal_type") or "").strip().lower() == target_slot:
+        score += 2
+    return score
+
+
 def _resolver_fila_diario_flexible(
     user_id: str,
     meal_id: Optional[str] = None,
     meal_name: Optional[str] = None,
     meal_type: Optional[str] = None,
     days_ago: Optional[int] = None,
+    ingredients: Optional[list[str]] = None,
 ) -> tuple[Optional[str], Optional[dict]]:
     """Busca y resuelve una fila de `consumed_meals` de forma flexible.
 
     Permite corregir o eliminar comidas cuando el LLM no tiene el UUID exacto
     (ej: en modo voz, o si el usuario dice «elimina el desayuno», «bórralo», «borra la cena»,
     «era un ejemplo, no me comí eso», o pasa meal_id='ultimo').
+    [BB-031 / P1-CORRECT-MEAL-TARGET-DISAMBIGUATION · 2026-11-04] Si hay múltiples comidas en
+    el mismo slot (efecto BB-004), desambigua usando scoring de intersección léxica de ingredientes y meal_name.
     """
     _mid = str(meal_id or "").strip()
 
@@ -1071,46 +1144,17 @@ def _resolver_fila_diario_flexible(
             if cid == _mid or (len(_mid) >= 6 and cid.startswith(_mid)):
                 return (cid, c)
 
-    # 4. Si el usuario se refiere a la última comida o no especificó nada
-    es_ultimo = (
-        norm_mid in ultimas_palabras
-        or norm_mname in ultimas_palabras
-        or (not _mid and not meal_name and not meal_type)
-        or (norm_mid == "" and norm_mname == "" and norm_mtype == "")
-    )
-    if es_ultimo and candidates:
-        elegida = candidates[0]
-        return (str(elegida.get("id")), elegida)
-
-    # 5. Coincidencia por tokens significativos de comida
-    stopwords = {
-        "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
-        "con", "y", "en", "por", "para", "mi", "mis", "plato", "comida",
-        "registro", "desayuno", "almuerzo", "cena", "merienda", "snack"
-    }
+    # Extraer tokens a buscar de meal_name, meal_id e ingredients (BB-031)
     tokens_buscar = set()
     for fuente in (norm_mname, norm_mid):
         if fuente and fuente not in ultimas_palabras:
-            for tok in fuente.split():
-                if len(tok) >= 3 and tok not in stopwords:
-                    tokens_buscar.add(tok)
+            tokens_buscar.update(_extraer_tokens_texto_resolver(fuente))
+    if ingredients and isinstance(ingredients, list):
+        for ing in ingredients:
+            if isinstance(ing, str):
+                tokens_buscar.update(_extraer_tokens_texto_resolver(ing))
 
-    if tokens_buscar:
-        mejor_cand = None
-        max_matches = 0
-        for c in candidates:
-            c_name_norm = _norm_txt(c.get("meal_name") or "")
-            c_tokens = set(c_name_norm.split())
-            matches = len(tokens_buscar.intersection(c_tokens))
-            if any(tok in c_name_norm for tok in tokens_buscar):
-                matches += 1
-            if matches > max_matches:
-                max_matches = matches
-                mejor_cand = c
-        if mejor_cand and max_matches > 0:
-            return (str(mejor_cand.get("id")), mejor_cand)
-
-    # 6. Si coincide con un meal_type (desayuno, almuerzo, cena, merienda, snack)
+    # Identificar target_slot
     target_slot = None
     if _resolver_meal_type(norm_mtype):
         target_slot = _resolver_meal_type(norm_mtype)
@@ -1119,13 +1163,60 @@ def _resolver_fila_diario_flexible(
     elif _resolver_meal_type(norm_mname):
         target_slot = _resolver_meal_type(norm_mname)
 
+    # 4. Si el usuario se refiere a la última comida o no especificó nada
+    es_ultimo = (
+        norm_mid in ultimas_palabras
+        or norm_mname in ultimas_palabras
+        or (not _mid and not meal_name and not meal_type and not ingredients)
+        or (norm_mid == "" and norm_mname == "" and norm_mtype == "" and not ingredients)
+    )
+    if es_ultimo and not target_slot and not tokens_buscar and candidates:
+        elegida = candidates[0]
+        return (str(elegida.get("id")), elegida)
+
+    # 5. [BB-031] Si hay target_slot específico, evaluar desambiguación si hay múltiples comidas en el slot
     if target_slot:
+        slot_candidates = [
+            c for c in candidates
+            if (c.get("meal_type") or "").strip().lower() == target_slot
+        ]
+        if len(slot_candidates) >= 2:
+            # Múltiples comidas en el mismo slot (efecto BB-004):
+            # desambiguar por intersección léxica entre ingredientes/nombre de la corrección y cada candidato
+            if tokens_buscar:
+                mejor_c = None
+                mejor_score = 0
+                for c in slot_candidates:
+                    sc = _calcular_score_candidato(c, tokens_buscar, target_slot=target_slot)
+                    score_contenido = sc - 2  # Descontar el bonus de slot común
+                    if score_contenido > mejor_score:
+                        mejor_score = score_contenido
+                        mejor_c = c
+                if mejor_c and mejor_score > 0:
+                    return (str(mejor_c.get("id")), mejor_c)
+            # Fallback determinista al más reciente del slot si ninguno coincide en contenido
+            return (str(slot_candidates[0].get("id")), slot_candidates[0])
+        elif len(slot_candidates) == 1:
+            return (str(slot_candidates[0].get("id")), slot_candidates[0])
+
+    # 6. [BB-031] Coincidencia por tokens significativos de comida en todas las candidatas del día
+    if tokens_buscar:
+        mejor_cand = None
+        max_score = 0
         for c in candidates:
-            if (c.get("meal_type") or "").strip().lower() == target_slot:
-                return (str(c.get("id")), c)
+            sc = _calcular_score_candidato(c, tokens_buscar, target_slot=target_slot)
+            if sc > max_score:
+                max_score = sc
+                mejor_cand = c
+        if mejor_cand and max_score > 0:
+            return (str(mejor_cand.get("id")), mejor_cand)
 
     # 7. Si solo hay una comida candidata hoy
     if len(candidates) == 1:
+        return (str(candidates[0].get("id")), candidates[0])
+
+    # 8. Fallback a la última comida si es_ultimo fue indicado
+    if es_ultimo and candidates:
         return (str(candidates[0].get("id")), candidates[0])
 
     return (None, None)
@@ -2121,7 +2212,8 @@ def correct_consumed_meal(
 
     if _fila is None:
         _resolved_id, _resolved_fila = _resolver_fila_diario_flexible(
-            user_id, meal_id=_mid, meal_name=meal_name, meal_type=meal_type, days_ago=days_ago
+            user_id, meal_id=_mid, meal_name=meal_name, meal_type=meal_type, days_ago=days_ago,
+            ingredients=ingredients,
         )
         if _resolved_id:
             _mid = _resolved_id
