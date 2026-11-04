@@ -1375,6 +1375,35 @@ def _rescue_dinner_from_unlabeled_desayuno(user_id: str, meal_type: str, calorie
         return meal_type
 
 
+def _buscar_cena_principal_hoy(user_id: str) -> Optional[dict]:
+    """[BB-033 / P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04]
+    Busca si el usuario ya tiene registrada una cena principal (meal_type = 'cena' y calories >= 350)
+    en el día biológico actual. Retorna el dict del registro más sustancial o None."""
+    try:
+        from db import execute_sql_query as _esq_ds
+        _tz_off_ds = user_tz_offset_min(user_id)
+        from db_facts import _diary_rollover_hour
+        _roll_min_ds = _diary_rollover_hour() * 60
+
+        _rows = _esq_ds(
+            "SELECT id, meal_type, meal_name, calories, protein, carbs, healthy_fats, consumed_at, created_at "
+            "FROM consumed_meals "
+            "WHERE user_id = %s AND meal_type = 'cena' "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date "
+            "AND calories >= 350 "
+            "ORDER BY calories DESC, consumed_at DESC",
+            (user_id, _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+            fetch_all=True,
+        ) or []
+        if _rows and isinstance(_rows[0], dict):
+            return _rows[0]
+        return None
+    except Exception as _e_cp:
+        logger.warning(f"[BB-033 / NIGHT-SNACK-LABEL] error buscando cena principal: {_e_cp}")
+        return None
+
+
 def _buscar_comida_principal_reciente_ttl(
     user_id: str,
     referencia_ts: Any = None,
@@ -1813,10 +1842,30 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # A substantial meal can still recover its inferred dinner slot; the slot never limits diary rows.
     # [P1-EXPLICIT-SLOT-RESPECT · 2026-10-27] Si el usuario nombró explícitamente la franja ("Merendé esto",
     # "mi merienda", "un snack", etc.), NUNCA debe sobreescribirse con la cena.
+    _es_merienda_nocturna = False
+    _cal_cena_previa = 0
     if not explicit_slot:
-        _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
-        if _meal_type == "desayuno":
-            _meal_type = _rescue_dinner_from_unlabeled_desayuno(user_id, _meal_type, calories, _days_ago)
+        # [BB-033 / P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04]
+        # Si llega en horario nocturno (>= 18:00 o de madrugada < 4:00) y el usuario YA tiene su cena
+        # principal registrada hoy (>= 350 kcal), una ingesta moderada o ligera (<= 350 kcal: postre, picadera,
+        # avena con leche, antojo) se registra como 'merienda' (merienda nocturna / extra de la noche)
+        # para no repetir "Anoté como cena..." por segunda vez en la misma noche.
+        _hora_actual = _hora_local_float(user_id) if _days_ago == 0 else None
+        _es_horario_nocturno = _hora_actual is not None and (_hora_actual >= 18.0 or _hora_actual < 4.0)
+        _cena_principal = _buscar_cena_principal_hoy(user_id) if (_es_horario_nocturno and _days_ago == 0) else None
+
+        if _cena_principal and calories is not None and calories <= 350:
+            _cal_cena_previa = int(_cena_principal.get("calories") or 0)
+            _es_merienda_nocturna = True
+            _meal_type = "merienda"
+            logger.info(
+                f"🌙 [BB-033 / NIGHT-SNACK-LABEL] '{meal_name}' ({calories} kcal) clasificado como 'merienda' "
+                f"(merienda nocturna / extra de la noche) para user {str(user_id)[:8]} tras cena previa de {_cal_cena_previa} kcal."
+            )
+        else:
+            _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
+            if _meal_type == "desayuno":
+                _meal_type = _rescue_dinner_from_unlabeled_desayuno(user_id, _meal_type, calories, _days_ago)
 
     # [P1-SUPPLEMENT-SLOT-GUARD · 2026-10-19] Una toma de suplemento (o producto no calórico como creatina,
     # pastillas, vitaminas o minerales) NUNCA debe ocupar una comida principal (desayuno/almuerzo/cena). Un
@@ -1834,6 +1883,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         if _meal_type != "suplemento":
             logger.info(f"💊 [SUPPLEMENT-SLOT-GUARD] '{meal_name}' reclasificado '{_meal_type}' → 'suplemento' (los suplementos no son comidas ni meriendas)")
             _meal_type = "suplemento"
+            _es_merienda_nocturna = False
 
     # [BB-025 / P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03]
     # Bebidas ligeras e infusiones aisladas (té, café solo, agua con limón, infusión herbal, caldo ligero <= 50 kcal):
@@ -1841,6 +1891,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if _meal_type in ("desayuno", "almuerzo", "cena", "merienda", "snack") and calories is not None and calories <= 50 and _es_bebida_ligera_nombre(meal_name):
         logger.info(f"🍵 [BB-025 / COMPLEMENT-GUARD] '{meal_name}' ({calories} kcal) reclasificado '{_meal_type}' → 'complemento' (bebida ligera aislada)")
         _meal_type = "complemento"
+        _es_merienda_nocturna = False
 
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
 
@@ -1997,6 +2048,14 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             msg += (f" (Aviso para el asistente: registraste '{meal_name}' como suplemento, NO como una comida principal. "
                     f"Tomar un suplemento por la mañana NO es el desayuno y no concluye esa comida. Dile qué anotaste y que cuando "
                     f"desayune o coma algo te avise para anotarlo; NUNCA le digas «cuando almuerces» si aún no ha desayunado.)")
+        if _es_merienda_nocturna:
+            msg += (
+                f" (Aviso para el asistente: esta comida de {calories} kcal se registró como merienda nocturna / extra de la noche "
+                f"porque el usuario ya tiene su cena principal registrada hoy ({_cal_cena_previa} kcal). "
+                f"En tu respuesta visible al usuario, confírmala como **merienda nocturna** o **extra de la noche** "
+                f"(ej. «Anoté tu **merienda nocturna**: ...» o «Anoté tu **extra de la noche**: ...»); "
+                f"NUNCA digas «Anoté como cena» por segunda vez en la misma noche.)"
+            )
         if not _mt_reconocido:
             msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{meal_type}' y quedó como "
                     f"snack; si era desayuno, almuerzo o cena, corrígelo con correct_consumed_meal.)")

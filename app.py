@@ -1068,7 +1068,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-BEVERAGE-DOUBTS-NEUTRAL-HIERARCHY · 2026-11-04] Jerarquía neutra y sanitización de dudas en fotos de bebidas ambiguas evitando contradicción café/té (BB-030).
 # [P1-CORRECT-MEAL-TARGET-DISAMBIGUATION · 2026-11-04] Desambiguación de target en correct_consumed_meal en slots múltiples mediante scoring de intersección léxica de ingredients/meal_name (BB-031).
 # [P1-BRUNCH-SATIETY-CLAIM-SUPPRESSION · 2026-11-04] Supresión de reclamo en _nota_comidas_sin_registrar por brunch o ventana de saciedad tras ingesta pesada (BB-032).
-_LAST_KNOWN_PFIX = "P1-BRUNCH-SATIETY-CLAIM-SUPPRESSION · 2026-11-04"
+# [P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04] Etiquetado semántico en rescate nocturno cuando ya existe una cena principal previa (BB-033).
+_LAST_KNOWN_PFIX = "P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

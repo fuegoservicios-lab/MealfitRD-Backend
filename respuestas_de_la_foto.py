@@ -310,7 +310,9 @@ def instruccion(vision) -> str:
         "(solo subió la foto y contestó los botones de dudas), asigna el `meal_type` según la HORA ACTUAL "
         "y lo que falta en su DIARIO DE HOY (por la noche con la cena vacía → `cena`; al mediodía → `almuerzo`). "
         "ESTÁ TOTALMENTE PROHIBIDO registrar como `desayuno` una foto enviada por la tarde o noche solo porque "
-        "tú en tu turno anterior hayas preguntado «¿qué desayunaste?» o si estuvo en ayunas. Una foto nocturna es su CENA. "
+        "tú en tu turno anterior hayas preguntado «¿qué desayunaste?» o si estuvo en ayunas. Una foto nocturna es su CENA "
+        "(a menos que ya tenga registrada su cena principal de hoy y esta comida sea ligera/moderada ≤350 kcal como un postre o picadera, "
+        "en cuyo caso es merienda y se confirma como **merienda nocturna** o **extra de la noche**; NUNCA repitas «Anoté como cena»). "
         "PROHIBIDO USAR correct_consumed_meal: Esta foto ES UNA COMIDA NUEVA que se registra con `log_consumed_meal`. "
         "NUNCA uses `correct_consumed_meal` para modificar una comida anterior del diario (como el desayuno o una comida previa de horas antes), "
         "salvo que el usuario aclare explícitamente que este alimento o foto fue parte de una comida ya registrada (ej. «fue parte del almuerzo»), en cuyo caso se suma a esa comida existente con correct_consumed_meal. "
@@ -532,7 +534,7 @@ def instruccion_solo_foto(vision) -> str:
     return (
         " SOLO LA FOTO: el usuario te mandó la foto de su plato sin escribir nada: se lo comió. Regístralo EN ESTE TURNO "
         "con `log_consumed_meal`, las cifras del análisis y el `meal_type` que toque por la hora y lo que ya lleva "
-        "registrado hoy, sin preguntarle antes si se lo comió, y confírmalo en una frase: qué anotaste. Aunque la "
+        "registrado hoy (de noche con cena previa de hoy, una comida moderada ≤350 kcal es merienda nocturna), sin preguntarle antes si se lo comió, y confírmalo en una frase: qué anotaste. Aunque la "
         "conversación viniera de otro tema, ESTA foto es su comida. NUNCA le asignes 'desayuno' de noche o tarde solo porque tu pregunta anterior hablase de desayuno."
     )
 
