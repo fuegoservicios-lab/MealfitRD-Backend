@@ -6687,12 +6687,15 @@ def _ajustar_calorias_por_delta_ingrediente(
     tool_args: dict,
     messages: list,
 ) -> Optional[dict]:
-    """[BB-023 / P1-DIARY-DELTA-CORRECTION · 2026-11-03]
-    Si el usuario corrigió la cantidad o porción de un ingrediente en un plato ya registrado
-    (ej. «No eran 3 maduros, era solo 1», «Eran 2 huevos, no 4»), opera por diferencial:
-    Total Nuevo = Total Anterior - Calorías Ítem Anterior + Calorías Ítem Nuevo
-    en lugar de re-estimar desde cero en crudo, preservando la calibración criolla (BB-002)
-    (aceite del sofrito, grasa del guiso o moro).
+    """[BB-023 / P1-DIARY-DELTA-CORRECTION · 2026-11-03] [BB-028 / P1-PROPORTIONAL-COOKING-FAT-SCALE · 2026-11-04]
+    Si el usuario corrigió la cantidad o porción de un ingrediente o plato ya registrado:
+    1. Unidades discretas (ej. «No eran 3 maduros, era solo 1», «Eran 2 huevos, no 4»):
+       opera por diferencial: Total = Total Anterior - Ítem viejo + Ítem nuevo.
+    2. Vehículo absorbente (ej. «Solo me comí la mitad del moro», «Dejé casi todo el arroz, solo la carne»):
+       el buffer de grasa de cocción/sofrito (implicit_cooking_kcal) escala proporcionalmente con el
+       vehículo que lo retiene (70% arroz/moro, 30% guiso), evitando la inflación artificial de aceite (BB-028).
+    3. Fracción global del plato (ej. «Solo me comí la mitad», «Dejé la mitad del plato»):
+       escala tanto los alimentos base como el buffer de grasa de cocción en la misma proporción (50%).
     """
     if not isinstance(tool_args, dict):
         return None
@@ -6709,6 +6712,13 @@ def _ajustar_calorias_por_delta_ingrediente(
     if not texto_humano:
         return None
     t = texto_humano.lower().strip()
+
+    # Exclusión temprana: Si el usuario indica un cambio total de plato (sustitución), no intervenir:
+    # ej. "no comí moro con pollo, me comí una avena con leche", "en vez de moro fue pizza"
+    if re.search(r"\b(?:en\s+vez\s+de|en\s+lugar\s+de)\s+[a-záéíóúñ]+(?:\s+[a-záéíóúñ]+)*\s+(?:com[ií]|fue|era|ped[ií])\b", t):
+        return None
+    if re.search(r"\bno\s+(?:com[ií]|me\s+com[ií]|era|almorc[eé]|cen[eé])\b.*?\b(?:com[ií]|me\s+com[ií]|fue|era|ped[ií]|sino)\b", t):
+        return None
 
     # 2. Obtener la fila original del diario
     mid = str(tool_args.get("meal_id") or "").strip()
@@ -6746,114 +6756,305 @@ def _ajustar_calorias_por_delta_ingrediente(
     if orig_cal <= 0:
         return None
 
-    # 3. Detectar patrones de corrección de cantidad/unidades
+    # Buffer de grasa implícita de cocción / sofrito / caldero (BB-002 / BB-023 / BB-028)
+    orig_nut = orig.get("nutrition")
+    if not isinstance(orig_nut, dict):
+        orig_nut = {}
+    orig_implicit_cooking_kcal = orig_nut.get("implicit_cooking_kcal")
+    if orig_implicit_cooking_kcal is None:
+        if orig_cal >= 550:
+            orig_implicit_cooking_kcal = 180
+        elif orig_cal >= 300:
+            orig_implicit_cooking_kcal = int(round(orig_cal * 0.22))
+        else:
+            orig_implicit_cooking_kcal = 0
+
+    reduction_type = None
+    carrier_item = None
+    scale_factor = None
+    delta_oil = 0
+    remaining_implicit_cooking_kcal = orig_implicit_cooking_kcal
+    expected_cal = None
+    expected_prot = None
+    delta_cal = 0
+    delta_prot = 0
     n_old, n_new, item_word = None, None, None
 
-    # Patrón 1: "no eran 3 maduros, era solo 1" / "no fue 1 maduro, fueron 2" / "no eran 3 maduros, era 1"
-    m1 = re.search(r"\bno\s+(?:eran|fueron|fue)\s+(\d+)\s+([a-záéíóúñ]+).*?(?:(?:era|fueron|fue)\s+)?(?:solo|sólo)?\s*(\d+)\b", t)
-    # Patrón 2: "eran 2 huevos, no 4" / "fueron 2 maduros, no 3"
-    m2 = re.search(r"\b(?:eran|fueron)\s+(\d+)\s+([a-záéíóúñ]+),?\s*no\s+(\d+)\b", t)
-    # Patrón 3: "1 maduro en vez de 3"
-    m3 = re.search(r"\b(\d+)\s+([a-záéíóúñ]+)\s+en\s+vez\s+de\s+(\d+)\b", t)
-    # Patrón 4: "solo comí 1 maduro" / "solo fue 1 maduro" / "era solo 1 maduro"
-    m4 = re.search(r"\b(?:solo|sólo)\s+(?:comí|comi|fue|era|eran|fueron)?\s*(\d+)\s+([a-záéíóúñ]+)\b", t)
-    # Patrón 5: "no comí 3 maduros, solo 1"
-    m5 = re.search(r"\bno\s+com[ií]\s+(\d+)\s+([a-záéíóúñ]+).*?(?:solo|sólo)?\s*(\d+)\b", t)
+    # RAMA 1 [BB-028]: Reducción de Vehículo Absorbente (moro, arroz, locrio, mangú, víveres)
+    # Si el usuario reduce o descarta el vehículo graso (ej. «solo la mitad del moro», «dejé el arroz, solo la carne»),
+    # el buffer de grasa de cocción ligado a ese vehículo debe amortiguarse proporcionalmente.
+    _VEH_REGEX = r"(moro(?:s)?|arroz(?:es)?|locrio(?:s)?|chof[aá]n|mang[uú]|v[ií]veres?|fideos?|pastas?|espaguetis?)"
 
-    if m1:
-        n_old = int(m1.group(1))
-        item_word = m1.group(2).lower()
-        n_new = int(m1.group(3))
-    elif m2:
-        n_new = int(m2.group(1))
-        item_word = m2.group(2).lower()
-        n_old = int(m2.group(3))
-    elif m3:
-        n_new = int(m3.group(1))
-        item_word = m3.group(2).lower()
-        n_old = int(m3.group(3))
-    elif m5:
-        n_old = int(m5.group(1))
-        item_word = m5.group(2).lower()
-        n_new = int(m5.group(3))
-    elif m4:
-        n_new = int(m4.group(1))
-        item_word = m4.group(2).lower()
-        # Buscar n_old en el nombre del plato previo o sus ingredientes
-        texto_previo = (orig_name + " " + " ".join(orig.get("ingredients") or [])).lower()
-        m_prev = re.search(rf"\b(\d+)\s+{re.escape(item_word[:4])}\w*\b", texto_previo)
-        if m_prev:
-            n_old = int(m_prev.group(1))
+    # 1A: Fracción de vehículo absorbente
+    m_car_frac = re.search(
+        r"\b(?:solo\s+)?(?:com[ií]|me\s+com[ií]|fue)?\s*(la\s+mitad|medio|media|un\s+tercio|un\s+cuarto|(?:\d+)\s*%)\s+(?:del?|de\s+la)\s+" + _VEH_REGEX + r"\b",
+        t,
+    )
+    if not m_car_frac:
+        m_car_frac = re.search(
+            r"\bdej[eé]\s+(la\s+mitad|medio|media|un\s+tercio|un\s+cuarto|(?:\d+)\s*%)\s+(?:del?|de\s+la)\s+" + _VEH_REGEX + r"\b",
+            t,
+        )
+    if not m_car_frac:
+        m_car_frac = re.search(
+            r"\b(?:solo\s+)?(?:com[ií]|me\s+com[ií])\s+" + _VEH_REGEX + r"\s+(la\s+mitad|medio|media|un\s+tercio|un\s+cuarto|(?:\d+)\s*%)\b",
+            t,
+        )
 
-    if n_old is None or n_new is None or not item_word:
+    # 1B: Descarte o disminución radical de vehículo absorbente
+    # ej. «dejé casi todo el arroz, solo me comí la carne», «dejé todo el arroz», «solo la carne, dejé el moro»
+    m_car_drop = None
+    if not m_car_frac:
+        m_car_drop = re.search(
+            r"\bdej[eé]\s+(?:todo\s+el|casi\s+todo\s+el|el)?\s*" + _VEH_REGEX + r"\b",
+            t,
+        )
+        if m_car_drop:
+            has_meat = bool(re.search(r"\bsolo\s+(?:me\s+com[ií]\s+)?(?:la\s+)?(?:carne|pollo|pechuga|cerdo|res|pescado|prote[ií]na)\b", t))
+            has_all = bool(re.search(r"\bdej[eé]\s+(?:todo|casi\s+todo)\b", t))
+            if not (has_meat or has_all):
+                m_car_drop = None
+
+        if not m_car_drop:
+            # «solo me comí la carne, dejé el arroz» / «solo el pollo, sin moro»
+            m_car_inv = re.search(
+                r"\bsolo\s+(?:me\s+com[ií]\s+)?(?:la\s+)?(?:carne|pollo|pechuga|cerdo|res|pescado|prote[ií]na),?\s*(?:sin|dej[eé])\s+(?:el\s+)?" + _VEH_REGEX + r"\b",
+                t,
+            )
+            if not m_car_inv:
+                m_car_inv = re.search(
+                    r"\bsin\s+" + _VEH_REGEX + r",?\s*solo\s+(?:me\s+com[ií]\s+)?(?:la\s+)?(?:carne|pollo|pechuga|cerdo|res|pescado|prote[ií]na)\b",
+                    t,
+                )
+            if m_car_inv:
+                m_car_drop = m_car_inv
+
+    if m_car_frac:
+        reduction_type = "carrier_scale"
+        g1, g2 = m_car_frac.group(1), m_car_frac.group(2)
+        if re.search(_VEH_REGEX, g1):
+            carrier_item = g1.lower()
+            frac_str = g2.lower()
+        else:
+            frac_str = g1.lower()
+            carrier_item = g2.lower()
+
+        if "mitad" in frac_str or "medio" in frac_str or "media" in frac_str:
+            frac_val = 0.5
+        elif "tercio" in frac_str:
+            frac_val = 0.333
+        elif "cuarto" in frac_str:
+            frac_val = 0.25
+        elif "%" in frac_str:
+            m_p = re.search(r"(\d+)", frac_str)
+            frac_val = float(m_p.group(1)) / 100.0 if m_p else 0.5
+        else:
+            frac_val = 0.5
+
+        if "dejé" in t and ("del" in t or "de la" in t):
+            scale_factor = max(0.05, min(0.95, 1.0 - frac_val))
+        else:
+            scale_factor = max(0.05, min(0.95, frac_val))
+
+    elif m_car_drop:
+        reduction_type = "carrier_scale"
+        carrier_item = m_car_drop.group(1).lower()
+        scale_factor = 0.1 if "casi todo" in t else 0.0
+
+    if reduction_type == "carrier_scale":
+        carrier_base_cal = 260 if orig_cal >= 550 else int(round(orig_cal * 0.40))
+        carrier_fat_buffer = int(round(orig_implicit_cooking_kcal * 0.70))
+        ratio_removed = max(0.0, min(1.0, 1.0 - scale_factor))
+        delta_base = int(round(carrier_base_cal * ratio_removed))
+        delta_oil = int(round(carrier_fat_buffer * ratio_removed))
+        delta_prot = int(round(5 * ratio_removed))
+        delta_cal = -(delta_base + delta_oil)
+
+        expected_cal = max(50, orig_cal + delta_cal)
+        expected_prot = max(0, orig_prot - delta_prot)
+        remaining_implicit_cooking_kcal = orig_implicit_cooking_kcal - delta_oil
+        item_word = carrier_item
+
+    # RAMA 2 [BB-028]: Reducción por Fracción Global del Plato (ej. «solo la mitad», «50%», «dejé la mitad»)
+    if reduction_type is None:
+        f_glob = None
+        m_glob_half = re.search(r"\b(?:solo\s+)?(?:com[ií]|me\s+com[ií]|fue)?\s*(la\s+mitad|medio\s+plato|media\s+porci[oó]n)\b", t)
+        if not m_glob_half:
+            m_glob_half = re.search(r"\bdej[eé]\s+(la\s+mitad|medio\s+plato)\b", t)
+
+        if m_glob_half:
+            f_glob = 0.5
+        else:
+            m_glob_pct = re.search(r"(?:solo\s+)?(?:(?:me\s+)?com[ií]|dej[eé]|fue)?\s*(?:el\s+)?(\d+)\s*%", t)
+            if m_glob_pct:
+                pct = float(m_glob_pct.group(1))
+                f_glob = max(0.05, min(0.95, (100.0 - pct) / 100.0 if "dejé" in t else pct / 100.0))
+            elif re.search(r"\b(?:un\s+tercio|tercera\s+parte)\b", t):
+                f_glob = 0.333
+            elif re.search(r"\b(?:dos\s+tercios)\b", t):
+                f_glob = 0.667
+            elif re.search(r"\b(?:un\s+cuarto|cuarta\s+parte)\b", t):
+                f_glob = 0.25
+            elif re.search(r"\b(?:tres\s+cuartos)\b", t):
+                f_glob = 0.75
+
+        if f_glob is not None:
+            reduction_type = "global_fraction"
+            carrier_item = "plato"
+            scale_factor = f_glob
+            expected_cal = max(50, int(round(orig_cal * f_glob)))
+            expected_prot = max(0, int(round(orig_prot * f_glob + 1e-6)))
+            scaled_oil = int(round(orig_implicit_cooking_kcal * f_glob))
+            delta_oil = orig_implicit_cooking_kcal - scaled_oil
+            remaining_implicit_cooking_kcal = scaled_oil
+            delta_cal = expected_cal - orig_cal
+            item_word = "plato"
+
+    # RAMA 3 [BB-023]: Corrección de Unidades Discretas de Ingrediente
+    if reduction_type is None:
+        # Patrón 1: "no eran 3 maduros, era solo 1" / "no fue 1 maduro, fueron 2" / "no eran 3 maduros, era 1"
+        m1 = re.search(r"\bno\s+(?:eran|fueron|fue)\s+(\d+)\s+([a-záéíóúñ]+).*?(?:(?:era|fueron|fue)\s+)?(?:solo|sólo)?\s*(\d+)\b", t)
+        # Patrón 2: "eran 2 huevos, no 4" / "fueron 2 maduros, no 3"
+        m2 = re.search(r"\b(?:eran|fueron)\s+(\d+)\s+([a-záéíóúñ]+),?\s*no\s+(\d+)\b", t)
+        # Patrón 3: "1 maduro en vez de 3"
+        m3 = re.search(r"\b(\d+)\s+([a-záéíóúñ]+)\s+en\s+vez\s+de\s+(\d+)\b", t)
+        # Patrón 4: "solo comí 1 maduro" / "solo fue 1 maduro" / "era solo 1 maduro"
+        m4 = re.search(r"\b(?:solo|sólo)\s+(?:comí|comi|fue|era|eran|fueron)?\s*(\d+)\s+([a-záéíóúñ]+)\b", t)
+        # Patrón 5: "no comí 3 maduros, solo 1"
+        m5 = re.search(r"\bno\s+com[ií]\s+(\d+)\s+([a-záéíóúñ]+).*?(?:solo|sólo)?\s*(\d+)\b", t)
+
+        if m1:
+            n_old = int(m1.group(1))
+            item_word = m1.group(2).lower()
+            n_new = int(m1.group(3))
+        elif m2:
+            n_new = int(m2.group(1))
+            item_word = m2.group(2).lower()
+            n_old = int(m2.group(3))
+        elif m3:
+            n_new = int(m3.group(1))
+            item_word = m3.group(2).lower()
+            n_old = int(m3.group(3))
+        elif m5:
+            n_old = int(m5.group(1))
+            item_word = m5.group(2).lower()
+            n_new = int(m5.group(3))
+        elif m4:
+            n_new = int(m4.group(1))
+            item_word = m4.group(2).lower()
+            # Buscar n_old en el nombre del plato previo o sus ingredientes
+            texto_previo = (orig_name + " " + " ".join(orig.get("ingredients") or [])).lower()
+            m_prev = re.search(rf"\b(\d+)\s+{re.escape(item_word[:4])}\w*\b", texto_previo)
+            if m_prev:
+                n_old = int(m_prev.group(1))
+
+        if n_old is not None and n_new is not None and item_word:
+            dens = None
+            for k, d in _DENSIDADES_DELTA_INGREDIENTES.items():
+                if item_word.startswith(k) or k in item_word:
+                    dens = d
+                    break
+            if dens:
+                diff = n_new - n_old
+                if diff != 0:
+                    reduction_type = "discrete_units"
+                    carrier_item = item_word
+                    scale_factor = float(n_new) / float(n_old) if n_old > 0 else 1.0
+                    delta_cal = int(round(diff * dens["cal"]))
+                    delta_prot = int(round(diff * dens["prot"]))
+                    expected_cal = max(50, orig_cal + delta_cal)
+                    expected_prot = max(0, orig_prot + delta_prot)
+
+    # Si ninguna rama detectó corrección válida, retornar None
+    if reduction_type is None or expected_cal is None:
         return None
-
-    # 4. Encontrar densidad calórica del ítem
-    dens = None
-    for k, d in _DENSIDADES_DELTA_INGREDIENTES.items():
-        if item_word.startswith(k) or k in item_word:
-            dens = d
-            break
-    if not dens:
-        return None
-
-    diff = n_new - n_old
-    if diff == 0:
-        return None
-
-    delta_cal = int(round(diff * dens["cal"]))
-    delta_prot = int(round(diff * dens["prot"]))
-    expected_cal = max(50, orig_cal + delta_cal)
-    expected_prot = max(0, orig_prot + delta_prot)
 
     tool_cal = tool_args.get("calories")
     tool_cal_int = int(tool_cal) if tool_cal is not None else None
 
-    # Si el LLM recalculó desde cero en crudo (colapso de calorías > 25 kcal respecto al delta):
-    debe_ajustar = (
-        tool_cal_int is None
-        or (diff < 0 and tool_cal_int < (expected_cal - 25))
-        or (diff > 0 and tool_cal_int < orig_cal)
-    )
+    if reduction_type == "discrete_units":
+        diff = n_new - n_old
+        debe_ajustar = (
+            tool_cal_int is None
+            or (diff < 0 and tool_cal_int < (expected_cal - 25))
+            or (diff > 0 and tool_cal_int < orig_cal)
+            or abs(tool_cal_int - expected_cal) > 25
+        )
+    else:
+        # En escala global o de vehículo graso (BB-028), el LLM falla por:
+        # 1. Inflación: mantiene intactas las 180 kcal de aceite fijo (tool_cal >> expected_cal)
+        # 2. Colapso en crudo: calcula arroz/pollo hervido con 0 grasa (tool_cal << expected_cal)
+        debe_ajustar = (
+            tool_cal_int is None
+            or abs(tool_cal_int - expected_cal) > 25
+        )
 
     res = dict(tool_args)
     if debe_ajustar:
         logger.info(
-            f"🛡️ [P1-DIARY-DELTA-CORRECTION] Corrección por delta protegida sobre '{orig_name}' ({orig_cal} kcal): "
-            f"{item_word} ({n_old} → {n_new}, delta={delta_cal} kcal). LLM propuso {tool_cal_int} kcal; "
-            f"ajustado a {expected_cal} kcal ({expected_prot}g prot) para preservar grasa criolla (BB-002)."
+            f"🛡️ [BB-028 / P1-PROPORTIONAL-COOKING-FAT-SCALE] Corrección ({reduction_type}) sobre '{orig_name}' ({orig_cal} kcal): "
+            f"vehículo={carrier_item}, factor={scale_factor}, delta={delta_cal} kcal. LLM propuso {tool_cal_int} kcal; "
+            f"ajustado a {expected_cal} kcal ({expected_prot}g prot). Grasa cocción {orig_implicit_cooking_kcal} -> {remaining_implicit_cooking_kcal} kcal."
         )
         res["calories"] = expected_cal
-        if res.get("protein") is None or int(res.get("protein") or 0) < expected_prot - 3:
+        if reduction_type in ("carrier_scale", "global_fraction"):
+            res["protein"] = expected_prot
+        elif res.get("protein") is None or int(res.get("protein") or 0) < expected_prot - 3 or int(res.get("protein") or 0) > expected_prot + 10:
             res["protein"] = expected_prot
     else:
         expected_cal = tool_cal_int
 
-    # Asegurar nombre del plato con la cantidad corregida
+    # Actualizar nombre del plato
     curr_name = str(res.get("meal_name") or orig_name).strip()
-    norm_item = item_word if n_new > 1 else item_word.rstrip("s")
-    if re.search(rf"\b{n_old}\s+{re.escape(item_word)}", curr_name, re.IGNORECASE):
-        res["meal_name"] = re.sub(
-            rf"\b{n_old}\s+{re.escape(item_word)}\b",
-            f"{n_new} {norm_item}",
-            curr_name,
-            flags=re.IGNORECASE,
-        )
+    if reduction_type == "discrete_units" and n_old is not None and n_new is not None:
+        norm_item = item_word if n_new > 1 else item_word.rstrip("s")
+        if re.search(rf"\b{n_old}\s+{re.escape(item_word)}", curr_name, re.IGNORECASE):
+            res["meal_name"] = re.sub(
+                rf"\b{n_old}\s+{re.escape(item_word)}\b",
+                f"{n_new} {norm_item}",
+                curr_name,
+                flags=re.IGNORECASE,
+            )
+        curr_ingredients = res.get("ingredients") or orig.get("ingredients")
+        if isinstance(curr_ingredients, list):
+            res["ingredients"] = [
+                re.sub(rf"\b{n_old}\s+{re.escape(item_word)}\b", f"{n_new} {norm_item}", str(ing), flags=re.IGNORECASE)
+                for ing in curr_ingredients
+            ]
+    elif reduction_type == "carrier_scale":
+        if scale_factor == 0.0 or scale_factor <= 0.1:
+            if carrier_item and carrier_item in curr_name.lower():
+                res["meal_name"] = re.sub(rf"\b(?:con\s+)?{re.escape(carrier_item)}\w*\b", "", curr_name, flags=re.IGNORECASE).strip()
+                res["meal_name"] = re.sub(r"\s+", " ", res["meal_name"]).strip(" ,+")
+                if "solo" not in res["meal_name"].lower() and "sin" not in res["meal_name"].lower():
+                    res["meal_name"] = f"{res['meal_name']} (sin {carrier_item})"
+        elif scale_factor == 0.5:
+            if "media porción" not in curr_name.lower():
+                res["meal_name"] = f"{curr_name} (media porción de {carrier_item})"
+    elif reduction_type == "global_fraction":
+        if "porción" not in curr_name.lower() and "%" not in curr_name:
+            if scale_factor == 0.5:
+                res["meal_name"] = f"{curr_name} (media porción)"
+            else:
+                res["meal_name"] = f"{curr_name} ({int(round(scale_factor*100))}%)"
 
-    # Mantener sincronizado el array de ingredientes si viene en tool_args o en la fila original
-    curr_ingredients = res.get("ingredients") or orig.get("ingredients")
-    if isinstance(curr_ingredients, list):
-        res["ingredients"] = [
-            re.sub(rf"\b{n_old}\s+{re.escape(item_word)}\b", f"{n_new} {norm_item}", str(ing), flags=re.IGNORECASE)
-            for ing in curr_ingredients
-        ]
-
-    # Metadata de auditoría en nutrition
+    # Metadata de auditoría
     nut = dict(res.get("nutrition") or {})
+    nut["cooking_fat_scale"] = {
+        "reduction_type": reduction_type,
+        "carrier_item": carrier_item,
+        "scale_factor": scale_factor,
+        "orig_calories": orig_cal,
+        "adjusted_calories": res["calories"],
+        "orig_implicit_cooking_kcal": orig_implicit_cooking_kcal,
+        "remaining_implicit_cooking_kcal": remaining_implicit_cooking_kcal,
+        "scaled_oil_delta": delta_oil,
+        "llm_proposed_calories": tool_cal_int,
+    }
     nut["delta_correction"] = {
-        "item": item_word,
-        "old_units": n_old,
-        "new_units": n_new,
+        "item": carrier_item or item_word,
+        "old_units": n_old if n_old is not None else 1,
+        "new_units": n_new if n_new is not None else (1 if reduction_type != "carrier_scale" else scale_factor),
         "delta_calories": delta_cal,
         "orig_calories": orig_cal,
         "adjusted_calories": res["calories"],

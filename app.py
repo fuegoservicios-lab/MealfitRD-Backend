@@ -1063,7 +1063,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03] (backend + frontend) Separación de bebidas ligeras y complementos (té, infusiones, café <= 50 kcal): meal_type='complemento' sin ocupar franjas de comida principal ni contar como comidas principales en el dashboard.
 # [P1-PHOTO-MULTI-DOUBT-DINNER-RESCUE · 2026-11-03] Soberanía de aclaración multi-duda en fotos (BB-026) y rescate nocturno de franja a cena para platos sustanciales sin rótulo.
 # [P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04] Promoción de complementos calóricos a merienda/fusión principal y degradación a complemento en rectificaciones (BB-027).
-_LAST_KNOWN_PFIX = "P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04"
+# [P1-PROPORTIONAL-COOKING-FAT-SCALE · 2026-11-04] Escalamiento proporcional del buffer de grasa de cocción criolla al reducir porciones, fracciones globales o descartar el vehículo absorbente (BB-028).
+_LAST_KNOWN_PFIX = "P1-PROPORTIONAL-COOKING-FAT-SCALE · 2026-11-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
