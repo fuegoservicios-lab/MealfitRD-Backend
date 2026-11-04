@@ -1211,6 +1211,50 @@ def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: i
         return meal_type
 
 
+def _rescue_dinner_from_unlabeled_desayuno(user_id: str, meal_type: str, calories: int, days_ago: int) -> str:
+    """[BB-026 / P1-PHOTO-MULTI-DOUBT-DINNER-RESCUE · 2026-11-03]
+    Si un plato sustancial (>= 250 kcal) llega de noche (18:00 en adelante o de madrugada)
+    con meal_type == 'desayuno', el usuario NO especificó explícitamente el slot, el almuerzo
+    YA está registrado hoy y la cena está vacía: es la CENA. Protege contra fotos sin rótulo
+    donde el LLM hereda 'desayuno' de una pregunta previa del coach."""
+    if not _DINNER_RESCUE_ENABLED or days_ago != 0 or meal_type != "desayuno":
+        return meal_type
+    try:
+        if int(calories or 0) < _DINNER_RESCUE_MIN_KCAL:
+            return meal_type
+        from db import execute_sql_query as _esq_ds
+        _tz_off_ds = user_tz_offset_min(user_id)
+        from db_facts import _diary_rollover_hour
+        _roll_min_ds = _diary_rollover_hour() * 60
+        _rows = _esq_ds(
+            "SELECT meal_type, MAX(consumed_at) AS ultima FROM consumed_meals "
+            "WHERE user_id = %s AND meal_type = ANY(%s) "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date "
+            "GROUP BY meal_type",
+            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES), _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+            fetch_all=True,
+        ) or []
+        _por_slot = {str(r.get("meal_type")): r.get("ultima") for r in _rows if isinstance(r, dict)}
+        if "cena" in _por_slot:
+            return meal_type
+        if "almuerzo" not in _por_slot:
+            return meal_type
+
+        _hora = _hora_local_float(user_id)
+        if _hora is not None and (_hora >= 18.0 or _hora < 4.0):
+            logger.info(
+                f"🍽️ [P1-DIARY-DINNER-SLOT / BB-026] slot reclasificado 'desayuno' → 'cena' para user "
+                f"{str(user_id)[:8]}: {int(calories)} kcal a las {_hora:.1f}h con almuerzo registrado y "
+                f"cena del día vacía."
+            )
+            return "cena"
+        return meal_type
+    except Exception as _e_ds:
+        logger.warning(f"[P1-DIARY-DINNER-SLOT / BB-026] rescate desayuno no-op: {_e_ds}")
+        return meal_type
+
+
 # [P1-PLAN-LOTE-84 · 2026-09-17] El cierre tras registrar sabe qué hora es. El dueño registró el desayuno a las 11:23 y el
 # coach cerró con «¿Te anoto el almuerzo cuando lo comas?»: la nota del lote 76 ofrecía LA QUE FALTA por su nombre sin mirar
 # si ya tocaba. Una comida que aún no ha llegado no se ofrece con una pregunta; se cierra con una frase consciente de la
@@ -1511,6 +1555,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # "mi merienda", "un snack", etc.), NUNCA debe sobreescribirse con la cena.
     if not explicit_slot:
         _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
+        if _meal_type == "desayuno":
+            _meal_type = _rescue_dinner_from_unlabeled_desayuno(user_id, _meal_type, calories, _days_ago)
 
     # [P1-SUPPLEMENT-SLOT-GUARD · 2026-10-19] Una toma de suplemento (o producto no calórico como creatina,
     # pastillas, vitaminas o minerales) NUNCA debe ocupar una comida principal (desayuno/almuerzo/cena). Un

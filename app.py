@@ -1061,7 +1061,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-DIARY-DELTA-CORRECTION · 2026-11-03] (backend) Recálculo de calorías ocultas al editar un ingrediente por diferencial (BB-002 + BB-011).
 # [P1-CALORIE-BAR-GOAL-SEMANTICS · 2026-11-03] (frontend + backend) Semántica de la Barra Verde Esmeralda (BB-001) según el objetivo del usuario (Green Zone 90-105% y exceso >110% en déficit).
 # [P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03] (backend + frontend) Separación de bebidas ligeras y complementos (té, infusiones, café <= 50 kcal): meal_type='complemento' sin ocupar franjas de comida principal ni contar como comidas principales en el dashboard.
-_LAST_KNOWN_PFIX = "P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03"
+# [P1-PHOTO-MULTI-DOUBT-DINNER-RESCUE · 2026-11-03] Soberanía de aclaración multi-duda en fotos (BB-026) y rescate nocturno de franja a cena para platos sustanciales sin rótulo.
+_LAST_KNOWN_PFIX = "P1-PHOTO-MULTI-DOUBT-DINNER-RESCUE · 2026-11-03"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
