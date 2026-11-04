@@ -17,6 +17,9 @@ from bebidas_de_la_foto import (
     nombre_generico_bebida,
     tipo_de_bebida,
     inyectar_dudas_bebida,
+    tiene_duda_identidad,
+    es_duda_multibebida,
+    sanitizar_dudas_bebida,
 )
 from vision_agent import _coerce_meal_scan, _opcion_coincide_con_aclaracion
 from respuestas_de_la_foto import _platos_claros
@@ -270,3 +273,87 @@ def test_agent_today_remaining_block_ignores_low_kcal_beverage():
 
     # Desayuno NO debe haber sido tachado de las comidas restantes del plan
     assert "Desayuno" in out
+
+
+def test_tiene_duda_identidad_detecta_pregunta_que_bebida_tienes_en_la_taza():
+    """[BB-030] Verifica que frases como '¿Qué bebida tienes en la taza?' sean reconocidas como identidad."""
+    dudas = [
+        {
+            "pregunta": "¿Qué bebida tienes en la taza?",
+            "opciones": [
+                {"texto": "Café negro"},
+                {"texto": "Café con leche"},
+                {"texto": "Té o infusión"},
+                {"texto": "Chocolate de agua"},
+            ],
+        }
+    ]
+    assert tiene_duda_identidad(dudas) is True
+    assert es_duda_multibebida(dudas[0]) is True
+
+
+def test_es_duda_multibebida_y_sanitizar_elimina_pregunta_dependiente_de_cafe():
+    """[BB-030] Si existe una duda multi-bebida y una pregunta dependiente que asume café,
+    sanitizar_dudas_bebida elimina la contradicción dejando la multi-bebida de primera."""
+    dudas_contradictorias = [
+        {
+            "pregunta": "¿Cómo preparaste el café?",
+            "opciones": [{"texto": "Café negro solo"}, {"texto": "Con leche"}],
+        },
+        {
+            "pregunta": "¿Qué bebida tienes en la taza?",
+            "opciones": [
+                {"texto": "Café negro"},
+                {"texto": "Café con leche"},
+                {"texto": "Té o infusión"},
+                {"texto": "Chocolate de agua"},
+            ],
+        },
+    ]
+    limpias = sanitizar_dudas_bebida(dudas_contradictorias)
+    assert len(limpias) == 1
+    assert limpias[0]["pregunta"] == "¿Qué bebida tienes en la taza?"
+
+
+def test_coerce_meal_scan_mug_with_gemini_beverage_doubt_never_duplicates_coffee():
+    """[BB-030] Caso real del usuario: foto de taza oscura donde el modelo generó '¿Qué bebida tienes en la taza?'.
+    _coerce_meal_scan NO debe anteponer '¿Cómo preparaste el café?' ni duplicar preguntas contradictorias."""
+    raw = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Café negro",
+        "description": "Una taza de cerámica negra con líquido oscuro caliente.",
+        "calories": 2,
+        "protein": 0,
+        "carbs": 0,
+        "healthy_fats": 0,
+        "items": [{"name": "café", "calories": 2, "quantity": 1, "unit": "taza"}],
+        "dudas": [
+            {
+                "sobre": "café",
+                "pregunta": "¿Qué bebida tienes en la taza?",
+                "opciones": [
+                    {"texto": "Café negro", "supuesta": True, "nombre_plato": "Café negro", "ajuste": {"calories": 0}},
+                    {"texto": "Café con leche", "supuesta": False, "nombre_plato": "Café con leche", "ajuste": {"calories": 40}},
+                    {"texto": "Té o infusión", "supuesta": False, "nombre_plato": "Té o infusión", "ajuste": {"calories": 0}},
+                    {"texto": "Chocolate de agua", "supuesta": False, "nombre_plato": "Chocolate de agua", "ajuste": {"calories": 60}},
+                ],
+            }
+        ],
+    }
+    result = _coerce_meal_scan(raw, aclaracion=None)
+    # Debe tener EXACTAMENTE 1 duda limpia (la de identidad multi-bebida)
+    assert len(result["dudas"]) == 1
+    d = result["dudas"][0]
+    assert d["pregunta"] == "¿Qué bebida tienes en la taza?"
+    # JAMÁS debe existir la pregunta que asume café
+    assert all("¿cómo preparaste el café" not in duda["pregunta"].lower() for duda in result["dudas"])
+
+
+def test_opcion_coincide_con_aclaracion_disyuncion_te_o_infusion():
+    """[BB-030] Una opción disyuntiva como 'Té o infusión' debe coincidir si el usuario aclara 'mi té' o 'infusión'."""
+    duda = {"sobre": "bebida", "pregunta": "¿Qué bebida tienes en la taza?"}
+    assert _opcion_coincide_con_aclaracion("Té o infusión", "mi te", duda) is True
+    assert _opcion_coincide_con_aclaracion("Té o infusión", "una infusion de manzanilla", duda) is True
+    assert _opcion_coincide_con_aclaracion("Té o infusión", "cafe negro", duda) is False
+
