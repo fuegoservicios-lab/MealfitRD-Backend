@@ -1064,7 +1064,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PHOTO-MULTI-DOUBT-DINNER-RESCUE · 2026-11-03] Soberanía de aclaración multi-duda en fotos (BB-026) y rescate nocturno de franja a cena para platos sustanciales sin rótulo.
 # [P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04] Promoción de complementos calóricos a merienda/fusión principal y degradación a complemento en rectificaciones (BB-027).
 # [P1-PROPORTIONAL-COOKING-FAT-SCALE · 2026-11-04] Escalamiento proporcional del buffer de grasa de cocción criolla al reducir porciones, fracciones globales o descartar el vehículo absorbente (BB-028).
-_LAST_KNOWN_PFIX = "P1-PROPORTIONAL-COOKING-FAT-SCALE · 2026-11-04"
+# [P1-MICRO-PROTEIN-RESCUE-CRON · 2026-11-04] Cron 7:00 PM con modo Micro-Rescate Proteico para colisión de calorías llenas (>=92%) con déficit proteico severo (<=65%) protegiendo la Green Zone (BB-029).
+_LAST_KNOWN_PFIX = "P1-MICRO-PROTEIN-RESCUE-CRON · 2026-11-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

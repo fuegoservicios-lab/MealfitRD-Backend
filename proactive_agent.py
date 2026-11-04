@@ -1443,11 +1443,18 @@ No uses demasiados emojis. Sé directo, breve y empático.
                         if _gap_eval.instruccion_prompt:
                             tone_instruction = (tone_instruction or "") + _gap_eval.instruccion_prompt
                             if _gap_eval.mode == "cierre_hidratacion":
-                                # Con el 95%+ de calorías consumidas, cambiar el estilo a cierre e hidratación
+                                # Con el 95%+ de calorías consumidas y proteína adecuada, cambiar el estilo a cierre e hidratación
                                 style_instruction = (
                                     "Saluda de forma breve y empática felicitando el cierre de su jornada. "
                                     "PROHIBIDO sugerir platos de comida o recetas. Recomienda hidratación ligera "
                                     "(agua o infusión caliente sin azúcar) o descanso."
+                                )
+                            elif _gap_eval.mode == "micro_rescate_proteico":
+                                # [BB-029] Con calorías casi al límite pero proteína muy deficitaria, sugerir micro-rescate ultra-magro
+                                style_instruction = (
+                                    "Saluda con cercanía y adviértele de forma transparente que su presupuesto calórico está casi lleno pero su proteína quedó corta. "
+                                    "PROHIBIDO sugerir platos calóricos, carbohidratos o cenas completas. Sugiérele exclusivamente un micro-rescate proteico ultra-aislado "
+                                    "de ~100-120 kcal (25 g de proteína limpia en claras o batido whey en agua) para salvar el músculo sin romper la barra verde ni pasar de calorías."
                                 )
                     except Exception as _gap_err:
                         logger.debug(f"[P1-MACRO-GAP-DINNER-CRON] error evaluando brecha de macros: {_gap_err}")

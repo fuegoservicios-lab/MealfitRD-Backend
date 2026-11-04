@@ -70,18 +70,31 @@ def bloque_del_dia(consumed, health) -> str:
                 f"- Calorías: {kcal} de {meta_kcal} "
                 + (f"(le quedan {quedan})." if quedan >= 0 else f"(ya pasó su meta por {-quedan}).")
             )
-            if meta_prot:
+            if meta_prot and meta_kcal > 0:
                 falta = meta_prot - prot
                 lineas.append(
                     f"- Proteína: {prot} de {meta_prot} g "
                     + (f"(le faltan {falta} g)." if falta > 0 else "(ya la cubrió).")
                 )
-                if quedan < 350 and falta >= 25 and quedan > 0:
+                pct_k = kcal / meta_kcal
+                pct_p = prot / meta_prot
+                if (pct_k >= 0.92 or quedan <= 120) and pct_p <= 0.65:
+                    lineas.append(
+                        "- REGLA DE PRESUPUESTO [BB-029 / MICRO-RESCATE PROTEICO]: Calorías casi al límite (>= 92%) con proteína muy deficitaria (<= 65%). "
+                        "PROHIBIDO sugerir cenas pesadas o carbohidratos. Sugiere exclusivamente un micro-rescate ultra-aislado de ~100-120 kcal "
+                        "(25 g de proteína limpia en claras o batido whey en agua) para proteger el músculo sin romper la barra verde (BB-024)."
+                    )
+                elif quedan <= 100 or pct_k >= 0.95:
+                    lineas.append(
+                        "- REGLA DE PRESUPUESTO: Margen calórico prácticamente agotado (>= 95%). "
+                        "PROHIBIDO sugerir platos calóricos; enfócate en cierre de jornada, hidratación sin calorías o descanso."
+                    )
+                elif quedan < 350 and falta >= 25 and quedan > 0:
                     lineas.append(
                         "- REGLA DE PRESUPUESTO: Margen calórico estrecho con proteína pendiente alta. "
                         "Sugiere únicamente proteína magra pura (claras, atún al agua, batido whey, pechuga limpia)."
                     )
-            if quedan <= 100 or (meta_kcal > 0 and kcal / meta_kcal >= 0.95):
+            elif quedan <= 100 or (meta_kcal > 0 and kcal / meta_kcal >= 0.95):
                 lineas.append(
                     "- REGLA DE PRESUPUESTO: Margen calórico prácticamente agotado (>= 95%). "
                     "PROHIBIDO sugerir platos calóricos; enfócate en cierre de jornada, hidratación sin calorías o descanso."

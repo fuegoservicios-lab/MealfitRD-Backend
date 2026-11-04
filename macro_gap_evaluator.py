@@ -31,10 +31,17 @@ _FUENTES_PROTEINA_MAGRA = [
     {"nombre": "filete de pescado blanco a la plancha", "claves": ("pescado", "tilapia", "mero")},
 ]
 
+# Fuentes ultra-aisladas para micro-rescate proteico (BB-029: ~100-120 kcal, 20-25g proteína limpia)
+_FUENTES_MICRO_RESCATE = [
+    {"nombre": "claras de huevo revueltas o cocidas (4-5 claras, ~80 kcal, 18-20 g proteína)", "claves": ("clara", "claras")},
+    {"nombre": "batido de proteína whey en agua fría (1 scoop en agua, ~110-120 kcal, 24-25 g proteína)", "claves": ("proteina", "whey", "batida", "batido")},
+    {"nombre": "atún en agua bien escurrido (1 lata, ~100-110 kcal, 24-26 g proteína)", "claves": ("atun", "tuna")},
+]
+
 
 @dataclass
 class MacroGapResult:
-    mode: str  # 'cierre_hidratacion' | 'proteina_magra' | 'cena_completa' | 'estandar' | 'desconocido'
+    mode: str  # 'cierre_hidratacion' | 'micro_rescate_proteico' | 'proteina_magra' | 'cena_completa' | 'estandar' | 'desconocido'
     target_kcal: int
     target_protein: int
     consumed_kcal: int
@@ -80,6 +87,20 @@ def _filtrar_fuentes_magras(consumidos_hoy: set[str]) -> List[str]:
     # Si todos coincidieron, incluir al menos las dos opciones universales más puras
     if not permitidos:
         permitidos = ["atún en agua", "claras de huevo", "batido de proteína en agua"]
+    return permitidos
+
+
+def _filtrar_fuentes_micro_rescate(consumidos_hoy: set[str]) -> List[str]:
+    """[BB-029] Devuelve fuentes ultra-aisladas (~100-120 kcal, 20-25g proteína limpia) para micro-rescate."""
+    permitidos = []
+    for f in _FUENTES_MICRO_RESCATE:
+        if not any(k in consumidos_hoy for k in f["claves"]):
+            permitidos.append(f["nombre"])
+    if not permitidos:
+        permitidos = [
+            "claras de huevo revueltas o cocidas (4-5 claras, ~80 kcal, 18-20 g proteína)",
+            "batido de proteína whey en agua fría (~110-120 kcal, 24-25 g proteína)",
+        ]
     return permitidos
 
 
@@ -157,13 +178,45 @@ def evaluar_brecha_macros_cena(
     consumidos_set = _extraer_alimentos_consumidos(filas)
     magros_filtrados = _filtrar_fuentes_magras(consumidos_set)
 
+    pct_prot_consumed = consumed_prot / float(target_prot) if target_prot > 0 else 1.0
+
     # ─────────────────────────────────────────────────────────────
-    # CASO 1: Presupuesto agotado (>= 95% consumido o <= 100 kcal restantes)
+    # CASO 1A [BB-029]: Micro-Rescate Proteico (kcal >= 92% y proteína <= 65%)
+    # Colisión BB-020 vs BB-024: el presupuesto calórico está casi lleno pero hay déficit proteico severo.
+    # Prohibido felicitar y mandar a dormir con agua (riesgo muscular); prohibido sugerir cena pesada (rompería 110%).
+    # Sugiérele exclusivamente un micro-rescate ultra-aislado de ~100-120 kcal (25 g prot limpia en claras o whey en agua).
+    # ─────────────────────────────────────────────────────────────
+    if (pct_consumed >= 0.92 or remaining_kcal <= 120) and pct_prot_consumed <= 0.65 and target_prot > 0:
+        micro_magros = _filtrar_fuentes_micro_rescate(consumidos_set)
+        sug_txt = ", ".join(micro_magros[:2])
+        prompt_txt = (
+            f"\n⚡ REGLA OBLIGATORIA DE MICRO-RESCATE PROTEICO [BB-029] (Lleva {consumed_kcal} de {target_kcal} kcal · {pct_consumed:.0%}, pero solo {consumed_prot} de {target_prot} g de proteína · {pct_prot_consumed:.0%}):\n"
+            f"- El presupuesto calórico diario está prácticamente agotado (le quedan solo ~{max(0, remaining_kcal)} kcal), pero su proteína está en déficit severo (faltan ~{remaining_prot} g).\n"
+            "- TERMINANTEMENTE PROHIBIDO proponer platos calóricos, comidas pesadas, carbohidratos (arroz, mangú, pan, víveres) o grasas adicionales: rompería el 110% de calorías y perdería la Barra Verde Esmeralda (BB-024).\n"
+            "- TERMINANTEMENTE PROHIBIDO enviar solo felicitación y agua: el usuario necesita salvar su requerimiento muscular antes de dormir.\n"
+            f"- Acción obligatoria: adviértele con empatía que sus calorías están casi al tope pero su proteína quedó corta, y sugiérele EXCLUSIVAMENTE una opción ultra-aislada de ~100–120 kcal con ~25 g de proteína limpia (ej. {sug_txt}).\n"
+            "- Explícale que esta opción suma apenas ~5% de calorías manteniéndolo dentro del margen de la barra verde (en déficit) mientras rescata su masa muscular."
+        )
+        return MacroGapResult(
+            mode="micro_rescate_proteico",
+            target_kcal=target_kcal,
+            target_protein=target_prot,
+            consumed_kcal=consumed_kcal,
+            consumed_protein=consumed_prot,
+            remaining_kcal=remaining_kcal,
+            remaining_protein=remaining_prot,
+            pct_kcal_consumed=pct_consumed,
+            instruccion_prompt=prompt_txt,
+            alimentos_magros_filtrados=micro_magros,
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # CASO 1B: Cierre Limpio e Hidratación (kcal >= 95% o <= 100 kcal restantes, CON proteína adecuada)
     # ─────────────────────────────────────────────────────────────
     if pct_consumed >= 0.95 or remaining_kcal <= 100:
         prompt_txt = (
             f"\n🌙 REGLA OBLIGATORIA DE CIERRE DE DÍA / HIDRATACIÓN (Lleva {consumed_kcal} de {target_kcal} kcal · {pct_consumed:.0%}):\n"
-            f"- El usuario ya cubrió prácticamente la totalidad de su presupuesto calórico diario (le quedan solo ~{max(0, remaining_kcal)} kcal).\n"
+            f"- El usuario ya cubrió prácticamente la totalidad de su presupuesto calórico diario (le quedan solo ~{max(0, remaining_kcal)} kcal) con proteína adecuada ({consumed_prot} de {target_prot} g · {pct_prot_consumed:.0%}).\n"
             "- TERMINANTEMENTE PROHIBIDO proponer platos calóricos, comidas pesadas, recetas completas o empujarle a cenar comida sólida.\n"
             "- Mensaje adecuado: salúdalo con calidez, felicítale por su jornada y pregúntale cómo se siente. Si tiene un apetito o antojo ligero antes de dormir, "
             "sugiérele exclusivamente un vaso de agua, una infusión o un té caliente sin azúcar, o anímale a descansar con satisfacción."

@@ -104,3 +104,49 @@ def test_usuario_sin_metas_degrada_a_desconocido():
     res = evaluar_brecha_macros_cena([{"meal_name": "Arroz", "calories": 300}], None)
     assert res.mode == "desconocido"
     assert res.instruccion_prompt == ""
+
+
+def test_evaluacion_calorias_llenas_pero_proteina_baja_activa_micro_rescate():
+    """[BB-029] Caso emblemático: 96% de calorías consumidas pero solo 40% de proteína (platos de calle).
+    Debe activar modo micro_rescate_proteico, advertir de la brecha y sugerir opción ultra-aislada (~100-120 kcal)."""
+    health = {"target_calories": 2000, "target_protein": 150}
+    consumed = [
+        {"meal_name": "Empanadas y refresco al mediodía", "calories": 1000, "protein": 30},
+        {"meal_name": "Frituras y pastelitos", "calories": 920, "protein": 30},  # Total: 1920/2000 = 96% kcal, 60/150 = 40% prot
+    ]
+    res = evaluar_brecha_macros_cena(consumed, health)
+    assert res.mode == "micro_rescate_proteico"
+    assert res.pct_kcal_consumed >= 0.92
+    assert res.remaining_protein == 90
+    assert "MICRO-RESCATE PROTEICO" in res.instruccion_prompt
+    assert "Barra Verde" in res.instruccion_prompt or "barra verde" in res.instruccion_prompt.lower()
+    assert len(res.alimentos_magros_filtrados) > 0
+    assert any("clara" in s or "whey" in s or "atún" in s for s in res.alimentos_magros_filtrados)
+
+
+def test_micro_rescate_filtra_alimentos_ya_consumidos():
+    """[BB-029] Si el usuario ya consumió atún hoy, el micro-rescate ofrece claras o batido whey en agua."""
+    health = {"target_calories": 1800, "target_protein": 130}
+    consumed = [
+        {"meal_name": "Ensalada con atún", "calories": 1700, "protein": 50, "ingredients": ["atun", "mayonesa", "pan"]},
+    ]
+    res = evaluar_brecha_macros_cena(consumed, health)
+    assert res.mode == "micro_rescate_proteico"
+    nombres = [f.lower() for f in res.alimentos_magros_filtrados]
+    assert not any("atun" in s or "atún" in s for s in nombres)
+    assert any("clara" in s or "whey" in s for s in nombres)
+
+
+def test_bloque_del_dia_inyecta_micro_rescate_proteico():
+    """[BB-029] bloque_del_dia debe emitir la regla de micro-rescate cuando kcal >= 92% y prot <= 65%."""
+    perfil = {
+        "gender": "male", "age": 30, "height": 175, "weight": 80, "weightUnit": "kg",
+        "activityLevel": "moderate", "mainGoal": "gain_muscle", "medicalConditions": ["none"],
+    }
+    # Consumidas casi todas las calorías pero apenas 50g de 150g de proteína
+    comidas = [
+        {"meal_type": "almuerzo", "meal_name": "Comida de calle", "calories": 2950, "protein": 50},
+    ]
+    bloque = ad.bloque_del_dia(comidas, perfil)
+    assert "MICRO-RESCATE PROTEICO" in bloque
+    assert "100-120 kcal" in bloque
