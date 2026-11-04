@@ -4,7 +4,7 @@ import json
 import re
 import unicodedata
 import time
-from typing import Optional
+from typing import Optional, Any
 from langchain_core.tools import tool
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini → GLM con router por tier.
 from llm_provider import ChatGLM, GLM_FLASH, resolve_model_for_user
@@ -967,6 +967,35 @@ def _es_cero_calorias_valido(meal_name: str, meal_type: str = None, suplemento: 
     return any(k in _n_name for k in _cero_cal_keywords)
 
 
+def _es_bebida_ligera_nombre(meal_name: str) -> bool:
+    """[BB-025 / BB-027 · 2026-11-04] Identifica si un nombre corresponde a una infusión, té,
+    café solo, caldo ligero o bebida sin aporte energético sustancial."""
+    if not meal_name:
+        return False
+    _n = _norm_txt(meal_name)
+    if _n in ("te", "té", "infusion", "infusión", "tisana", "cafe", "café", "espresso", "expreso", "americano"):
+        return True
+    _keywords = (
+        "te ", "te,", "té ", "té,", "taza de te", "taza de té",
+        "infusion", "infusión", "tisana",
+        "cafe negro", "café negro", "cafe solo", "café solo", "taza de cafe", "taza de café",
+        "espresso", "expreso", "americano",
+        "agua con limon", "agua con limón", "caldo claro", "caldo ligero", "agua mineral"
+    )
+    if any(k in _n for k in _keywords):
+        return True
+    if (
+        _n.startswith("te ")
+        or _n.startswith("té ")
+        or _n.startswith("infusion")
+        or _n.startswith("infusión")
+        or _n.startswith("cafe ")
+        or _n.startswith("café ")
+    ):
+        return True
+    return False
+
+
 def _leer_fila_diario(user_id: str, meal_id: str) -> Optional[dict]:
     """Fila original de `consumed_meals` (`AND user_id`, I2). Best-effort: None si no se pudo leer;
     el caller degrada a la conducta previa, nunca inventa la fila."""
@@ -1253,6 +1282,82 @@ def _rescue_dinner_from_unlabeled_desayuno(user_id: str, meal_type: str, calorie
     except Exception as _e_ds:
         logger.warning(f"[P1-DIARY-DINNER-SLOT / BB-026] rescate desayuno no-op: {_e_ds}")
         return meal_type
+
+
+def _buscar_comida_principal_reciente_ttl(
+    user_id: str,
+    referencia_ts: Any = None,
+    ttl_min: float = 30.0,
+    exclude_meal_id: str = None
+) -> Optional[dict]:
+    """[BB-021 / BB-027 · 2026-11-04]
+    Busca si existe una comida principal ('desayuno', 'almuerzo', 'cena') de hoy consumida/creada
+    dentro de una ventana de ttl_min minutos respecto a referencia_ts (o ahora)."""
+    try:
+        from db import execute_sql_query as _esq_ds
+        from datetime import datetime, timezone as _tz
+        _tz_off_ds = user_tz_offset_min(user_id)
+        from db_facts import _diary_rollover_hour
+        _roll_min_ds = _diary_rollover_hour() * 60
+
+        _rows = _esq_ds(
+            "SELECT id, meal_type, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, created_at "
+            "FROM consumed_meals "
+            "WHERE user_id = %s AND meal_type = ANY(%s) "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date "
+            "ORDER BY consumed_at DESC, created_at DESC",
+            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES), _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+            fetch_all=True,
+        ) or []
+
+        if not _rows:
+            return None
+
+        now_utc = datetime.now(_tz.utc)
+        ref_dt = now_utc
+        if referencia_ts is not None:
+            if isinstance(referencia_ts, datetime):
+                ref_dt = referencia_ts if referencia_ts.tzinfo else referencia_ts.replace(tzinfo=_tz.utc)
+            elif isinstance(referencia_ts, str):
+                try:
+                    p = datetime.fromisoformat(referencia_ts.replace("Z", "+00:00"))
+                    ref_dt = p if p.tzinfo else p.replace(tzinfo=_tz.utc)
+                except Exception:
+                    ref_dt = now_utc
+
+        candidates = []
+        for r in _rows:
+            if not isinstance(r, dict):
+                continue
+            cid = str(r.get("id") or "")
+            if exclude_meal_id and cid == str(exclude_meal_id):
+                continue
+
+            raw_ts = r.get("consumed_at") or r.get("created_at")
+            if not raw_ts:
+                continue
+            if isinstance(raw_ts, datetime):
+                m_dt = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=_tz.utc)
+            else:
+                try:
+                    p = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+                    m_dt = p if p.tzinfo else p.replace(tzinfo=_tz.utc)
+                except Exception:
+                    continue
+
+            diff_sec = abs((ref_dt - m_dt).total_seconds())
+            if diff_sec <= ttl_min * 60:
+                candidates.append((diff_sec, r))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
+    except Exception as exc:
+        logger.warning(f"[BB-027] Error buscando comida principal reciente TTL: {exc}")
+        return None
 
 
 # [P1-PLAN-LOTE-84 · 2026-09-17] El cierre tras registrar sabe qué hora es. El dueño registró el desayuno a las 11:23 y el
@@ -1577,16 +1682,72 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 
     # [BB-025 / P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03]
     # Bebidas ligeras e infusiones aisladas (té, café solo, agua con limón, infusión herbal, caldo ligero <= 50 kcal):
-    # NUNCA deben ocupar franjas principales (desayuno/almuerzo/cena) si se registran solas. Se clasifican como 'complemento'.
-    _es_bebida_ligera_nombre = any(k in _norm_name for k in (
-        "te ", "te,", "té ", "té,", "taza de te", "taza de té", "infusion", "infusión", "cafe negro", "café negro",
-        "cafe solo", "café solo", "espresso", "americano", "agua con limon", "agua con limón", "caldo claro", "caldo ligero"
-    )) or _norm_name.startswith("te ") or _norm_name.startswith("té ") or _norm_name.startswith("infusion") or _norm_name.startswith("infusión")
-    
-    if _meal_type in ("desayuno", "almuerzo", "cena") and calories is not None and calories <= 50 and _es_bebida_ligera_nombre:
+    # NUNCA deben ocupar franjas principales (desayuno/almuerzo/cena/merienda/snack) si se registran solas. Se clasifican como 'complemento'.
+    if _meal_type in ("desayuno", "almuerzo", "cena", "merienda", "snack") and calories is not None and calories <= 50 and _es_bebida_ligera_nombre(meal_name):
         logger.info(f"🍵 [BB-025 / COMPLEMENT-GUARD] '{meal_name}' ({calories} kcal) reclasificado '{_meal_type}' → 'complemento' (bebida ligera aislada)")
         _meal_type = "complemento"
+
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
+
+    # [BB-027 / P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04]
+    # Un alimento o bebida con > 50 kcal NUNCA puede ser 'complemento'.
+    # Si llega como complemento con > 50 kcal, se evalúa si fusionar con comida principal activa (TTL <= 30 min)
+    # o promoverse a merienda/snack.
+    if _meal_type == "complemento" and calories is not None and calories > 50:
+        logger.info(f"☕ [BB-027 / PROMOTED-COMPLEMENT] '{meal_name}' ({calories} kcal) > 50 kcal; no puede ser complemento.")
+        _consumed_at_dt = datetime.now(_tz.utc) - _td(days=_days_ago)
+        _main_candidato = _buscar_comida_principal_reciente_ttl(user_id, _consumed_at_dt, ttl_min=30.0)
+        if _main_candidato:
+            main_id = str(_main_candidato.get("id"))
+            main_type = str(_main_candidato.get("meal_type"))
+            main_name = str(_main_candidato.get("meal_name") or "")
+            main_cal = int(_main_candidato.get("calories") or 0)
+            main_prot = int(_main_candidato.get("protein") or 0)
+            main_carbs = int(_main_candidato.get("carbs") or 0)
+            main_fats = int(_main_candidato.get("healthy_fats") or 0)
+
+            tot_cal = main_cal + calories
+            tot_prot = main_prot + int(protein or 0)
+            tot_carbs = main_carbs + int(carbs or 0)
+            tot_fats = main_fats + int(healthy_fats or 0)
+            tot_name = f"{main_name} + {meal_name}" if meal_name.lower() not in main_name.lower() else main_name
+
+            import json as _json_cm
+            main_ing = _main_candidato.get("ingredients") or []
+            if isinstance(main_ing, str):
+                try:
+                    main_ing = _json_cm.loads(main_ing)
+                except Exception:
+                    main_ing = [main_ing]
+            if not isinstance(main_ing, list):
+                main_ing = []
+            nuevos_ing = list(ingredients or [])
+            tot_ing = list(dict.fromkeys(main_ing + nuevos_ing))
+
+            db_update_consumed_meal(
+                user_id,
+                main_id,
+                meal_name=tot_name,
+                calories=tot_cal,
+                protein=tot_prot,
+                carbs=tot_carbs,
+                healthy_fats=tot_fats,
+                ingredients=tot_ing if tot_ing else None,
+            )
+            logger.info(
+                f"☕ [BB-027] log_consumed_meal fusionado en {main_type} ({main_id}) por TTL <= 30 min: "
+                f"total={tot_cal} kcal ('{tot_name}')."
+            )
+            _nota_total = _nota_total_del_dia(user_id, _days_ago)
+            return (
+                f"REGISTRADO: Sumé '{meal_name}' ({calories} kcal) a tu {main_type} recién registrado "
+                f"(ahora {tot_cal} kcal).{_nota_total} [ID_REGISTRO_DIARIO: {main_id} — uso interno tuyo, "
+                f"NO se lo menciones ni se lo leas al usuario.]"
+            )
+        else:
+            _hora = _hora_local_float(user_id)
+            _meal_type = "snack" if (_hora is not None and (_hora >= 22.0 or _hora < 6.0)) else "merienda"
+            logger.info(f"☕ [BB-027] Reclasificado '{meal_name}' ({calories} kcal) a '{_meal_type}'.")
     # [P1-DIARY-DINNER-SLOT · 2026-07-30] El único log de qué slot se escribe era `logger.debug`, y
     # en producción solo se emite INFO+ — o sea que al revisar el journal NO había forma de saber
     # qué comida creyó el modelo que estaba registrando. Sube a INFO: es el dato que hace
@@ -2065,6 +2226,100 @@ def correct_consumed_meal(
                 _nota_nevera = (" La Nevera NO se ajustó: no hay rastro de qué descontó el registro "
                                 "original y devolverlo a ciegas lo contaría dos veces. Si hace falta, "
                                 "corrígela con modify_pantry_inventory.")
+
+    # [BB-027 / P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04]
+    # Hook de Promoción y Degradación de Complementos en correcciones
+    _tipo_anterior = str((_fila or {}).get("meal_type") or "").strip().lower()
+    _cal_efectivo = calories if calories is not None else int((_fila or {}).get("calories") or 0)
+    _nom_efectivo = meal_name if meal_name is not None else str((_fila or {}).get("meal_name") or "").strip()
+    _ref_ts = (_fila or {}).get("consumed_at") or (_fila or {}).get("created_at")
+
+    # 1. Caso PROMOCIÓN: Era complemento y tras corrección supera 50 kcal
+    if _tipo_anterior == "complemento" and _cal_efectivo > 50 and (_meal_type is None or _meal_type == "complemento"):
+        _main_candidato = _buscar_comida_principal_reciente_ttl(user_id, _ref_ts, ttl_min=30.0, exclude_meal_id=_mid)
+        if _main_candidato:
+            main_id = str(_main_candidato.get("id"))
+            main_type = str(_main_candidato.get("meal_type"))
+            main_name = str(_main_candidato.get("meal_name") or "")
+            main_cal = int(_main_candidato.get("calories") or 0)
+            main_prot = int(_main_candidato.get("protein") or 0)
+            main_carbs = int(_main_candidato.get("carbs") or 0)
+            main_fats = int(_main_candidato.get("healthy_fats") or 0)
+
+            tot_cal = main_cal + _cal_efectivo
+            tot_prot = main_prot + (protein if protein is not None else int((_fila or {}).get("protein") or 0))
+            tot_carbs = main_carbs + (carbs if carbs is not None else int((_fila or {}).get("carbs") or 0))
+            tot_fats = main_fats + (healthy_fats if healthy_fats is not None else int((_fila or {}).get("healthy_fats") or 0))
+            tot_name = f"{main_name} + {_nom_efectivo}" if _nom_efectivo.lower() not in main_name.lower() else main_name
+
+            import json as _json_cm
+            main_ing = _main_candidato.get("ingredients") or []
+            if isinstance(main_ing, str):
+                try:
+                    main_ing = _json_cm.loads(main_ing)
+                except Exception:
+                    main_ing = [main_ing]
+            if not isinstance(main_ing, list):
+                main_ing = []
+            nuevos_ing = ingredients if ingredients is not None else ((_fila or {}).get("ingredients") or [])
+            if isinstance(nuevos_ing, str):
+                try:
+                    nuevos_ing = _json_cm.loads(nuevos_ing)
+                except Exception:
+                    nuevos_ing = [nuevos_ing]
+            if not isinstance(nuevos_ing, list):
+                nuevos_ing = []
+            tot_ing = list(dict.fromkeys(main_ing + nuevos_ing))
+
+            db_update_consumed_meal(
+                user_id,
+                main_id,
+                meal_name=tot_name,
+                calories=tot_cal,
+                protein=tot_prot,
+                carbs=tot_carbs,
+                healthy_fats=tot_fats,
+                ingredients=tot_ing if tot_ing else None,
+            )
+            # Revertir eventos de nevera y borrar la fila huérfana del complemento
+            try:
+                import db_inventory
+                db_inventory.revert_consumption_events(user_id, _mid)
+            except Exception:
+                pass
+            db_delete_consumed_meal(user_id, _mid)
+
+            logger.info(
+                f"☕ [BB-027] Complemento {_mid} promovido y fusionado en {main_type} ({main_id}) "
+                f"por TTL <= 30 min: total={tot_cal} kcal ('{tot_name}')."
+            )
+            _nota_total = _nota_total_del_dia(user_id, 0)
+            return (
+                f"¡Corregido y fusionado! Al agregar aditivos ({_cal_efectivo} kcal) a tu '{_nom_efectivo}' "
+                f"dentro de los 30 min de tu {main_type}, lo sumé a tu {main_type} (ahora {tot_cal} kcal) "
+                f"y liberé la fila de complementos.{_nota_total} [ID_REGISTRO_DIARIO: {main_id} — uso interno tuyo, "
+                f"NO se lo menciones ni se lo leas al usuario.]"
+            )
+        else:
+            _hora = _hora_local_float(user_id)
+            _meal_type = "snack" if (_hora is not None and (_hora >= 22.0 or _hora < 6.0)) else "merienda"
+            logger.info(
+                f"☕ [BB-027] Complemento {_mid} promovido a '{_meal_type}' "
+                f"por superar 50 kcal ({_cal_efectivo} kcal) sin comida principal en TTL <= 30 min."
+            )
+
+    # 2. Caso DEGRADACIÓN: Era principal o merienda, y al quitar alimentos cae a <= 50 kcal siendo bebida ligera
+    elif (
+        _tipo_anterior in ("merienda", "snack", "desayuno", "almuerzo", "cena")
+        and _cal_efectivo <= 50
+        and _es_bebida_ligera_nombre(_nom_efectivo)
+        and (_meal_type is None or _meal_type == _tipo_anterior)
+    ):
+        _meal_type = "complemento"
+        logger.info(
+            f"🍵 [BB-027] Comida '{_nom_efectivo}' ({_cal_efectivo} kcal) degradada '{_tipo_anterior}' → 'complemento' "
+            f"al quedar solo bebida ligera <= 50 kcal. Franja de {_tipo_anterior} liberada."
+        )
 
     from food_label_nutrients import snapshot
     try:
