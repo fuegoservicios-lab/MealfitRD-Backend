@@ -1512,6 +1512,34 @@ def _comidas_por_hora(faltan, hora_local, horas) -> tuple:
 _NO_INSISTAS = (" Una sola vez: si ya se lo preguntaste en esta conversación y no lo contestó, no lo repitas. Si ya preguntaste por esa comida antes en este chat, cierra sin volver a nombrarla.")
 
 
+def _row_hora_local_float(r: dict, tz_offset_min: int = 240) -> Optional[float]:
+    """[BB-032 / P1-BRUNCH-SATIETY-CLAIM-SUPPRESSION · 2026-11-04]
+    Extrae la hora local del día como float (ej. 11:45 -> 11.75) de una fila de comida consumida.
+    Acepta:
+    - 'hora': float directo (muy común en tests/mocks).
+    - 'consumed_at' o 'created_at': datetime o string ISO.
+    Convierte a hora local restando tz_offset_min (offset oeste de UTC, ej. 240 min = UTC-4).
+    """
+    if not isinstance(r, dict):
+        return None
+    if "hora" in r and isinstance(r["hora"], (int, float)):
+        return float(r["hora"])
+    raw_ts = r.get("consumed_at") or r.get("created_at")
+    if not raw_ts:
+        return None
+    try:
+        from datetime import datetime, timezone, timedelta
+        if isinstance(raw_ts, datetime):
+            m_dt = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=timezone.utc)
+        else:
+            p = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+            m_dt = p if p.tzinfo else p.replace(tzinfo=timezone.utc)
+        loc = m_dt - timedelta(minutes=int(tz_offset_min if tz_offset_min is not None else 240))
+        return loc.hour + loc.minute / 60.0 + loc.second / 3600.0
+    except Exception:
+        return None
+
+
 def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ahora_local=None) -> str:
     """[P1-PLAN-LOTE-76 · 2026-09-17] Qué comidas de ESE día siguen sin registrar, para que el asistente ofrezca la
     que falta POR SU NOMBRE o no pregunte: el dueño recibió «¿Te falta algo más de ayer por registrar?» cuando el
@@ -1537,6 +1565,42 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
             _plan_day = None
         _faltan = comidas_sin_registrar(_rows_dia, _plan_day)
         _dia_txt = "hoy" if not days_ago else ("ayer" if int(days_ago) == 1 else f"hace {int(days_ago)} días")
+
+        # [BB-032 / P1-BRUNCH-SATIETY-CLAIM-SUPPRESSION · 2026-11-04]
+        # Supresión por saciedad y comidas puente ("Brunch / Desayuno-Almuerzo pesado"):
+        # 1. Comida puente (11:00 AM - 1:30 PM con >= 650 kcal, o "brunch" con >= 500 kcal entre 10:30 AM y 2:00 PM):
+        #    Satisface implícitamente tanto 'desayuno' como 'almuerzo'.
+        # 2. Ventana de saciedad: Ingesta matutina pesada (>= 600 kcal, h < 12.0) suprime reclamo de 'almuerzo'
+        #    si han transcurrido menos de 3.5 horas desde la ingesta.
+        if _faltan:
+            _ahora_eval = ahora_local if ahora_local is not None else _hora_local_float(user_id)
+            _brunch_cubierto = False
+            _saciedad_almuerzo = False
+
+            for _r in _rows_dia:
+                if not isinstance(_r, dict):
+                    continue
+                _cal = float(_r.get("calories") or 0)
+                _h_local = _row_hora_local_float(_r, tz_offset_min=int(_tz_off_f if _tz_off_f is not None else 240))
+                if _h_local is None:
+                    continue
+                _mname = str(_r.get("meal_name") or "").lower()
+
+                # Condición 1: Comida puente (11:00 AM - 1:30 PM, 11.0 <= h <= 13.5 con >= 650 kcal)
+                # o explícitamente "brunch" con >= 500 kcal entre 10:30 AM y 2:00 PM (10.5 <= h <= 14.0)
+                if (_cal >= 650 and 11.0 <= _h_local <= 13.5) or ("brunch" in _mname and _cal >= 500 and 10.5 <= _h_local <= 14.0):
+                    _brunch_cubierto = True
+
+                # Condición 2: Saciedad matutina pesada frente a almuerzo (< 3.5h transcurridas)
+                if not days_ago and _cal >= 600 and _h_local < 12.0 and _ahora_eval is not None:
+                    _dif_h = float(_ahora_eval) - _h_local
+                    if 0.0 <= _dif_h < 3.5:
+                        _saciedad_almuerzo = True
+
+            if _brunch_cubierto:
+                _faltan = [s for s in _faltan if s not in ("desayuno", "almuerzo")]
+            elif _saciedad_almuerzo:
+                _faltan = [s for s in _faltan if s != "almuerzo"]
         # [P1-PLAN-LOTE-84] Hoy, lo que falta se separa por la hora: lo que ya pasó se ofrece; lo que aún no toca, no.
         if _faltan and not days_ago:
             _ahora = ahora_local if ahora_local is not None else _hora_local_float(user_id)
