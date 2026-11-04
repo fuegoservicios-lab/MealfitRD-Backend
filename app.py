@@ -2201,6 +2201,28 @@ async def lifespan(app: FastAPI):
             f"[P0-NEW-1-AUTOHEAL] Startup sweep falló (best-effort): {_sweep_err}"
         )
 
+    # [BB-025 / P1-DIARY-COMPLEMENTS-SECTION] Backfill de bebidas ligeras (<= 50 kcal)
+    try:
+        from db_core import execute_sql_write
+        execute_sql_write(
+            """
+            UPDATE consumed_meals
+            SET meal_type = 'complemento'
+            WHERE meal_type IN ('desayuno', 'almuerzo', 'cena', 'merienda', 'snack')
+              AND calories <= 50
+              AND (
+                meal_name ILIKE '%té%' OR meal_name ILIKE '%infusi%' OR meal_name ILIKE '%te %'
+                OR meal_name ILIKE '%café negro%' OR meal_name ILIKE '%cafe negro%'
+                OR meal_name ILIKE '%café solo%' OR meal_name ILIKE '%cafe solo%'
+                OR meal_name ILIKE '%agua con limón%' OR meal_name ILIKE '%agua con limon%'
+                OR meal_name ILIKE '%caldo ligero%'
+              )
+            """
+        )
+        logger.info("🍵 [BB-025] Backfill de bebidas ligeras a 'complemento' OK.")
+    except Exception as _bf_err:
+        logger.warning(f"⚠️ [BB-025] Error en backfill de bebidas ligeras: {_bf_err}")
+
     # [P0-LIVE-2 · 2026-05-11] Startup-run del CB sweep (espejo P0-NEW-1-AUTOHEAL).
     # Cierra el mismo chicken-and-egg para CB rows stale: el cron periódico
     # `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) está dentro del scheduler.

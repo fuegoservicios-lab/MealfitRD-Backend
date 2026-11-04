@@ -1841,6 +1841,15 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         # un fall-through teórico del loop de retry que el control de flujo no alcanza).
         assert meals is not None
 
+        # [BB-025 / P1-DIARY-COMPLEMENTS-SECTION] Clasificación retroactiva de bebidas ligeras
+        for m in meals:
+            mt = str(m.get("meal_type") or "").lower()
+            cals = float(m.get("calories") or 0.0)
+            m_name = str(m.get("meal_name") or "").lower()
+            if mt not in ("complemento", "suplemento") and cals <= 50:
+                if any(tok in m_name for tok in ("té", "te", "infusion", "infusión", "café negro", "cafe negro", "café solo", "cafe solo", "agua con limón", "agua con limon", "caldo ligero")):
+                    m["meal_type"] = "complemento"
+
         total_cal = sum(m.get("calories", 0) for m in meals)
         total_pro = sum(m.get("protein", 0) for m in meals)
         total_car = sum(m.get("carbs", 0) for m in meals)

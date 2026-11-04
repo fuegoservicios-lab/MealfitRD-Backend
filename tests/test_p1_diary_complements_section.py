@@ -20,6 +20,10 @@ def test_complemento_canonical_type_exists():
 def test_te_ligero_reclasificado_a_complemento_no_desayuno():
     user_id = "test-uid-bb025"
     with patch("tools.db_log_consumed_meal", return_value="meal-uuid-te") as mock_db, \
+         patch("tools.nevera_activa", return_value=False), \
+         patch("tools._nota_total_del_dia", return_value=""), \
+         patch("tools._nota_comidas_sin_registrar", return_value=""), \
+         patch("db.get_user_profile", return_value={}), \
          patch("proactive_agent.mark_nudge_logged_from_diary", return_value=None):
 
         # Usuario registra una taza de té de 2 kcal a las 8 AM con meal_type='desayuno' por horario
@@ -41,6 +45,10 @@ def test_te_ligero_reclasificado_a_complemento_no_desayuno():
 def test_desayuno_real_con_huevos_mantiene_desayuno():
     user_id = "test-uid-bb025"
     with patch("tools.db_log_consumed_meal", return_value="meal-uuid-huevos") as mock_db, \
+         patch("tools.nevera_activa", return_value=False), \
+         patch("tools._nota_total_del_dia", return_value=""), \
+         patch("tools._nota_comidas_sin_registrar", return_value=""), \
+         patch("db.get_user_profile", return_value={}), \
          patch("proactive_agent.mark_nudge_logged_from_diary", return_value=None):
 
         res = log_consumed_meal.invoke({
