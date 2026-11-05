@@ -833,6 +833,13 @@ def build_past_diary_block(consumed_rows: Any, today: date,
                             seg += f" ({int(cal)} kcal, {int(prot)}g prot)"
                         else:
                             seg += f" ({int(cal)} kcal)"
+                if r.get("id"):
+                    seg += f" [id: {r.get('id')}]"
+                ings = r.get("ingredients")
+                if isinstance(ings, list) and ings:
+                    clean_ings = [str(x).strip() for x in ings if str(x).strip()]
+                    if clean_ings:
+                        seg += f" (ingredientes: {', '.join(clean_ings[:6])})"
                 parts.append(seg)
             # [P1-PLAN-LOTE-76] lo que falta de ese día, por su nombre
             _pd = find_plan_day_for_date(plan_data, cursor, today, tz_offset_mins) if isinstance(plan_data, dict) else None

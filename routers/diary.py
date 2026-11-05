@@ -100,6 +100,8 @@ class ManualMealRequest(BaseModel):
     # [P1-PLAN-LOTE-720 · 2026-09-28] «estimate» si alguna línea salió del estimador («Descríbelo» / texto libre): la
     # ficha del plato lo dice. Cualquier otro valor = «manual». Es una etiqueta, no toca la aritmética.
     origin: Optional[str] = Field(default=None, max_length=16)
+    # [P1-DIARY-CHAT-BRIDGE · 2026-11-05] Sincronización en vivo con el Coach
+    session_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class EstimateMacrosRequest(BaseModel):
@@ -152,6 +154,7 @@ class RepeatMealRequest(BaseModel):
     meal_type: Optional[str] = Field(default=None, max_length=32)
     days_ago: int = Field(default=0, ge=0, le=7)
     base_only: bool = Field(default=True, description="[P1-CLONE-HABITUAL-DECONTAMINATE] Si es True, clona solo el plato base excluyendo extras fusionados")
+    session_id: Optional[str] = Field(default=None, max_length=64)
 
 
 from food_label_nutrients import FoodLabel, snapshot as label_snapshot, micros_from_snapshot
@@ -163,6 +166,7 @@ class ConsumedMealRequest(BaseModel):
     """Payload para `POST /api/diary/consumed`. Campos numéricos clamp a
     rangos sanos para evitar NaN/Infinity contamination en agregados."""
     user_id: Optional[str] = None
+    session_id: Optional[str] = Field(default=None, max_length=64)
     meal_name: str = Field(..., min_length=1, max_length=200)
     meal_type: str = Field(default="snack", max_length=32)
     calories: float = Field(default=0.0, ge=0.0, le=10000.0)
@@ -253,6 +257,7 @@ class ConsumedFromPlanRequest(BaseModel):
     meal_index: int = Field(..., ge=0, le=50)
     # Mismo rango que `ConsumedMealRequest.days_ago` y `tools._CONSUMED_MAX_DAYS_AGO`.
     days_ago: int = Field(default=0, ge=0, le=7)
+    session_id: Optional[str] = Field(default=None, max_length=64)
 
     model_config = {"extra": "ignore"}
 
@@ -1003,6 +1008,7 @@ def _persist_consumed_meal(
     *, user_id: str, meal_name: str, meal_type: str, calories, protein, carbs,
     healthy_fats, ingredients, days_ago, background_tasks: BackgroundTasks,
     source: str, deduct: bool = True, origen: Optional[str] = None, nutrition: Optional[dict] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """[P1-MANUAL-FOOD-LOG · 2026-08-11] EL camino de escritura del diario, extraído
     del cuerpo de `/consumed` para que la foto y el componedor manual lo COMPARTAN en
@@ -1058,6 +1064,26 @@ def _persist_consumed_meal(
 
     if not _already_logged:
         background_tasks.add_task(trigger_incremental_learning, user_id)
+        if isinstance(_logged_ok, str) and source != "chat":
+            try:
+                from diary_chat_bridge import sync_meal_to_coach_chat
+                sync_meal_to_coach_chat(
+                    user_id=user_id,
+                    meal_id=_logged_ok,
+                    meal_name=meal_name,
+                    meal_type=meal_type,
+                    calories=int(calories),
+                    protein=int(protein),
+                    carbs=int(carbs),
+                    healthy_fats=int(healthy_fats),
+                    ingredients=_ingredients,
+                    days_ago=_days_ago,
+                    source=source,
+                    session_id=session_id,
+                    background_tasks=background_tasks,
+                )
+            except Exception as _sync_err:
+                logger.warning(f"[diary] No se pudo sincronizar al coach: {_sync_err}")
 
     return {
         "success": True,
@@ -1120,6 +1146,7 @@ def api_log_consumed_meal(
             source="photo",
             # [P1-PLAN-LOTE-224] solo un `False` explícito apaga la resta; ausente = la conducta de siempre
             deduct=payload.deduct_pantry is not False,
+            session_id=payload.session_id,
         )
         # [P1-PLAN-LOTE-575] la corrección del escáner, una vez por comida guardada (un repetido no cuenta dos veces).
         # La comida YA está guardada: nada de la señal puede convertir eso en un 500.
@@ -1391,6 +1418,7 @@ def api_log_manual_meal(
             days_ago=payload.days_ago, background_tasks=background_tasks,
             source="manual", deduct=bool(payload.deduct_pantry),
             origen=("estimate" if payload.origin == "estimate" else "manual"),   # [P1-PLAN-LOTE-720]
+            session_id=payload.session_id,
         )
         resp["totals"] = {k: int(v) for k, v in totales.items()}
         resp["lines"] = [
@@ -1512,6 +1540,7 @@ def api_repeat_consumed_meal(
             nutrition=nutrition_out,
             days_ago=payload.days_ago, background_tasks=background_tasks,
             source="manual", deduct=False, origen="repeat",   # [P1-PLAN-LOTE-720]
+            session_id=payload.session_id,
         )
     except HTTPException as he:
         raise he
@@ -1660,6 +1689,26 @@ def api_log_consumed_meal_from_plan(
 
         if not already_logged:
             background_tasks.add_task(trigger_incremental_learning, verified_user_id)
+            if isinstance(logged, str) and logged != "deduped":
+                try:
+                    from diary_chat_bridge import sync_meal_to_coach_chat
+                    sync_meal_to_coach_chat(
+                        user_id=verified_user_id,
+                        meal_id=logged,
+                        meal_name=meal_name,
+                        meal_type=meal_type,
+                        calories=int(calories),
+                        protein=int(protein),
+                        carbs=int(carbs),
+                        healthy_fats=int(healthy_fats),
+                        ingredients=ingredients,
+                        days_ago=_days_ago,
+                        source="plan_meal",
+                        session_id=payload.session_id,
+                        background_tasks=background_tasks,
+                    )
+                except Exception as _sync_err:
+                    logger.warning(f"[diary] No se pudo sincronizar comida del plan al coach: {_sync_err}")
 
         return {
             "success": True,

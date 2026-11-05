@@ -5981,21 +5981,31 @@ def _extraer_ultimo_texto_usuario(messages: list) -> str:
 _RE_ID_REGISTRO_DIARIO = re.compile(r"\[ID_REGISTRO_DIARIO:\s*([0-9a-fA-F-]{8,64})\b")
 
 
-def _ultimo_id_registro_diario_previo(messages: list) -> Optional[str]:
-    """Busca el último ID_REGISTRO_DIARIO emitido en un ToolMessage ANTES del último mensaje del usuario."""
-    if not messages:
-        return None
-    ultimo_human_idx = None
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
-            ultimo_human_idx = i
-            break
-    scan = messages[:ultimo_human_idx] if ultimo_human_idx is not None else messages
-    for msg in reversed(scan):
-        if isinstance(msg, ToolMessage):
-            m = _RE_ID_REGISTRO_DIARIO.search(str(msg.content or ""))
-            if m:
-                return m.group(1)
+def _ultimo_id_registro_diario_previo(messages: list, user_id: Optional[str] = None) -> Optional[str]:
+    """Busca el último ID_REGISTRO_DIARIO emitido en un ToolMessage o AIMessage ANTES del último mensaje del usuario, o la última comida de hoy."""
+    if messages:
+        ultimo_human_idx = None
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], HumanMessage):
+                ultimo_human_idx = i
+                break
+        scan = messages[:ultimo_human_idx] if ultimo_human_idx is not None else messages
+        for msg in reversed(scan):
+            if isinstance(msg, (ToolMessage, AIMessage)):
+                m = _RE_ID_REGISTRO_DIARIO.search(str(msg.content or ""))
+                if m:
+                    return m.group(1)
+    if user_id:
+        try:
+            from db_facts import get_consumed_meals_today
+            tm = get_consumed_meals_today(user_id) or []
+            if tm:
+                tm.sort(key=lambda m: str(m.get("created_at") or m.get("consumed_at") or ""), reverse=True)
+                mid = tm[0].get("id")
+                if mid:
+                    return str(mid)
+        except Exception:
+            pass
     return None
 
 
@@ -6127,7 +6137,7 @@ def _intentar_fusionar_repeticion_en_fila_previa(user_id: str, tool_args: dict, 
     misma fila (conservando su foto y evitando dos tarjetas sueltas de la misma comida)."""
     try:
         from tools import _leer_fila_diario
-        prev_mid = _ultimo_id_registro_diario_previo(messages)
+        prev_mid = _ultimo_id_registro_diario_previo(messages, user_id=user_id)
         if not prev_mid:
             return None
         fila = _leer_fila_diario(user_id, prev_mid)
@@ -6783,7 +6793,7 @@ def _ajustar_calorias_por_delta_ingrediente(
         except Exception:
             orig = None
     if not orig:
-        prev_mid = _ultimo_id_registro_diario_previo(messages)
+        prev_mid = _ultimo_id_registro_diario_previo(messages, user_id=user_id)
         if prev_mid:
             try:
                 from tools import _leer_fila_diario
@@ -8289,6 +8299,19 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         return ""
 
 
+def _format_consumed_meal_line(m: dict) -> str:
+    """[P1-DIARY-CHAT-BRIDGE · 2026-11-05] Formatea una fila del diario de hoy con tipo, nombre, calorías, ID e ingredientes si existen."""
+    slot = (str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''
+    id_part = f" [id: {m.get('id')}]" if m.get('id') else ""
+    ing_part = ""
+    ings = m.get('ingredients')
+    if isinstance(ings, list) and ings:
+        clean_ings = [str(x).strip() for x in ings if str(x).strip()]
+        if clean_ings:
+            ing_part = f" (ingredientes: {', '.join(clean_ings[:6])})"
+    return f"{slot}{m.get('meal_name')} ({m.get('calories')} kcal){id_part}{ing_part}"
+
+
 def _macro_totals_line(consumed_today: list, plan_vigente, form_data=None) -> str:
     """[P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros ACUMULADAS del día (proteína/
     carbos/grasas) con sus metas — el DIARIO DE HOY solo llevaba kcal,
@@ -9335,9 +9358,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
-                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)" + (f" [id: {m.get('id')}]" if m.get('id') else "")
-                    for m in consumed_today
+                meals_text = ", ".join([  # [P1-DIARY-CHAT-BRIDGE · 2026-11-05]
+                    _format_consumed_meal_line(m) for m in consumed_today
                 ])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
@@ -9990,9 +10012,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([  # [P1-DIARY-FREETEXT-ESTIMATE v2] slot delante del plato
-                    f"{(str(m.get('meal_type') or '').strip() + ': ') if m.get('meal_type') else ''}{m.get('meal_name')} ({m.get('calories')} kcal)" + (f" [id: {m.get('id')}]" if m.get('id') else "")
-                    for m in consumed_today
+                meals_text = ", ".join([  # [P1-DIARY-CHAT-BRIDGE · 2026-11-05]
+                    _format_consumed_meal_line(m) for m in consumed_today
                 ])
                 
                 target_calories = form_data.get("target_calories") if form_data else None

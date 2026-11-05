@@ -1355,7 +1355,7 @@ def get_consumed_meals_since(user_id: str, since_iso_date: str, include_ingredie
     # campos básicos. Reduce I/O sobre tabla append-only que puede acumular
     # miles de filas por usuario.
     _COLUMNS = (
-        "meal_name, calories, protein, carbs, healthy_fats, "
+        "id, meal_name, calories, protein, carbs, healthy_fats, "
         "consumed_at, meal_type"
     )
     if include_ingredients:
