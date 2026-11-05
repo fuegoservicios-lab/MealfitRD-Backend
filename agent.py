@@ -5182,6 +5182,104 @@ def _strip_repeated_missing_meal_question(content: str, messages: list) -> str:
     return f"{prefix}{ui_tag}"
 
 
+def _es_intencion_restauracion_comida_borrada(messages: list) -> bool:
+    """[BB-038] Detecta si el usuario pide restaurar o volver a registrar una comida que fue borrada/eliminada."""
+    texto = _extraer_ultimo_texto_usuario(messages)
+    if not texto:
+        return False
+    pat = (
+        r"(?:borr[eé]|borrado|elimin[eé]|eliminado|quit[eé]|quitado).*?(?:sin\s+querer|por\s+error|accidentalmente|agrega|vuelve|restaura|pon|recupera|anota)"
+        r"|(?:restaura|recupera|vuelve\s+a\s+(?:poner|anotar|agregar|registrar)|agrega(?:\s+de\s+nuevo)?|anota(?:\s+de\s+nuevo)?).*?(?:que\s+borr[eé]|que\s+elimin[eé]|borrad[oa]|eliminad[oa])"
+        r"|se\s+me\s+borr[oó]"
+    )
+    return bool(re.search(pat, texto, re.IGNORECASE))
+
+
+def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photos: list, messages: list) -> dict:
+    """[BB-040] Protege contra alucinaciones comunes de alimentos no detectados por la visión
+    ni mencionados por el usuario (ej. aguacate, espárragos, salsa de hierbas, pan tostado).
+    Asegura también que proteínas clave detectadas por la visión (ej. pechuga) no se omitan."""
+    if not plate_photos or not isinstance(tool_args, dict):
+        return tool_args
+
+    desc_completa = " ".join(str(p.get("desc") or "") for p in plate_photos).lower()
+    user_txt = _extraer_ultimo_texto_usuario(messages).lower()
+    m_name = str(tool_args.get("meal_name") or "")
+
+    # 1. Alimentos propensos a alucinación no presentes en foto ni texto
+    items_alucinados = [
+        (r"\b(?:y\s+)?aguacate\b", "aguacate"),
+        (r"\b(?:y\s+)?esp[aá]rragos?\b", "espárragos"),
+        (r"\b(?:y\s+)?(?:salsa\s+de\s+hierbas|chimichurri)\b", "salsa de hierbas"),
+        (r"\b(?:y\s+)?pan\s+tostado\b", "pan tostado"),
+    ]
+    for pat, item_kw in items_alucinados:
+        if item_kw not in desc_completa and item_kw not in user_txt:
+            if re.search(pat, m_name, re.IGNORECASE):
+                logger.info(f"🛡️ [BB-040] Eliminando ingrediente alucinado '{item_kw}' de meal_name ('{m_name}')")
+                m_name = re.sub(pat, "", m_name, flags=re.IGNORECASE)
+                m_name = re.sub(r",\s*,", ",", m_name)
+                m_name = re.sub(r"\s+y\s*$", "", m_name)
+                m_name = re.sub(r",\s*$", "", m_name).strip()
+
+    # 2. Proteínas detectadas en visión que el modelo pudo haber omitido
+    if "pechuga" in desc_completa and "pechuga" not in m_name.lower() and "pechuga" not in user_txt:
+        if "pollo" in desc_completa or "pechuga de pollo" in desc_completa:
+            m_name += " y pechuga de pollo a la parrilla"
+            logger.info(f"🛡️ [BB-040] Restaurando proteína detectada en visión a meal_name: '{m_name}'")
+
+    tool_args["meal_name"] = m_name
+
+    # 3. Kcal dentro de ±15% de la estimación de visión salvo que usuario haya especificado porción
+    kcal_foto = plate_photos[0].get("kcal")
+    if kcal_foto and not re.search(r"\b(?:gramos?|[0-9]+\s*g|[0-9]+\s*oz|porci[oó]n|cucharadas?)\b", user_txt):
+        current_kcal = int(tool_args.get("calories") or 0)
+        kf = int(kcal_foto)
+        if current_kcal > 0 and (current_kcal > kf * 1.20 or current_kcal < kf * 0.80):
+            logger.info(f"🛡️ [BB-040] Ajustando calorías ({current_kcal} -> {kf}) hacia la estimación de visión ({kf} kcal).")
+            tool_args["calories"] = kf
+
+    return tool_args
+
+
+def _promover_slot_plato_fuerte_tarde(tool_args: dict, user_id: str, local_hour: Optional[float], messages: list) -> dict:
+    """[BB-043] Si se registra un plato fuerte (≥ 450 kcal) por la tarde (12:00 PM a 6:30 PM),
+    y el usuario NO nombró explícitamente 'merienda' o 'snack', y el almuerzo está vacío hoy:
+    clasificar como 'almuerzo' (almuerzo tardío), NUNCA como merienda.
+    Si es después de las 6:30 PM y cena está vacía, clasificar como 'cena'."""
+    if not isinstance(tool_args, dict):
+        return tool_args
+    meal_type = str(tool_args.get("meal_type") or "").strip().lower()
+    if meal_type not in ("merienda", "snack"):
+        return tool_args
+    if tool_args.get("explicit_slot"):
+        return tool_args
+    cal = int(tool_args.get("calories") or 0)
+    if cal < 450:
+        return tool_args
+
+    txt = _extraer_ultimo_texto_usuario(messages).lower()
+    if "merienda" in txt or "snack" in txt:
+        return tool_args
+
+    try:
+        from db_facts import get_consumed_meals_today
+        today_meals = get_consumed_meals_today(user_id) or []
+        slots_hoy = {str(m.get("meal_type") or "").strip().lower() for m in today_meals}
+        h = float(local_hour) if local_hour is not None else 14.0
+
+        if h < 18.5 and "almuerzo" not in slots_hoy:
+            logger.info(f"🍽️ [BB-043] Plato fuerte ({cal} kcal) a las {h:.1f}h con almuerzo vacío -> clasificado como 'almuerzo'.")
+            tool_args["meal_type"] = "almuerzo"
+        elif h >= 18.5 and "cena" not in slots_hoy:
+            logger.info(f"🍽️ [BB-043] Plato fuerte ({cal} kcal) a las {h:.1f}h con cena vacía -> clasificado como 'cena'.")
+            tool_args["meal_type"] = "cena"
+    except Exception as e:
+        logger.warning(f"Error en BB-043 promover slot: {e}")
+
+    return tool_args
+
+
 def execute_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -5342,6 +5440,20 @@ def execute_tools(state: ChatState):
                         tool_args = _fused_part_args
 
                 if tool_name == "correct_consumed_meal":
+                    # [BB-038] Si el usuario pide restaurar una comida borrada, NUNCA usar correct_consumed_meal.
+                    # Convertir a log_consumed_meal con force=True.
+                    if _es_intencion_restauracion_comida_borrada(state.get("messages") or []):
+                        logger.info(
+                            f"🔄 [BB-038] Redirigiendo correct_consumed_meal -> log_consumed_meal para restaurar comida borrada "
+                            f"('{tool_args.get('meal_name')}')."
+                        )
+                        tool_name = "log_consumed_meal"
+                        tool_args = dict(tool_args)
+                        tool_args.pop("meal_id", None)
+                        tool_args.pop("delete", None)
+                        tool_args["force"] = True
+
+                if tool_name == "correct_consumed_meal":
                     _adjusted_fusion = _ajustar_args_fusion_correct_consumed_meal(
                         _trusted_uid, tool_args, state.get("messages") or [], state.get("turn_plate_photos") or []
                     )
@@ -5434,24 +5546,38 @@ def execute_tools(state: ChatState):
                 # [P1-PHOTO-DIARY-PROTECT · 2026-10-26] Prohibir que un turno con foto de plato nueva
                 # altere comidas anteriores del diario con correct_consumed_meal (salvo que sea la recién creada en el turno previo para rectificar).
                 if tool_name == "correct_consumed_meal" and (state.get("turn_photo_to_log") or state.get("turn_plate_photos")):
-                    created_this_turn = _meals_created_this_turn(messages)
-                    created_prev_turn = _meals_created_in_previous_turn(messages)
-                    recent_created = created_this_turn | created_prev_turn
                     target_id = str(tool_args.get("meal_id") or "").strip()
-                    if target_id not in recent_created and not _es_solicitud_explicita_de_corregir_diario(messages):
-                        logger.warning(
-                            f"🛡️ [P1-PHOTO-DIARY-PROTECT] Bloqueado correct_consumed_meal sobre comida previa ({target_id}) "
-                            f"en turno con foto de plato (user={str(state.get('user_id'))[:8]})."
+                    # [BB-041] Si target_id no existe en BD (el usuario lo eliminó del diario):
+                    # NUNCA intentar correct_consumed_meal. Redirigir de inmediato a log_consumed_meal.
+                    from tools import _leer_fila_diario
+                    _fila_target = _leer_fila_diario(_trusted_uid, target_id) if target_id else None
+                    if target_id and _fila_target is None and not _es_solicitud_explicita_de_borrado_diario(messages):
+                        logger.info(
+                            f"🛡️ [BB-041] target_id '{target_id}' no existe en BD (eliminado). Redirigiendo a log_consumed_meal."
                         )
-                        tool_result = (
-                            "ERROR: En este turno el usuario envió una FOTO DE PLATO NUEVA (o contestó una duda de su foto). "
-                            "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario de horas antes. "
-                            "Esta foto ES UNA COMIDA NUEVA que debes registrar con `log_consumed_meal` usando las cifras del "
-                            "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`. "
-                            "(Esta nota es interna: NUNCA le digas al usuario que no pudiste actualizar el registro ni le pidas permiso para intentar corregir)."
-                        )
-                        tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
-                        continue
+                        tool_name = "log_consumed_meal"
+                        tool_args = dict(tool_args)
+                        tool_args.pop("meal_id", None)
+                        tool_args.pop("delete", None)
+                        tool_args["force"] = True
+                    else:
+                        created_this_turn = _meals_created_this_turn(messages)
+                        created_prev_turn = _meals_created_in_previous_turn(messages)
+                        recent_created = created_this_turn | created_prev_turn
+                        if target_id not in recent_created and not _es_solicitud_explicita_de_corregir_diario(messages):
+                            logger.warning(
+                                f"🛡️ [P1-PHOTO-DIARY-PROTECT] Bloqueado correct_consumed_meal sobre comida previa ({target_id}) "
+                                f"en turno con foto de plato (user={str(state.get('user_id'))[:8]})."
+                            )
+                            tool_result = (
+                                "ERROR: En este turno el usuario envió una FOTO DE PLATO NUEVA (o contestó una duda de su foto). "
+                                "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario de horas antes. "
+                                "Esta foto ES UNA COMIDA NUEVA que debes registrar con `log_consumed_meal` usando las cifras del "
+                                "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`. "
+                                "(Esta nota es interna: NUNCA le digas al usuario que no pudiste actualizar el registro ni le pidas permiso para intentar corregir)."
+                            )
+                            tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
+                            continue
 
                 # [P1-ANTI-CLONE-GUARD · 2026-10-29] Prohibir clonar/duplicar comidas en el mismo turno
                 # (ej. el modelo anota un plato como almuerzo y en el siguiente loop lo anota como desayuno).
@@ -5488,6 +5614,20 @@ def execute_tools(state: ChatState):
                             )
                             tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
                             continue
+
+                if tool_name == "log_consumed_meal":
+                    # [BB-040] Sanitizar alucinaciones de foto (aguacate, espárragos, etc.) y rescatar proteínas detectadas
+                    tool_args = _sanitizar_ingredientes_contra_alucinacion_foto(
+                        tool_args, state.get("turn_plate_photos") or [], state.get("messages") or []
+                    )
+                    # [BB-043] Promover plato fuerte por la tarde (≥ 450 kcal) a almuerzo si está vacío
+                    from prompts.chat_agent import hora_local_del_chat
+                    from tools import _hora_local_float
+                    _hl = (hora_local_del_chat(state["tz_offset"])
+                           if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
+                    tool_args = _promover_slot_plato_fuerte_tarde(
+                        tool_args, _trusted_uid, _hl, state.get("messages") or []
+                    )
 
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
@@ -6430,7 +6570,7 @@ def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
                 if "merienda" in t or "snack" in t:
                     return "merienda"
 
-            # [P1-PHOTO-DIARY-FUSION · 2026-10-30] Adición inmediata al turno previo (ej: "Extra lata de atun genova", "Además un café")
+            # [BB-042 / P1-PHOTO-DIARY-FUSION · 2026-11-05] Adición inmediata al turno previo (ej: "Y pechuga a la parrilla", "Extra lata de atun genova", "Además un café")
             addition_patterns = (
                 r"^(?:de\s+)?extra\b",
                 r"^y\s+de\s+extra\b",
@@ -6440,10 +6580,11 @@ def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
                 r"^olvid[eé](?:\s+poner|\s+decir(?:te)?)?\b",
                 r"^falt[oó]\b",
                 r"^(?:agr[eé]ga(?:le)?|a[nñ][aá]de(?:le)?|s[uú]ma(?:le)?)\b",
-                r"^(?:y|con)\s+(?:una?|dos|2|tres|3|medio|media|otro|otra|un\s+poco\s+de)\b",
+                r"^(?:y|con)\s+(?:una?|dos|2|tres|3|cuatro|4|cinco|5|medio|media|otro|otra|un\s+poco\s+de|[0-9]+(?:\s*(?:g|gr|gramos|oz|ml|cucharadas?|tazas?|piezas?|rodajas?|filetes?))?|[a-záéíóúñ]+(?:\s+a\s+la|\s+al|\s+de|\s+con)?)\b",
             )
             clean_t = t.strip()
-            es_adicion_inmediata = any(re.search(pat, clean_t, re.IGNORECASE) for pat in addition_patterns)
+            es_pregunta = clean_t.endswith("?") or bool(re.search(r"^(?:y|con)\s+(?:qu[eé]|c[oó]mo|cu[aá]nto|por\s+qu[eé]|para\s+qu[eé])\b", clean_t, re.IGNORECASE))
+            es_adicion_inmediata = (not es_pregunta) and any(re.search(pat, clean_t, re.IGNORECASE) for pat in addition_patterns)
             if es_adicion_inmediata:
                 if "almuerzo" in t or "lunch" in t:
                     return "almuerzo"

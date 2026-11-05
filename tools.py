@@ -904,6 +904,20 @@ def _normalize_meal_type(meal_type) -> str:
     return _resolver_meal_type(meal_type) or "snack"
 
 
+def _limpiar_nombre_comida(nombre: Optional[str]) -> Optional[str]:
+    """[BB-044] Limpia prefijos y sufijos conversacionales indeseados del nombre de la comida
+    (ej. «Desayuno de hoy:», «Desayuno:», «de siempre»)."""
+    if not nombre or not isinstance(nombre, str):
+        return nombre
+    t = nombre.strip()
+    t = re.sub(r"^(?:desayuno|almuerzo|cena|merienda|snack)(?:\s+de\s+hoy)?:\s*", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"^(?:mi\s+)?(?:desayuno|almuerzo|cena|merienda|snack):\s*", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+de\s+siempre$", "", t, flags=re.IGNORECASE)
+    if t:
+        t = t[0].upper() + t[1:]
+    return t.strip()
+
+
 # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Rangos de una comida. Sin ellos `log_consumed_meal` aceptaba
 # -300 kcal o 50.000 kcal: el primero RESTA del día y el segundo revienta metas, rachas y el
 # resumen semanal del coach. Los topes son holgados (un atracón real cabe); lo que se rechaza es lo
@@ -1143,6 +1157,11 @@ def _resolver_fila_diario_flexible(
             cid = str(c.get("id") or "")
             if cid == _mid or (len(_mid) >= 6 and cid.startswith(_mid)):
                 return (cid, c)
+        # [BB-037] Si se pasó un UUID explícito o prefijo hex (>=8 caracteres) y no existió en candidates,
+        # NUNCA caer a heurísticas laxas que puedan devolver una comida completamente distinta.
+        _mid_es_uuid = bool(_mid and _mid.lower() not in ultimas_palabras and re.match(r"^[0-9a-fA-F-]{8,}$", _mid))
+        if _mid_es_uuid:
+            return (None, None)
 
     # Extraer tokens a buscar de meal_name, meal_id e ingredients (BB-031)
     tokens_buscar = set()
@@ -1211,9 +1230,15 @@ def _resolver_fila_diario_flexible(
         if mejor_cand and max_score > 0:
             return (str(mejor_cand.get("id")), mejor_cand)
 
-    # 7. Si solo hay una comida candidata hoy
+    # 7. [BB-037] Si solo hay una comida candidata hoy, validar coherencia antes de devolverla
     if len(candidates) == 1:
-        return (str(candidates[0].get("id")), candidates[0])
+        cand = candidates[0]
+        cand_slot = (cand.get("meal_type") or "").strip().lower()
+        if es_ultimo or (not target_slot and not tokens_buscar and not _mid):
+            return (str(cand.get("id")), cand)
+        if (target_slot and target_slot == cand_slot) or (tokens_buscar and _calcular_score_candidato(cand, tokens_buscar, target_slot=target_slot) > 0):
+            return (str(cand.get("id")), cand)
+        return (None, None)
 
     # 8. Fallback a la última comida si es_ultimo fue indicado
     if es_ultimo and candidates:
@@ -1672,6 +1697,11 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                             f"(ya pasó su hora) — cierra ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta "
                             f"sobre qué comió para anotarlo {_omision_pas} (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
                             f"pregunta genérica de si le falta algo).{_NO_INSISTAS})")
+        if days_ago and days_ago > 0:
+            # [BB-044] Para días pasados (days_ago > 0), NO empujar al asistente a interrogar sobre comidas faltantes de ayer.
+            # Solo confirmar lo registrado con calma sin reclamos de días anteriores.
+            return f" (Para el asistente: Comida de {_dia_txt.lower()} registrada correctamente. Confirma la anotación de forma limpia sin preguntar por otras comidas faltantes de {_dia_txt.lower()}.)"
+
         if _faltan:
             _omision_gen = "o si estuvo en ayunas / no comió" if "desayuno" in _faltan else "o si no comió esa comida / se la saltó"
             return (f" (Para el asistente: {_dia_txt} sigue sin registrar {', '.join(_faltan)} — cierra "
@@ -1792,6 +1822,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
 
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
+    meal_name = _limpiar_nombre_comida(meal_name)
 
     # [P1-PLAN-LOTE-291 · 2026-09-25] Una toma de un suplemento de su Alacena: las macros salen de la ETIQUETA del pote
     # × porciones (el modelo no pone cifras) y, tras registrar, se restan del pote. Sin pote o sin etiqueta, las del
@@ -2328,10 +2359,23 @@ def correct_consumed_meal(
         f"days_ago={days_ago!r} delete={delete!r}"
     )
 
+    meal_name = _limpiar_nombre_comida(meal_name)
     _mid = str(meal_id or "").strip()
     _fila = None
-    if _mid and _mid.lower() not in ("ultimo", "ultima", "last", "reciente", "ese", "eso", "none", "null"):
+    _palabras_genericas_mid = ("ultimo", "ultima", "last", "reciente", "ese", "eso", "none", "null", "desayuno", "almuerzo", "cena", "merienda", "snack")
+    _es_uuid_explicito = bool(_mid and _mid.lower() not in _palabras_genericas_mid and re.match(r"^[0-9a-fA-F-]{8,}$", _mid))
+
+    if _mid and _mid.lower() not in _palabras_genericas_mid:
         _fila = _leer_fila_diario(user_id, _mid)
+
+    # [BB-037] Si se pasó un UUID explícito y no existe en BD (fue borrado o id inexistente),
+    # NUNCA hacer fallback a otra fila del diario para evitar corrupción catastrófica de comidas ajenas.
+    if _es_uuid_explicito and _fila is None:
+        action = "eliminar" if delete else "corregir"
+        return (
+            f"ERROR: la comida con ID '{_mid}' no existe en tu diario o fue eliminada previamente. "
+            f"No se pudo {action} ni se modificó ningún otro registro del diario."
+        )
 
     if _fila is None:
         _resolved_id, _resolved_fila = _resolver_fila_diario_flexible(
@@ -2441,6 +2485,41 @@ def correct_consumed_meal(
                 _nota_nevera = (" La Nevera NO se ajustó: no hay rastro de qué descontó el registro "
                                 "original y devolverlo a ciegas lo contaría dos veces. Si hace falta, "
                                 "corrígela con modify_pantry_inventory.")
+
+    # [BB-044] Detección de No-Op: Si no se altera ningún valor respecto a la BD, no ejecutar write innecesario
+    if _fila and not delete:
+        _old_cal = int((_fila or {}).get("calories") or 0)
+        _old_prot = int((_fila or {}).get("protein") or 0)
+        _old_carbs = int((_fila or {}).get("carbs") or 0)
+        _old_fats = int((_fila or {}).get("healthy_fats") or 0)
+        _old_name = str((_fila or {}).get("meal_name") or "").strip()
+        _old_type = str((_fila or {}).get("meal_type") or "").strip().lower()
+
+        _new_cal = calories if calories is not None else _old_cal
+        _new_prot = protein if protein is not None else _old_prot
+        _new_carbs = carbs if carbs is not None else _old_carbs
+        _new_fats = healthy_fats if healthy_fats is not None else _old_fats
+        _new_name = meal_name if meal_name is not None else _old_name
+        _new_type = _meal_type if _meal_type is not None else _old_type
+
+        if (
+            _new_cal == _old_cal
+            and _new_prot == _old_prot
+            and _new_carbs == _old_carbs
+            and _new_fats == _old_fats
+            and _new_name.lower() == _old_name.lower()
+            and _new_type == _old_type
+            and days_ago is None
+            and ingredients is None
+            and nutrition is None
+        ):
+            logger.info(f"⏭️ [BB-044] correct_consumed_meal no-op sobre {_mid} ('{_old_name}'): datos idénticos.")
+            _nota_total = _nota_total_del_dia(user_id, 0)
+            return (
+                f"Registro confirmado sin cambios ('{_old_name}' ya tenía estos mismos datos: "
+                f"{_old_cal} kcal, {_old_prot}g proteína).{_nota_total} "
+                f"[ID_REGISTRO_DIARIO: {_mid} — uso interno tuyo, NO se lo menciones ni se lo leas al usuario.]"
+            )
 
     # [BB-027 / P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04]
     # Hook de Promoción y Degradación de Complementos en correcciones
@@ -2594,8 +2673,9 @@ def correct_consumed_meal(
             _dias_fila = _dias_atras_de_fila(user_id, (_fila or {}).get("consumed_at"))
             if _dias_fila is not None:
                 _nota_total = _nota_total_del_dia(user_id, _dias_fila)
+        _prev_str = f" ('{_old_name}' en {_old_type})" if (_fila and _old_name) else ""
         return (
-            f"¡Corregido! Actualicé el registro existente ({detalle}) — no se creó "
+            f"¡Corregido! Actualicé el registro existente{_prev_str} ({detalle}) — no se creó "
             f"ninguna fila nueva.{_nota_nevera}{_nota_total} [ID_REGISTRO_DIARIO: {updated_id} — uso interno "
             f"tuyo, NO se lo menciones ni se lo leas al usuario.]"
         )
