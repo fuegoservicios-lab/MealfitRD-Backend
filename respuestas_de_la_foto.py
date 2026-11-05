@@ -540,11 +540,12 @@ def instruccion_solo_foto(vision) -> str:
 
 
 NOTA_REINTENTO = (
-    "ALTO. El usuario te está ANOTANDO el plato de la foto (te la mandó sola, contestó sus dudas o te dijo qué comida "
-    "es) y terminaste "
-    "el turno sin registrarlo. Llama AHORA a `log_consumed_meal` con las cifras del plato YA ajustadas a lo que contestó "
-    "y el `meal_type` que dijo (o el de la hora si no lo dijo). Solo si dijo que todavía no se "
-    "lo ha comido, o te pregunta si puede comerlo, no registres nada: vuelve a escribir tu respuesta COMPLETA sin darlo "
+    "ALTO. El usuario te está ANOTANDO el plato de la foto (te la mandó sola, contestó sus dudas, especificó detalles/porciones o te dijo qué comida "
+    "es) y terminaste el turno sin registrarlo. "
+    "En una aplicación de diario nutricional, enviar la foto de un plato implica consumo inmediato. Llama AHORA a `log_consumed_meal` con las cifras del plato "
+    "YA ajustadas a lo que contestó/especificó y el `meal_type` que dijo (o el de la hora si no lo dijo). "
+    "ESTÁ TERMINANTEMENTE PROHIBIDO pedir confirmación redundante (como «¿ya te lo comiste?», «¿la comiste hoy?» o «no confirma que fuera comida consumida»). "
+    "Solo si dijo explícitamente que todavía no se lo ha comido, o te pregunta si puede comerlo, no registres nada: vuelve a escribir tu respuesta COMPLETA sin darlo "
     "por registrado. Esta nota es interna: el usuario NO la ve; no la menciones ni te disculpes por ella."
 )
 
@@ -555,11 +556,70 @@ _RE_PORCION_EXTRA_FOTO = re.compile(
 )
 
 
+_RE_DETALLE_O_PORCION = re.compile(
+    r"\b(?:\d+(?:[.,]\d+)?|\d+/\d+|un|una|dos|tres|cuatro|cinco|medio|media|poco|poca|pico)\s*"
+    r"(?:cucharad[as]*|cdas?|cditas?|cucharaditas?|gramos?|g|oz|onzas?|tazas?|rebanadas?|lonchas?|rodajas?|"
+    r"trozos?|pedazos?|unidades?|piezas?|vasos?|porci[oó]n|porciones|platos?)\b"
+    r"|\b(?:1\.5|2\.5|0\.5)\b"
+    r"|\b\d+\s*a\s*\d+\s*(?:cucharad[as]*|cdas?|gramos?|onzas?|rebanadas?|piezas?|porciones)\b"
+    r"|\b(?:con|sin|de|solo|mas|menos)\s+[a-z]+",
+    re.IGNORECASE
+)
+
+
+def es_detalle_o_porcion_de_comida(texto: str) -> bool:
+    """[BB-036] Verifica si el texto aporta una porción, cantidad o detalle de ingrediente/preparación
+    (ej. «1.5 a 2 cucharadas», «2 rebanadas», «con mantequilla de maní») sin ser una pregunta."""
+    t = str(texto or "").strip()
+    if not t or "?" in t or "¿" in t or len(t.split()) > 15:
+        return False
+    norm = _plano(t)
+    if any(q in norm for q in ("puedo comer", "debo comer", "cuantas calorias", "como se prepara", "es saludable")):
+        return False
+    return bool(_RE_DETALLE_O_PORCION.search(norm))
+
+
+def detectar_slot_de_nudge_reciente(recent_messages: list | None) -> str | None:
+    """[BB-036] Detecta si el mensaje más reciente del coach/asistente fue una invitación, recordatorio
+    o pregunta proactiva sobre una franja de comida específica (merienda, almuerzo, cena, desayuno)."""
+    if not recent_messages:
+        return None
+    for msg in reversed(recent_messages):
+        is_ai = False
+        content = ""
+        if isinstance(msg, dict):
+            role = str(msg.get("role") or msg.get("sender") or "").lower()
+            if role in ("model", "assistant", "ai"):
+                is_ai = True
+                content = str(msg.get("content") or "")
+        elif hasattr(msg, "content"):
+            c_name = msg.__class__.__name__
+            m_type = str(getattr(msg, "type", "")).lower()
+            if c_name == "AIMessage" or m_type in ("ai", "assistant", "model"):
+                is_ai = True
+                content = str(getattr(msg, "content", "") or "")
+
+        if not is_ai or not content:
+            continue
+
+        norm = _plano(content)
+        if any(w in norm for w in ("merendar", "merienda", "merendaste", "pausa para merendar", "tu merienda")):
+            return "merienda"
+        if any(w in norm for w in ("cenar", "cena", "cenaste", "para cenar", "tu cena")):
+            return "cena"
+        if any(w in norm for w in ("almorzar", "almuerzo", "almorzaste", "para almorzar", "tu almuerzo")):
+            return "almuerzo"
+        if any(w in norm for w in ("desayunar", "desayuno", "desayunaste", "para desayunar", "tu desayuno")):
+            return "desayuno"
+        break
+    return None
+
+
 def _prompt_indica_porcion_extra(prompt) -> bool:
     return bool(_RE_PORCION_EXTRA_FOTO.search(_plano(prompt)))
 
 
-def marcar_rotulo(vision, prompt):
+def marcar_rotulo(vision, prompt, recent_messages: list | None = None):
     """El `vision` con `rotulo` cuando el texto del turno es el rótulo de una foto de plato (y no hay respuestas: con
     ellas manda su propia regla). Sin rótulo, el MISMO objeto."""
     if not isinstance(vision, dict):
@@ -581,9 +641,24 @@ def marcar_rotulo(vision, prompt):
         # (ej. «Desayuné\n2 huevos»), preservamos el rótulo para que el system prompt sepa el meal_type.
         if _extraida_del_prompt:
             tipo = rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt)
+            if not tipo and recent_messages:
+                tipo = detectar_slot_de_nudge_reciente(recent_messages)
+            if tipo:
+                return dict(vision, rotulo=tipo)
+        elif recent_messages:
+            tipo = detectar_slot_de_nudge_reciente(recent_messages)
             if tipo:
                 return dict(vision, rotulo=tipo)
         return vision
     if es_solo_foto(prompt):   # [P1-PLAN-LOTE-687] sin texto no hay rótulo: la foto sola manda
+        slot_nudge = detectar_slot_de_nudge_reciente(recent_messages) if recent_messages else None
+        if slot_nudge:
+            return dict(vision, solo_foto=True, rotulo=slot_nudge)
         return dict(vision, solo_foto=True)
-    return dict(vision, rotulo=rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt))
+
+    tipo = rotulo_de_comida(prompt) or tipo_de_comida_en_texto(prompt)
+    if not tipo and recent_messages and (es_detalle_o_porcion_de_comida(prompt) or len(str(prompt or "").split()) <= 4):
+        # [BB-036] El usuario respondió con una porción/detalle tras un nudge o recordatorio previo del coach
+        tipo = detectar_slot_de_nudge_reciente(recent_messages)
+
+    return dict(vision, rotulo=tipo)

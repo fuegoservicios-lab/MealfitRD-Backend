@@ -7372,7 +7372,7 @@ def _plate_photos_from_vision(vision) -> list:
 
 
 def _registro_es_la_foto(args: dict, foto: dict) -> bool:
-    """¿Este `log_consumed_meal` es la comida de la foto? Por NOMBRE (un alimento en común) o por kcal (±30 %).
+    """¿Este `log_consumed_meal` es la comida de la foto? Por NOMBRE (alimentos en común) o por kcal (±30 %).
     Los ingredientes no cuentan: «queso al gusto» de unos tacos casaba con el queso del desayuno."""
     if not isinstance(args, dict):
         return False
@@ -7382,13 +7382,20 @@ def _registro_es_la_foto(args: dict, foto: dict) -> bool:
     except (TypeError, ValueError):
         kcal, kcal_foto = 0.0, 0.0
 
-    # [P1-PLATE-PHOTO-INTEGRITY · 2026-10-21] Si el plato de la foto tiene una estimación sustancial (>= 200 kcal),
-    # un registro con menos del 50% de las calorías de la foto NO es la comida de la foto: el modelo redujo un plato
-    # completo a un solo ingrediente/snack (ej. 143 kcal de huevos en un plato de 535 kcal con plátano y queso).
-    if kcal_foto >= 200 and kcal > 0 and kcal < 0.50 * kcal_foto:
-        return False
+    tokens_reg = _tokens_de_comida(args.get("meal_name"))
+    tokens_foto = _tokens_de_comida(foto.get("desc"))
+    comunes = tokens_reg & tokens_foto
 
-    if _tokens_de_comida(args.get("meal_name")) & _tokens_de_comida(foto.get("desc")):
+    # [P1-PLATE-PHOTO-INTEGRITY · 2026-10-21 / BB-036] Si el plato de la foto tiene una estimación sustancial (>= 200 kcal),
+    # un registro con menos del 50% de las calorías de la foto solo se descarta si faltan alimentos clave
+    # del plato (ej. 143 kcal de huevos en un plato de 535 kcal con plátano y queso).
+    # Pero si el registro incluye la gran mayoría de alimentos del plato (ej. tortita de arroz con mantequilla de maní
+    # ajustada por porción real), o el nombre coincide sustancialmente, SÍ es la comida de la foto.
+    if kcal_foto >= 200 and kcal > 0 and kcal < 0.50 * kcal_foto:
+        if not comunes or (tokens_foto and len(comunes) / len(tokens_foto) < 0.50):
+            return False
+
+    if comunes:
         return True
     return kcal > 0 and kcal_foto > 0 and abs(kcal - kcal_foto) <= 0.30 * kcal_foto
 
@@ -7535,7 +7542,8 @@ def nudge_plate_photo(state: ChatState):
                 f"el plato completo: {lista}.\n"
                 f"NO registres una segunda comida como merienda ni dupliques el diario. Usa `correct_consumed_meal` con el "
                 f"ID_REGISTRO_DIARIO recién creado para unificarlo en el PLATO COMPLETO («{lista}») con las calorías del análisis "
-                f"(~{kcal_foto} kcal) y meal_type='{prev_type}'."
+                f"(~{kcal_foto} kcal) y meal_type='{prev_type}'.\n"
+                f"PROHIBIDO preguntar si se lo comió o pedir confirmaciones innecesarias: esa comida ya fue consumida."
             ))],
             "plate_photo_retried": True,
         }
@@ -7543,11 +7551,13 @@ def nudge_plate_photo(state: ChatState):
     return {
         "messages": [SystemMessage(content=(
             f"ALTO. En este turno el usuario te mandó la foto de un plato que NO registraste: {lista}. Lo que "
-            "registraste en este turno es OTRA comida.\n"
-            "Si el usuario dijo que se comió lo de la foto («este fue el desayuno», «me comí esto»), llama AHORA a "
-            "`log_consumed_meal` para ESA comida, como un registro APARTE: con las cifras del análisis de la foto y el "
-            "`meal_type` que él dijo (o el más probable por la hora si no lo dijo).\n"
-            "Si ya la registraste con otro nombre en este turno, o él NO dijo que se la comiera, no registres nada: "
+            "registraste en este turno es OTRA comida o no abarcó este plato.\n"
+            "En esta app de diario nutricional, si el usuario manda la foto de un plato de comida y no dice expresamente que aún "
+            "no se lo ha comido ni pregunta si puede comerlo, ESA COMIDA SE CONSIDERA CONSUMIDA. Llama AHORA a "
+            "`log_consumed_meal` para registrarla con el PLATO COMPLETO, como un registro APARTE: con las cifras del análisis "
+            "(o ajustadas si aclaró porciones) y el `meal_type` correspondiente (o el más probable por la hora si no lo dijo).\n"
+            "PROHIBIDO TERMINANTEMENTE pedir confirmaciones absurdas (ej. «¿la comiste hoy?», «no confirma que fuera comida consumida», «¿te la anoto?»). "
+            "Solo si el usuario dijo explícitamente que todavía no se lo ha comido o preguntó si puede comerlo, no registres nada: "
             "vuelve a escribir tu respuesta COMPLETA sin darla por registrada.\n"
             "El total del día sale del resultado de la herramienta («TOTAL REAL DE HOY»), no de tu cuenta. Esta nota "
             "es interna: el usuario NO la ve, así que no la menciones ni te disculpes por ella — tu respuesta nueva "
@@ -9819,9 +9829,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
     _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
     _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
-    # [P1-PLAN-LOTE-694] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
+    # [P1-PLAN-LOTE-694 / BB-036] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
     from respuestas_de_la_foto import marcar_rotulo, preparar_vision, foto_para_anotar as _foto_para_anotar
     vision = marcar_rotulo(vision, prompt)
+    if memory and isinstance(memory, dict) and memory.get("recent_messages"):
+        vision = marcar_rotulo(vision, prompt, recent_messages=memory["recent_messages"])
     vision = preparar_vision(vision)
 
     # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
