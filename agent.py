@@ -5298,6 +5298,17 @@ def execute_tools(state: ChatState):
                             f"{tool_args.get('days_ago')} → {_dias_corregido} (día biológico activo en curso)"
                         )
                         tool_args["days_ago"] = _dias_corregido
+                # [BB-034 / P1-COMPARATIVE-YESTERDAY-TEMPLATE · 2026-11-05]
+                # Si el usuario dice "desayuné el mismo desayuno de ayer pero sin el atún", "almorcé lo mismo de ayer", etc.:
+                # la comida se consumió HOY (days_ago=0). Si el LLM erróneamente pasó days_ago > 0, se fuerza a 0.
+                if tool_name == "log_consumed_meal" and tool_args.get("days_ago"):
+                    _last_user_txt = _extraer_ultimo_texto_usuario(state.get("messages") or [])
+                    if es_plantilla_comparativa_ayer(_last_user_txt):
+                        logger.info(
+                            f"📅 [BB-034 / YESTERDAY-TEMPLATE] Override days_ago {tool_args.get('days_ago')} → 0: "
+                            f"el usuario usó 'ayer' como plantilla comparativa ('{_last_user_txt[:60]}...')."
+                        )
+                        tool_args["days_ago"] = 0
                 # Repeat permission comes from a human statement, never the model's choice of slot.
                 from meal_registration_time import confirmed_repeat_consumption, explicit_repeat_consumption
                 _repeat_confirmed = confirmed_repeat_consumption(
@@ -5923,6 +5934,48 @@ def _reply_claims_diary_write(text: str) -> bool:
 _RE_DIA_ANTEAYER = re.compile(r"\b(?:anteayer|antier|antes de ayer)\b", re.IGNORECASE)
 _RE_DIA_AYER = re.compile(r"\b(?:ayer|anoche)\b", re.IGNORECASE)
 _RE_DIA_HOY = re.compile(r"\b(?:hoy|esta mañana|ahorita)\b", re.IGNORECASE)
+
+# [BB-034 / P1-COMPARATIVE-YESTERDAY-TEMPLATE · 2026-11-05]
+# Regexes para detectar el uso de 'ayer'/'anoche' como plantilla comparativa de alimentos (receta o ingredientes a replicar/adaptar)
+# vs. evento histórico real (cuándo se consumió).
+_RE_PLANTILLA_COMPARATIVA_AYER = re.compile(
+    r"\b(?:"
+    r"(?:el\s+mismo|la\s+misma|los\s+mismos|las\s+mismas)\b[^.\n]{0,35}?\b(?:de\s+(?:ayer|anoche)|que\s+(?:ayer|anoche))|"
+    r"(?:lo\s+mismo|igual)\s+(?:que|a|de)\s+(?:lo\s+de\s+)?(?:ayer|anoche)|"
+    r"(?:igual\s+al?\s+(?:de\s+)?(?:ayer|anoche))|"
+    r"(?:desayun[eé]|almorc[eé]|cen[eé]|com[ií]|merend[eé])\b[^.\n]{0,25}?\b(?:lo\s+mismo|igual|lo\s+de|el\s+mismo|la\s+misma)\b[^.\n]{0,25}?\b(?:ayer|anoche)|"
+    r"\blo\s+de\s+(?:ayer|anoche)\b"
+    r")\b",
+    re.IGNORECASE
+)
+
+_RE_EVENTO_HISTORICO_EXPLICITO = re.compile(
+    r"\b(?:eso\s+fue\s+(?:ayer|anoche)|fue\s+(?:ayer|anoche)|ayer\s+en\s+la|se\s+me\s+olvid[oó]\b[^.\n]{0,20}\b(?:ayer|anoche)|^(?:ayer|anoche)\b)\b",
+    re.IGNORECASE
+)
+
+
+def es_plantilla_comparativa_ayer(texto: str) -> bool:
+    """[BB-034 / P1-COMPARATIVE-YESTERDAY-TEMPLATE · 2026-11-05]
+    Retorna True si el texto usa 'ayer' o 'anoche' como plantilla comparativa de alimentos o receta
+    ('el mismo desayuno de ayer pero sin X', 'lo mismo de ayer', 'igual que ayer', 'lo de ayer')
+    para referirse a una comida consumida HOY (days_ago=0), y no a un evento histórico de ayer."""
+    if not texto or not isinstance(texto, str):
+        return False
+    if _RE_EVENTO_HISTORICO_EXPLICITO.search(texto.strip()):
+        return False
+    return bool(_RE_PLANTILLA_COMPARATIVA_AYER.search(texto))
+
+
+def _extraer_ultimo_texto_usuario(messages: list) -> str:
+    """Extrae el texto plano del último HumanMessage en la lista de mensajes."""
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage):
+            c = msg.content
+            return c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict)
+            )
+    return ""
 
 
 _RE_ID_REGISTRO_DIARIO = re.compile(r"\[ID_REGISTRO_DIARIO:\s*([0-9a-fA-F-]{8,64})\b")
@@ -7095,6 +7148,15 @@ def _days_ago_named_by_user(
                 return None
             if _RE_DIA_ANTEAYER.search(texto):
                 return 2
+            # [BB-034 / P1-COMPARATIVE-YESTERDAY-TEMPLATE · 2026-11-05]
+            # Si el usuario usó 'ayer' como plantilla comparativa ('el mismo desayuno de ayer',
+            # 'lo mismo que ayer', 'lo de ayer'), la comida se consumió HOY. No aplica days_ago=1.
+            if es_plantilla_comparativa_ayer(texto):
+                logger.info(
+                    f"📅 [BB-034 / YESTERDAY-TEMPLATE] 'ayer' detectado como plantilla comparativa en "
+                    f"'{texto[:60]}...': se conserva days_ago=0 (hoy)."
+                )
+                return None
             return 1 if _RE_DIA_AYER.search(texto) else None
     return None
 
