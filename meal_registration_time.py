@@ -69,6 +69,23 @@ _RE_EXPLICIT_MEAL_SLOT = re.compile(
     re.IGNORECASE,
 )
 
+# [BB-046] Marcadores temporales de momentos de consumo en el da (ej. "a las 12", "a la noche", "al medioda")
+_RE_TEMPORAL_MEAL_MARKERS = re.compile(
+    r'\b(?:a\s+las?\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm|del?\s+mediod[ií]a|de\s+la\s+(?:ma[nñ]ana|tarde|noche)))?|'
+    r'al\s+mediod[ií]a|(?:a|en|por)\s+la\s+(?:noche|ma[nñ]ana|tarde|madrugada)|'
+    r'de\s+(?:noche|ma[nñ]ana|tarde)|m[aá]s\s+tarde|luego|despu[eé]s)\b',
+    re.IGNORECASE,
+)
+
+
+def count_meal_indicators_in_text(text: str) -> int:
+    """[BB-046] Cuenta cuntas comidas o momentos del da distintos menciona el usuario en su mensaje."""
+    if not text or not isinstance(text, str):
+        return 0
+    slot_matches = set(_RE_EXPLICIT_MEAL_SLOT.findall(text))
+    time_matches = _RE_TEMPORAL_MEAL_MARKERS.findall(text)
+    return max(len(slot_matches), len(time_matches), len(slot_matches) + len(time_matches))
+
 
 def explicit_slot_named_by_user(messages) -> bool:
     """Returns True if the user explicitly named the meal slot (e.g. 'Merendé esto', 'mi cena', 'almorcé')."""

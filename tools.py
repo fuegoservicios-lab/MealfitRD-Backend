@@ -1664,6 +1664,18 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                 _ahora_calc = (float(_ahora) + 24.0) if float(_ahora) < 4.0 else float(_ahora)
                 _pasadas, _proximas = _comidas_por_hora(_faltan, _ahora_calc, _horas_tipicas_de_comida(user_id))
                 _hora_txt = _fmt_hora_float(_ahora)
+
+                # [BB-048] A altas horas de la noche (21:00+ o 00:00-04:00):
+                # No insistir en el desayuno de hace 14 horas ni preguntar "o estuviste en ayunas".
+                if (float(_ahora) >= 21.0 or float(_ahora) < 4.0) and "desayuno" in _pasadas:
+                    _pasadas = [p for p in _pasadas if p != "desayuno"]
+
+                if not _proximas and not _pasadas:
+                    return (
+                        f" (Para el asistente: son las {_hora_txt} y el día ya cerró: confirma la anotación "
+                        f"de forma limpia y directa sin preguntar por el desayuno ni insistir en comidas pasadas.)"
+                    )
+
                 if _proximas:
                     _prox = _proximas[0]
                     _prox_h = _horas_tipicas_de_comida(user_id).get(_prox, _HORA_TIPICA_DE_COMIDA.get(_prox, 12.0))

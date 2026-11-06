@@ -4994,13 +4994,30 @@ def _tokens_alimento_plato(text: str) -> set[str]:
     return {w for w in words if w not in _STOPWORDS_PLATO_TURNO}
 
 
+def _token_match(tok_a: str, tok_b: str) -> bool:
+    """[BB-046] Coincidencia morfológica flexible: exacta, o prefijo/raíz común >= 4 letras (ej. chofa vs chofan)."""
+    if tok_a == tok_b:
+        return True
+    if len(tok_a) >= 4 and len(tok_b) >= 4:
+        if tok_a.startswith(tok_b) or tok_b.startswith(tok_a):
+            return True
+        min_l = min(len(tok_a), len(tok_b))
+        if min_l >= 4 and tok_a[:min_l] == tok_b[:min_l]:
+            return True
+    return False
+
+
+def _tokens_coinciden(tokens_a: set[str], tokens_b: set[str]) -> bool:
+    """[BB-046] Verifica si algún token de tokens_a coincide morfológicamente con algún token de tokens_b."""
+    return any(_token_match(a, b) for a in tokens_a for b in tokens_b)
+
+
 def _es_segundo_plato_distinto_del_turno(
     tool_args: dict, messages: list, user_text: str, current_tool_id: Optional[str] = None
 ) -> bool:
-    """[BB-014 · 2026-11-01] Determina si una segunda llamada a `log_consumed_meal` en el mismo
+    """[BB-014 · 2026-11-01 / BB-046 · 2026-11-06] Determina si una segunda llamada a `log_consumed_meal` en el mismo
     turno registra un segundo plato genuinamente distinto mencionado por el usuario en su mensaje
-    (ej. 'De comida un bowl de pasta con pollo y de cena un steak de res'), en vez de clonar
-    el mismo plato en otra franja."""
+    (ej. 'A las 12 sancocho y a la noche un chofa'), en vez de clonar el mismo plato en otra franja."""
     if not isinstance(tool_args, dict):
         return False
     new_name = str(tool_args.get("meal_name") or "").strip()
@@ -5044,11 +5061,22 @@ def _es_segundo_plato_distinto_del_turno(
     if not prev_tokens:
         return False
 
-    # El nuevo plato debe aportar palabras de alimento presentes en el texto del usuario
-    # que NO estaban en el primer plato, y el primer plato también debe tener sus propias palabras en el texto.
-    exclusivos_nuevos_en_usuario = (new_tokens - prev_tokens) & user_tokens
-    exclusivos_previos_en_usuario = (prev_tokens - new_tokens) & user_tokens
-    return bool(exclusivos_nuevos_en_usuario and exclusivos_previos_en_usuario)
+    # [BB-046] El nuevo plato debe aportar alimentos presentes en el texto del usuario
+    # que no estaban en el primero, usando coincidencia morfológica para jerga ('chofa' -> 'chofán').
+    exclusivos_nuevos = new_tokens - prev_tokens
+    exclusivos_previos = prev_tokens - new_tokens
+    nuevo_en_usuario = _tokens_coinciden(exclusivos_nuevos, user_tokens)
+    previo_en_usuario = _tokens_coinciden(exclusivos_previos, user_tokens)
+
+    if nuevo_en_usuario and previo_en_usuario:
+        return True
+
+    # [BB-046] Si el meal_type es distinto y los alimentos de ambos platos no se solapan:
+    if new_type and new_type not in prev_types and not _tokens_coinciden(new_tokens, prev_tokens):
+        if nuevo_en_usuario or previo_en_usuario:
+            return True
+
+    return False
 
 
 _SLOT_PATTERNS_PREGUNTA = {
@@ -5592,8 +5620,11 @@ def execute_tools(state: ChatState):
                                 break
                         if isinstance(_user_text, list):
                             _user_text = " ".join(str(p.get("text", "")) for p in _user_text if isinstance(p, dict))
-                        from meal_registration_time import _RE_EXPLICIT_MEAL_SLOT
-                        _slots_en_texto = len(_RE_EXPLICIT_MEAL_SLOT.findall(str(_user_text)))
+                        from meal_registration_time import _RE_EXPLICIT_MEAL_SLOT, count_meal_indicators_in_text
+                        _slots_en_texto = max(
+                            len(_RE_EXPLICIT_MEAL_SLOT.findall(str(_user_text))),
+                            count_meal_indicators_in_text(str(_user_text)),
+                        )
                         if (
                             _num_fotos <= 1
                             and _slots_en_texto < 2
@@ -5607,10 +5638,9 @@ def execute_tools(state: ChatState):
                             )
                             tool_result = (
                                 "ERROR: Ya registraste la comida de este turno. "
-                                "Está TERMINANTEMENTE PROHIBIDO registrar el mismo plato o foto en una segunda franja "
-                                "(ej. duplicarlo como almuerzo y desayuno). Si falta otra comida por registrar en el día, "
-                                "SOLO debes preguntarle al usuario al cerrar qué comió o si estuvo en ayunas; "
-                                "NO llames a log_consumed_meal de nuevo."
+                                "Está TERMINANTEMENTE PROHIBIDO duplicar o registrar el mismo plato en una segunda franja. "
+                                "Confirma de forma limpia y cálida al usuario qué comida quedó anotada con sus calorías y macros; "
+                                "PROHIBIDO TERMINANTEMENTE decirle al usuario frases técnicas como 'el diario solo aceptó el primer registro' o mencionar fallos del sistema."
                             )
                             tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
                             continue
