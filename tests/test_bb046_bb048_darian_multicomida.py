@@ -135,3 +135,49 @@ def test_bb048_no_pregunta_por_desayuno_tarde_en_la_noche():
         assert "estuviste en ayunas" not in res
         assert "Hoy sigue sin registrar desayuno" not in res
         assert "el día ya cerró" in res
+
+
+# ==============================================================================
+# BB-051 / BB-052: Protocolo de Catch-up Nocturno Cálido y Supresión con Múltiples Faltantes
+# ==============================================================================
+
+def test_bb051_no_pregunta_por_desayuno_ni_merienda_con_multiples_faltantes_en_noche():
+    """A las 10:55 PM, aun si faltaban desayuno y merienda en el plan, no interroga sobre ellos."""
+    with patch("tools._diary_date_str_for_user", return_value="2026-11-05"), \
+         patch("tools.user_tz_offset_min", return_value=0), \
+         patch("tools._hora_local_float", return_value=22.9), \
+         patch("db_facts.get_consumed_meals_today", return_value=[]), \
+         patch("tools.get_latest_usable_meal_plan", return_value=None), \
+         patch("chat_history_context.comidas_sin_registrar", return_value=["desayuno", "merienda"]):
+        
+        res = _nota_comidas_sin_registrar("u1", days_ago=0, ahora_local=22.9)
+        assert "estuviste en ayunas" not in res
+        assert "qué comiste en el desayuno" not in res
+        assert "sigue sin registrar" not in res
+        assert "el día ya cerró" in res
+
+
+def test_bb051_cierre_nocturno_si_ya_ceno():
+    """Si la cena ya fue registrada en el día y son más de las 21:00, no insiste en comidas pasadas."""
+    cena_row = {"meal_type": "cena", "meal_name": "Chofán", "calories": 650, "protein": 28}
+    with patch("tools._diary_date_str_for_user", return_value="2026-11-05"), \
+         patch("tools.user_tz_offset_min", return_value=0), \
+         patch("tools._hora_local_float", return_value=22.9), \
+         patch("db_facts.get_consumed_meals_today", return_value=[cena_row]), \
+         patch("tools.get_latest_usable_meal_plan", return_value=None), \
+         patch("chat_history_context.comidas_sin_registrar", return_value=["desayuno", "almuerzo"]):
+        
+        res = _nota_comidas_sin_registrar("u1", days_ago=0, ahora_local=22.9)
+        assert "estuviste en ayunas" not in res
+        assert "qué comiste en el desayuno" not in res
+        assert "sigue sin registrar" not in res
+        assert "el día ya cerró" in res
+
+
+def test_bb051_prompt_instrucciones_catchup_nocturno_calido():
+    """El prompt del chat agent contiene la directiva BB-051 de empatía y prohibición de interrogatorio tardío."""
+    from prompts.chat_agent import _REGLA_UNA_LLAMADA_POR_COMIDA
+    assert "[BB-051 / P1-CATCHUP-NOCTURNO-CALIDO" in _REGLA_UNA_LLAMADA_POR_COMIDA
+    assert "Apertura empática y natural" in _REGLA_UNA_LLAMADA_POR_COMIDA
+    assert "Supresión total de interrogatorios matutinos" in _REGLA_UNA_LLAMADA_POR_COMIDA
+    assert "Cierre de descanso" in _REGLA_UNA_LLAMADA_POR_COMIDA

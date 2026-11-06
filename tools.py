@@ -1665,15 +1665,21 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                 _pasadas, _proximas = _comidas_por_hora(_faltan, _ahora_calc, _horas_tipicas_de_comida(user_id))
                 _hora_txt = _fmt_hora_float(_ahora)
 
-                # [BB-048] A altas horas de la noche (21:00+ o 00:00-04:00):
-                # No insistir en el desayuno de hace 14 horas ni preguntar "o estuviste en ayunas".
-                if (float(_ahora) >= 21.0 or float(_ahora) < 4.0) and "desayuno" in _pasadas:
-                    _pasadas = [p for p in _pasadas if p != "desayuno"]
+                # [BB-048 / BB-051] A altas horas de la noche (21:00+ o 00:00-04:00):
+                # Si ya cenó o son altas horas de la noche, NO insistir en desayuno, merienda ni comidas pasadas del día.
+                if float(_ahora) >= 21.0 or float(_ahora) < 4.0:
+                    _pasadas = [p for p in _pasadas if p not in ("desayuno", "merienda")]
+                    _faltan = [p for p in _faltan if p not in ("desayuno", "merienda")]
+                    _tipos_dia = {str(r.get("meal_type") or "").lower() for r in _rows_dia if isinstance(r, dict)}
+                    if "cena" in _tipos_dia:
+                        _pasadas = []
+                        _faltan = []
 
                 if not _proximas and not _pasadas:
                     return (
                         f" (Para el asistente: son las {_hora_txt} y el día ya cerró: confirma la anotación "
-                        f"de forma limpia y directa sin preguntar por el desayuno ni insistir en comidas pasadas.)"
+                        f"de forma limpia y directa sin preguntar por el desayuno ni insistir en comidas pasadas. "
+                        f"Si el usuario se está poniendo al día con varias comidas, sé cálido y deséale una feliz noche o buen descanso.)"
                     )
 
                 if _proximas:
@@ -1702,10 +1708,10 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                 if _pasadas:
                     _omision_pas = (
                         "o si estuvo en ayunas"
-                        if "desayuno" in _faltan
+                        if "desayuno" in _pasadas
                         else "o si no comió esa comida / se la saltó (ej. «¿qué comiste en el almuerzo de hoy, o no almorzaste?»; NUNCA digas «estuviste en ayunas» si ya desayunó)"
                     )
-                    return (f" (Para el asistente: son las {_hora_txt}. {_dia_txt} sigue sin registrar {', '.join(_faltan)} "
+                    return (f" (Para el asistente: son las {_hora_txt}. {_dia_txt} sigue sin registrar {', '.join(_pasadas)} "
                             f"(ya pasó su hora) — cierra ofreciendo agregar LA QUE FALTA por su nombre, en una pregunta corta "
                             f"sobre qué comió para anotarlo {_omision_pas} (nunca «cuando la comas», ni «¿te propongo algo para comer?», ni la "
                             f"pregunta genérica de si le falta algo).{_NO_INSISTAS})")
