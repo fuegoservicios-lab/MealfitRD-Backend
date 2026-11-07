@@ -6366,8 +6366,10 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
     Propone una comida o receta A LA MEDIDA de lo que al usuario le falta hoy. Devuelve hasta 3 platos del catálogo de
     recetas con gramos, macros calculadas con la tabla de alimentos, tiempo, pasos y qué tiene ya en su Nevera —
     filtrados por sus alergias, dieta y rechazos. NO registra nada ni toca el plan.
-    Úsala cuando pida qué comer, una idea de comida o una receta ('dame una receta para hoy', 'dame una comida para el
+    Úsala ÚNICAMENTE cuando pida qué comer, una idea de comida o una receta ('dame una receta para hoy', 'dame una comida para el
     desayuno', 'qué ceno con lo que tengo', 'necesito algo con más proteína').
+    [BB-058] PROHIBIDO usar cuando el usuario mencione un alimento, marca o producto aislado (ej. 'lata de atun genova', '2 huevos')
+    sin pedir receta: en esos casos es un reporte de consumo para log_consumed_meal o clarificación de comida consumida.
     - meal_type: 'desayuno' | 'almuerzo' | 'merienda' | 'cena'. Si el usuario no lo dice, déjalo vacío: se deduce de la
       hora y de lo que le falta por registrar.
     - kcal_objetivo / proteina_objetivo: SOLO si el usuario pide una cifra ('algo de 400 calorías', 'con 40 g de
