@@ -5399,26 +5399,52 @@ def log_water_glass(user_id: str, count_delta: float = 1) -> str:
     Usa esta herramienta cuando el usuario diga que se tomo agua o que se equivoco:
     - 'me tome un vaso' / 'marca uno mas' → count_delta=1 (default)
     - 'me tome un sorbo / medio vaso' → count_delta=0.5
+    - 'una botella de agua' (500 ml / 16.9 oz) → count_delta=2
+    - 'media botella' → count_delta=1
+    - '3/4 botella' → count_delta=1.5
+    - '1 litro de agua' → count_delta=4
+    - 'termo 32 oz' → count_delta=4
     - 'me tome 3 vasos seguidos' → count_delta=3
     - 'borra el ultimo / me equivoque' → count_delta=-1
     - 'resetea el dia' → primero check_hydration_today para saber el conteo
       actual N, luego log_water_glass(count_delta=-N).
 
+    EQUIVALENCIAS ESTÁNDAR DE ENVASES COTIDIANOS (1 vaso = 250 ml / 8 oz):
+    - 1 botella comercial estándar (500 ml / 16.9 oz) = 2 vasos (count_delta=2)
+    - 1/2 botella de agua (250 ml) = 1 vaso (count_delta=1)
+    - 3/4 botella de agua (~375 ml) = 1.5 vasos (count_delta=1.5)
+    - 1 litro de agua = 4 vasos (count_delta=4)
+    - 1 termo mediano (20–24 oz / ~600–700 ml) = 2.5 vasos (count_delta=2.5)
+    - 1 termo grande / Stanley (32–40 oz / ~1–1.2 L) = 4 a 5 vasos (count_delta=4 o 5)
+
     Para SETEAR un valor absoluto (ej: el usuario dice 'llevo 5 vasos'),
     primero usa `check_hydration_today` para saber el conteo actual, calcula
     el delta y pasa ese valor (5 - actual).
 
-    El delta debe ser multiplo de 0.5. El conteo total queda clamped a [0, 50]
-    (cap defensivo de la tabla). Tras la mutacion, incluye SIEMPRE la etiqueta
-    `[UI_ACTION: REFRESH_HYDRATION]` en tu respuesta para que el Dashboard
-    recargue el card de Hidratacion.
+    El delta se redondea automáticamente al múltiplo de 0.5 más cercano.
+    El conteo total queda clamped a [0, 50] (cap defensivo de la tabla).
+    Tras la mutacion, incluye SIEMPRE la etiqueta `[UI_ACTION: REFRESH_HYDRATION]`
+    en tu respuesta para que el Dashboard recargue el card de Hidratacion.
     """
     logger.info(f"💧 [TOOL EXECUTION] log_water_glass user={user_id} delta={count_delta}")
-    # [P3-WATER-HALF-GLASS · 2026-06-24] Acepta enteros y medios vasos (0.5).
+    # [P3-WATER-HALF-GLASS · 2026-06-24 / BB-054 · 2026-11-06] Acepta enteros y medios vasos (0.5).
     if isinstance(count_delta, bool) or not isinstance(count_delta, (int, float)):
         return "Error: el delta de vasos debe ser numerico (positivo para sumar, negativo para restar)."
-    if (count_delta * 2) != int(count_delta * 2):
-        return "Error: el delta debe ser multiplo de 0.5 (medio vaso)."
+
+    # [BB-054] Auto-redondeo defensivo al múltiplo de 0.5 más cercano (ej. 0.75 → 1.0, 0.3 → 0.5, 1.25 → 1.5).
+    # Previene que el agente reciba errores técnicos y los traslade al usuario final.
+    raw_delta = float(count_delta)
+    import math
+    if raw_delta >= 0:
+        count_delta = math.floor(raw_delta * 2.0 + 0.5) / 2.0
+    else:
+        count_delta = math.ceil(raw_delta * 2.0 - 0.5) / 2.0
+
+    if count_delta == 0 and raw_delta > 0:
+        count_delta = 0.5
+    elif count_delta == 0 and raw_delta < 0:
+        count_delta = -0.5
+
     if count_delta == 0:
         return "El delta fue 0 — no se modifico nada."
     count_delta = float(count_delta)

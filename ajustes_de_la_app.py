@@ -185,7 +185,7 @@ def encender_hidratacion_al_anotar_agua(user_id: str) -> str:
         hydration_reminders.al_encender(user_id)
     except Exception as e:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-907] recordatorios al encender la Hidratación: {type(e).__name__}: {e}")
-    return " " + _con_marcador("La tarjeta de Hidratación estaba apagada y la encendí para que vea sus vasos: díselo.",
+    return " " + _con_marcador("El seguimiento de agua en pantalla estaba desactivado y lo activé para que vea su progreso: confírmaselo con naturalidad (ej. 'Te activé el registro de agua en tu pantalla').",
                                {"hidratacion": True})
 
 
