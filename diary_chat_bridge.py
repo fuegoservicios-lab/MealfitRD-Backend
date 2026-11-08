@@ -95,6 +95,24 @@ def get_or_resolve_today_session_for_user(user_id: str, session_id: Optional[str
         return nueva
 
 
+_SUPPLEMENT_NAME_KEYWORDS: tuple[str, ...] = (
+    "mass gainer", "gainer", "weight gainer", "whey", "proteina en polvo", "proteína en polvo",
+    "creatina", "creatine", "bcaa", "caseina", "caseína", "glutamina", "glutamine",
+    "pre entreno", "pre workout", "preentreno", "preworkout", "multivitamin", "multivitamínico",
+    "colageno", "colágeno", "electrolitos", "electrolytes", "omega 3", "omega3",
+    "magnesio", "zinc", "ashwagandha", "melatonina"
+)
+
+
+def _es_suplemento(meal_type: Optional[str], meal_name: str) -> bool:
+    """[BB-062] Determina si un registro corresponde a un suplemento por su franja o nombre comercial."""
+    _tipo = (meal_type or "").strip().lower()
+    if _tipo in ("suplemento", "supplement", "suplementos"):
+        return True
+    _nombre = (meal_name or "").lower()
+    return any(k in _nombre for k in _SUPPLEMENT_NAME_KEYWORDS)
+
+
 def build_sync_turn_texts(
     meal_name: str,
     meal_type: Optional[str],
@@ -107,14 +125,15 @@ def build_sync_turn_texts(
     """
     Construye el texto del mensaje de usuario y la confirmación del Coach.
     """
-    _tipo = (meal_type or "").strip().lower()
-    _is_sup = (_tipo == "suplemento")
+    _tipo_orig = (meal_type or "").strip().lower()
     _nombre = (meal_name or "").strip() or "Comida"
     _cal = int(round(float(calories or 0)))
     _prot = int(round(float(protein or 0)))
+    _is_sup = _es_suplemento(_tipo_orig, _nombre)
+    _tipo = "suplemento" if _is_sup else _tipo_orig
 
     # --- TEXTO DE USUARIO ---
-    if _is_sup:
+    if _tipo_orig in ("suplemento", "supplement", "suplementos"):
         if days_ago == 0:
             user_text = f"Registré mi suplemento: {_nombre}"
         elif days_ago == 1:
@@ -146,25 +165,38 @@ def build_sync_turn_texts(
             header = f"Anoté tu **{_tipo} de ayer**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
         else:
             header = f"Anoté tu **{_tipo} de hace {days_ago} días**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+    elif _tipo == "extra":
+        if days_ago == 0:
+            header = f"Anoté tu **extra**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+        elif days_ago == 1:
+            header = f"Anoté tu **extra de ayer**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+        else:
+            header = f"Anoté tu **extra de hace {days_ago} días**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+    elif _tipo == "complemento":
+        if days_ago == 0:
+            header = f"Anoté tu **complemento**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+        elif days_ago == 1:
+            header = f"Anoté tu **complemento de ayer**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+        else:
+            header = f"Anoté tu **complemento de hace {days_ago} días**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
     else:
         if days_ago == 0:
-            header = f"Anoté tu comida: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+            header = f"Anoté tu **comida**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
         elif days_ago == 1:
-            header = f"Anoté tu comida de ayer: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+            header = f"Anoté tu **comida de ayer**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
         else:
-            header = f"Anoté tu comida de hace {days_ago} días: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
+            header = f"Anoté tu **comida de hace {days_ago} días**: {_nombre}; aprox. **{_cal} kcal** y **{_prot} g de proteína**"
 
     # Cierre / frase de seguimiento
     if days_ago > 0:
         followup = ". No suma a las macros de hoy."
-    elif _is_sup:
-        followup = ". Recuerda que esto no sustituye una comida principal."
     else:
         # Calcular macros restantes de hoy
         consumed_today = []
         if user_id:
             try:
-                consumed_today = get_consumed_meals_today(user_id) or []
+                _tz = _user_tz_offset(user_id)
+                consumed_today = get_consumed_meals_today(user_id, tz_offset_mins=_tz) or []
             except Exception as _ce:
                 logger.debug(f"[diary_chat_bridge] Error leyendo comidas de hoy: {_ce}")
 
@@ -174,25 +206,47 @@ def build_sync_turn_texts(
         target_cals = None
         target_prot = None
         if user_id:
+            # 1. Intentar resolver metas dinámicas del día (SSOT de nutrición para planes dinámicos y contadores) [BB-063]
             try:
-                from db import get_user_profile, get_latest_usable_meal_plan
-                prof = get_user_profile(user_id) or {}
-                hp = prof.get("health_profile") or {}
-                target_cals = hp.get("target_calories")
-                target_prot = hp.get("target_protein")
-                if not target_cals:
-                    plan = get_latest_usable_meal_plan(user_id)
-                    if plan:
-                        target_cals = plan.get("calories")
-                        target_prot = plan.get("protein")
-            except Exception as _te:
-                logger.debug(f"[diary_chat_bridge] Error leyendo targets: {_te}")
+                from tools import _perfil_y_plan_de_hoy
+                from coach_day_context import metas_del_dia
+                _hp, _plan = _perfil_y_plan_de_hoy(user_id)
+                _metas = metas_del_dia(_hp, _plan)
+                if _metas:
+                    target_cals = _metas.get("kcal")
+                    target_prot = _metas.get("protein_g")
+            except Exception as _m_err:
+                logger.debug(f"[diary_chat_bridge] metas_del_dia fallback: {_m_err}")
 
-        if target_cals and int(target_cals) > total_cals:
+            # 2. Fallback a health_profile o meal_plans para compatibilidad con perfiles estáticos o mocks de tests
+            if not target_cals:
+                try:
+                    from db import get_user_profile, get_latest_usable_meal_plan
+                    prof = get_user_profile(user_id) or {}
+                    hp = prof.get("health_profile") or {}
+                    target_cals = hp.get("target_calories")
+                    target_prot = hp.get("target_protein")
+                    if not target_cals:
+                        plan = get_latest_usable_meal_plan(user_id)
+                        if plan:
+                            target_cals = plan.get("calories")
+                            target_prot = plan.get("protein")
+                except Exception as _te:
+                    logger.debug(f"[diary_chat_bridge] Error leyendo targets: {_te}")
+
+        if _is_sup and not target_cals:
+            followup = ". Recuerda que esto no sustituye una comida principal."
+        elif target_cals and int(target_cals) > total_cals:
             rem_cal = int(target_cals) - total_cals
             if target_prot and int(target_prot) > total_prot:
                 rem_prot = int(target_prot) - total_prot
                 followup = f". Te quedan **~{rem_cal} kcal** y **~{rem_prot} g de proteína** para tu meta de hoy."
+            elif target_prot and total_prot >= int(target_prot):
+                exceso_p = total_prot - int(target_prot)
+                if exceso_p > 0:
+                    followup = f". Te quedan **~{rem_cal} kcal** para tu meta de hoy; ya superaste la meta de proteína por unos **{exceso_p} g**."
+                else:
+                    followup = f". Te quedan **~{rem_cal} kcal** para tu meta de hoy; ya cubriste tu meta de proteína."
             else:
                 followup = f". Te quedan **~{rem_cal} kcal** para tu meta de hoy."
         else:
