@@ -1679,7 +1679,10 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                     return (
                         f" (Para el asistente: son las {_hora_txt} y el día ya cerró: confirma la anotación "
                         f"de forma limpia y directa sin preguntar por el desayuno ni insistir en comidas pasadas. "
-                        f"Si el usuario se está poniendo al día con varias comidas, sé cálido y deséale una feliz noche o buen descanso.)"
+                        f"[BB-066] REGLA CONTRA REPETICIÓN DE DESPEDIDAS NOCTURNAS: Si en los turnos recientes de esta conversación "
+                        f"YA le deseaste un buen descanso o feliz noche («Que descanses», «Que tengas buena noche», «A descansar»), "
+                        f"ESTÁ TERMINANTEMENTE PROHIBIDO REPETIRLO: confirma el plato sin despedidas repetitivas. "
+                        f"Si el usuario tiene 2 o más comidas registradas hoy o se está poniendo al día, reporta siempre el total diario acumulado de calorías y proteína.)"
                     )
 
                 if _proximas:
@@ -1730,7 +1733,10 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
             _ahora_fin = ahora_local if ahora_local is not None else _hora_local_float(user_id)
             if _ahora_fin is not None and (float(_ahora_fin) >= 21.0 or float(_ahora_fin) < 4.0):
                 _cierre_noche = (f" Son las {_fmt_hora_float(float(_ahora_fin))} y el día ya cerró: NO sugieras comer "
-                                 f"nada más ni tomar batidas antes de dormir salvo que el usuario lo pida.")
+                                 f"nada más ni tomar batidas antes de dormir salvo que el usuario lo pida. "
+                                 f"[BB-066] REGLA CONTRA REPETICIÓN DE DESPEDIDAS NOCTURNAS: Si en los turnos recientes de esta conversación "
+                                 f"YA le deseaste un buen descanso o feliz noche, ESTÁ TERMINANTEMENTE PROHIBIDO REPETIRLO: "
+                                 f"confirma el plato sin despedidas repetitivas y reporta siempre el total diario acumulado.")
         return (f" (Para el asistente: {_dia_txt} ya tiene todas sus comidas registradas — NO preguntes si "
                 f"le falta algo de ese día.{_cierre_noche})")
     except Exception as _falta_err:
@@ -1777,7 +1783,8 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
                     f"ve en su diario de hoy. Si hablas del total del día o de lo que le falta, usa ESTA "
                     f"suma: lo que le falta es la meta del bloque «LO QUE LE FALTA HOY» menos esta suma (ese bloque se "
                     f"calculó ANTES de este registro). NUNCA partas de un total dicho en mensajes anteriores de la "
-                    f"conversación: pueden ser de otro día.{_margen})")
+                    f"conversación: pueden ser de otro día. [BB-066] Al registrar de noche (21:00+) o cuando el usuario lleve 2 o más comidas hoy, "
+                    f"reporta SIEMPRE este acumulado diario de calorías y proteína (ej. «Hoy llevas en total ~{int(round(_c['kcal']))} kcal y ~{int(round(_c['protein_g']))} g de proteína en el diario»).{_margen})")
         return (f" (Para el asistente: el diario de {_dia} suma ahora {_suma}. Si hablas del total de ese día, usa "
                 f"ESTA suma, nunca un total de mensajes anteriores.)")
     except Exception as _tot_err:
