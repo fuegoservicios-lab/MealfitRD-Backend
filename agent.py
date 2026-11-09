@@ -4884,13 +4884,29 @@ def _es_solicitud_explicita_de_borrado_diario(messages: list) -> bool:
 
 
 def _meals_created_this_turn(messages: list) -> set[str]:
-    """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] IDs de comidas que fueron creadas en este mismo turno."""
+    """[P1-PHOTO-DIARY-PROTECT · 2026-10-26] [BB-051 · 2026-11-09] IDs de comidas creadas en este turno con log_consumed_meal.
+    Excluye correcciones o actualizaciones (correct_consumed_meal), que NO son creaciones nuevas."""
     created = set()
-    for msg in reversed(messages):
+    tool_names = {}
+    for msg in reversed(messages or []):
         if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
             break
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+            tc_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if tc_id and tc_name:
+                tool_names[tc_id] = tc_name
+
+    for msg in reversed(messages or []):
+        if isinstance(msg, HumanMessage) or getattr(msg, "type", None) in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            break
+        tc_id = getattr(msg, "tool_call_id", None)
+        if tc_id and tool_names.get(tc_id) and tool_names.get(tc_id) != "log_consumed_meal":
+            continue
         content = getattr(msg, "content", "") or ""
         if isinstance(content, str) and "[ID_REGISTRO_DIARIO:" in content:
+            if "¡Corregido!" in content or "Registro confirmado sin cambios" in content:
+                continue
             for match in re.finditer(r"\[ID_REGISTRO_DIARIO:\s*([a-zA-Z0-9_\-]+)", content, re.IGNORECASE):
                 created.add(match.group(1))
     return created
@@ -5630,8 +5646,28 @@ def execute_tools(state: ChatState):
                 # altere comidas anteriores del diario con correct_consumed_meal (salvo que sea la recién creada en el turno previo para rectificar).
                 if tool_name == "correct_consumed_meal" and (state.get("turn_photo_to_log") or state.get("turn_plate_photos")):
                     target_id = str(tool_args.get("meal_id") or "").strip()
-                    # [BB-041] Si target_id no existe en BD (el usuario lo eliminó del diario):
-                    # NUNCA intentar correct_consumed_meal. Redirigir de inmediato a log_consumed_meal.
+                    created_this_turn = _meals_created_this_turn(messages)
+                    # [BB-051 · 2026-11-09] En turnos con foto de comida (turn_plate_photos / turn_photo_to_log),
+                    # está TERMINANTEMENTE PROHIBIDO modificar comidas de turnos anteriores (created_prev_turn)
+                    # con correct_consumed_meal salvo solicitud explícita humana en texto ('fue parte del...', 'corrige...').
+                    # Una foto es una comida nueva; no puede alterar el almuerzo/desayuno del turno anterior.
+                    if target_id not in created_this_turn and not _es_solicitud_explicita_de_corregir_diario(messages):
+                        logger.warning(
+                            f"🛡️ [P1-PHOTO-DIARY-PROTECT] Bloqueado correct_consumed_meal sobre comida previa ({target_id}) "
+                            f"en turno con foto de plato (user={str(state.get('user_id'))[:8]})."
+                        )
+                        tool_result = (
+                            "ERROR: En este turno el usuario envió una FOTO DE PLATO NUEVA (o contestó una duda de su foto). "
+                            "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario de horas antes. "
+                            "Esta foto ES UNA COMIDA NUEVA que debes registrar con `log_consumed_meal` usando las cifras del "
+                            "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`. "
+                            "(Esta nota es interna: NUNCA le digas al usuario que no pudiste actualizar el registro ni le pidas permiso para intentar corregir)."
+                        )
+                        tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
+                        continue
+
+                    # [BB-041] Si target_id era de este turno o solicitud explícita pero ya no existe en BD (eliminado):
+                    # Redirigir de inmediato a log_consumed_meal.
                     from tools import _leer_fila_diario
                     _fila_target = _leer_fila_diario(_trusted_uid, target_id) if target_id else None
                     if target_id and _fila_target is None and not _es_solicitud_explicita_de_borrado_diario(messages):
@@ -5643,24 +5679,6 @@ def execute_tools(state: ChatState):
                         tool_args.pop("meal_id", None)
                         tool_args.pop("delete", None)
                         tool_args["force"] = True
-                    else:
-                        created_this_turn = _meals_created_this_turn(messages)
-                        created_prev_turn = _meals_created_in_previous_turn(messages)
-                        recent_created = created_this_turn | created_prev_turn
-                        if target_id not in recent_created and not _es_solicitud_explicita_de_corregir_diario(messages):
-                            logger.warning(
-                                f"🛡️ [P1-PHOTO-DIARY-PROTECT] Bloqueado correct_consumed_meal sobre comida previa ({target_id}) "
-                                f"en turno con foto de plato (user={str(state.get('user_id'))[:8]})."
-                            )
-                            tool_result = (
-                                "ERROR: En este turno el usuario envió una FOTO DE PLATO NUEVA (o contestó una duda de su foto). "
-                                "Está TERMINANTEMENTE PROHIBIDO usar `correct_consumed_meal` para modificar una comida previa del diario de horas antes. "
-                                "Esta foto ES UNA COMIDA NUEVA que debes registrar con `log_consumed_meal` usando las cifras del "
-                                "análisis del plato completo y el meal_type que corresponda por la hora o por su texto. Llama AHORA a `log_consumed_meal`. "
-                                "(Esta nota es interna: NUNCA le digas al usuario que no pudiste actualizar el registro ni le pidas permiso para intentar corregir)."
-                            )
-                            tool_messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
-                            continue
 
                 # [P1-ANTI-CLONE-GUARD · 2026-10-29] Prohibir clonar/duplicar comidas en el mismo turno
                 # (ej. el modelo anota un plato como almuerzo y en el siguiente loop lo anota como desayuno).
