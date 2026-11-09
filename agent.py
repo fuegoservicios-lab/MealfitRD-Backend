@@ -5274,6 +5274,7 @@ def _promover_slot_plato_fuerte_tarde(tool_args: dict, user_id: str, local_hour:
     """[BB-043] Si se registra un plato fuerte (≥ 450 kcal) por la tarde (12:00 PM a 6:30 PM),
     y el usuario NO nombró explícitamente 'merienda' o 'snack', y el almuerzo está vacío hoy:
     clasificar como 'almuerzo' (almuerzo tardío), NUNCA como merienda.
+    Si es por la mañana (4:30 AM a 12:00 PM) y desayuno está vacío: clasificar como 'desayuno'.
     Si es después de las 6:30 PM y cena está vacía, clasificar como 'cena'."""
     if not isinstance(tool_args, dict):
         return tool_args
@@ -5296,14 +5297,68 @@ def _promover_slot_plato_fuerte_tarde(tool_args: dict, user_id: str, local_hour:
         slots_hoy = {str(m.get("meal_type") or "").strip().lower() for m in today_meals}
         h = float(local_hour) if local_hour is not None else 14.0
 
-        if h < 18.5 and "almuerzo" not in slots_hoy:
+        if 12.0 <= h < 18.5 and "almuerzo" not in slots_hoy:
             logger.info(f"🍽️ [BB-043] Plato fuerte ({cal} kcal) a las {h:.1f}h con almuerzo vacío -> clasificado como 'almuerzo'.")
             tool_args["meal_type"] = "almuerzo"
+        elif 4.5 <= h < 12.0 and "desayuno" not in slots_hoy:
+            logger.info(f"🍳 [BB-043] Plato fuerte ({cal} kcal) a las {h:.1f}h con desayuno vacío -> clasificado como 'desayuno'.")
+            tool_args["meal_type"] = "desayuno"
         elif h >= 18.5 and "cena" not in slots_hoy:
             logger.info(f"🍽️ [BB-043] Plato fuerte ({cal} kcal) a las {h:.1f}h con cena vacía -> clasificado como 'cena'.")
             tool_args["meal_type"] = "cena"
     except Exception as e:
         logger.warning(f"Error en BB-043 promover slot: {e}")
+
+    return tool_args
+
+
+def _corregir_almuerzo_prematuro(tool_args: dict, user_id: str, local_hour: Optional[float], messages: list) -> dict:
+    """[BB-049] Si una comida se clasifica como 'almuerzo' antes de las 12:00 PM (ej. 11:11 AM),
+    el usuario NO nombró explícitamente 'almuerzo'/'almorcé' en su mensaje, y el desayuno está vacío hoy:
+    reclasificar como 'desayuno' (desayuno tardío / brunch).
+    Nadie almuerza a las 10:00 u 11:00 AM; platos con huevos, tostadas, frutas o primera comida del día son desayuno."""
+    if not isinstance(tool_args, dict):
+        return tool_args
+    meal_type = str(tool_args.get("meal_type") or "").strip().lower()
+    if meal_type != "almuerzo":
+        return tool_args
+    if tool_args.get("explicit_slot"):
+        return tool_args
+    if int(tool_args.get("days_ago") or 0) != 0:
+        return tool_args
+
+    txt = _extraer_ultimo_texto_usuario(messages).lower()
+    if re.search(r'\b(almor[zc]\w*|almuer[zc]\w*|lunch|almo[cç]o)\b', txt):
+        return tool_args
+
+    h = float(local_hour) if local_hour is not None else None
+    if h is None:
+        return tool_args
+
+    # Antes de las 12:00 PM: si no hay desayuno hoy, es desayuno
+    es_antes_de_12 = 4.5 <= h < 12.0
+    # Entre 12:00 y 12:30 PM: si es plato típico de desayuno (tostadas, pancakes, avena, huevos, etc.)
+    mname = str(tool_args.get("meal_name") or "").lower()
+    es_brunch_tardio = (12.0 <= h < 12.5 and any(k in mname for k in (
+        "tostada", "pancake", "panqueque", "waffle", "avena", "cereal",
+        "huevo revuelto", "huevos revueltos", "mangu", "mangú", "omelet", "omelette"
+    )))
+
+    if not (es_antes_de_12 or es_brunch_tardio):
+        return tool_args
+
+    try:
+        from db_facts import get_consumed_meals_today
+        today_meals = get_consumed_meals_today(user_id) or []
+        slots_hoy = {str(m.get("meal_type") or "").strip().lower() for m in today_meals}
+        if "desayuno" not in slots_hoy:
+            logger.info(
+                f"🍳 [BB-049] Reclasificando almuerzo prematuro '{tool_args.get('meal_name')}' -> 'desayuno' "
+                f"a las {h:.2f}h con desayuno vacío hoy (user={str(user_id)[:8]})."
+            )
+            tool_args["meal_type"] = "desayuno"
+    except Exception as e:
+        logger.warning(f"Error en BB-049 corrección de almuerzo prematuro: {e}")
 
     return tool_args
 
@@ -5656,6 +5711,10 @@ def execute_tools(state: ChatState):
                     _hl = (hora_local_del_chat(state["tz_offset"])
                            if state.get("tz_offset") is not None else _hora_local_float(_trusted_uid))
                     tool_args = _promover_slot_plato_fuerte_tarde(
+                        tool_args, _trusted_uid, _hl, state.get("messages") or []
+                    )
+                    # [BB-049] Reclasificar almuerzo prematuro (< 12:00 PM) a desayuno si el desayuno está vacío
+                    tool_args = _corregir_almuerzo_prematuro(
                         tool_args, _trusted_uid, _hl, state.get("messages") or []
                     )
 

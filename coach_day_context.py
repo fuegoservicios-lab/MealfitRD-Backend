@@ -214,7 +214,7 @@ def momento_del_dia(hora: Optional[float], schedule_type=None) -> str:
     h = float(hora) % 24
     if h < 4.5:
         return "madrugada"
-    if h < 11.5:
+    if h < 12.0:
         return "manana"
     if h < 15.5:
         return "mediodia"
@@ -223,12 +223,9 @@ def momento_del_dia(hora: Optional[float], schedule_type=None) -> str:
     return "noche"
 
 
-# [P1-PLAN-LOTE-950 · 2026-09-30] Qué comidas de hoy están anotadas y cuáles ya pasaron. El dueño, 29-sep: a las 20:01,
-# 22:27 y 22:42 (hora de RD) el coach cerró TRES veces con «Cuando almuerces, cuéntame qué comiste» — copiaba la
-# coletilla de su respuesta anterior; el bloque le daba la hora y el déficit, pero no QUÉ comidas faltaban ni cuáles ya
-# habían pasado. El aviso de las 19:00 (otro camino) sí dijo «cena». Lo que el dueño pide: «no me mandaste tu almuerzo
-# de hoy; si comiste, mándame foto y procedo a contabilizar las macros».
-FIN_DE_FRANJA = {"desayuno": 11.0, "almuerzo": 15.5, "merienda": 18.5}   # la cena no «pasa» dentro del día
+# [P1-PLAN-LOTE-950 · 2026-09-30] [BB-049 · 2026-11-09] Qué comidas de hoy están anotadas y cuáles ya pasaron.
+# Desayuno no pasa hasta las 12:00 PM (mediodía): en RD/LatAm a las 11:00-11:30 AM es desayuno/brunch, no almuerzo.
+FIN_DE_FRANJA = {"desayuno": 12.0, "almuerzo": 16.0, "merienda": 19.0}   # la cena no «pasa» dentro del día
 _FRANJA_DE = {"desayuno": "desayuno", "breakfast": "desayuno", "almuerzo": "almuerzo", "lunch": "almuerzo",
               "comida": "almuerzo", "merienda": "merienda", "snack": "merienda", "cena": "cena", "dinner": "cena"}
 
@@ -251,6 +248,8 @@ def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=N
     if h < 4.5:
         return ""   # madrugada: el día que cuenta es el de antes; mejor no afirmar nada
     anotadas = franjas_anotadas(consumed_today)
+    ahora = franja_por_hora(h)
+    ahora = None if ahora in anotadas else ahora   # la de esta hora ya está: ninguna comida «toca»
     partes, pasadas = [], []
     for f in FRANJAS:
         if f in anotadas:
@@ -260,9 +259,7 @@ def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=N
             if f != "merienda":
                 pasadas.append(f)
         else:
-            partes.append(f"{f} — sin anotar, " + ("es la que toca ahora" if f == franja_por_hora(h) else "más tarde"))
-    ahora = franja_por_hora(h)
-    ahora = None if ahora in anotadas else ahora   # la de esta hora ya está: ninguna comida «toca»
+            partes.append(f"{f} — sin anotar, " + ("es la que toca ahora" if f == ahora else "más tarde"))
     out = "\n🍽️ COMIDAS DE HOY (según su diario y la hora): " + "; ".join(partes) + "."
     out += (" CÓMO CIERRAS: " + (f"si tu cierre nombra una comida, que sea la que toca AHORA ({ahora})" if ahora else
                                   "a esta hora no le toca ninguna comida: no cierres invitándole a comer")
@@ -369,11 +366,11 @@ def franja_por_hora(hora: Optional[float], faltan=None) -> str:
     si no hay dato, la de la hora."""
     h = 12.0 if hora is None else float(hora) % 24
     pendientes = [f for f in (faltan or []) if f in FRANJAS]
-    # [P1-LATE-BREAKFAST] Si aún no hay desayuno registrado y es antes de las 12:00 PM, es desayuno (ej. brunch a las 11:30)
+    # [P1-LATE-BREAKFAST] [BB-049] Si aún no hay desayuno registrado y es antes de las 12:00 PM, es desayuno (ej. brunch a las 11:30)
     if pendientes and "desayuno" in pendientes and 4.5 <= h < 12.0:
         return "desayuno"
-    por_hora = ("desayuno" if 4.5 <= h < 11.0 else "almuerzo" if 11.0 <= h < 15.5 else
-                "merienda" if 15.5 <= h < 18.5 else "cena")
+    por_hora = ("desayuno" if 4.5 <= h < 12.0 else "almuerzo" if 12.0 <= h < 16.0 else
+                "merienda" if 16.0 <= h < 19.0 else "cena")
     if pendientes and por_hora not in pendientes:
         orden = list(FRANJAS)
         despues = [f for f in pendientes if orden.index(f) >= orden.index(por_hora)]

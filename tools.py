@@ -1400,6 +1400,47 @@ def _rescue_dinner_from_unlabeled_desayuno(user_id: str, meal_type: str, calorie
         return meal_type
 
 
+def _rescue_breakfast_from_premature_almuerzo(user_id: str, meal_type: str, meal_name: str) -> str:
+    """[BB-049 / RESCUE-BREAKFAST · 2026-11-09]
+    Si un plato llega con meal_type == 'almuerzo' antes de las 12:00 PM (ej. 11:11 AM)
+    sin haber registrado desayuno hoy, reclasificar como 'desayuno' (desayuno tardío / brunch).
+    Nadie almuerza a las 10:00 o 11:00 AM en RD/LatAm; comidas de mañana son desayuno."""
+    if meal_type != "almuerzo":
+        return meal_type
+    try:
+        _hora = _hora_local_float(user_id)
+        if _hora is None or not (4.5 <= _hora < 12.0):
+            if _hora is not None and 12.0 <= _hora < 12.5:
+                _m = str(meal_name or "").lower()
+                if not any(k in _m for k in ("tostada", "pancake", "panqueque", "waffle", "avena", "cereal", "huevo revuelto", "mangu", "mangú")):
+                    return meal_type
+            else:
+                return meal_type
+        from db import execute_sql_query as _esq_ds
+        _tz_off_ds = user_tz_offset_min(user_id)
+        from db_facts import _diary_rollover_hour
+        _roll_min_ds = _diary_rollover_hour() * 60
+        _rows = _esq_ds(
+            "SELECT COUNT(*) AS total FROM consumed_meals "
+            "WHERE user_id = %s AND meal_type = 'desayuno' "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date",
+            (user_id, _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+            fetch_all=False,
+        )
+        count_desayuno = int((_rows or {}).get("total") or 0)
+        if count_desayuno == 0:
+            logger.info(
+                f"🍳 [BB-049 / RESCUE-BREAKFAST] slot reclasificado 'almuerzo' → 'desayuno' para user "
+                f"{str(user_id)[:8]}: '{meal_name}' a las {_hora:.2f}h con desayuno del día vacío."
+            )
+            return "desayuno"
+        return meal_type
+    except Exception as _e_ds:
+        logger.warning(f"[BB-049 / RESCUE-BREAKFAST] rescate desayuno no-op: {_e_ds}")
+        return meal_type
+
+
 def _buscar_cena_principal_hoy(user_id: str) -> Optional[dict]:
     """[BB-033 / P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04]
     Busca si el usuario ya tiene registrada una cena principal (meal_type = 'cena' y calories >= 350)
@@ -1922,6 +1963,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
             if _meal_type == "desayuno":
                 _meal_type = _rescue_dinner_from_unlabeled_desayuno(user_id, _meal_type, calories, _days_ago)
+            elif _meal_type == "almuerzo" and _days_ago == 0:
+                _meal_type = _rescue_breakfast_from_premature_almuerzo(user_id, _meal_type, meal_name)
 
     # [P1-SUPPLEMENT-SLOT-GUARD · 2026-10-19] Una toma de suplemento (o producto no calórico como creatina,
     # pastillas, vitaminas o minerales) NUNCA debe ocupar una comida principal (desayuno/almuerzo/cena). Un

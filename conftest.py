@@ -64,6 +64,9 @@ except Exception:
     from unittest.mock import MagicMock
     if "langchain_openai" not in sys.modules:
         _stub = MagicMock()
-        _stub.ChatOpenAI = object
-        _stub.OpenAIEmbeddings = object
+        class _StubLLM:
+            def __init__(self, *args, **kwargs):
+                pass
+        _stub.ChatOpenAI = _StubLLM
+        _stub.OpenAIEmbeddings = _StubLLM
         sys.modules["langchain_openai"] = _stub

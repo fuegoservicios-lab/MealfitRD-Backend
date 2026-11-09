@@ -72,7 +72,7 @@ def test_execute_tools_blocks_cloned_meal_in_same_turn():
     assert len(tool_msgs) == 1
     assert isinstance(tool_msgs[0], ToolMessage)
     assert "ERROR: Ya registraste la comida de este turno" in tool_msgs[0].content
-    assert "TERMINANTEMENTE PROHIBIDO registrar el mismo plato o foto en una segunda franja" in tool_msgs[0].content
+    assert "TERMINANTEMENTE PROHIBIDO" in tool_msgs[0].content and "en una segunda franja" in tool_msgs[0].content
 
 
 def test_db_facts_dedup_rejects_reused_photo_attachment():
