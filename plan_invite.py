@@ -47,20 +47,21 @@ def _parse(valor) -> Optional[datetime]:
 
 
 def estado_de_la_invitacion(doc: Optional[dict], ahora: datetime) -> dict:
-    """`{visible, next_at, visible_until}`. Pura: todo entra por parámetro."""
+    """`{visible, next_at, visible_until, dismissed}`. Pura: todo entra por parámetro."""
     doc = doc or {}
     vista, descartada = _parse(doc.get("shown_at")), _parse(doc.get("dismissed_at"))
     semana = timedelta(days=_dias_entre_invitaciones())
     if vista is None and descartada is None:
-        return {"visible": True, "next_at": None, "visible_until": None}
+        return {"visible": True, "next_at": None, "visible_until": None, "dismissed": False}
     if descartada is not None and (vista is None or descartada >= vista):
         vuelve = descartada + semana
-        return {"visible": ahora >= vuelve, "next_at": vuelve.isoformat(), "visible_until": None}
+        fue_descartada = ahora < vuelve
+        return {"visible": ahora >= vuelve, "next_at": vuelve.isoformat(), "visible_until": None, "dismissed": fue_descartada}
     vuelve = vista + semana
     limite = vista + timedelta(seconds=SEGUNDOS_A_LA_VISTA)
     visible = ahora < limite or ahora >= vuelve
     return {"visible": visible, "next_at": vuelve.isoformat(),
-            "visible_until": limite.isoformat() if ahora < limite else None}
+            "visible_until": limite.isoformat() if ahora < limite else None, "dismissed": False}
 
 
 def _leer(user_id: str) -> dict:
