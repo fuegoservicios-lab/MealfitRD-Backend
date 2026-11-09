@@ -528,12 +528,49 @@ def _min_horas_separacion_comida(meal: str) -> float:
     return 2.0
 
 
+def _almuerzo_cubierto_por_brunch(consumed, user_tz_off: int = 240) -> bool:
+    """[BB-070 / BB-032] Si el usuario registró un brunch o comida puente pesada,
+    el almuerzo queda cubierto implícitamente por saciedad fisiológica."""
+    if not consumed:
+        return False
+    from datetime import timedelta
+    for m in consumed:
+        if not isinstance(m, dict):
+            continue
+        try:
+            cal = float(m.get("calories") or 0)
+        except Exception:
+            cal = 0
+        mn = str(m.get("meal_name") or "").lower()
+        ts = m.get("consumed_at") or m.get("created_at")
+        if ts is None:
+            continue
+        try:
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if isinstance(ts, datetime):
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                local_dt = ts - timedelta(minutes=int(user_tz_off or 240))
+                h_local = local_dt.hour + local_dt.minute / 60.0
+                # Comida puente (11:00 AM - 1:30 PM con >= 650 kcal) o 'brunch' (10:30 AM - 2:00 PM con >= 500 kcal)
+                # o desayuno tardío muy pesado (>= 850 kcal entre 10:00 AM y 12:30 PM)
+                if (cal >= 650 and 11.0 <= h_local <= 13.5) or \
+                   ("brunch" in mn and cal >= 500 and 10.5 <= h_local <= 14.0) or \
+                   (cal >= 850 and 10.0 <= h_local <= 12.5):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def _comida_muy_reciente(consumed, ahora_utc, min_horas: float = 2.0, tipo: str = None) -> bool:
-    """[P1-MIN-MEAL-GAP] ¿El usuario registró una comida hace menos de `min_horas` horas respecto a `ahora_utc`?
-    Si `tipo` se especifica, solo considera comidas cuyo meal_type o meal_name contenga `tipo`.
-    Si `tipo` es None, considera cualquier comida real registrada (excluyendo suplementos y tomas menores).
-    Evita disparar avisos de Cena/Almuerzo/Merienda poco después de haber comido (ej. almorzar a las 18:23
-    y recibir aviso de Cena a las 19:30). El aviso espera a un tick posterior dentro de su ventana de reintento."""
+    """[P1-MIN-MEAL-GAP] [BB-070 / P0-PROACTIVE-SATIETY-CURVE]
+    ¿El usuario registró una comida hace menos de `min_horas` horas respecto a `ahora_utc`?
+    Aplica curva de saciedad fisiológica basada en densidad energética:
+    - Comida previa >= 850 kcal: separación mínima de 4.0 horas.
+    - Comida previa >= 600 kcal: separación mínima de 3.5 horas (paridad BB-032).
+    - Comida normal / moderada: respeta el min_horas base."""
     if not consumed or not isinstance(ahora_utc, datetime):
         return False
     if ahora_utc.tzinfo is None:
@@ -572,8 +609,16 @@ def _comida_muy_reciente(consumed, ahora_utc, min_horas: float = 2.0, tipo: str 
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
                 delta_s = (ahora_utc - ts).total_seconds()
-                # Consideramos reciente si ocurrió hace menos de min_horas (con margen de -300s por leve clock skew)
-                if -300.0 <= delta_s < min_horas * 3600.0:
+
+                # Curva de saciedad calórica dinámica [BB-070]
+                gap_efectivo_h = min_horas
+                if cal >= 850:
+                    gap_efectivo_h = max(gap_efectivo_h, 4.0)
+                elif cal >= 600:
+                    gap_efectivo_h = max(gap_efectivo_h, 3.5)
+
+                # Consideramos reciente si ocurrió hace menos de gap_efectivo_h (con margen de -300s por leve clock skew)
+                if -300.0 <= delta_s < gap_efectivo_h * 3600.0:
                     return True
         except Exception:
             continue
@@ -1421,6 +1466,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 for cand in candidatas:
                     if _comida_ya_registrada(consumed, cand["meal"]):
                         logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {cand['meal']}. Todo ok.")
+                        continue
+                    if cand["meal"] == "Almuerzo" and _almuerzo_cubierto_por_brunch(consumed, _user_tz_off):
+                        logger.info(f"🍽️ [CRON] Usuario {user_id}: almuerzo cubierto implícitamente por brunch/desayuno pesado. Todo ok.")
                         continue
                     _gap_h = _min_horas_separacion_comida(cand["meal"])
                     if cand["meal"] in ("Almuerzo", "Merienda", "Cena") and _comida_muy_reciente(consumed, _now_utc, min_horas=_gap_h):
