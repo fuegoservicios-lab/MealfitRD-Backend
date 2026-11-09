@@ -36,6 +36,11 @@ def _user_tz_offset(user_id: str) -> int:
         return _DEFAULT_TZ_OFFSET_MIN
 
 
+def _now_utc() -> datetime:
+    """Helper mockeable para tiempo actual UTC."""
+    return datetime.now(timezone.utc)
+
+
 def get_or_resolve_today_session_for_user(user_id: str, session_id: Optional[str] = None) -> str:
     """
     Resuelve el session_id activo para el usuario:
@@ -48,8 +53,9 @@ def get_or_resolve_today_session_for_user(user_id: str, session_id: Optional[str
         return str(session_id or uuid.uuid4())
 
     tz_min = _user_tz_offset(user_id)
-    now_utc = datetime.now(timezone.utc)
-    today_local = (now_utc - timedelta(minutes=tz_min)).date()
+    now_utc = _now_utc()
+    # [BB-044 / P1-CHAT-ROLLOVER-4AM · 2026-11-09] Rollover biológico a las 4:00 AM local
+    today_local = (now_utc - timedelta(minutes=tz_min) - timedelta(hours=4)).date()
 
     if session_id:
         try:
@@ -79,7 +85,7 @@ def get_or_resolve_today_session_for_user(user_id: str, session_id: Optional[str
                 # Normalizar a offset-aware UTC si es naive
                 if created_at.tzinfo is None:
                     created_at = created_at.replace(tzinfo=timezone.utc)
-                dia_sesion = (created_at - timedelta(minutes=tz_min)).date()
+                dia_sesion = (created_at - timedelta(minutes=tz_min) - timedelta(hours=4)).date()
                 if dia_sesion >= today_local:
                     return str(fila["id"])
     except Exception as e:

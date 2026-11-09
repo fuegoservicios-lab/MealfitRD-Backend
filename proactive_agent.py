@@ -703,8 +703,9 @@ def _sesion_del_dia_para_aviso(session_id, user_id, ahora_utc, tz_offset_min):
         ultima = (fila or {}).get("ultima")
         if ultima is None:
             return session_id          # sesión aún vacía: es la que el cliente acaba de abrir
-        hoy_local = (ahora_utc - timedelta(minutes=tz_offset_min)).date()
-        dia_de_la_sesion = (ultima - timedelta(minutes=tz_offset_min)).date()
+        # [BB-044 / P1-CHAT-ROLLOVER-4AM · 2026-11-09] Rollover biológico a las 4:00 AM hora local
+        hoy_local = (ahora_utc - timedelta(minutes=tz_offset_min) - timedelta(hours=4)).date()
+        dia_de_la_sesion = (ultima - timedelta(minutes=tz_offset_min) - timedelta(hours=4)).date()
         if dia_de_la_sesion >= hoy_local:
             return session_id          # ya es la conversación de hoy
     except Exception as e:
