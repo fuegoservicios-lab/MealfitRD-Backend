@@ -952,6 +952,25 @@ def _validar_macros_comida(**campos):
             return out, (f"'{k}'={f:g} {unidad} es imposible para una sola comida (máximo {tope} {unidad}); "
                          f"revisa las unidades (¿kJ en vez de kcal? ¿mg en vez de g?).")
         out[k] = int(round(f))
+
+    # [BB-053 · 2026-11-10] Coherencia física Atwater (4P + 4C + 9F).
+    # Ninguna comida real puede tener menos calorías que la suma energética de sus propios macros
+    # (con un 12% de tolerancia para fibra dietética no digerible y redondeos menores).
+    # Evita que comidas con ingredientes calóricos (mantequilla de maní, queso, aceites)
+    # subestimen calorías totales respecto a los gramos de macronutrientes declarados.
+    cal = out.get("calories")
+    p = out.get("protein") or 0
+    c = out.get("carbs") or 0
+    f = out.get("healthy_fats") or 0
+    if cal is not None and cal > 0 and (p > 0 or c > 0 or f > 0):
+        atwater_floor = 4 * p + 4 * c + 9 * f
+        if atwater_floor > 0 and cal < atwater_floor * 0.88:
+            logger.info(
+                f"⚖️ [BB-053 / ATWATER-RECONCILE] Reconciliando calorías {cal} -> {atwater_floor} "
+                f"según macros calculados (P:{p}g, C:{c}g, F:{f}g)."
+            )
+            out["calories"] = atwater_floor
+
     return out, None
 
 

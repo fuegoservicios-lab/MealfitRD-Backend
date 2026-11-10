@@ -5275,13 +5275,45 @@ def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photo
     tool_args["meal_name"] = m_name
 
     # 3. Kcal dentro de ±15% de la estimación de visión salvo que usuario haya especificado porción
+    # o alimentos/ingredientes adicionales en el mensaje de texto [BB-053]
     kcal_foto = plate_photos[0].get("kcal")
-    if kcal_foto and not re.search(r"\b(?:gramos?|[0-9]+\s*g|[0-9]+\s*oz|porci[oó]n|cucharadas?)\b", user_txt):
+    if kcal_foto:
+        tokens_foto = _tokens_de_comida(desc_completa)
+        tokens_user = _tokens_de_comida(user_txt)
+        tokens_reg = _tokens_de_comida(tool_args.get("meal_name")) | _tokens_de_comida(" ".join(tool_args.get("ingredients") or []))
+
+        # Alimentos que están en el registro y en el mensaje del usuario pero NO en la foto sola
+        alimentos_extra_confirmados = (tokens_reg - tokens_foto) & tokens_user
+
+        tiene_unidades_o_porcion = bool(re.search(
+            r"\b(?:gramos?|[0-9]+\s*g|[0-9]+\s*oz|porci[oó]n|cucharadas?|tazas?|vasos?|scoops?|unidades?|piezas?|mitad|doble|solo|solamente|menos|mas|más)\b",
+            user_txt,
+            re.IGNORECASE
+        ))
+
         current_kcal = int(tool_args.get("calories") or 0)
         kf = int(kcal_foto)
-        if current_kcal > 0 and (current_kcal > kf * 1.20 or current_kcal < kf * 0.80):
-            logger.info(f"🛡️ [BB-040] Ajustando calorías ({current_kcal} -> {kf}) hacia la estimación de visión ({kf} kcal).")
-            tool_args["calories"] = kf
+        if current_kcal > kf * 1.20:
+            if not alimentos_extra_confirmados and not tiene_unidades_o_porcion:
+                logger.info(
+                    f"🛡️ [BB-040/BB-053] Ajustando calorías ({current_kcal} -> {kf}) hacia la estimación de visión ({kf} kcal) "
+                    f"por ausencia de alimentos extra confirmados o porciones en texto."
+                )
+                tool_args["calories"] = kf
+                if current_kcal > 0:
+                    ratio = kf / float(current_kcal)
+                    for k in ("protein", "carbs", "healthy_fats"):
+                        if tool_args.get(k) is not None:
+                            tool_args[k] = int(round(tool_args[k] * ratio))
+        elif current_kcal > 0 and current_kcal < kf * 0.80:
+            if not tiene_unidades_o_porcion:
+                logger.info(f"🛡️ [BB-040/BB-053] Ajustando calorías ({current_kcal} -> {kf}) hacia la estimación de visión ({kf} kcal).")
+                tool_args["calories"] = kf
+                if current_kcal > 0:
+                    ratio = kf / float(current_kcal)
+                    for k in ("protein", "carbs", "healthy_fats"):
+                        if tool_args.get(k) is not None:
+                            tool_args[k] = int(round(tool_args[k] * ratio))
 
     return tool_args
 
