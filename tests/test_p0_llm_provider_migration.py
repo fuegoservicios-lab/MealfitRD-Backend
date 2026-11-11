@@ -101,7 +101,11 @@ _VOICE_SEAM_MARKER = "[P1-PLAN-LOTE-685-VOZ]"
 # nutricional de esa proteína?»): `etiqueta_web.py` BUSCA en Google la etiqueta de UN producto (Gemini 3.8 Flash con
 # la búsqueda, por REST, sin SDK). No razona por el coach ni ve historial o perfil: el veto al cerebro sigue intacto.
 _ETIQUETA_WEB_SEAM_MARKER = "[P1-PLAN-LOTE-767-ETIQUETA-WEB]"
-_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER, _ETIQUETA_WEB_SEAM_MARKER)
+# [P1-DECISION-TRIAGE · 2026-11-11] Cuarta costura (BB-074..079, pedida por el dueño): Gemini Decision 1 por REST,
+# sin SDK. Devuelve PROBABILIDADES, nunca texto: no razona por el coach ni escribe en la base — solo prefiltra una foto
+# o frena una vez una bebida ambigua. La key sale de `llm_provider._google_api_key` (no nombra la variable).
+_DECISION_TRIAGE_SEAM_MARKER = "[P1-DECISION-TRIAGE]"
+_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER, _ETIQUETA_WEB_SEAM_MARKER, _DECISION_TRIAGE_SEAM_MARKER)
 
 
 def test_a_blanket_no_gemini_in_prod_code():

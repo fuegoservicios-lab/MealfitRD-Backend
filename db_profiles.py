@@ -925,6 +925,7 @@ _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     # [P1-PLAN-LOTE-685] La voz del coach (coach_voz.py): texto US$0,50/M y AUDIO US$6/M (25 tokens por segundo), precio
     # oficial leído el 28-sep hasta el 31-dic-2026; el 1-ene-2027 se DUPLICA. Longest-prefix: sin esta fila caería en la de arriba.
     "gemini-3.8-flash-lite-tts": {"input": 500_000, "output": 6_000_000, "cached": 0},  # [P1-PLAN-LOTE-685-VOZ]
+    "gemini-decision-1": {"input": 100_000, "output": 0, "cached": 0},  # [P1-DECISION-TRIAGE] salida gratis
 }
 
 

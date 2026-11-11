@@ -1070,7 +1070,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-BRUNCH-SATIETY-CLAIM-SUPPRESSION · 2026-11-04] Supresión de reclamo en _nota_comidas_sin_registrar por brunch o ventana de saciedad tras ingesta pesada (BB-032).
 # [P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04] Etiquetado semántico en rescate nocturno cuando ya existe una cena principal previa (BB-033).
 # [P1-COMPARATIVE-YESTERDAY-TEMPLATE · 2026-11-05] Diferenciación semántica de 'ayer' como plantilla comparativa vs. fecha de consumo para registrar en hoy (BB-034).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-980 · 2026-11-11"
+# [P1-PLAN-LOTE-981 · 2026-11-11] P1-DECISION-TRIAGE: Gemini Decision 1 como triaje fail-open (prefiltro de foto, freno de bebida ambigua, sombra) — BB-074..079.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-981 · 2026-11-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

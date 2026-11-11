@@ -5724,6 +5724,21 @@ def execute_tools(state: ChatState):
                                    f"otra porción consumida → force=false")
                     tool_args["force"] = False
 
+                # [P1-DECISION-TRIAGE · 2026-11-11] BB-078: bebida ambigua (Gemini Decision 1, en paralelo desde
+                # la entrada del turno). Solo FRENA una vez para que el coach pregunte el azúcar; jamás escribe.
+                # Va DESPUÉS del override de user_id (P0-AGENT-1). Fail-open: sin triaje ⇒ None ⇒ como siempre.
+                # Solo con UNA llamada de registro en el turno: frenar «plato + jugo» dejaría el plato sin guardar.
+                if tool_name == "log_consumed_meal" and _meal_calls_count <= 1:
+                    from decision_triage import freno_de_bebida
+                    _freno = freno_de_bebida(
+                        tool_name, messages,
+                        turno_con_foto=bool(state.get("turn_photo_to_log") or state.get("turn_plate_photos")),
+                        repeticion=bool(_repeat_confirmed),
+                    )
+                    if _freno:
+                        tool_messages.append(ToolMessage(content=_freno, tool_call_id=tool_id))
+                        continue
+
                 # [P1-DELETE-GUARD · 2026-10-31] Prohibir correct_consumed_meal con delete=True
                 # si el usuario NO ha pedido borrar ni ha declarado que no se comió el alimento.
                 # Evita que el agente borre unilateralmente comidas ante erratas de teclado ("Tsurus blanca")

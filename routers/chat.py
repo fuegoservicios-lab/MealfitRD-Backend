@@ -930,6 +930,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         )
         rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
         __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
+        __import__("decision_triage").iniciar_turno(prompt, user_id)   # [P1-DECISION-TRIAGE] BB-076: en paralelo, fail-open
         
         plan_tier = "gratis"
         if user_id and user_id != "guest":
@@ -1266,6 +1267,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         )
         rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
         __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
+        __import__("decision_triage").iniciar_turno(prompt, user_id)   # [P1-DECISION-TRIAGE] BB-076: en paralelo, fail-open
 
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)

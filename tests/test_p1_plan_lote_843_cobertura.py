@@ -146,6 +146,7 @@ _CERCO = {
     "cron_tasks.py": "sonda «ping» del worker: sin datos, y tras la recogida con permiso; embeddings del aprendizaje "
                      "del bloque (usar_embeddings=permite_ia)",
     "db_chat.py": "search_deep_memory: tool del coach, dentro del turno del chat (428)",
+    "decision_triage.py": "triaje (lote 981): turno del chat y /api/diary/upload (428) + permite_ia",
     "dreaming.py": "consolidate_user (permite_ia)",
     "embeddings_provider.py": "cliente de Cohere: lo usan sitios ya protegidos (chat, hechos, Dreaming, proactivo…)",
     "etiqueta_web.py": "tool del coach (main, lote 767): dentro del turno del chat (428)",
@@ -187,6 +188,7 @@ def test_los_sitios_de_segundo_plano_consultan_el_permiso():
     anclas = {
         "fact_extractor.py": ['permite_ia(user_id, "extraccion_de_hechos")', 'permite_ia(user_id, "cola_de_hechos")'],
         "dreaming.py": ['permite_ia(user_id, "dreaming")'],
+        "decision_triage.py": ['permite_ia(user_id, "triaje_de_decision")'],
         "plan_display_i18n.py": ['permite_ia(user_id, "traduccion_del_plan")'],
         "proactive_agent.py": ['permite_ia(user_id, "coach_proactivo")', 'permite_ia(user_id, "respuesta_a_aviso")',
                                'permite_ia(user_id, "jit_semana_2")'],

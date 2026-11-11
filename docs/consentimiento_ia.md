@@ -249,6 +249,7 @@ Con `block`, nada de esto llama a un proveedor para una cuenta sin permiso vigen
 | Título del plan (`services._titulo_del_plan`: guardado, parcial y diferido) | objetivo, calorías y platos | `permite_ia` → el título determinista |
 | Delegación de GPT-Live-1 (`coach_live._delegar`, lote 905: el turno del coach corre en un hilo durante la sesión) | lo que dijo (IA de texto) | `permite_ia(s.user_id, "coach_live")` en cada turno: con el permiso retirado a mitad, se despide y cierra |
 | JIT de semana 2 (`proactive_agent._trigger_week2_background_generation`, código muerto) | el perfil | `permite_ia` por si alguien lo revive |
+| Triaje con Gemini Decision 1 (`decision_triage.run_triage`, lote 981: hilo en paralelo al turno del chat y prefiltro de `/api/diary/upload`, ambos ya tras el 428) | el mensaje y, en la foto, la imagen; probabilidades de vuelta, sin texto | `permite_ia(user_id, "triaje_de_decision")`: sin permiso, no se consulta y todo sigue como siempre |
 | Nombres de alimentos desde la lista de compras, la Nevera, el diario y sus crons (`normalize_name`, intento 6) | el nombre (Cohere) | la marca de la sección anterior |
 
 Y dos crons que no llaman a la IA pero hablaban de esa cola: el escalado de bloques atascados

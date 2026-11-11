@@ -638,7 +638,39 @@ async def api_diary_upload(
         # [P1-PLAN-LOTE-628] el país del perfil: la foto se lee con el sentido que tiene allí (en RD, nada cambia)
         from pais_del_estimador import pais_del_usuario
         _pais = await pais_del_usuario(verified_user_id)
-        vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
+        # [P1-DECISION-TRIAGE · 2026-11-11] BB-077: Gemini Decision 1 mira si la foto es comida. En `guard` va ANTES
+        # de la visión (tope 0,4 s) y, si es casi seguro que no lo es, la visión no se gasta; en `shadow` corre en
+        # paralelo y solo se registra. Con `aclaracion` (re-análisis de la MISMA foto) no se consulta. Fail-open.
+        import decision_triage as _dt
+        _dt_modo = _dt.modo() if not aclaracion else "off"
+        _dt_media = {"data": file_bytes, "mime_type": sniffed_ct}
+        _dt_res = None
+        if _dt_modo == "guard":
+            _dt_res = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
+            if _dt.foto_rechazada(_dt_res):
+                vision_result = _dt.payload_no_comida()
+            else:
+                vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
+        elif _dt_modo == "shadow":
+            _dt_res, vision_result = await asyncio.gather(
+                _dt.run_triage_async(media=_dt_media, user_id=actual_user_id),
+                process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais),
+            )
+        else:
+            vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
+        if _dt_modo != "off":
+            try:
+                background_tasks.add_task(_dt.registrar_metrica, actual_user_id, "decision_triage_media",
+                                          float(_dt_res.latency_ms if _dt_res else 0), {
+                                              "mode": _dt_modo, "ok": _dt_res is not None,
+                                              "p_food": _dt_res.si(_dt.Q_MEDIA) if _dt_res else None,
+                                              "rejected": bool(isinstance(vision_result, dict)
+                                                               and vision_result.get("triage_rejected")),
+                                              "vision_is_food": (vision_result or {}).get("is_food")
+                                              if isinstance(vision_result, dict) else None,
+                                          })
+            except Exception:
+                pass
         # [P1-PLAN-LOTE-575] cuánto tardó y si sirvió, para el panel (ni la foto ni su texto). En SEGUNDO PLANO: esperarla
         # aquí con el pool saturado podía sumar segundos al escaneo de cualquier usuario (revisión final).
         try:
