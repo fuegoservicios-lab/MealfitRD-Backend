@@ -5555,6 +5555,8 @@ def execute_tools(state: ChatState):
                         tool_name = "correct_consumed_meal"
                         tool_args = _merged_args
 
+                _es_stale_extra_reclasificado = False
+
                 # [P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una
                 # comida ya registrada hoy (ej. 'fue parte del almuerzo', 'agrégalo al almuerzo'), fusionar en
                 # la fila existente sumando calorías, macros, ingredientes y adjuntos de foto.
@@ -5569,6 +5571,24 @@ def execute_tools(state: ChatState):
                         )
                         tool_name = "correct_consumed_meal"
                         tool_args = _fused_part_args
+                    else:
+                        # [BB-054] Si era una adición implícita ('extra...', 'además...') pero no se fusionó
+                        # (por ejemplo porque expiró el TTL de la comida previa), reclasificar el meal_type
+                        # para que no herede erróneamente el slot de hace horas (ej. desayuno a la 1:32 PM).
+                        _last_user_txt = _extraer_ultimo_texto_usuario(state.get("messages") or [])
+                        if _es_adicion_implicita_sin_slot(_last_user_txt):
+                            _cal = int(tool_args.get("calories") or 0)
+                            from tools import _hora_local_float, _resolver_slot_post_ttl
+                            _h = _hora_local_float(_trusted_uid)
+                            _nuevo_slot = _resolver_slot_post_ttl(_trusted_uid, _cal, _h)
+                            if _nuevo_slot and _nuevo_slot != tool_args.get("meal_type"):
+                                logger.info(
+                                    f"🕒 [BB-054 / STALE-EXTRA-DESACOPLED] Adición implícita post-TTL: "
+                                    f"reclasificando slot '{tool_args.get('meal_type')}' → '{_nuevo_slot}' "
+                                    f"({_cal} kcal a las {_h:.2f}h)."
+                                )
+                                tool_args["meal_type"] = _nuevo_slot
+                                _es_stale_extra_reclasificado = True
 
                 if tool_name == "correct_consumed_meal":
                     # [BB-038] Si el usuario pide restaurar una comida borrada, NUNCA usar correct_consumed_meal.
@@ -5583,6 +5603,55 @@ def execute_tools(state: ChatState):
                         tool_args.pop("meal_id", None)
                         tool_args.pop("delete", None)
                         tool_args["force"] = True
+
+                    # [BB-054] Si el LLM llamó a correct_consumed_meal sobre una comida previa ante una adición implícita
+                    # ('extra...', 'además...') cuyo TTL ha expirado (> 30 min) sin anclaje explícito al slot,
+                    # NUNCA sobreescribir la comida de hace horas. Redirigir a log_consumed_meal.
+                    _last_user_txt = _extraer_ultimo_texto_usuario(state.get("messages") or [])
+                    if tool_name == "correct_consumed_meal" and _es_adicion_implicita_sin_slot(_last_user_txt):
+                        from tools import _leer_fila_diario, _hora_local_float, _resolver_slot_post_ttl
+                        _target_mid = str(tool_args.get("meal_id") or "").strip()
+                        _target_fila = _leer_fila_diario(_trusted_uid, _target_mid) if _target_mid else None
+                        if _target_fila and not _comida_dentro_de_ttl_fusion(_target_fila, ttl_min=_FUSION_TTL_MINUTOS):
+                            _orig_cal = int(_target_fila.get("calories") or 0)
+                            _tool_cal = int(tool_args.get("calories") or 0)
+                            _delta_cal = (_tool_cal - _orig_cal) if _tool_cal > _orig_cal else _tool_cal
+                            _orig_prot = int(_target_fila.get("protein") or 0)
+                            _tool_prot = int(tool_args.get("protein") or 0)
+                            _delta_prot = max(0, (_tool_prot - _orig_prot) if _tool_cal > _orig_cal else _tool_prot)
+                            _orig_carbs = int(_target_fila.get("carbs") or 0)
+                            _tool_carbs = int(tool_args.get("carbs") or 0)
+                            _delta_carbs = max(0, (_tool_carbs - _orig_carbs) if _tool_cal > _orig_cal else _tool_carbs)
+                            _orig_fats = int(_target_fila.get("healthy_fats") or 0)
+                            _tool_fats = int(tool_args.get("healthy_fats") or 0)
+                            _delta_fats = max(0, (_tool_fats - _orig_fats) if _tool_cal > _orig_cal else _tool_fats)
+                            _h = _hora_local_float(_trusted_uid)
+                            _nuevo_slot = _resolver_slot_post_ttl(_trusted_uid, _delta_cal, _h)
+
+                            # Extraer nombre limpio del alimento extra
+                            _mname = str(tool_args.get("meal_name") or "")
+                            _tname = str(_target_fila.get("meal_name") or "")
+                            if _tname.lower() in _mname.lower():
+                                _clean_name = re.sub(re.escape(_tname), "", _mname, flags=re.IGNORECASE).strip()
+                                _clean_name = re.sub(r"^(?:con|y|\+)\s+", "", _clean_name, flags=re.IGNORECASE).strip()
+                            else:
+                                _clean_name = re.sub(r"^(?:de\s+)?extra\s+", "", _last_user_txt, flags=re.IGNORECASE).strip()
+
+                            logger.info(
+                                f"🔄 [BB-054] Redirigiendo correct_consumed_meal -> log_consumed_meal para adición implícita post-TTL: "
+                                f"delta={_delta_cal} kcal, slot='{_nuevo_slot}' (target={_target_mid} de hace horas)."
+                            )
+                            tool_name = "log_consumed_meal"
+                            tool_args = dict(tool_args)
+                            tool_args.pop("meal_id", None)
+                            tool_args.pop("delete", None)
+                            tool_args["meal_name"] = _clean_name.capitalize() if _clean_name else _mname
+                            tool_args["calories"] = _delta_cal
+                            tool_args["protein"] = _delta_prot
+                            tool_args["carbs"] = _delta_carbs
+                            tool_args["healthy_fats"] = _delta_fats
+                            tool_args["meal_type"] = _nuevo_slot
+                            _es_stale_extra_reclasificado = True
 
                 if tool_name == "correct_consumed_meal":
                     _adjusted_fusion = _ajustar_args_fusion_correct_consumed_meal(
@@ -6108,6 +6177,13 @@ def execute_tools(state: ChatState):
 
             if tool_name in ("log_consumed_meal", "correct_consumed_meal") and isinstance(tool_result, str):
                 tool_result = _neutralizar_nota_comida_faltante_ya_preguntada(tool_result, messages)
+                if _es_stale_extra_reclasificado:
+                    tool_result += (
+                        f" (Aviso para el asistente: este alimento de {tool_args.get('calories')} kcal se registró como **{tool_args.get('meal_type')}** "
+                        f"independiente debido a la hora actual, ya que la comida anterior de hoy se registró hace horas. "
+                        f"En tu respuesta visible al usuario, confírmala como **{tool_args.get('meal_type')}** (ej. «Anoté tu **{tool_args.get('meal_type')}**: ...»); "
+                        f"NUNCA digas que lo sumaste o agregaste al desayuno ni a la comida anterior.)"
+                    )
 
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
             
@@ -6339,6 +6415,31 @@ def _es_anclaje_explicito_de_slot(texto: str) -> bool:
     if not texto:
         return False
     return bool(_RE_ANCLAJE_EXPLICITO_SLOT.search(str(texto)))
+
+
+# [BB-054] Patrones de adición implícita al turno o comida previa
+_RE_ADICION_IMPLICITA = re.compile(
+    r"^(?:(?:de\s+)?extra\b|y\s+de\s+extra\b|(?:y\s+)?adem[aá]s\b|(?:y\s+)?tambi[eé]n\b|"
+    r"(?:se\s+me\s+)?(?:qued[oó]|olvid[oó])\b|olvid[eé](?:\s+poner|\s+decir(?:te)?)?\b|"
+    r"falt[oó]\b|(?:agr[eé]ga(?:le)?|a[nñ][aá]de(?:le)?|s[uú]ma(?:le)?)\b|"
+    r"(?:y|con)\s+(?:una?|dos|2|tres|3|cuatro|4|cinco|5|medio|media|otro|otra|un\s+poco\s+de|[0-9]+|"
+    r"[a-záéíóúñ]+(?:\s+a\s+la|\s+al|\s+de|\s+con)?)\b)",
+    re.IGNORECASE,
+)
+
+
+def _es_adicion_implicita_sin_slot(texto: str) -> bool:
+    """[BB-054] Retorna True si el usuario expresó una adición circunstancial o ítem extra
+    ('extra yogurt...', 'además un café...', 'también dos galletas...') SIN anclar explícitamente el slot objetivo
+    ('al desayuno...', 'en el almuerzo...')."""
+    if not texto or not isinstance(texto, str):
+        return False
+    t = texto.strip()
+    if t.endswith("?") or re.search(r"^(?:y|con)\s+(?:qu[eé]|c[oó]mo|cu[aá]nto|por\s+qu[eé]|para\s+qu[eé])\b", t, re.IGNORECASE):
+        return False
+    if _es_anclaje_explicito_de_slot(t):
+        return False
+    return bool(_RE_ADICION_IMPLICITA.search(t))
 
 
 def _comida_dentro_de_ttl_fusion(comida: dict, ttl_min: float = _FUSION_TTL_MINUTOS, ahora_utc=None) -> bool:
@@ -6979,6 +7080,13 @@ def _ajustar_args_fusion_correct_consumed_meal(
     # Si la llamada ya apunta al meal_id correcto y el modelo ya computó el nuevo total de calorías (>= orig_cal):
     # El modelo ya calculó el plato completo. Solo aseguramos preservar fotos de hoy y meal_id.
     if tool_meal_id == orig_id and tool_cal >= orig_cal and orig_cal > 0:
+        texto_humano = _extraer_ultimo_texto_usuario(messages)
+        if _es_adicion_implicita_sin_slot(texto_humano) and not _comida_dentro_de_ttl_fusion(orig, ttl_min=_FUSION_TTL_MINUTOS):
+            logger.info(
+                f"⏳ [BB-054 / P1-FUSION-TTL-GUARD] TTL expirado (> {_FUSION_TTL_MINUTOS} min) para correct_consumed_meal "
+                f"sobre {orig_id} ('{orig.get('meal_name')}'). Bloqueando edición sobre comida de hace horas."
+            )
+            return None
         existing_nutrition = orig.get("nutrition") or {}
         if isinstance(existing_nutrition, str):
             try:

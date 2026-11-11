@@ -1460,6 +1460,123 @@ def _rescue_breakfast_from_premature_almuerzo(user_id: str, meal_type: str, meal
         return meal_type
 
 
+def _resolver_slot_post_ttl(user_id: str, calories: int, hora_local: Optional[float] = None) -> str:
+    """[BB-054] Determina el slot de comida adecuado ('merienda', 'almuerzo', 'cena', 'snack')
+    para un alimento registrado con adición implícita ('extra...', 'además...') tras expirar el TTL
+    de la comida anterior, evitando etiquetarlo con el slot de hace horas."""
+    try:
+        h = hora_local if hora_local is not None else _hora_local_float(user_id)
+        if h is None:
+            return "merienda"
+
+        cal = int(calories or 0)
+
+        # Madrugada profunda (< 6:00 AM) o noche muy tardía (>= 22:00)
+        if h < 6.0 or h >= 22.0:
+            return "snack" if cal < 400 else "cena"
+
+        # Mañana (6:00 AM - 11:00 AM)
+        if 6.0 <= h < 11.0:
+            return "desayuno" if cal >= 250 else "merienda"
+
+        # Mediodía y primera hora de la tarde (11:00 AM - 16:30 PM)
+        if 11.0 <= h < 16.5:
+            if cal < 350:
+                return "merienda"
+            try:
+                from db import execute_sql_query as _esq_ds
+                _tz_off_ds = user_tz_offset_min(user_id)
+                from db_facts import _diary_rollover_hour
+                _roll_min_ds = _diary_rollover_hour() * 60
+                _rows = _esq_ds(
+                    "SELECT COUNT(*) AS total FROM consumed_meals "
+                    "WHERE user_id = %s AND meal_type = 'almuerzo' "
+                    "AND (consumed_at - make_interval(mins => %s))::date "
+                    "  = (now() - make_interval(mins => %s))::date",
+                    (user_id, _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+                    fetch_all=False,
+                )
+                if int((_rows or {}).get("total") or 0) == 0:
+                    return "almuerzo"
+            except Exception:
+                pass
+            return "merienda"
+
+        # Tarde (16:30 PM - 18:30 PM)
+        if 16.5 <= h < 18.5:
+            return "merienda"
+
+        # Noche (18:30 PM - 22:00 PM)
+        if cal < 350:
+            return "merienda"
+        try:
+            from db import execute_sql_query as _esq_ds
+            _tz_off_ds = user_tz_offset_min(user_id)
+            from db_facts import _diary_rollover_hour
+            _roll_min_ds = _diary_rollover_hour() * 60
+            _rows = _esq_ds(
+                "SELECT COUNT(*) AS total FROM consumed_meals "
+                "WHERE user_id = %s AND meal_type = 'cena' "
+                "AND (consumed_at - make_interval(mins => %s))::date "
+                "  = (now() - make_interval(mins => %s))::date",
+                (user_id, _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+                fetch_all=False,
+            )
+            if int((_rows or {}).get("total") or 0) == 0:
+                return "cena"
+        except Exception:
+            pass
+        return "merienda"
+    except Exception as _e_slot:
+        logger.warning(f"[BB-054] Error resolviendo slot post-TTL: {_e_slot}")
+        return "merienda"
+
+
+def _rescue_stale_desayuno_after_noon(user_id: str, meal_type: str, calories: int, days_ago: int) -> tuple[str, bool]:
+    """[BB-054 / RESCUE-STALE-DESAYUNO · 2026-11-11]
+    Si un alimento llega con meal_type == 'desayuno' al mediodía o tarde (>= 12:00 PM)
+    en el día biológico actual (days_ago == 0) y el usuario ya tiene un desayuno registrado
+    hoy (o es pasado el mediodía >= 12.5h con comida ligera < 350 kcal), reclasificar a 'merienda'
+    (o 'almuerzo' si es plato fuerte >= 350 kcal sin almuerzo registrado).
+    Evita que alimentos como 'extra yogurt' a la 1:32 PM se anoten como desayuno.
+    Retorna (nuevo_slot, fue_reclasificado)."""
+    if meal_type != "desayuno" or days_ago != 0:
+        return meal_type, False
+    try:
+        _hora = _hora_local_float(user_id)
+        if _hora is None or _hora < 12.0:
+            return meal_type, False
+
+        from db import execute_sql_query as _esq_ds
+        _tz_off_ds = user_tz_offset_min(user_id)
+        from db_facts import _diary_rollover_hour
+        _roll_min_ds = _diary_rollover_hour() * 60
+
+        _rows = _esq_ds(
+            "SELECT COUNT(*) AS total FROM consumed_meals "
+            "WHERE user_id = %s AND meal_type = 'desayuno' "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date",
+            (user_id, _tz_off_ds + _roll_min_ds, _tz_off_ds + _roll_min_ds),
+            fetch_all=False,
+        )
+        count_desayuno = int((_rows or {}).get("total") or 0)
+
+        if count_desayuno > 0 or _hora >= 12.5:
+            nuevo_slot = _resolver_slot_post_ttl(user_id, calories, _hora)
+            if nuevo_slot != "desayuno":
+                logger.info(
+                    f"🥪 [BB-054 / RESCUE-STALE-DESAYUNO] slot reclasificado 'desayuno' → '{nuevo_slot}' para user "
+                    f"{str(user_id)[:8]}: {int(calories or 0)} kcal a las {_hora:.2f}h (desayunos previos: {count_desayuno})."
+                )
+                return nuevo_slot, True
+
+        return meal_type, False
+    except Exception as _e_rsd:
+        logger.warning(f"[BB-054 / RESCUE-STALE-DESAYUNO] error reclasificando desayuno: {_e_rsd}")
+        return meal_type, False
+
+
 def _buscar_cena_principal_hoy(user_id: str) -> Optional[dict]:
     """[BB-033 / P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04]
     Busca si el usuario ya tiene registrada una cena principal (meal_type = 'cena' y calories >= 350)
@@ -1960,6 +2077,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # "mi merienda", "un snack", etc.), NUNCA debe sobreescribirse con la cena.
     _es_merienda_nocturna = False
     _cal_cena_previa = 0
+    _es_desayuno_tardio_reclasificado = False
     if not explicit_slot:
         # [BB-033 / P1-NIGHT-SNACK-SEMANTIC-LABEL · 2026-11-04]
         # Si llega en horario nocturno (>= 18:00 o de madrugada < 4:00) y el usuario YA tiene su cena
@@ -1982,6 +2100,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
             if _meal_type == "desayuno":
                 _meal_type = _rescue_dinner_from_unlabeled_desayuno(user_id, _meal_type, calories, _days_ago)
+                _meal_type, _es_desayuno_tardio_reclasificado = _rescue_stale_desayuno_after_noon(user_id, _meal_type, calories, _days_ago)
             elif _meal_type == "almuerzo" and _days_ago == 0:
                 _meal_type = _rescue_breakfast_from_premature_almuerzo(user_id, _meal_type, meal_name)
 
@@ -2002,6 +2121,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             logger.info(f"💊 [SUPPLEMENT-SLOT-GUARD] '{meal_name}' reclasificado '{_meal_type}' → 'suplemento' (los suplementos no son comidas ni meriendas)")
             _meal_type = "suplemento"
             _es_merienda_nocturna = False
+            _es_desayuno_tardio_reclasificado = False
 
     # [BB-025 / P1-DIARY-COMPLEMENTS-SECTION · 2026-11-03]
     # Bebidas ligeras e infusiones aisladas (té, café solo, agua con limón, infusión herbal, caldo ligero <= 50 kcal):
@@ -2010,6 +2130,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         logger.info(f"🍵 [BB-025 / COMPLEMENT-GUARD] '{meal_name}' ({calories} kcal) reclasificado '{_meal_type}' → 'complemento' (bebida ligera aislada)")
         _meal_type = "complemento"
         _es_merienda_nocturna = False
+        _es_desayuno_tardio_reclasificado = False
 
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
 
@@ -2173,6 +2294,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 f"En tu respuesta visible al usuario, confírmala como **merienda nocturna** o **extra de la noche** "
                 f"(ej. «Anoté tu **merienda nocturna**: ...» o «Anoté tu **extra de la noche**: ...»); "
                 f"NUNCA digas «Anoté como cena» por segunda vez en la misma noche.)"
+            )
+        if _es_desayuno_tardio_reclasificado:
+            _hora_actual = _hora_local_float(user_id) if _days_ago == 0 else None
+            _hora_txt = _fmt_hora_float(_hora_actual) if _hora_actual is not None else "la hora actual"
+            msg += (
+                f" (Aviso para el asistente: este alimento de {calories} kcal se registró como **{_meal_type}** "
+                f"independiente debido a la hora actual ({_hora_txt}), ya que el desayuno de hoy se registró hace horas. "
+                f"En tu respuesta visible al usuario, confírmala como **{_meal_type}** (ej. «Anoté tu **{_meal_type}**: ...»); "
+                f"NUNCA digas que lo sumaste o agregaste al desayuno.)"
             )
         if not _mt_reconocido:
             msg += (f" (Aviso para el asistente: no reconocí el tipo de comida '{meal_type}' y quedó como "
