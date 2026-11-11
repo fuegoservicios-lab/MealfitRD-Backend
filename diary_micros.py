@@ -72,6 +72,9 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
     acc = {k: 0.0 for k in CLAVES}
     known = {k: 0 for k in CLAVES}
     sources = {k: [] for k in CLAVES}
+    # [MICROS-ORIGEN · 2026-11-11] Aporte de CADA renglón: sin esto el panel solo podía decir «2,406 mg» pero no
+    # qué alimento los puso. Un renglón que no resuelve entra con `values` vacío: cuenta como «sin datos».
+    items: list[dict] = []
     resolved = 0
     total = 0
     kcal = 0.0
@@ -80,6 +83,8 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
         if not isinstance(ing, str) or not ing.strip():
             continue
         total += 1
+        item = {"label": ing.strip()[:120], "values": {}}
+        items.append(item)
         try:
             m = db.micros_from_ingredient_string(ing)
         except Exception:
@@ -102,6 +107,7 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
             if v is not None:
                 acc[clave] += v
                 known[clave] += 1
+                item["values"][clave] = round(v, 3)
                 provenance = (m.get("provenance") or {}).get(src) or (m.get("provenance") or {}).get("catalog")
                 if provenance and provenance not in sources[clave]:
                     sources[clave].append(provenance)
@@ -111,7 +117,7 @@ def micros_de_ingredientes(ingredients: Any, db) -> Optional[dict]:
            "resolved": resolved, "total": total, "catalog_version": CATALOG_VERSION,
            "coverage": {k: {"known": known[k], "total": total,
                             "status": "none" if not known[k] else "complete" if known[k] == total else "partial"} for k in CLAVES},
-           "provenance": sources}
+           "provenance": sources, "items": items}
     if con_macros:
         out["kcal"] = round(kcal, 1)
     return out
@@ -163,14 +169,66 @@ def resumen_micros(meals: list[dict]) -> dict:
                 if c and c.get("status") == "complete":
                     complete[k] += 1
     total = len(meals or [])
+    origen = origen_por_nutriente(meals)
     return {
         "micros": {k: round(v, 3) if known[k] else None for k, v in tot.items()},
         "micros_coverage": {"con_datos": con_datos, "total": total,
                             "by_nutrient": {k: {"known": known[k], "total": total,
                                                  "status": "none" if not known[k] else "complete" if complete[k] == total else "partial",
-                                                 "sources": sources[k]} for k in CLAVES},
+                                                 "sources": sources[k], **origen[k]} for k in CLAVES},
                             "catalog_version": CATALOG_VERSION},
     }
+
+
+TOP_FUENTES = 5
+MAX_FALTANTES = 6
+
+
+def _nombre_comida(m: dict) -> str:
+    return str(m.get("meal_name") or m.get("meal_type") or "").strip()[:80]
+
+
+def origen_por_nutriente(meals: list[dict]) -> dict:
+    """[MICROS-ORIGEN · 2026-11-11] Por nutriente: qué alimentos aportaron más (`top`, mayor a menor), el resto
+    agrupado (`others`) y qué comidas/alimentos quedaron SIN dato (`missing`). Es lo que responde «¿qué me subió el
+    sodio?» y «¿qué falta para que el total sea completo?». Solo etiquetas y cantidades; nunca la receta entera.
+    La misma regla vive en `microsShared.origenPorNutriente` para el recálculo optimista del cliente."""
+    out = {}
+    for k in CLAVES:
+        aportes, faltan = [], []
+        for idx, m in enumerate(meals or []):
+            comida = _nombre_comida(m)
+            mi = m.get("micros")
+            valor_comida = valid_amount(((mi or {}).get("values") or {}).get(k)) if mi else None
+            if valor_comida is None:
+                faltan.append({"meal": comida, "meal_type": m.get("meal_type"), "foods": [], "whole_meal": True})
+                continue
+            items = mi.get("items")
+            if not isinstance(items, list) or not items:
+                # Etiqueta o cliente antiguo sin desglose: la comida es la unidad de aporte.
+                aportes.append({"food": comida, "meal": comida, "meal_type": m.get("meal_type"), "value": valor_comida, "_i": idx})
+                continue
+            sin_dato = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                v = valid_amount((it.get("values") or {}).get(k))
+                if v is None:
+                    if it.get("label"):
+                        sin_dato.append(str(it["label"]))
+                elif v > 0:
+                    aportes.append({"food": str(it.get("label") or comida), "meal": comida,
+                                    "meal_type": m.get("meal_type"), "value": v, "_i": idx})
+            if sin_dato:
+                faltan.append({"meal": comida, "meal_type": m.get("meal_type"), "foods": sin_dato[:MAX_FALTANTES], "whole_meal": False})
+        aportes.sort(key=lambda a: (-a["value"], a["_i"]))
+        for a in aportes:
+            a.pop("_i", None)
+        resto = aportes[TOP_FUENTES:]
+        out[k] = {"top": aportes[:TOP_FUENTES],
+                  "others": {"count": len(resto), "value": round(sum(a["value"] for a in resto), 3)},
+                  "missing": faltan[:MAX_FALTANTES]}
+    return out
 
 
 def metas_micros(sex: Optional[str], age: Optional[int], pregnant: bool = False, lactating: bool = False) -> dict:
