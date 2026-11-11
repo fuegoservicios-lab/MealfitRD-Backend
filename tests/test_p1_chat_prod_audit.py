@@ -159,7 +159,10 @@ def test_call_model_uses_is_rate_limit_error_before_cb_failure():
         "Orden incorrecto: _is_rate_limit_error debe chequearse ANTES de "
         "_cb.record_failure() — si no, los 429 ensucian el CB."
     )
-    assert "raise LLMRateLimitedError" in body
+    # [P1-PLAN-LOTE-980] Con respaldo (P1-CHAT-PROVIDER-FALLBACK) el 429 se envuelve en
+    # `_rl = LLMRateLimitedError(...)` y se re-lanza si no hay a quien pasarlo.
+    assert "raise LLMRateLimitedError" in body or (
+        "_rl = LLMRateLimitedError(" in body and "raise _rl from _invoke_exc" in body)
 
 
 def test_router_maps_rate_limited_to_429_with_retry_after():

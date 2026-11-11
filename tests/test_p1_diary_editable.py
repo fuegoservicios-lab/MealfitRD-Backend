@@ -198,6 +198,11 @@ class TestDeleteConsumedMealDbLayer:
     def test_delete_sql_carries_and_user_id_same_statement(self, db_facts_src: str):
         body = _extract_function_body(db_facts_src, "delete_consumed_meal")
         m = re.search(r'"(DELETE FROM consumed_meals[^"]*)"', body)
+        if m is None and "DELETE_WITH_REMOVAL_SQL" in body:
+            # [P1-PLAN-LOTE-980] El DELETE vive en `diario_contexto.DELETE_WITH_REMOVAL_SQL`
+            # (CTE que además recuerda el borrado para el coach).
+            import diario_contexto
+            m = re.search(r"(DELETE FROM consumed_meals[^\n]*)", diario_contexto.DELETE_WITH_REMOVAL_SQL)
         assert m, "delete_consumed_meal no emite un `DELETE FROM consumed_meals` reconocible."
         stmt = m.group(1)
         assert re.search(r"\bAND\s+user_id\s*=\s*%s", stmt, re.IGNORECASE), (
@@ -250,7 +255,8 @@ class TestDeleteConsumedMealDbLayer:
         monkeypatch.setattr(db_facts, "connection_pool", object())
         monkeypatch.setattr(db_facts, "execute_sql_write", fake_write)
         db_facts.delete_consumed_meal("user-XYZ", "meal-ABC")
-        assert captured["params"] == ("meal-ABC", "user-XYZ"), (
+        # [P1-PLAN-LOTE-980] El 3er parámetro es la clave del recuerdo del borrado (app_kv_store).
+        assert tuple(captured["params"][:2]) == ("meal-ABC", "user-XYZ"), (
             "el orden de los params debe matchear el orden de los "
             "placeholders `WHERE id = %s AND user_id = %s`."
         )

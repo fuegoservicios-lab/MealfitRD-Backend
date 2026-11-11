@@ -47,11 +47,14 @@ def test_la_pechuga_cocida_cuenta_lo_que_pesaba_cruda():
 def test_lo_que_no_se_toca():
     db = _db()
     assert _m(db, "150 g de pechuga de pollo")["grams"] == 150                                  # sin cocción
-    assert _m(db, "150 g de pechuga de pollo a la plancha")["grams"] == 150                     # la lista tampoco
+    # [P1-PLAN-LOTE-980] f1af9466 (2026-10-20) sumó «a la plancha» a las cocciones de la proteína: ya cuenta cruda.
+    assert abs(_m(db, "150 g de pechuga de pollo a la plancha")["grams"] - 150 * cc.factor_proteina()) < 0.5
     assert _m(db, "1 pechuga de pollo cocida")["grams"] == 170                                  # una pieza es una pieza
     assert _m(db, "150 g de pechuga de pollo cocida (200 g en crudo)")["grams"] == 200         # el paréntesis ya es crudo
     assert _m(db, "100 g de jamón de pavo cocido")["grams"] == 100                              # embutido: se vende hecho
-    assert abs(_m(db, "60 g de arroz blanco frito")["grams"] - 60) < 0.01                        # un grano no es proteína
+    # un grano no es proteína: nunca el factor 1,35. [P1-PLAN-LOTE-980] desde f1af9466 «arroz blanco» es grano
+    # PREPARADO y cuenta en la base seca de su fila (≤ 60 g), que es otra conversión.
+    assert _m(db, "60 g de arroz blanco frito")["grams"] <= 60 + 0.01
 
 
 def test_ganchos():

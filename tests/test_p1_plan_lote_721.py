@@ -54,7 +54,9 @@ def test_lo_que_la_ficha_pide_existe():
     assert 'APIRouter(prefix="/api/diary"' in diary or "prefix=\"/api/diary\"" in diary
 
     # «Registrar otra vez»: los campos que manda son los de RepeatMealRequest
-    assert "JSON.stringify({ source_meal_id: meal.id, meal_type: meal.meal_type || undefined, days_ago: 0 })" in ficha
+    # [P1-PLAN-LOTE-980] El body pasó a varias líneas y sumó `session_id` (puente al chat del coach).
+    _plano = re.sub(r"\s+", " ", ficha)
+    assert "source_meal_id: meal.id, meal_type: meal.meal_type || undefined, days_ago: 0," in _plano
     from routers.diary import RepeatMealRequest
     assert {"source_meal_id", "meal_type", "days_ago"} <= set(RepeatMealRequest.model_fields)
 
@@ -71,7 +73,8 @@ def test_la_foto_no_viaja():
     # [P1-PLAN-LOTE-762] el pie «Solo en este dispositivo» salió de la ficha; la promesa sigue: la foto sale del
     # almacén del dispositivo y la ficha no la pide a ninguna ruta
     ficha = _f("src/components/dashboard/FichaDeComida.jsx")
-    assert "useFotoDeComida(userId, meal?.id, 'foto')" in ficha
+    # [P1-PLAN-LOTE-980] 8954aac4: la ficha muestra TODAS las fotos del plato, del mismo almacén local.
+    assert "useFotoDeComida(userId, meal?.id, 'foto')" in ficha or "useFotosDeComida(userId, meal?.id)" in ficha
     assert not re.search(r"fetchWithAuth\([^)]*(foto|photo)", ficha, re.I) and "photo_url" not in ficha
     # el servidor no tiene dónde guardarla: ni columna en la migración del lote ni en la ficha que devuelve
     mig = _b("migrations/p1_plan_lote_720_consumed_meals_origen_2026_09_28.sql")

@@ -111,7 +111,7 @@ def test_builder_skip_true_skips_passes_functional(monkeypatch):
     data = {"plan_data": {"days": [], "generation_status": "partial"}}
     sql, vals = dp._build_meal_plan_insert_sql(dict(data), skip_plan_data_finalize=True)
     assert calls == [], "skip=True no debe invocar el finalize"
-    assert "INSERT INTO meal_plans" in sql and len(vals) == 1
+    assert "INSERT INTO meal_plans" in sql and len(vals) == 2  # plan_data + usage_scope (P1-PLAN-LOTE-980)
 
     dp._build_meal_plan_insert_sql(dict(data))
     assert len(calls) == 1, "default (skip=False) debe conservar el escudo central"

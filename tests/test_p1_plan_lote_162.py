@@ -85,7 +85,9 @@ def test_historial_y_dias_anteriores_del_contador():
     tp = _f("src/components/dashboard/TrackingProgress.jsx")
     assert "if (consumirAbrirDiasAnteriores()) setHistoryOpen(true);" in tp
     dh = _f("src/components/dashboard/DiaryHistory.jsx")
-    assert "const hoyISO = useMemo(() => aISO(new Date()), [open]);" in dh
+    # [P1-PLAN-LOTE-980] Con el corte de las 4:00 (P1-DIARY-ROLLOVER-4AM) «hoy» es el día biológico.
+    assert ("const hoyISO = useMemo(() => aISO(new Date()), [open]);" in dh
+            or "const hoyISO = useMemo(() => getBiologicalDateStr(new Date()), [open]);" in dh)
 
 
 def test_escaner_borrado_google_y_android():

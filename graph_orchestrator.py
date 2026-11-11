@@ -26558,7 +26558,7 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                         if not isinstance(ing, str):
                             continue
                         mc = db.macros_from_ingredient_string(ing) or {}
-                        g = mc.get("grams")
+                        g = getattr(db, "_grams_literales", lambda _s: None)(ing) or mc.get("grams")  # [P1-PLAN-LOTE-980] el pouch mide lo SERVIDO, no su equivalente crudo
                         if not g:
                             continue
                         g = float(g)

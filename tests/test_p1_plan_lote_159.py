@@ -73,7 +73,9 @@ def test_el_corte_es_por_el_ULTIMO_mensaje_no_por_el_nacimiento():
     Mirar `created_at` la partiría justo mientras el usuario escribe. Aquí el último mensaje es
     de hoy a las 00:30 local aunque la sesión naciera ayer: no se toca.
     """
-    medianoche_y_media = datetime(2026, 9, 22, 4, 30, tzinfo=timezone.utc)   # 00:30 en RD
+    # [P1-PLAN-LOTE-980] BB-044 (2026-11-07): el día del chat arranca a las 4:00 local, no a medianoche;
+    # a las 00:30 todavía es el día biológico ANTERIOR. El caso equivalente hoy: 04:30 local.
+    medianoche_y_media = datetime(2026, 9, 22, 8, 30, tzinfo=timezone.utc)   # 04:30 en RD
     elegida, creadas = _correr(medianoche_y_media)
     assert elegida == "ses-vieja"
     assert creadas == []
@@ -84,8 +86,9 @@ def test_la_frontera_es_el_dia_LOCAL_de_cada_usuario():
 
     Sin esto, un dominicano recibiría el «chat de hoy» a las 20:00 de su día anterior.
     """
-    # Último mensaje: 22-sep 02:00 UTC = 21-sep 22:00 en RD (UTC-4).
-    msg = datetime(2026, 9, 22, 2, 0, tzinfo=timezone.utc)
+    # [P1-PLAN-LOTE-980] Con el corte de las 4:00 (BB-044): 22-sep 05:00 UTC = 22-sep 01:00 en RD,
+    # todavía el día biológico 21; en UTC son las 05:00 del 22, ya el día 22.
+    msg = datetime(2026, 9, 22, 5, 0, tzinfo=timezone.utc)
     # Visto desde RD es de AYER ⇒ chat nuevo.
     elegida_rd, creadas_rd = _correr(msg, tz=_RD)
     assert elegida_rd != "ses-vieja" and len(creadas_rd) == 1

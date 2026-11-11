@@ -393,11 +393,17 @@ def diario(monkeypatch):
     monkeypatch.setattr(tools, "db_log_consumed_meal", lambda *a, **k: st["logs"].append((a, k)) or "row-new")
     monkeypatch.setattr(tools, "_rescue_dinner_slot", lambda uid, mt, kcal, d: mt)
     monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 240)
+    # [P1-PLAN-LOTE-980] Los rescates por hora (BB-049/BB-054) dependen del reloj; estos tests
+    # miden el mapeo y la Nevera, así que se neutralizan igual que `_rescue_dinner_slot`.
+    monkeypatch.setattr(tools, "_rescue_breakfast_from_premature_almuerzo", lambda uid, mt, name: mt)
+    monkeypatch.setattr(tools, "_rescue_stale_desayuno_after_noon", lambda uid, mt, kcal, d: (mt, False))
+    monkeypatch.setattr(tools, "_rescue_dinner_from_unlabeled_desayuno", lambda uid, mt, kcal, d: mt)
 
     def _q(sql, params=None, fetch_one=False, fetch_all=False, **kw):
         if "inventory_consumption_events" in sql:
             return {"c": st["eventos"]}
-        if "SELECT meal_type, consumed_at" in sql:
+        # [P1-PLAN-LOTE-980] `_leer_fila_diario` lee ahora `SELECT id, meal_type, consumed_at, ...`.
+        if "SELECT meal_type, consumed_at" in sql or "SELECT id, meal_type, consumed_at" in sql:
             return st["fila"]
         if "FROM consumed_meals" in sql:
             return st["dup"]

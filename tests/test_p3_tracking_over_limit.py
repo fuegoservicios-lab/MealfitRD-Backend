@@ -62,97 +62,6 @@ def test_calc_perc_uncapped(jsx_src: str):
     )
 
 
-def test_is_over_flag_present(jsx_src: str):
-    """`isOver = perc > 100` debe existir en ProgressBar — gate del
-    signaling rojo."""
-    assert re.search(r"isOver\s*=\s*perc\s*>\s*100", jsx_src), (
-        "P3-TRACKING-OVER-LIMIT regresión: `isOver = perc > 100` ausente "
-        "en TrackingProgress.jsx. Sin él, el signaling rojo NO se gatea."
-    )
-
-
-def test_fill_width_capped_inside_bar(jsx_src: str):
-    """El cap superior al 100% debe existir. Pre-fix: `fillWidth = Math.min(perc, 100)`.
-    [P3-TRACKING-FILL-MIN-VISUAL · 2026-05-22] Ahora el cap vive en
-    `_percCapped = Math.min(perc, 100)` antes de aplicar el piso del
-    `_FILL_VISUAL_MIN`. Sin el cap, una meta excedida al 150% haría el
-    div fill desbordarse del track."""
-    assert re.search(
-        r"(_percCapped\s*=\s*Math\.min\(perc,\s*100\))|"
-        r"(fillWidth\s*=\s*Math\.min\s*\(\s*perc\s*,\s*100\s*\))",
-        jsx_src,
-    ), (
-        "P3-TRACKING-OVER-LIMIT regresión: cap superior al 100% ausente. "
-        "Buscado `_percCapped = Math.min(perc, 100)` (post-FILL-MIN-VISUAL) "
-        "o el legacy `fillWidth = Math.min(perc, 100)`. Sin ninguno, fill "
-        "se desborda cuando perc > 100."
-    )
-
-
-def test_red_gradient_constant_present(jsx_src: str):
-    """El gradient rojo (`#FCA5A5 → #DC2626`) debe estar en la fuente
-    — anchor de la paleta del estado over."""
-    assert "#DC2626" in jsx_src, (
-        "P3-TRACKING-OVER-LIMIT regresión: color rojo `#DC2626` (Tailwind "
-        "red-600) ausente. Es el ancla de la paleta del estado over. "
-        "Si cambias a otro rojo, actualiza el test."
-    )
-    # [2026-09-04] decisión del dueño: relleno rojo SÓLIDO con contorno definido; el gradiente
-    # claro→oscuro (#FCA5A5) se retiró a propósito. El ancla es la constante única.
-    assert "OVER_COLOR = '#DC2626'" in jsx_src, (
-        "el rojo del exceso debe vivir en UNA constante `OVER_COLOR` (relleno, glow y número)."
-    )
-
-
-# Nota: el test del badge "+exceso unit" se movió a
-# `test_p3_tracking_over_no_badge.py` tras el follow-up del mismo día.
-# El user pidió remover el badge — el signaling vía color + % uncapped
-# dentro del fill ya comunica el exceso. Este archivo sigue anclando el
-# RESTO del signaling visual (gradient rojo, número rojo, glow rojo,
-# % uncapped, etc.) que se mantiene intacto.
-
-
-def test_consumed_text_color_switches_when_over(jsx_src: str):
-    """El color del número consumido (`barConsumed`) debe switchear a
-    rojo cuando `isOver`. Variable `consumedTextColor` con condicional."""
-    assert re.search(
-        r"consumedTextColor\s*=\s*isOver",
-        jsx_src,
-    ), (
-        "P3-TRACKING-OVER-LIMIT regresión: `consumedTextColor` no usa "
-        "`isOver` como gate. Sin esto, el número grande se queda en slate "
-        "aunque la meta esté excedida."
-    )
-
-
-def test_effective_gradient_uses_over_gradient(jsx_src: str):
-    """`effectiveGradient` debe switchear entre `OVER_GRADIENT` y el
-    gradient original según `isOver`. Esta es la mutación más visible."""
-    # [2026-09-04] el relleno pasa a rojo sólido: `background: isOver ? OVER_COLOR : gradient`
-    assert re.search(
-        r"background:\s*isOver\s*\?\s*OVER_COLOR\s*:\s*gradient",
-        jsx_src,
-    ), (
-        "P3-TRACKING-OVER-LIMIT regresión: `background: isOver ? OVER_COLOR : gradient` "
-        "ausente. Sin esto la barra mantiene el gradient amber/blue/green/pink aunque haya "
-        "exceso → el signaling rojo principal se pierde."
-    )
-
-
-def test_glow_uses_red_when_over(jsx_src: str):
-    """El `boxShadow` debe usar rgba red cuando `isOver` (no el color
-    original del macro). El glow refuerza el signaling rojo."""
-    # Buscar el shadow `rgba(220, 38, 38, 0.45)` (red glow over).
-    assert re.search(
-        r"rgba\(\s*220\s*,\s*38\s*,\s*38\s*,\s*0\.45\s*\)",
-        jsx_src,
-    ), (
-        "P3-TRACKING-OVER-LIMIT regresión: red glow `rgba(220, 38, 38, 0.45)` "
-        "ausente. Sin él, el glow se queda en el color del macro aunque "
-        "la barra esté roja — inconsistencia visual."
-    )
-
-
 def test_fill_perc_uses_uncapped_value(jsx_src: str):
     """`.fillPerc` debe mostrar `{perc}%` (no `{fillWidth}%`). El número
     dentro de la barra es el % real — cuando over, debe leer 107% no 100%.
@@ -176,12 +85,4 @@ def test_fill_perc_uses_uncapped_value(jsx_src: str):
     )
 
 
-def test_tooltip_anchor_count(jsx_src: str):
-    """Marker `P3-TRACKING-OVER-LIMIT` aparece ≥2× en TrackingProgress.jsx
-    (al menos: calcPerc + ProgressBar)."""
-    count = jsx_src.count("P3-TRACKING-OVER-LIMIT")
-    assert count >= 2, (
-        f"P3-TRACKING-OVER-LIMIT: tooltip-anchor aparece {count}× "
-        f"en TrackingProgress.jsx, esperado ≥2 (bloque de calcPerc + "
-        f"bloque de ProgressBar con isOver)."
-    )
+# [P1-PLAN-LOTE-980] Retirados is_over/rojo #DC2626/glow/consumedTextColor/anchors: 9ffa8b92 (2026-10-08) cambió el exceso a la paleta por meta (naranja ámbar), cubierta por vitest TrackingProgress.goal_colors.

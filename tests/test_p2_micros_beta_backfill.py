@@ -86,8 +86,12 @@ def filas():
 
 
 def _cero(v) -> bool:
+    # [P1-PLAN-LOTE-980] Desde 7d450530 (2026-10-10, docs/diary-micronutrients-2026-10-10.md) el dato
+    # AUSENTE es NULL y un cero REPORTADO sigue siendo cero: aquí se cuentan solo los ceros reportados.
+    if v is None:
+        return False
     try:
-        return float(v or 0) == 0.0
+        return float(v) == 0.0
     except (TypeError, ValueError):
         return True
 

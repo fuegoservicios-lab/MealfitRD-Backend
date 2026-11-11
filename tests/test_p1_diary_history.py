@@ -65,7 +65,8 @@ def test_days_viene_clampado():
     """`days` lo elige el cliente. Sin tope, `days=99999` convierte un endpoint
     de UI en un escaneo de tabla."""
     src = _fuente_endpoint()
-    assert re.search(r"min\(int\(days\),\s*90\)", src), (
+    # [P1-PLAN-LOTE-980] 036aac29 (2026-10-29) subió el tope a 365 para el calendario mensual.
+    assert re.search(r"min\(int\(days\),\s*(?:90|365)\)", src), (
         "P1-DIARY-HISTORY: `days` sin clamp superior"
     )
 
@@ -121,9 +122,12 @@ def test_el_drawer_existe_y_lo_abre_la_card_de_hoy():
     )
     # El disparador va DESPUÉS del ternario vacío/no-vacío: si quedara dentro
     # de la rama con comidas, desaparecería justo en el caso reportado.
+    # [P1-PLAN-LOTE-980] Desde el rediseño el disparador va ARRIBA de la lista, junto a «Registrar
+    # comida»: vale igual mientras quede FUERA del ternario vacío/no-vacío.
     i_ternario = tp.index("Aún no registras comidas hoy")
     i_trigger = tp.index("<DiaryHistoryTrigger")
-    assert i_trigger > i_ternario, (
+    i_inicio_ternario = tp.index("_todaysMeals.length === 0 ?")
+    assert i_trigger > i_ternario or i_trigger < i_inicio_ternario, (
         "el disparador quedó dentro de la rama con comidas: con el día en cero "
         "—el caso que originó esto— no habría forma de abrir el historial"
     )

@@ -81,6 +81,7 @@ def test_deploy_script_waits_for_the_worker_before_restart():
     if not script.exists():
         pytest.skip("deploy-mealfit.ps1 no está en la raíz de este árbol")
     ps1 = script.read_text(encoding="utf-8", errors="replace")
+    ps1 = ps1.replace(" --warning=no-unknown-keyword", "")  # [P1-PLAN-LOTE-980] flag de tar del VPS
     call = ps1.find("bash /opt/mealfit/backend/scripts/drain_before_restart.sh")
     restart = ps1.find("systemctl restart mealfit-backend")
     tar = ps1.find("tar -xzf /tmp/backend.tar.gz -C /opt/mealfit")

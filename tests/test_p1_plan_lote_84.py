@@ -34,11 +34,12 @@ def test_formato_de_la_hora():
 def dia_del_dueno(monkeypatch):
     import db_facts
     monkeypatch.setattr(tools, "_local_date_str_for_user", lambda _u: "2026-09-17")
+    monkeypatch.setattr(tools, "_diary_date_str_for_user", lambda _u=None: "2026-09-17")  # [P1-PLAN-LOTE-980]
     monkeypatch.setattr(tools, "user_tz_offset_min", lambda _u: 240)
     monkeypatch.setattr(tools, "get_latest_usable_meal_plan", lambda _u: None)
     monkeypatch.setattr(tools, "_horas_tipicas_de_comida", lambda _u: dict(_TIPICAS))
     monkeypatch.setattr(db_facts, "get_consumed_meals_today",
-                        lambda _u, date_str=None, tz_offset_mins=None: [{"meal_type": "desayuno", "meal_name": "huevos"}])
+                        lambda _u, date_str=None, tz_offset_mins=None: [{"meal_type": "desayuno", "meal_name": "huevos", "calories": 400}])
 
 
 def test_a_las_11_23_el_almuerzo_aun_no_toca_y_no_se_pregunta(dia_del_dueno):
@@ -53,7 +54,7 @@ def test_a_las_11_23_el_almuerzo_aun_no_toca_y_no_se_pregunta(dia_del_dueno):
 def test_a_las_9_la_cena_queda_lejos_y_la_frase_no_dice_ya_casi(dia_del_dueno):
     import db_facts
     db_facts.get_consumed_meals_today = lambda _u, date_str=None, tz_offset_mins=None: [
-        {"meal_type": "desayuno"}, {"meal_type": "almuerzo"}]
+        {"meal_type": "desayuno", "calories": 400}, {"meal_type": "almuerzo", "calories": 400}]
     nota = tools._nota_comidas_sin_registrar("u-1", 0, ahora_local=14.5)
     assert "La próxima es cena (~7:30 PM)" in nota
     assert "«cuando cenes, cuéntame qué comiste y lo anoto»" in nota and "ya casi" not in nota
@@ -68,13 +69,14 @@ def test_a_las_2_de_la_tarde_el_almuerzo_ya_paso_y_se_ofrece_por_su_nombre(dia_d
 
 def test_ayer_no_cambia(dia_del_dueno):
     nota = tools._nota_comidas_sin_registrar("u-1", 1, ahora_local=11.38)
-    assert "ayer sigue sin registrar" in nota and "ofreciendo agregar LA QUE FALTA" in nota
+    # [P1-PLAN-LOTE-980] BB-044: en un día pasado el coach confirma y NO reclama lo que faltó.
+    assert "Comida de ayer registrada correctamente. Confirma la anotación de forma limpia sin preguntar por otras comidas faltantes de ayer." in nota and "ofreciendo agregar LA QUE FALTA" not in nota
 
 
 def test_todo_registrado_no_cambia(dia_del_dueno):
     import db_facts
     db_facts.get_consumed_meals_today = lambda _u, date_str=None, tz_offset_mins=None: [
-        {"meal_type": "desayuno"}, {"meal_type": "almuerzo"}, {"meal_type": "cena"}]
+        {"meal_type": "desayuno", "calories": 400}, {"meal_type": "almuerzo", "calories": 400}, {"meal_type": "cena", "calories": 400}]
     nota = tools._nota_comidas_sin_registrar("u-1", 0, ahora_local=21.0)
     assert "ya tiene todas sus comidas registradas" in nota
 

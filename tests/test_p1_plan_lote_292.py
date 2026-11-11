@@ -203,6 +203,8 @@ def test_I4_el_inventario_solo_trae_potes_a_quien_los_pide(monkeypatch):
     user_data._fetch_inventory("u", True, incluir_suplementos=True)
     assert "ui.kind = 'food'" in sqls[0] and "OR ui.kind = 'supplement'" not in sqls[0]
     assert "OR ui.kind = 'supplement'" in sqls[1]
-    front = _BACKEND.parent / "frontend" / "src" / "pages" / "Pantry.jsx"
+    # [P1-PLAN-LOTE-980] La lectura de la Nevera se extrajo a `utils/inventarioDeNevera.js` (la usa Pantry.jsx).
+    front = _BACKEND.parent / "frontend" / "src" / "utils" / "inventarioDeNevera.js"
     if front.exists():
         assert "/api/inventory?incluir_suplementos=1" in front.read_text(encoding="utf-8")
+        assert "inventarioDeNevera" in (_BACKEND.parent / "frontend" / "src" / "pages" / "Pantry.jsx").read_text(encoding="utf-8")

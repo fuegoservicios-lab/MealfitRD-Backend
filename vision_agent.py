@@ -379,8 +379,8 @@ _MEAL_VISION_PROMPT = (
     "'infusion', 'bebida', 'jugo natural'): usa el nombre de la opcion supuesta (la mas probable por el color) y marca supuesta=true. "
     "Muchos tes dominicanos son mezclas (jengibre con canela y limon): si el color o lo que se ve sugiere una mezcla, ofrecela como opcion. "
     # [BB-030 / P1-BEVERAGE-DOUBTS-NEUTRAL-HIERARCHY · 2026-11-04] Jerarquía neutra en bebidas ambiguas
-    "JERARQUIA EN BEBIDAS AMBIGUAS: si el liquido puede ser cafe, te o chocolate, la PRIMERA duda DEBE ser la identidad neutra ('¿Que bebida tienes en la taza?' con opciones como 'Cafe negro', 'Cafe con leche', 'Te o infusion', 'Chocolate'). "
-    "PROHIBIDO generar una pregunta que asuma la preparacion del cafe ('¿Como preparaste el cafe?') si tienes una duda de identidad abierta sobre que bebida es: una pregunta dependiente crea contradiccion si el usuario toma te o chocolate. "
+    "JERARQUIA EN BEBIDAS AMBIGUAS: si el liquido puede ser cafe, te o chocolate, la PRIMERA duda DEBE ser la identidad neutra ('Que bebida tienes en la taza?' con opciones como 'Cafe negro', 'Cafe con leche', 'Te o infusion', 'Chocolate'). "
+    "PROHIBIDO generar una pregunta que asuma la preparacion del cafe ('Como preparaste el cafe?') si tienes una duda de identidad abierta sobre que bebida es: una pregunta dependiente crea contradiccion si el usuario toma te o chocolate. "
     # [P1-PLAN-LOTE-322 · 2026-09-25] El dueño: «una forma más fácil de responder esas preguntas».
     "OPCIONES: cada duda lleva en 'opciones' de 2 a 5 respuestas cortas que el usuario toca (ej: '2 huevos', '3 huevos', "
     "'4 huevos'; 'Panecillo', 'Arepa', 'Galleta'; 'Frito', 'A la plancha'). Marca con supuesta=true la que usaste para "

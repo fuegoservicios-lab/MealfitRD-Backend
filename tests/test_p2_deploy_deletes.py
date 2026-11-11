@@ -48,6 +48,7 @@ def _codigo_sin_comentarios() -> str:
     if not _DEPLOY.exists():
         pytest.fail(f"[P2-DEPLOY-DELETES] No existe {_DEPLOY}")
     texto = _DEPLOY.read_text(encoding="utf-8", errors="replace")
+    texto = texto.replace(" --warning=no-unknown-keyword", "")  # [P1-PLAN-LOTE-980] flag de tar del VPS
     texto = re.sub(r"<#.*?#>", "", texto, flags=re.DOTALL)  # bloque de ayuda
     return re.sub(r"^\s*#.*$", "", texto, flags=re.MULTILINE)
 

@@ -59,8 +59,11 @@ def test_sin_rotulo_y_con_los_botones_como_fichas():
 
 def test_el_chat_empieza_arriba_del_todo():
     r = _regla(_movil(), "                    .messages-container")
-    assert "margin-top: 0 !important;" in r
-    assert "padding-top: calc(3.7rem + max(env(safe-area-inset-top), 24px)) !important;" in r
+    # [P1-PLAN-LOTE-980] d436bff6 movió el hueco de la cabecera de padding a margin («la franja queda
+    # fuera del scroll: ningún mensaje pasa detrás del aviso»). Lo que se protege: el offset existe.
+    _off = "calc(3.7rem + max(env(safe-area-inset-top), 24px)) !important;"
+    assert (("margin-top: 0 !important;" in r and "padding-top: " + _off in r)
+            or ("margin-top: " + _off in r and "padding-top: 1.25rem !important;" in r))
 
 
 def test_el_css_vive_en_un_template_literal():

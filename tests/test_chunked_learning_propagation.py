@@ -1870,6 +1870,10 @@ def test_p0_1_enqueue_uses_single_atomic_upsert_statement():
     captured_sql = []
 
     def fake_query(query, params, **kwargs):
+        # [P1-PLAN-LOTE-980] La lectura del origen del plan (usage_scope, ios_free)
+        # precede al UPSERT y no es parte de la idempotencia.
+        if "SELECT usage_scope" in query:
+            return {}
         captured_sql.append(query)
         # Simular insert nuevo
         return {"id": "row-uuid", "status": "pending", "inserted": True}
@@ -1970,6 +1974,8 @@ def test_p0_1_enqueue_passes_both_fresh_and_retry_timestamps():
     captured_params = []
 
     def fake_query(query, params, **kwargs):
+        if "SELECT usage_scope" in query:  # [P1-PLAN-LOTE-980] origen del plan, no el UPSERT
+            return {}
         captured_params.append(params)
         return {"id": "row", "status": "pending", "inserted": True}
 

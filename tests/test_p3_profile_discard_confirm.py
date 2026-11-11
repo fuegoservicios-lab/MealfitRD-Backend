@@ -100,7 +100,8 @@ def test_volver_button_gates_on_body_metrics_changed():
     # Se sigue la CADENA (botón → handler → gate), que es lo que protege al usuario y
     # además no depende de dónde esté declarado el handler.
     # [P2-ICON-CLOSE-UNIFORM · 2026-09-02] el botón lleva la clase de sistema: `${styles.exitSettingsBtn} ui-close`.
-    m_onclick = re.search(r"className=\{(?:`\$\{)?styles\.exitSettingsBtn(?:\} ui-close`)?\}\s*onClick=\{(\w+)\}", src)
+    # [P1-PLAN-LOTE-980] y la clase `ui-close` pasó a condicional (`${inDialog ? 'ui-close' : ''}`).
+    m_onclick = re.search(r"className=\{(?:`\$\{)?styles\.exitSettingsBtn(?:\} [^`]*`)?\}\s*onClick=\{(\w+)\}", src)
     assert m_onclick, "el botón Volver perdió su onClick={handler}"
     handler = m_onclick.group(1)
 

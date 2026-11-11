@@ -50,6 +50,8 @@ def _rutas_declaradas() -> set[str]:
 
 
 def _resuelve(destino: str, rutas: set[str]) -> bool:
+    # [P1-PLAN-LOTE-980] El ancla (`/medical#fuentes`) y la query no son parte de la ruta del router.
+    destino = destino.split("#", 1)[0].split("?", 1)[0] or "/"
     if destino in rutas:
         return True
     # Una ruta paramétrica (`/novedades/:slug`) cubre a sus hijos concretos.

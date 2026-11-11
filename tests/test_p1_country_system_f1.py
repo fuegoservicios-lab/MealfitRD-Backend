@@ -2113,23 +2113,17 @@ def test_rescue_dinner_slot_usa_offset_resuelto_con_signo_menos(monkeypatch):
     query, params = calls[-1]["query"], calls[-1]["params"]
     assert query.count("- make_interval(mins => %s)") == 2
     assert "America/Santo_Domingo" not in query
-    assert params[-2] == -60 and params[-1] == -60, f"offset resuelto ausente: {params!r}"
+    # [P1-PLAN-LOTE-980] Desde P1-DIARY-ROLLOVER-4AM el día del diario arranca a las 4:00:
+    # el parámetro es offset + rollover (−60 + 240), no el offset solo.
+    from db_facts import _diary_rollover_hour
+    _esperado = -60 + _diary_rollover_hour() * 60
+    assert params[-2] == _esperado and params[-1] == _esperado, f"offset resuelto ausente: {params!r}"
 
 
-# ── tools.log_consumed_meal (dup-guard): SQL exacto, signo '-' ───────────────
-
-def _cuerpo_log_consumed_meal_dup_guard() -> str:
-    cuerpo_completo = _sin_comentarios("tools.py")
-    ini = cuerpo_completo.index("_meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force")
-    fin = cuerpo_completo.index("except Exception as _dup_err:", ini)
-    return cuerpo_completo[ini:fin]
-
-
-def test_log_consumed_meal_dup_guard_sql_exacto_offset_resuelto():
-    cuerpo = _cuerpo_log_consumed_meal_dup_guard()
-    assert "user_tz_offset_min(user_id)" in cuerpo
-    assert "America/Santo_Domingo" not in cuerpo
-    assert cuerpo.count("- make_interval(mins => %s)") == 2
+# ── tools.log_consumed_meal (dup-guard) ──────────────────────────────────────
+# [P1-PLAN-LOTE-980] Retirado: 2c6f3af0 (2026-10-12, «Allow additional foods in the same
+# meal period») quitó a propósito el bloqueo de duplicados por franja. Sin guard no hay SQL
+# que vigilar; el offset de las demás consultas del diario lo cubren los tests de este fichero.
 
 
 # ── proactive_agent.get_daily_nudge_count: signo '-' ──────────────────────────

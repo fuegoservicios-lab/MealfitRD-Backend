@@ -117,7 +117,9 @@ def test_los_textos_estan_en_los_cuatro_idiomas():
 
 def test_las_pruebas_de_la_pagina_existen():
     prueba = _front("src/__tests__/Agent.renovacion_diaria.test.jsx")
-    assert "al volver a la pestaña pasada la medianoche, se abre el chat de hoy" in prueba
+    # [P1-PLAN-LOTE-980] BB-044: el chat se renueva en el corte biológico de las 4 AM, no a medianoche.
+    assert ("al volver a la pestaña pasada la medianoche, se abre el chat de hoy" in prueba
+            or "al volver a la pestaña pasado el corte biológico de las 4 AM, se abre el chat de hoy" in prueba)
     assert "abrir hoy un chat viejo desde Recientes no lo renueva al volver a la pestaña" in prueba
 
 

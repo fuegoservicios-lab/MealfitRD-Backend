@@ -39,7 +39,8 @@ def test_solo_el_contador_pide_las_secciones_planas():
     tracking = _front(_DASH + "DashboardTracking.jsx")
     # [P1-PLAN-LOTE-103] `metasMacros` (era `targets`): las del plan en modo plan, las del perfil en modo contador
     # [P1-PLAN-LOTE-105] la tarjeta recibe además las metas de micros
-    assert "<TrackingProgress planData={metasMacros} userId={userProfile?.id} flatOnMobile microTargets={targets?.micros || null} />" in tracking
+    # [P1-PLAN-LOTE-980] 9ffa8b92 añadió `referenceProfile={formData}` (distancias de referencia).
+    assert "<TrackingProgress planData={metasMacros} userId={userProfile?.id} flatOnMobile microTargets={targets?.micros || null}" in tracking
     assert "|| 'guest'} flatOnMobile />" in tracking
     dash = _front("src/pages/Dashboard.jsx")
     assert "flatOnMobile" not in dash, "el dashboard de plan no se aplana en este lote"

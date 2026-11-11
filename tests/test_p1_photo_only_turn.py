@@ -122,4 +122,6 @@ def test_el_contexto_con_texto_no_fuerza_el_resumen():
         "has_text": True,
         "items": [{"kind": "plato", "description": "arroz blanco"}],
     })
-    assert "proactiv" not in ctx.lower()
+    # [P1-PLAN-LOTE-980] BB-036 añadió a las reglas compartidas «confírmala proactivamente» (registrar sin
+    # pedir permiso), que vale en los dos contextos; lo exclusivo de la foto sin texto es su orden propia.
+    assert "FOTO DE PLATO SERVIDO" not in ctx and "Responde al mensaje del usuario" in ctx

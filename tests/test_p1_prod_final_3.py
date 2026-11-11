@@ -142,7 +142,9 @@ def test_constants_has_anchor_p1_embedding_cache_bounded():
 # ---------------------------------------------------------------------------
 _HOT_PATH_FILES_AND_KEYS = (
     # [P1-PLAN-LOTE-719] aquí iba Settings.jsx ('mealfit_notifications'): su estado era código muerto y se retiró.
-    (_DASHBOARD_JSX, "mealfit_push_onboarding_seen"),
+    # [P1-PLAN-LOTE-980] aquí iba Dashboard.jsx ('mealfit_push_onboarding_seen'): el onboarding de
+    # notificaciones pasó a `NotificationOnboarding.jsx`, con clave por usuario y los helpers seguros
+    # (lo vigila test_p1_prod_final_1::test_dashboard_push_onboarding_uses_safe_localstorage).
     (_PANTRY_JSX, "mealfit_plan"),
     (_PLAN_JSX, "mealfit_guest_session_id"),
     # [P1-PLAN-LOTE-109] aquí iba IOSInstallPrompt.jsx: el aviso de instalación se retiró.

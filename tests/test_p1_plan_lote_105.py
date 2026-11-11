@@ -87,7 +87,7 @@ def test_el_diario_de_dias_anteriores_esta_completo():
     # el backend acepta hasta 7 días atrás: el cajón no promete más
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
     assert "days_ago: int = Field(default=0, ge=0, le=7)" in diary
-    assert re.search(r"min\(int\(days\),\s*90\)", diary)
+    assert re.search(r"min\(int\(days\),\s*(?:90|365)\)", diary)  # 365: calendario mensual [P1-PLAN-LOTE-980]
 
 
 def test_la_tarjeta_escucha_el_borrado_del_cajon_sin_reaccionar_al_suyo():
@@ -143,7 +143,8 @@ def test_i18n_y_marcador():
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         d = json.loads(_front(f"src/i18n/locales/{loc}.json"))
         for k in ("Tus macros y micros de hoy", "Micros", "Extras y snacks", "Ver 2 semanas más", "Registrar en este día",
-                  "Solo se puede registrar hasta 7 días atrás.", "Ninguna de estas comidas trae micros (foto o macros propias)."):
+                  "Solo se puede registrar hasta 7 días atrás."):
+            # [P1-PLAN-LOTE-980] «Ninguna de estas comidas trae micros…» salió del UI en 0746cc70 (2026-10-12).
             assert d.get(k), f"{loc}: {k}"
         assert d.get("Últimos 7 días: media de {kcal} kcal en {n} días con registro", {}).get("other"), loc
         for viejo in ("Micros de hoy", "Tus macros de hoy", "Snacks"):

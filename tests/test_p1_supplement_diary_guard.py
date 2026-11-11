@@ -20,7 +20,8 @@ def test_suplemento_es_canonico_y_tiene_sinonimos():
     assert tools._resolver_meal_type("supplement") == "suplemento"
     assert tools._resolver_meal_type("supplements") == "suplemento"
     assert tools._resolver_meal_type("integratore") == "suplemento"
-    assert tools._resolver_meal_type("complement") == "suplemento"
+    # [P1-PLAN-LOTE-980] BB-025 (2026-11-03) creó la sección «complemento» (bebidas ligeras): «complement» va ahí.
+    assert tools._resolver_meal_type("complement") == "complemento"
 
 
 def test_slot_canonico_suplemento_es_none():

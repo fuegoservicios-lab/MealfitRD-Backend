@@ -50,7 +50,9 @@ def test_request_model_accepts_only_coordinates(diary_src: str):
     from routers.diary import ConsumedFromPlanRequest
 
     fields = set(ConsumedFromPlanRequest.model_fields)
-    assert fields == {"plan_id", "day_index", "meal_index", "days_ago"}, (
+    # [P1-PLAN-LOTE-980] `session_id` (45d61c3a): en qué chat del coach se anota el registro. No es
+    # contenido del plato y el puente (`diary_chat_bridge`) exige que la sesión sea del usuario.
+    assert fields == {"plan_id", "day_index", "meal_index", "days_ago", "session_id"}, (
         f"campos inesperados en ConsumedFromPlanRequest: {fields}. "
         f"Nombre/macros/ingredientes se LEEN del plan server-side; aceptarlos "
         f"del cliente abre descuento arbitrario de la Nevera."
@@ -106,7 +108,7 @@ def test_handler_never_reads_payload_content_fields(diary_src: str):
     """El handler solo puede leer coordenadas del payload."""
     body = _handler_src(diary_src)
     leidos = set(re.findall(r"payload\.(\w+)", body))
-    assert leidos <= {"plan_id", "day_index", "meal_index", "days_ago"}, (
+    assert leidos <= {"plan_id", "day_index", "meal_index", "days_ago", "session_id"}, (
         f"el handler lee del payload campos que no son coordenadas: "
         f"{leidos - {'plan_id', 'day_index', 'meal_index', 'days_ago'}}"
     )

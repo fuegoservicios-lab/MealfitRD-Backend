@@ -116,9 +116,11 @@ def test_all_5_callsites_pass_timeout(agent_src: str):
     callsite_re = re.compile(r"(?:ChatGLM|build_chat_llm)\s*\(")
     callsites = list(callsite_re.finditer(no_comments))
 
-    assert len(callsites) == 5, (
+    # [P1-PLAN-LOTE-980] 6º callsite: `_build_chat_fallback_llm` (respaldo cross-provider
+    # del coach, 0e6dff24 · 2026-10-14). Pasa su timeout como los otros cinco.
+    assert len(callsites) == 6, (
         f"P0-CHAT-LLM-TIMEOUT tripwire: detectados {len(callsites)} callsites "
-        f"de `ChatGLM(...)` en agent.py (esperados 5). Si "
+        f"de `ChatGLM(...)` en agent.py (esperados 6). Si "
         f"añadiste un callsite nuevo, asegúrate de pasarle `timeout=` y "
         f"actualizar este conteo."
     )

@@ -113,10 +113,11 @@ def test_log_consumed_meal_jsonb_wrap_near_insert():
         (i for i, ln in enumerate(lines) if "INSERT INTO consumed_meals" in ln),
         None,
     )
-    jsonb_lineno = next(
-        (i for i, ln in enumerate(lines) if re.search(r"Jsonb\s*\(\s*ingredients\b", ln)),
-        None,
-    )
+    # [P1-PLAN-LOTE-980] Hay más de un `Jsonb(ingredients` (el dedup de P2-CONSUMED-DEDUP también
+    # lo usa): cuenta el más cercano al INSERT.
+    _js = [i for i, ln in enumerate(lines) if re.search(r"Jsonb\s*\(\s*ingredients\b", ln)]
+    jsonb_lineno = (min(_js, key=lambda i: abs(i - insert_lineno))
+                    if _js and insert_lineno is not None else (_js[0] if _js else None))
     assert insert_lineno is not None, "INSERT INTO consumed_meals no encontrado"
     assert jsonb_lineno is not None, "Jsonb(ingredients no encontrado en log_consumed_meal"
     assert abs(jsonb_lineno - insert_lineno) <= 10, (

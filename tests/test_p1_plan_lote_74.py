@@ -159,6 +159,8 @@ SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "d
                "docs/consentimientos/ia/ia-2026-10/es-DO.md", "docs/consentimientos/ia/ia-2026-10/en-US.md",
                "docs/consentimientos/ia/ia-2026-10/pt-BR.md", "docs/consentimientos/ia/ia-2026-10/fr-FR.md",
                "docs/consentimientos/ia/ia-2026-10/it-IT.md",
+               # [P1-PLAN-LOTE-980] la versión vigente del mismo texto, que añade la voz (consentimientos.AI_CONSENT_VERSION)
+               *(f"docs/consentimientos/ia/ia-2026-10-voz/{loc}.md" for loc in ("es-DO", "en-US", "pt-BR", "fr-FR", "it-IT")),
                # [P1-PLAN-LOTE-849] lo abierto al dueño: la transferencia a China de datos de la UE (con un abogado)
                "docs/app_store_legal.md"}
 

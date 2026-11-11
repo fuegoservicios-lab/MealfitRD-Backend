@@ -33,7 +33,8 @@ def test_apagada_se_enciende_y_la_pantalla_se_entera(perfil):
     texto, cambio = aj.extraer_marcador("Listo: se sumaron 3 vaso(s)." + extra)
     assert perfil["escrituras"] == [("u1", True)] and perfil["recordatorios"] == 1
     assert cambio == {"hidratacion": True}, "el marcador llega al `done` y a las novedades de GPT-Live-1"
-    assert "encendí" in texto and "<<" not in texto, "el modelo lo dice, sin ver el JSON"
+    # [P1-PLAN-LOTE-980] El texto pasó de «encendí» a «lo activé … confírmaselo con naturalidad» (BB-05x).
+    assert ("encendí" in texto or "activé" in texto) and "<<" not in texto, "el modelo lo dice, sin ver el JSON"
 
 
 def test_encendida_o_invitado_no_toca_nada(perfil):

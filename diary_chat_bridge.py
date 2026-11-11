@@ -66,7 +66,9 @@ def get_or_resolve_today_session_for_user(user_id: str, session_id: Optional[str
             )
             if row:
                 owner = row.get("user_id")
-                if not owner or owner == str(user_id):
+                # [P1-PLAN-LOTE-980] Solo SU sesión: una sin dueño (invitado) no se adopta por id, o
+                # cualquiera con el UUID de un chat de invitado escribiría dentro.
+                if owner and owner == str(user_id):
                     return str(session_id)
         except Exception as e:
             logger.warning(f"[diary_chat_bridge] Error verificando session_id {session_id}: {e}")

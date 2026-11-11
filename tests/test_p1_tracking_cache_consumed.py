@@ -78,7 +78,8 @@ def test_consumed_cache_key_includes_user_and_date():
     body = key_helper.group(1)
     # Sanity: debe usar userId Y armar dateStr con año-mes-día.
     assert "userId" in body, "Helper no usa userId — riesgo cross-user."
-    assert re.search(r"getFullYear\s*\(\)", body), (
+    # [P1-PLAN-LOTE-980] Con el corte de las 4:00 la fecha sale de `getBiologicalDateStr()`.
+    assert re.search(r"getFullYear\s*\(\)|getBiologicalDateStr\s*\(\)", body), (
         "Helper no compone la fecha (getFullYear). Sin fecha en la key, "
         "el cache no invalida en rollover de medianoche."
     )

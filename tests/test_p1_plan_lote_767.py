@@ -256,7 +256,7 @@ def test_mejoras_bimg_bomg_noche_memoria_y_alita(monkeypatch):
     nota_tarde = tools._nota_comidas_sin_registrar(
         "u1",
         0,
-        rows_extra=[{"meal_type": "Desayuno"}, {"meal_type": "Almuerzo"}],
+        rows_extra=[{"meal_type": "Desayuno", "calories": 400}, {"meal_type": "Almuerzo", "calories": 400}],
         ahora_local=23.56,
     )
     assert "hoy sigue sin registrar cena (ya pasó su hora)" in nota_tarde
@@ -267,14 +267,14 @@ def test_mejoras_bimg_bomg_noche_memoria_y_alita(monkeypatch):
     nota_completa = tools._nota_comidas_sin_registrar(
         "u1",
         0,
-        rows_extra=[{"meal_type": "Desayuno"}, {"meal_type": "Almuerzo"}, {"meal_type": "Cena"}],
+        rows_extra=[{"meal_type": "Desayuno", "calories": 400}, {"meal_type": "Almuerzo", "calories": 400}, {"meal_type": "Cena", "calories": 400}],
         ahora_local=23.7,
     )
     assert "ya tiene todas sus comidas registradas" in nota_completa
     assert "NO sugieras comer nada más ni tomar batidas antes de dormir" in nota_completa
 
     # 3. estado_de_las_comidas después de las 22:30 avisa no cerrar con "cuando cenes" ni "¿te propongo algo para la cena?"
-    est_2348 = cdc.estado_de_las_comidas([{"meal_type": "Desayuno"}, {"meal_type": "Almuerzo"}], 23.8)
+    est_2348 = cdc.estado_de_las_comidas([{"meal_type": "Desayuno", "calories": 400}, {"meal_type": "Almuerzo", "calories": 400}], 23.8)
     assert "no cierres con «cuando cenes» ni «¿te propongo algo para la cena?»" in est_2348
 
     # 4. Regla anti-fusión de comidas de días distintos en fact_extractor y dreaming
@@ -300,7 +300,8 @@ def test_mejoras_darian_sandwich_proteina_y_avisos(monkeypatch):
 
     # 2. Aclaración en turno siguiente («de pollo danés con vegetales») va a correct_consumed_meal, nunca doble log_consumed_meal
     assert "«de pollo danés con vegetales»" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
-    assert "usa `correct_consumed_meal` sobre el `ID_REGISTRO_DIARIO` anterior" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
+    # [P1-PLAN-LOTE-980] cbd0ef99 reformuló «usa» → «FUSIÓNALO … usando» (repeticiones en la misma fila).
+    assert "`correct_consumed_meal` sobre el `ID_REGISTRO_DIARIO` anterior" in ca._REGLA_UNA_LLAMADA_POR_COMIDA
     assert "de pollo danés con vegetales" in ca.build_tools_instructions("u-darian")
     assert "de pollo danés con vegetales" in ca.build_tools_instructions_stream("u-darian")
 

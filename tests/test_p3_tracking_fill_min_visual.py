@@ -40,67 +40,30 @@ def src() -> str:
     return _TRACKING_JSX.read_text(encoding="utf-8")
 
 
-def test_fill_visual_min_constant_present(src: str):
-    """`_FILL_VISUAL_MIN` constante declarada en el ProgressBar."""
-    assert re.search(r"_FILL_VISUAL_MIN\s*=\s*\d+", src), (
-        "P3-TRACKING-FILL-MIN-VISUAL regresión: constante `_FILL_VISUAL_MIN` "
-        "removida. Sin ella el badge `{perc}%` vuelve a no caber dentro "
-        "del fill cuando el % real es bajo."
-    )
+# [P1-PLAN-LOTE-980] 9ffa8b92 (2026-10-08, marcas de meta y referencias) reescribió la barra: la
+# constante `_FILL_VISUAL_MIN` y el `_percCapped` desaparecieron, pero las tres garantías siguen —
+# piso visual con consumo, 0 sin consumo y nunca más del 100 % del carril. Se anclan sobre la
+# fórmula vigente.
 
-
-def test_fill_min_value_is_at_least_15(src: str):
-    """El piso debe ser ≥15 para que "100%" (max width 26px) entre cómodo
-    dentro del fill (~18% × 380px ≈ 68px)."""
-    m = re.search(r"_FILL_VISUAL_MIN\s*=\s*(\d+)", src)
-    assert m is not None
-    val = int(m.group(1))
-    assert val >= 15, (
-        f"P3-TRACKING-FILL-MIN-VISUAL regresión: piso={val} (<15). "
-        f"Insuficiente para que el badge `{{perc}}%` quepa dentro del fill."
-    )
-    assert val <= 30, (
-        f"P3-TRACKING-FILL-MIN-VISUAL: piso={val} (>30) está exageradamente "
-        f"alto. Distorsiona demasiado la magnitud visual. Recomendado 15-22."
-    )
-
-
-def test_fill_width_uses_max_with_min(src: str):
-    """`fillWidth = perc <= 0 ? 0 : Math.max(_percCapped, _FILL_VISUAL_MIN)`
-    pattern. Si quitan el Math.max el piso no aplica."""
-    assert "Math.max(_percCapped, _FILL_VISUAL_MIN)" in src or re.search(
-        r"Math\.max\(\s*_percCapped\s*,\s*_FILL_VISUAL_MIN\s*\)", src
-    ), (
-        "P3-TRACKING-FILL-MIN-VISUAL regresión: `fillWidth` no usa "
-        "`Math.max(_percCapped, _FILL_VISUAL_MIN)`. Sin esto, el piso no "
-        "aplica en runtime y el bug original recurre."
-    )
+def _fill_line(src: str) -> str:
+    for ln in src.splitlines():
+        if "const fillWidth =" in ln:
+            return ln
+    raise AssertionError("`const fillWidth =` ausente en TrackingProgress.jsx")
 
 
 def test_fill_width_zero_when_perc_zero(src: str):
-    """Cuando `perc === 0`, fillWidth debe seguir siendo 0 (no aplicar piso).
-    Pre-fix tenía guard `isEmpty = perc === 0` que oculta el badge. El piso
-    NO debe sobre-pintar cuando no hay consumo."""
-    # Buscar el ternary o branch del fillWidth que gate por perc <= 0.
-    assert re.search(
-        r"fillWidth\s*=\s*perc\s*<=?\s*0\s*\?\s*0\s*:",
-        src,
-    ), (
-        "P3-TRACKING-FILL-MIN-VISUAL regresión: `fillWidth` no tiene guard "
-        "`perc <= 0 ? 0 : ...`. Sin esto, una card recién creada con "
-        "perc=0 renderea un fill de 18% sin consumo — UX engañosa."
-    )
+    assert "perc <= 0 ? 0 :" in _fill_line(src), "sin consumo, la barra no puede pintar el piso visual"
+
+
+def test_fill_min_value_is_at_least_15(src: str):
+    m = re.search(r"Math\.max\(proportionalWidth,\s*(\d+)\)", _fill_line(src))
+    assert m and int(m.group(1)) >= 15, "el piso visual debe dejar caber el badge del % dentro del fill"
 
 
 def test_perc_capped_at_100_present(src: str):
-    """`_percCapped = Math.min(perc, 100)` para cap del isOver case."""
-    assert re.search(r"_percCapped\s*=\s*Math\.min\(perc,\s*100\)", src), (
-        "P3-TRACKING-FILL-MIN-VISUAL regresión: cap al 100% removido. "
-        "Casos `isOver` (perc > 100) dispararían fillWidth > 100% — "
-        "desborda el track."
-    )
+    assert re.search(r"const proportionalWidth = Math\.min\(100,", src), "el fill no puede desbordar el carril"
 
 
-def test_marker_present_as_tooltip_anchor(src: str):
-    """Marker P3-TRACKING-FILL-MIN-VISUAL presente en JSX."""
-    assert "P3-TRACKING-FILL-MIN-VISUAL" in src
+def test_badge_never_left_of_the_floor(src: str):
+    assert re.search(r"const badgePosition = Math\.max\(fillWidth,\s*\d+\)", src)

@@ -48,6 +48,8 @@ def diario(monkeypatch):
     estado = {"rows": []}
     monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 240)
     monkeypatch.setattr(tools, "_local_date_str_for_user", lambda uid=None: "2026-09-22")
+    # [P1-PLAN-LOTE-980] Desde P1-DIARY-ROLLOVER-4AM el «hoy» del diario sale de `_diary_date_str_for_user`.
+    monkeypatch.setattr(tools, "_diary_date_str_for_user", lambda uid=None: "2026-09-22")
     monkeypatch.setattr(db_facts, "get_consumed_meals_today",
                         lambda uid, date_str=None, tz_offset_mins=None: estado.setdefault("pedidos", []).append(date_str)
                         or estado["rows"])
@@ -104,10 +106,12 @@ def test_log_consumed_meal_devuelve_el_total_tras_registrar(diario, monkeypatch)
 def test_correct_consumed_meal_tambien_devuelve_el_total():
     src = _src("tools.py")
     i = src.index("def correct_consumed_meal(")
-    cuerpo = src[i:i + 16000]
+    # [P1-PLAN-LOTE-980] La función creció (BB-0xx): el cuerpo entero, no una ventana fija.
+    _fin = src.find(chr(10) + "def ", i + 10)
+    cuerpo = src[i:_fin if _fin != -1 else len(src)]
     assert "_nota_total = _nota_total_del_dia(user_id, _clamp_days_ago(days_ago))" in cuerpo
     assert "_dias_fila = _dias_atras_de_fila(user_id," in cuerpo
-    assert "{_nota_nevera}{_nota_total} [ID_REGISTRO_DIARIO:" in cuerpo
+    assert "{_nota_nevera}{_nota_total} [ID_REGISTRO_DIARIO:" in cuerpo.replace(chr(34) + chr(10) + "            f" + chr(34), "")
 
 
 @pytest.mark.parametrize("consumed_at,esperado", [

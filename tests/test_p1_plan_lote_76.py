@@ -43,14 +43,14 @@ def test_slot_canonico(valor, slot):
 
 def test_las_tres_principales_siempre_y_la_merienda_solo_si_el_plan_la_trae():
     from chat_history_context import comidas_sin_registrar
-    rows = [{"meal_type": "desayuno"}, {"meal_type": "almuerzo"}]
+    rows = [{"meal_type": "desayuno", "calories": 400}, {"meal_type": "almuerzo", "calories": 400}]
     assert comidas_sin_registrar(rows) == ["cena"]
     assert comidas_sin_registrar(rows, {"meals": [{"meal": "Desayuno"}, {"meal": "Merienda"}, {"meal": "Cena"}]}) == ["merienda", "cena"]
     # el registro de resolve_day_dates envuelve el día en `day`
     assert comidas_sin_registrar(rows, {"date": date(2026, 9, 16), "day": {"meals": [{"meal": "Snack"}]}}) == ["merienda", "cena"]
-    assert comidas_sin_registrar(rows + [{"meal_type": "cena"}]) == []
+    assert comidas_sin_registrar(rows + [{"meal_type": "cena", "calories": 400}]) == []
     assert comidas_sin_registrar([]) == ["desayuno", "almuerzo", "cena"]
-    assert comidas_sin_registrar([{"meal_type": "snack"}], {"meals": [{"meal": "Merienda"}]}) == ["desayuno", "almuerzo", "cena"]
+    assert comidas_sin_registrar([{"meal_type": "snack", "calories": 400}], {"meals": [{"meal": "Merienda"}]}) == ["desayuno", "almuerzo", "cena"]
 
 
 # ── El bloque del diario de días anteriores lo anota ──────────────────────────────────────────────
@@ -100,15 +100,16 @@ def herramienta(monkeypatch):
 
 def test_tras_registrar_dice_que_falta_y_pide_ofrecerla_por_su_nombre(herramienta):
     tools, estado = herramienta
-    estado["rows"] = [{"meal_type": "desayuno"}, {"meal_type": "almuerzo"}, {"meal_type": "cena"}]
+    estado["rows"] = [{"meal_type": "desayuno", "calories": 400}, {"meal_type": "almuerzo", "calories": 400}, {"meal_type": "cena", "calories": 400}]
     out = tools.log_consumed_meal.func("u1", "Huevos hervidos", 220, 9, 2, 14, meal_type="cena", days_ago=1) \
         if hasattr(tools.log_consumed_meal, "func") else tools.log_consumed_meal("u1", "Huevos hervidos", 220, 9, 2, 14, meal_type="cena", days_ago=1)
     assert "¡Éxito!" in out
-    assert "ayer ya tiene todas sus comidas registradas — NO preguntes" in out
-    estado["rows"] = [{"meal_type": "desayuno"}, {"meal_type": "cena"}]
+    # [P1-PLAN-LOTE-980] BB-044: un día pasado se confirma sin reclamar lo que faltó, esté completo o no.
+    assert "Comida de ayer registrada correctamente. Confirma la anotación de forma limpia sin preguntar por otras comidas faltantes de ayer." in out
+    estado["rows"] = [{"meal_type": "desayuno", "calories": 400}, {"meal_type": "cena", "calories": 400}]
     out = tools.log_consumed_meal.func("u1", "Huevos", 220, 9, 2, 14, meal_type="cena", days_ago=1) \
         if hasattr(tools.log_consumed_meal, "func") else tools.log_consumed_meal("u1", "Huevos", 220, 9, 2, 14, meal_type="cena", days_ago=1)
-    assert "ayer sigue sin registrar almuerzo — cierra ofreciendo agregar LA QUE FALTA por su nombre" in out
+    assert "Comida de ayer registrada correctamente. Confirma la anotación de forma limpia sin preguntar por otras comidas faltantes de ayer." in out and "LA QUE FALTA" not in out
 
 
 def test_el_calculo_es_best_effort(herramienta, monkeypatch):
@@ -127,9 +128,9 @@ def test_la_bateria_en_seco_comparte_la_nota_y_cuenta_sus_registros(monkeypatch)
     import db_facts
     monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 240)
     monkeypatch.setattr(tools, "get_latest_usable_meal_plan", lambda uid: {"days": []})
-    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid, date_str=None, tz_offset_mins=None: [{"meal_type": "desayuno"}])
-    nota = tools._nota_comidas_sin_registrar("u1", 1, rows_extra=[{"meal_type": "almuerzo"}, {"meal_type": "cena"}])
-    assert "ayer ya tiene todas sus comidas registradas" in nota
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda uid, date_str=None, tz_offset_mins=None: [{"meal_type": "desayuno", "calories": 400}])
+    nota = tools._nota_comidas_sin_registrar("u1", 1, rows_extra=[{"meal_type": "almuerzo", "calories": 400}, {"meal_type": "cena", "calories": 400}])
+    assert "Comida de ayer registrada correctamente. Confirma la anotación de forma limpia sin preguntar por otras comidas faltantes de ayer." in nota  # BB-044 [P1-PLAN-LOTE-980]
     # [P1-PLAN-LOTE-84] a las 9 de la noche las dos ya pasaron su hora: se ofrecen por su nombre, como antes
     assert "hoy sigue sin registrar almuerzo, cena" in tools._nota_comidas_sin_registrar("u1", 0, ahora_local=21.0)
     assert "_nota_comidas_sin_registrar" in _src("scripts/coach_battery/run_battery.py")   # el stub en seco la comparte

@@ -62,7 +62,9 @@ def test_con_block_la_recogida_lleva_el_filtro_en_sus_dos_ramas(recogida, monkey
     pickups = recogida(target)
     assert len(pickups) == 1, "la sentencia de recogida no se ejecutó"
     q = pickups[0]
-    assert "upc.id = q1.user_id" in q and "upc.ai_consent_version = 'ia-2026-10'" in q
+    # [P1-PLAN-LOTE-980] La versión vigente (hoy «ia-2026-10-voz»), no un literal que caduca en cada texto nuevo.
+    from consentimientos import AI_CONSENT_VERSION
+    assert "upc.id = q1.user_id" in q and f"upc.ai_consent_version = '{AI_CONSENT_VERSION}'" in q
     assert "upc.ai_consent_revoked_at IS NULL" in q, "retirar (revoked_at) corta la recogida"
     assert "up.plan_mode = 'tracking'" in q, "sigue junto a la pausa de P1-PLAN-MODE"
     assert "__PLAN_MODE_GATE__" not in q

@@ -151,6 +151,11 @@ def test_all_5_callsites_use_helper(agent_src: str):
         mv = var_re.search(window)
         if mv and mv.group(1) in vars_desde_helper:
             continue
+        # [P1-PLAN-LOTE-980] El respaldo del coach recibe un modelo ya resuelto por el knob
+        # MEALFIT_CHAT_AGENT_FALLBACK_MODEL (`_chat_agent_fallback_model`): no es hardcode.
+        _def_start = no_comments.rfind(chr(10) + "def ", 0, m.start())
+        if no_comments.startswith(chr(10) + "def _build_chat_fallback_llm(", _def_start):
+            continue
         line_no = no_comments.count("\n", 0, m.start()) + 1
         offenders.append(f"line {line_no}")
     assert not offenders, (
@@ -162,9 +167,10 @@ def test_all_5_callsites_use_helper(agent_src: str):
     )
     # Esperamos exactamente 5 callsites (los 5 documentados en el audit).
     # Si cambia el conteo, sirve como tripwire para auditar el nuevo callsite.
-    assert len(callsites) == 5, (
+    # [P1-PLAN-LOTE-980] 6º callsite = `_build_chat_fallback_llm` (respaldo del coach).
+    assert len(callsites) == 6, (
         f"P2-AUDIT-1 advertencia: detectados {len(callsites)} callsites de "
-        f"`ChatGLM(...)` en agent.py (esperados 5). Si añadiste "
+        f"`ChatGLM(...)` en agent.py (esperados 6). Si añadiste "
         f"un callsite nuevo, asegúrate de que usa un helper `_chat_*_model_name()` "
         f"y actualizar `_EXPECTED_HELPERS` + este conteo. Si removiste uno, "
         f"reducir el conteo aquí."

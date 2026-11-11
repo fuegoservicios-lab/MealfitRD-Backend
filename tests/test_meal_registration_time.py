@@ -18,8 +18,9 @@ def test_bad_offsets_fall_back_to_profile(invalid):
     assert normalize_live_offset(invalid) is None
 
 
+# [P1-PLAN-LOTE-980] Franjas de BB-049 (2026-11-09): almuerzo 12-16, merienda 16-19, cena 19+.
 @pytest.mark.parametrize('hour,slot', [(9, 'desayuno'), (13, 'almuerzo'), (16, 'merienda'),
-                                     (18.49, 'merienda'), (18.5, 'cena'), (21 + 56/60, 'cena')])
+                                     (18.99, 'merienda'), (19.0, 'cena'), (21 + 56/60, 'cena')])
 def test_fresh_consumption_uses_clock_not_previous_topic(hour, slot):
     messages = [HumanMessage(content='Háblame de la merienda'), AIMessage(content='¿Quieres merendar?'),
                 HumanMessage(content='Me comí tres pasteles en hoja grandes'), AIMessage(content='')]
@@ -103,7 +104,8 @@ def test_actual_dispatch_keeps_new_foods_and_real_repeat_intent(monkeypatch, tex
     calls = []
     monkeypatch.setattr(agent, 'agent_tools', [SimpleNamespace(
         name='log_consumed_meal', invoke=lambda args: calls.append(dict(args)) or 'Guardado')])
-    args = {'meal_name': text, 'calories': 500, 'protein': 20, 'carbs': 60,
+    # [P1-PLAN-LOTE-980] BB-043 sube a principal todo «snack» >= 450 kcal: una Oreo pesa ~55 kcal.
+    args = {'meal_name': text, 'calories': 55 if 'Oreo' in text else 500, 'protein': 20, 'carbs': 60,
             'healthy_fats': 20, 'meal_type': guessed, 'force': True, 'days_ago': 0}
     state = {'user_id': 'owner', 'session_id': 'chat', 'form_data': {}, 'tz_offset': 240,
              'messages': [HumanMessage(content='Me comí una Oreo'),

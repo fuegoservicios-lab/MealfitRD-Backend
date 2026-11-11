@@ -174,7 +174,8 @@ def test_execute_tools_quita_el_marcador_y_el_done_lo_entrega():
     assert '"ajustes_de_app": ajustes_de_app or None,' in src
     full = inspect.getsource(agent)
     assert full.count('"ajustes_de_app": None,') >= 2, "los DOS inputs lo reinician por turno"
-    assert "'ajustes_de_app': ajustes_de_app})}" in full
+    # [P1-PLAN-LOTE-980] El `done` sumó `diary_corrected_meal_ids` detrás; lo que importa es que lleve el ajuste.
+    assert "'ajustes_de_app': ajustes_de_app" in full and "})}" in full
 
 
 def test_la_tabla_de_tools_documenta_las_dos():

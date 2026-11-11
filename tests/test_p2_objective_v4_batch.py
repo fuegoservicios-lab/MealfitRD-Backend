@@ -267,5 +267,8 @@ def test_catalog_micros_fully_populated():
     except Exception as exc:  # pragma: no cover - entorno sin Neon
         pytest.skip(f"Neon no disponible en este entorno: {exc}")
     assert row and row.get("total", 0) > 0
-    nulls = {c: row.get(f"n{i}") for i, c in enumerate(_MICRO_COLS) if row.get(f"n{i}")}
-    assert not nulls, f"columnas de micros con NULLs (reabre estimado_bajo): {nulls}"
+    # [P1-PLAN-LOTE-980] Desde 7d450530 (2026-10-10) NULL = composición AUSENTE, a propósito (nunca un
+    # cero fabricado). El candado ya no es «cero NULL» sino que no haya un alta masiva sin micros.
+    _tope = 0.10 * row["total"]
+    nulls = {c: row.get(f"n{i}") for i, c in enumerate(_MICRO_COLS) if (row.get(f"n{i}") or 0) > _tope}
+    assert not nulls, f"columnas de micros con >10% NULL (¿alta sin curar?): {nulls}"

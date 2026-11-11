@@ -115,6 +115,15 @@ def test_dashboard_push_onboarding_uses_safe_localstorage():
     Private Mode dentro del useEffect callback → onboarding modal nunca
     se disparaba para usuarios nuevos en ese entorno.
     """
+    # [P1-PLAN-LOTE-980] El onboarding vive ahora en NotificationOnboarding.jsx con clave por usuario
+    # (`notificationDecisionKey(userId)`); el contrato —nunca localStorage crudo— es el mismo.
+    _onb = _FRONTEND_SRC / "components" / "dashboard" / "NotificationOnboarding.jsx"
+    if _onb.exists():
+        t = _read(_onb)
+        assert "safeLocalStorageGet(notificationDecisionKey(userId))" in t
+        assert "safeLocalStorageSet(notificationDecisionKey(userId)" in t
+        assert "localStorage.getItem(" not in t and "localStorage.setItem(" not in t
+        return
     text = _read(_DASHBOARD_JSX)
     assert "safeLocalStorageGet('mealfit_push_onboarding_seen')" in text, (
         "Dashboard.jsx no usa safeLocalStorageGet para la key "

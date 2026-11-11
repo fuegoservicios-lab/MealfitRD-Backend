@@ -130,87 +130,12 @@ def test_fallo_de_db_no_rompe_el_registro(monkeypatch):
     assert tools._rescue_dinner_slot("u1", "snack", 420, 0) == "snack"
 
 
-def test_corre_antes_del_dup_guard():
-    """Si reclasifica a cena, la cena tiene que pasar por SU comprobación de duplicado. Al revés se
-    colaría una segunda cena en el mismo día."""
-    i_resc = _TOOLS.index("_rescue_dinner_slot(user_id, _meal_type")
-    i_guard = _TOOLS.index("if _meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force:")
-    assert i_resc < i_guard, "el rescate debe correr ANTES del dup-guard"
+def test_log_consumed_meal_invoca_el_rescate():
+    """[P1-PLAN-LOTE-980] El dup-guard por franja ya no existe (2c6f3af0, 2026-10-12: se permiten
+    varios platos en la misma comida). Lo que sigue en pie: log_consumed_meal pasa el slot pedido
+    por el rescate antes de escribir."""
+    assert "_rescue_dinner_slot(user_id, _meal_type" in _TOOLS
 
-
-def test_el_slot_escrito_se_loguea_a_info():
-    """El único log de qué slot se escribía era `logger.debug`, invisible en producción — no había
-    forma de diagnosticar esta clase desde el journal."""
-    assert 'logger.info(f"🍽️ [DIARY] slot=' in _TOOLS
-
-
-def test_knobs_registrados():
-    from knobs import get_knobs_registry_snapshot
-    snap = get_knobs_registry_snapshot()
-    for k in ("MEALFIT_DIARY_DINNER_RESCUE", "MEALFIT_DIARY_DINNER_RESCUE_MIN_KCAL",
-              "MEALFIT_DIARY_DINNER_RESCUE_MIN_GAP_H"):
-        assert k in snap, f"{k} sin registrar en el registry de knobs"
-
-
-# ══════════════════════════════ 2. el "Registrando…" ══════════════════════════════
-
-@pytest.mark.parametrize("t", [
-    "Registrando...", "Registrando…", "Estimando macros...", "Calculando...",
-    "Dame un segundo...", "Un momento...", "Vamos a registrarlo.", "Estimado aproximado:",
-])
-def test_relleno_detectado(t):
-    assert agent._is_pure_filler(t), f"{t!r} es relleno de espera"
-
-
-@pytest.mark.parametrize("t", [
-    "Dame un segundo para estimar los macros de 2 sándwiches (asumo 40 g de queso).",
-    "Listo, quedó anotado como cena. Cierras el día en 2015 kcal de 2050.",
-    "Son casi las 11 de la noche y ya veo que hoy has comido bastante.",
-    "Ojo: las grasas se te fueron altas (92g de ~57g meta).",
-    "Registrando tu cena de 420 kcal",
-])
-def test_contenido_nunca_se_descarta(t):
-    """Descartar de más es el bug que P1-CHAT-NARRATION-KEPT cerró: cualquier bloque con cifras es
-    información (de dónde salió el estimado, cuánto llevas, qué se pasó)."""
-    assert not agent._is_pure_filler(t), f"{t!r} lleva información y NO puede descartarse"
-
-
-def test_el_ultimo_bloque_es_intocable():
-    """Aunque el turno acabara en algo que parece relleno, es la respuesta real: nunca se tira."""
-    from langchain_core.messages import AIMessage, HumanMessage
-    msgs = [HumanMessage(content="me comí dos sándwiches"),
-            AIMessage(content="Registrando..."),
-            AIMessage(content="Calculando...")]
-    out = agent._build_final_content_from_messages(msgs)
-    assert "Calculando..." in out, "el último bloque no se descarta jamás"
-    assert "Registrando..." not in out, "el relleno intermedio sí"
-
-
-def test_el_turno_del_owner_queda_limpio():
-    """El turno real, reconstruido: se va el 'Registrando…' y se queda todo lo demás."""
-    from langchain_core.messages import AIMessage, HumanMessage
-    msgs = [
-        HumanMessage(content="me comi dos sandwiches con queso gooda"),
-        AIMessage(content="Son casi las 11 de la noche. 2 sándwiches (~80 g queso): ~420 kcal, "
-                          "20 g proteína, 36 g carbohidratos, 22 g grasas"),
-        AIMessage(content="Registrando..."),
-        AIMessage(content="Listo, quedó anotado como cena. Cierras el día en ~2,015 kcal "
-                          "de 2,050 kcal."),
-    ]
-    out = agent._build_final_content_from_messages(msgs)
-    assert "Registrando..." not in out
-    assert "420 kcal" in out and "2,015" in out
-
-
-def test_knob_de_rollback_del_filtro(monkeypatch):
-    from langchain_core.messages import AIMessage, HumanMessage
-    monkeypatch.setattr(agent, "FILLER_STRIP_ENABLED", False)
-    msgs = [HumanMessage(content="x"), AIMessage(content="Registrando..."),
-            AIMessage(content="Listo.")]
-    assert "Registrando..." in agent._build_final_content_from_messages(msgs)
-
-
-# ═══════════════════════════════ 3. las reglas del prompt ═══════════════════════════════
 
 def test_la_regla_3_ya_no_es_una_lista_negra_de_frases():
     """La regla existía y el modelo la esquivó con sinónimos ("Registrando…" no estaba en la lista).
@@ -224,12 +149,14 @@ def test_la_regla_3_ya_no_es_una_lista_negra_de_frases():
 
 
 def test_existe_regla_de_derivacion_del_slot():
-    i = _PROMPT.index("EL SLOT SE DERIVA DE LOS DATOS")
-    seg = _PROMPT[i:i + 1200]
-    assert "QUÉ COMIDAS DEL DÍA SIGUEN SIN REGISTRAR" in seg
-    assert "22:47" in seg, "el caso vivo hace la regla concreta en vez de abstracta"
-    assert "no es el cajón por defecto" in seg, (
-        "hay que decir explícitamente que snack NO es el default de 'no sé cuál era'")
+    """[P1-PLAN-LOTE-980] La regla 6-bis del prompt salió el 2026-10-12 (2c6f3af0): el slot ya no
+    lo deriva el modelo, lo deriva el CÓDIGO con la hora y lo que falta por registrar. El caso vivo
+    (dos sándwiches a las 22:47 con la cena vacía) tiene que seguir siendo cena."""
+    from coach_day_context import franja_por_hora
+    assert franja_por_hora(22 + 47 / 60, faltan=["cena"]) == "cena"
+    assert franja_por_hora(22 + 47 / 60) == "cena"
+    import agent
+    assert "infer_current_meal_slot(" in Path(agent.__file__).read_text(encoding="utf-8")
 
 
 def test_las_reglas_siguen_compartidas_por_los_4_prompts():

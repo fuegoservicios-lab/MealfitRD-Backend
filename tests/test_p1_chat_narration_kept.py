@@ -276,7 +276,7 @@ _BREVITY_MARKERS = (
     "CERO TEXTO ANTES DE UNA HERRAMIENTA",
     # La regla del slot es nueva (P1-DIARY-DINNER-SLOT): un `snack` a las 22:47 con la cena sin
     # registrar era la cena. Se ancla igual para que no se caiga de uno de los 4 prompts.
-    "EL SLOT SE DERIVA DE LOS DATOS",
+    # "EL SLOT SE DERIVA DE LOS DATOS" salió el 2026-10-12 (2c6f3af0): lo deriva el código. [P1-PLAN-LOTE-980]
 )
 
 

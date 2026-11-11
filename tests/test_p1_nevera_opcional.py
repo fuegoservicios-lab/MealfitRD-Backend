@@ -363,7 +363,7 @@ def _corregir(monkeypatch, activa: bool):
     def _q(sql, *a, **k):
         if "inventory_consumption_events" in sql:
             return {"c": 2}
-        if "SELECT meal_type, consumed_at" in sql:
+        if "SELECT meal_type, consumed_at" in sql or "SELECT id, meal_type, consumed_at" in sql:  # [P1-PLAN-LOTE-980]
             return {"meal_type": "almuerzo", "consumed_at": ahora, "inventory_synced_at": ahora}
         return None
     monkeypatch.setattr(tools, "nevera_activa", lambda uid: activa)

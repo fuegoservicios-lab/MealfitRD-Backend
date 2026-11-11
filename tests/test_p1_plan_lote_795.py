@@ -80,7 +80,11 @@ def test_el_resto_del_mundo_sigue_cubierto():
 def test_la_fecha_del_aviso_medico_se_movio():
     texto = _leer("pages/legal/LegalPages.jsx")
     m = re.search(r'title="Aviso Médico"\s+lastUpdated="([^"]+)"', texto)
-    assert m and m.group(1) == "28 de Septiembre, 2026"
+    # [P1-PLAN-LOTE-980] La fecha siguió moviéndose (7-oct); lo que este lote fija es que ya no es la vieja.
+    _MESES = {"Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4, "Mayo": 5, "Junio": 6, "Julio": 7, "Agosto": 8,
+              "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12}
+    dd, mes, aa = re.match(r"(\d+) de (\w+), (\d{4})", m.group(1)).groups()
+    assert (int(aa), _MESES[mes], int(dd)) >= (2026, 9, 28), m.group(1)
 
 
 # ── 1-2. La clínica: nada de «renal» en lo que se presenta como verificado ──────────────────────

@@ -263,7 +263,8 @@ def test_la_cantidad_se_puede_borrar_y_escribir():
 @pytest.mark.parametrize("loc", ["en-US", "pt-BR", "fr-FR", "it-IT"])
 def test_los_textos_nuevos_estan_traducidos(loc):
     cat = json.loads(_front(f"src/i18n/locales/{loc}.json"))
-    for k in ("¿Comiste algo más?", "Añadir otro plato", "Registrar {n} platos", "Menos {nombre}", "Más {nombre}",
+    # [P1-PLAN-LOTE-980] «Añadir otro plato» salió del UI (P1-SCAN-AI-ASSISTANT-MODAL, d76627df la podó).
+    for k in ("¿Comiste algo más?", "Registrar {n} platos", "Menos {nombre}", "Más {nombre}",
               "Desmarca lo que no comiste o ajusta la cantidad: las calorías se recalculan solas."):
         assert cat.get(k), f"{loc}: falta «{k}»"
 

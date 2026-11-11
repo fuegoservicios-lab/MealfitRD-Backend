@@ -4451,14 +4451,14 @@ def _chat_agent_fallback_model(primary_model: str) -> Optional[str]:
 def _build_chat_fallback_llm(model: str):
     """Cliente del respaldo: sin `extra_body.thinking` (OpenAI lo rechaza), esfuerzo bajo para
     no sumar latencia a un turno que ya pagó el fallo del principal."""
-    kwargs = {"timeout": _chat_agent_llm_timeout_s(), "max_retries": 1}
+    kwargs = {"max_retries": 1}
     m = (model or "").lower()
     if is_openai_model(model):
         if "luna" in m or m.startswith(("o1", "o3", "o4")):
             kwargs["reasoning_effort"] = _env_str("MEALFIT_CHAT_AGENT_FALLBACK_EFFORT", "low") or "low"
     else:
         kwargs["temperature"] = 0.7
-    return build_chat_llm(model, **kwargs)
+    return build_chat_llm(model, timeout=_chat_agent_llm_timeout_s(), **kwargs)
 
 
 def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
@@ -6359,8 +6359,10 @@ def _ultimo_id_registro_diario_previo(messages: list, user_id: Optional[str] = N
                 mid = tm[0].get("id")
                 if mid:
                     return str(mid)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] ultimo registro de hoy: %s: %s",
+                type(_exc).__name__, str(_exc)[:160])
     return None
 
 

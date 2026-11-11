@@ -92,7 +92,8 @@ def test_jsx_color_is_always_white(jsx_src: str):
 def test_jsx_passes_left_inline_style(jsx_src: str):
     """`left: ${fillWidth}%` debe estar en inline style — el CSS no puede
     leer fillWidth, viene del state JS."""
-    m = re.search(r"left:\s*`\$\{fillWidth\}%`", jsx_src)
+    # [P1-PLAN-LOTE-980] 9ffa8b92: el badge se ancla a `badgePosition` (= max(fillWidth, piso)).
+    m = re.search(r"left:\s*`\$\{(?:fillWidth|badgePosition)\}%`", jsx_src)
     assert m is not None, (
         "P3-TRACKING-PERC-INSIDE-ALWAYS regresión: `left: ${fillWidth}%` "
         "removido del inline style. Sin esto el badge no se posiciona al "

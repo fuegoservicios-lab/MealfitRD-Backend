@@ -97,8 +97,11 @@ def test_log_water_glass_accepts_fractional_delta():
     blk = block.group(0)
     assert "count_delta: float" in blk, "log_water_glass debe declarar count_delta: float."
     assert "isinstance(count_delta, (int, float))" in blk
-    assert "(count_delta * 2) != int(count_delta * 2)" in blk, (
-        "La tool debe validar paso de 0.5 (medio vaso)."
+    # [P1-PLAN-LOTE-980] BB-054 cambió el rechazo de deltas fuera de 0.5 por un redondeo al
+    # múltiplo de 0.5 más cercano (el agente ya no recibe un error técnico que contarle al usuario).
+    assert ("(count_delta * 2) != int(count_delta * 2)" in blk
+            or "math.floor(raw_delta * 2.0 + 0.5) / 2.0" in blk), (
+        "La tool debe llevar el delta a pasos de 0.5 (medio vaso)."
     )
 
 

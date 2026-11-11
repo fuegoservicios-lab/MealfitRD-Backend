@@ -285,7 +285,9 @@ def test_log_consumed_meal_marks_inventory_synced_when_requested():
     # El SQL debe incluir la columna inventory_synced_at y el último parámetro
     # debe ser el timestamp ISO (no None).
     assert "inventory_synced_at" in captured["query"]
-    synced_at_param = captured["params"][-1]
+    # [P1-PLAN-LOTE-980] Tras `nutrition` (y source/plan_ref) ya no es el último: se ubica por columna.
+    _cols = captured["query"].split("(", 1)[1].split(")", 1)[0].replace(" ", "").split(",")
+    synced_at_param = captured["params"][_cols.index("inventory_synced_at")]
     assert synced_at_param is not None
     assert "T" in synced_at_param  # formato ISO
 
