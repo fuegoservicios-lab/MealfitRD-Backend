@@ -105,7 +105,7 @@ def test_los_textos_estan_en_los_cuatro_idiomas():
         "Nuevo chat automático en {h} h {m} min",
         "Nuevo chat automático en {m} min",
         "Nuevo chat automático en menos de un minuto",
-        "El chat se renueva solo cada día a medianoche, si no estás escribiendo.",
+        "El chat se renueva solo cada día a las 4:00 AM, si no estás escribiendo.",  # BB-044
     )
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         cat = json.loads(_front(f"src/i18n/locales/{loc}.json"))
