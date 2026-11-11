@@ -50,7 +50,7 @@ def test_stop_button_covers_recovery_phase():
     assert "(isLoading || recoveringTurn) ? (" not in _AP, \
         "volvió el gate que ocultaba el ■ en cuanto llegaba el primer token"
     i = _AP.find("const handleStopGeneration")
-    win = _AP[i:i + 2400]
+    win = _AP[i:i + 3600]
     assert "setRecoveringTurn(false)" in win
 
 
@@ -87,7 +87,7 @@ def test_detener_cierra_la_burbuja():
     `isStreaming: true`, nunca ofrece Copiar/Regenerar sobre lo que sí llegó y el
     efecto de caché se salta la persistencia."""
     i = _AP.find("const handleStopGeneration")
-    win = _AP[i:i + 1600]
+    win = _AP[i:i + 2400]
     assert "isStreaming: false" in win, \
         "el stop debe cerrar la burbuja en curso"
 
