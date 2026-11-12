@@ -378,6 +378,12 @@ _MEAL_VISION_PROMPT = (
     "'Con miel (+60 kcal)', 'Con leche (+40 kcal)') con su ajuste real. NUNCA nombres la bebida con un generico ('te herbal', "
     "'infusion', 'bebida', 'jugo natural'): usa el nombre de la opcion supuesta (la mas probable por el color) y marca supuesta=true. "
     "Muchos tes dominicanos son mezclas (jengibre con canela y limon): si el color o lo que se ve sugiere una mezcla, ofrecela como opcion. "
+    # [P1-PLAN-LOTE-989 · 2026-11-12] Foto de jugo de lechoza y entre las opciones no estaba la lechoza.
+    "JUGOS Y BATIDAS: nombralos por la FRUTA mas probable por el color y la textura ('Jugo de lechoza', 'Jugo de chinola', "
+    "'Batida de guineo'). Si pones una duda de que fruta es, las opciones son las 3-4 frutas MAS PROBABLES para ese color "
+    "(anaranjado: chinola, naranja, lechoza, zanahoria; rojo/rosado: fresa, sandia, remolacha, cereza; amarillo: pina, "
+    "chinola, mango; blanco/crema: guanabana, avena, coco, morir sonando) y la PRIMERA, marcada supuesta, es EXACTAMENTE la "
+    "que pusiste en 'meal_name'. Nunca ofrezcas cafe, te o chocolate para un vaso de jugo. "
     # [BB-030 / P1-BEVERAGE-DOUBTS-NEUTRAL-HIERARCHY · 2026-11-04] Jerarquía neutra en bebidas ambiguas
     "JERARQUIA EN BEBIDAS AMBIGUAS: si el liquido puede ser cafe, te o chocolate, la PRIMERA duda DEBE ser la identidad neutra ('Que bebida tienes en la taza?' con opciones como 'Cafe negro', 'Cafe con leche', 'Te o infusion', 'Chocolate'). "
     "PROHIBIDO generar una pregunta que asuma la preparacion del cafe ('Como preparaste el cafe?') si tienes una duda de identidad abierta sobre que bebida es: una pregunta dependiente crea contradiccion si el usuario toma te o chocolate. "

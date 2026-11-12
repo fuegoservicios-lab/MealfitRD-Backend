@@ -30,14 +30,14 @@ def _normalizar_texto(texto: str) -> str:
 
 # Palabras de bebida "fuertes": identifican una bebida en el nombre o en la descripción.
 _PATRON_BEBIDA = re.compile(
-    r"\b(infusion|tisana|cafe|jugo|batido|licuado|caldo|consome|chocolate caliente)\b"
+    r"\b(infusion|tisana|cafe|jugo|batido|batida|licuado|smoothie|caldo|consome|chocolate caliente)\b"
     r"|\bte\b",
     re.IGNORECASE,
 )
 # En la DESCRIPCIÓN (texto libre del modelo) el pronombre «te» es ruido: solo cuenta «te» como bebida si va
 # en una frase de bebida («taza de te», «te verde», «te de jengibre»...).
 _PATRON_BEBIDA_DESC = re.compile(
-    r"\b(infusion|tisana|cafe|jugo|batido|licuado|caldo|consome|chocolate caliente)\b"
+    r"\b(infusion|tisana|cafe|jugo|batido|batida|licuado|smoothie|caldo|consome|chocolate caliente)\b"
     r"|\b(?:taza|vaso|termo|jarra)\s+de\s+te\b|\bte\s+(?:verde|negro|herbal|de|con|helado|frio|caliente)\b",
     re.IGNORECASE,
 )
@@ -76,12 +76,16 @@ def es_bebida(meal_name: str, description: str = "", items: Optional[List[Dict[s
     if not (_PATRON_BEBIDA.search(n_norm) or _PATRON_BEBIDA_DESC.search(d_norm)):
         return False
 
+    # [P1-PLAN-LOTE-989] lo que va DENTRO de la bebida («jugo de fruta», «batida de avena») no es un sólido al lado
+    _dentro = re.compile(r"\b(?:jugo|batido|batida|licuado|smoothie)\s+(?:natural\s+)?de\s+[a-z]+(?:\s+(?:y|con)\s+[a-z]+)?")
+    n_norm, d_norm = _dentro.sub(" ", n_norm), _dentro.sub(" ", d_norm)
     # Cualquier alimento sólido en el rótulo o en la descripción → es un plato con bebida al lado, no «solo bebida».
     if _PATRON_ALIMENTOS_SOLIDOS.search(n_norm) or _PATRON_ALIMENTOS_SOLIDOS.search(d_norm):
         return False
 
     # Con componentes estructurados: cualquier componente sólido con calorías reales descarta.
-    if items and isinstance(items, list):
+    # [P1-PLAN-LOTE-989] en «Batida de avena y guineo» los items son sus INGREDIENTES, no sólidos al lado
+    if items and isinstance(items, list) and not _BEBIDA_CON_FRUTA.search(_normalizar_texto(meal_name)):
         for it in items:
             if not isinstance(it, dict):
                 continue
@@ -97,7 +101,7 @@ def tipo_de_bebida(meal_name: str, description: str = "") -> str:
     texto = _normalizar_texto(f"{meal_name} {description}")
     if re.search(r"\b(cafe)\b", texto):
         return "cafe"
-    if re.search(r"\b(jugo|batido|licuado)\b", texto):
+    if re.search(r"\b(jugo|batido|batida|licuado|smoothie)\b", texto):
         return "jugo"
     if re.search(r"\b(caldo|consome)\b", texto):
         return "caldo"
@@ -108,6 +112,103 @@ def nombre_generico_bebida(meal_name: str) -> bool:
     """¿El nombre del plato carece de especificidad de ingredientes/hierbas?"""
     n_norm = _normalizar_texto(meal_name)
     return n_norm in _NOMBRES_GENERICOS_BEBIDA or n_norm.startswith("taza de") or n_norm.startswith("vaso de")
+
+
+# [P1-PLAN-LOTE-989 · 2026-11-12] El dueño: foto de un jugo de lechoza y las preguntas no ofrecían «lechoza».
+# Dos causas: (1) la duda fija del jugo preguntaba «natural / con azúcar / con leche» y su `nombre_plato`
+# («Jugo con azúcar») BORRABA la fruta que el modelo sí había visto; (2) cuando el modelo armaba su propia duda
+# de identidad, nada garantizaba que su respuesta más probable (su propio `meal_name`) estuviera entre las opciones.
+_BEBIDA_CON_FRUTA = re.compile(r"\b(jugo|batido|batida|licuado|smoothie)\s+de\s+([a-z]+(?:\s+y\s+[a-z]+)?)")
+_FRUTA_GENERICA = {"fruta", "frutas", "la", "el", "una", "un", "casa", "temporada", "caja", "vaso", "botella", "color", "tono", "sabor", "textura", "aspecto"}
+
+
+def bebida_y_fruta(meal_name: str) -> Optional[tuple]:
+    """«Jugo de lechoza» → ('jugo', 'lechoza'); «Batida de guineo y avena» → ('batida', 'guineo y avena'). None si no hay."""
+    m = _BEBIDA_CON_FRUTA.search(_normalizar_texto(meal_name))
+    if not m or m.group(2).split()[0] in _FRUTA_GENERICA:
+        return None
+    # el nombre original conserva acentos («piña», «sandía»): se recorta del rótulo real si está
+    fruta = m.group(2)
+    original = re.search(r"\bde\s+(.+)$", str(meal_name or ""), re.IGNORECASE)
+    if original and _normalizar_texto(original.group(1)).startswith(fruta):
+        fruta = " ".join(original.group(1).split()[:len(fruta.split())]).lower()
+    return m.group(1), fruta
+
+
+# Lo más probable por el color del vaso (RD). Sin color, los jugos de casa más comunes.
+_FRUTAS_POR_COLOR = (
+    (("anaranjad", "naranja", "salmon", "coral"), ("chinola", "naranja", "lechoza", "zanahoria")),
+    (("rojo", "roja", "rosad", "fucsia", "morad", "vino"), ("fresa", "sandía", "remolacha", "cereza")),
+    (("amarill",), ("piña", "chinola", "mango", "limón")),
+    (("verde",), ("jugo verde", "limón", "pepino y apio", "guanábana")),
+    (("blanc", "crema", "beige"), ("guanábana", "avena", "coco", "morir soñando")),
+)
+_FRUTAS_SIN_COLOR = ("chinola", "naranja", "lechoza", "piña", "limón")
+
+
+def _opcion_fruta(fruta: str, supuesta: bool) -> Dict[str, Any]:
+    nombre = {"jugo verde": "Jugo verde", "morir soñando": "Morir soñando", "limón": "Limonada"}.get(fruta, f"Jugo de {fruta}")
+    texto = fruta[:1].upper() + fruta[1:] if fruta not in ("limón",) else "Limonada"
+    return {"texto": texto, "supuesta": supuesta, "nombre_plato": nombre,
+            "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}}
+
+
+def _duda_de_la_fruta(description: str) -> Dict[str, Any]:
+    d = _normalizar_texto(description)
+    frutas = _FRUTAS_SIN_COLOR
+    for claves, lista in _FRUTAS_POR_COLOR:
+        if any(re.search(r"\b" + c, d) for c in claves):
+            frutas = lista
+            break
+    return {"sobre": "jugo", "pregunta": "¿De qué es el jugo?",
+            "opciones": [_opcion_fruta(f, i == 0) for i, f in enumerate(frutas)]}
+
+
+def _duda_preparacion_con_fruta(bebida: str, fruta: str) -> Dict[str, Any]:
+    """La preparación SIN perder la fruta en el nombre del plato."""
+    base = f"{bebida[:1].upper()}{bebida[1:]} de {fruta}"
+    z = lambda c, p, ch, g: {"calories": c, "protein": p, "carbs": ch, "healthy_fats": g}
+    if bebida in ("batido", "batida", "licuado", "smoothie"):
+        opciones = [
+            {"texto": "Con leche", "supuesta": True, "nombre_plato": f"{base} con leche", "ajuste": z(0, 0, 0, 0)},
+            {"texto": "Con leche y azúcar", "supuesta": False, "nombre_plato": f"{base} con leche y azúcar", "ajuste": z(60, 0, 15, 0)},
+            {"texto": "Con agua, sin leche", "supuesta": False, "nombre_plato": f"{base} con agua", "ajuste": z(-80, -4, -6, -3)},
+        ]
+    else:
+        opciones = [
+            {"texto": "Natural, sin azúcar", "supuesta": True, "nombre_plato": f"{base} natural", "ajuste": z(0, 0, 0, 0)},
+            {"texto": "Con azúcar", "supuesta": False, "nombre_plato": f"{base} con azúcar", "ajuste": z(60, 0, 15, 0)},
+            {"texto": "Con leche", "supuesta": False, "nombre_plato": f"Batida de {fruta} con leche", "ajuste": z(80, 4, 10, 3)},
+            {"texto": "Con leche y azúcar", "supuesta": False, "nombre_plato": f"Batida de {fruta} con leche y azúcar", "ajuste": z(140, 4, 25, 3)},
+        ]
+    return {"sobre": bebida, "pregunta": f"¿Cómo preparaste {'la' if bebida == 'batida' else 'el'} {bebida} de {fruta}?",
+            "opciones": opciones}
+
+
+_GENERICAS_DEL_NOMBRE = {"jugo", "batido", "batida", "licuado", "vaso", "taza", "de", "con", "natural", "bebida",
+                         "el", "la", "un", "una", "sin"}
+
+
+def asegurar_supuesta_del_modelo(dudas: List[Dict[str, Any]], meal_name: str) -> List[Dict[str, Any]]:
+    """[P1-PLAN-LOTE-989] La duda de IDENTIDAD debe ofrecer lo que el propio modelo cree que es (su `meal_name`):
+    si ninguna opción lo nombra, entra de PRIMERA como la supuesta (ajuste 0: las macros ya son las de ese rótulo)."""
+    if not dudas or nombre_generico_bebida(meal_name):
+        return dudas
+    claves = [t for t in _normalizar_texto(meal_name).split() if len(t) >= 3 and t not in _GENERICAS_DEL_NOMBRE]
+    if not claves:
+        return dudas
+    out = []
+    for d in dudas:
+        if es_duda_identidad(d):
+            ops = [o for o in (d.get("opciones") or []) if isinstance(o, dict)]
+            ya_esta = any(all(c in _normalizar_texto(f"{o.get('texto', '')} {o.get('nombre_plato', '')}").split()
+                              for c in claves) for o in ops)
+            if not ya_esta and ops:
+                nueva = {"texto": str(meal_name)[:40], "supuesta": True, "nombre_plato": str(meal_name)[:120],
+                         "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}}
+                d = dict(d, opciones=[nueva] + [dict(o, supuesta=False) for o in ops][:4])
+        out.append(d)
+    return out
 
 
 def crear_duda_identidad(tipo: str, meal_name: str = "") -> Dict[str, Any]:
@@ -304,11 +405,31 @@ def inyectar_dudas_bebida(result: Dict[str, Any], dudas_crudas: List[Dict[str, A
     if not es_bebida(meal_name, desc, items):
         return list(dudas_crudas or [])
 
-    # Si ya traía duda sobre la identidad de la bebida, sanitizarla y respetarla (BB-030)
+    # Si ya traía duda sobre la identidad de la bebida, sanitizarla y respetarla (BB-030), pero con la respuesta
+    # más probable del propio modelo entre las opciones [P1-PLAN-LOTE-989]
     if tiene_duda_identidad(dudas_crudas):
-        return sanitizar_dudas_bebida(dudas_crudas)
+        return sanitizar_dudas_bebida(asegurar_supuesta_del_modelo(dudas_crudas, meal_name))
 
     tipo = tipo_de_bebida(meal_name, desc)
+    if tipo == "jugo":
+        # [P1-PLAN-LOTE-989] el jugo: si el modelo vio la fruta se pregunta la preparación SIN perderla; si no, la fruta
+        # (por el color del vaso) y luego la preparación
+        bf = bebida_y_fruta(meal_name)
+        if bf:
+            nuevas = [_duda_preparacion_con_fruta(*bf)]
+        else:
+            duda_fruta = _duda_de_la_fruta(desc)
+            result["meal_name"] = duda_fruta["opciones"][0]["nombre_plato"]
+            prep = crear_duda_identidad("jugo")
+            for o in prep["opciones"]:
+                o["nombre_plato"] = ""      # la preparación no pisa la fruta elegida
+            nuevas = [duda_fruta, prep]
+        for d in dudas_crudas or []:
+            if len(nuevas) >= 2:
+                break
+            if not re.search(r"azucar|endulz|leche|dulce|prepar", _normalizar_texto(d.get("pregunta", ""))):
+                nuevas.append(d)
+        return nuevas[:2]
     duda_id = crear_duda_identidad(tipo, meal_name)
     duda_ad = crear_duda_aditivos(tipo, aclaracion)
 
