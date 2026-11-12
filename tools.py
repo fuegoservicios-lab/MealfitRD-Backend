@@ -1954,6 +1954,11 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
                 _m = _cdc.margen_del_dia(_metas, _c)
                 if _m:
                     _margen = f" {_m} {_cdc.REGLA_MARGEN}"
+                    # [P1-PLAN-LOTE-983 · 2026-11-11] Caso vivo del dueño: con +225 kcal lo dijo, con +865 calló. El dato
+                    # le llegaba («kcal: YA SE PASÓ por ~865»); nada le pedía decirlo. tooltip-anchor: P1-PLAN-LOTE-983
+                    if "kcal: YA SE PASÓ" in _m:
+                        _margen += (" YA PASÓ SU META DE KCAL DE HOY: díselo SIEMPRE en una frase con la cifra de "
+                                    "cuánto se pasó (sin regañar, sin culpa y sin proponer compensarlo mañana).")
             except Exception as _mg_err:
                 logger.warning(f"[P1-PLAN-LOTE-226] margen tras el registro no calculado: {_mg_err!r}")
             return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "
@@ -2064,6 +2069,16 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 f"Estima sus calorías y macros basados en una porción razonable o en la etiqueta/foto, "
                 f"o si no sabes qué alimento es, pregúntale primero al usuario qué consumió antes de llamar. "
                 f"NO digas que quedó registrado.")
+
+    # [P1-PLAN-LOTE-983 · 2026-11-11] Desde foto, cada ingrediente con su cantidad (rechaza una vez; ver el módulo).
+    try:
+        import ingredientes_con_cantidad as _icc
+        _es_foto = bool(isinstance(nutrition, dict) and nutrition.get("attachment_ids"))
+        _rechazo_qty = _icc.rechazo(user_id, meal_name, ingredients, es_foto=_es_foto)
+        if _rechazo_qty:
+            return _rechazo_qty
+    except Exception as _qty_err:
+        logger.debug(f"[P1-PLAN-LOTE-983] no-op: {_qty_err!r}")
 
     # [P1-CONSUMED-BACKDATE · 2026-07-12] Fecha real de consumo + guard dup.
     from datetime import datetime, timezone as _tz, timedelta as _td
