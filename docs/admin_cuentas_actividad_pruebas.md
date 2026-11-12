@@ -56,6 +56,7 @@ escrita ANTES de responder (o de escribir): si no se puede anotar, 503 sin datos
 | `GET /cuentas/{user_id}/ajustes/historial` (≤ 500 cambios) | `_CUENTAS_LECTURA_LIMITER` (30/60) | `ver_ajustes` `{dias, n}` |
 | `GET /ajustes/resumen` | `_CUENTAS_LECTURA_LIMITER` (30/60) | ninguno: es un agregado, sin cuentas admin |
 | `GET /cuentas/{user_id}/prueba/<sección>` con `formulario` · `comidas` · `planes` · `planes/{plan_id}` · `conversaciones` · `conversaciones/{session_id}` · `adjuntos/{attachment_id}` · `actividad` | `_PRUEBA_DETALLE_LIMITER` (96/60) | `ver_prueba` `{seccion, objeto}` |
+| `POST /avisos/revisado` («Marcar como revisado» en «Requiere atención», lote 993; ≤ huellas del cuerpo) | `_AVISOS_LIMITER` (20/60) | `marcar_avisos_revisados` `{pedidas, cerradas}` |
 
 `POST /pruebas/lote` vive FUERA de `/cuentas/…` a propósito: `/cuentas/{user_id}/…` lo capturaría y daría 422. Los pares
 (max, periodo) de los limitadores son únicos en el repo: Redis cuenta por par (`rl:<max>:<periodo>:<uid>`).

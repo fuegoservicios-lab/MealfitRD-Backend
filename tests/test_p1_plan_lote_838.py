@@ -436,7 +436,8 @@ def test_la_doc_da_cada_limitador_con_sus_numeros_reales():
     for nombre, maximo, periodo in re.findall(r"`(_[A-Z_]+_LIMITER)` \((\d+)/(\d+)\)", _doc()):
         dichos.setdefault(nombre, set()).add((int(maximo), int(periodo)))      # cada mención, no solo la última
     assert set(dichos) == {"_CUENTAS_LISTA_LIMITER", "_CUENTAS_LECTURA_LIMITER", "_CUENTAS_ESCRITURA_LIMITER",
-                           "_PRUEBA_DETALLE_LIMITER", "_PRUEBA_LIMITER", "_AJUSTES_DISPOSITIVO_LIMITER"}
+                           "_PRUEBA_DETALLE_LIMITER", "_PRUEBA_LIMITER", "_AJUSTES_DISPOSITIVO_LIMITER",
+                           "_AVISOS_LIMITER"}  # lote 993
     for nombre, pares in dichos.items():
         real = getattr(ra, nombre, None) or getattr(ud, nombre)
         assert pares == {(real.max_calls, real.period)}, f"{nombre}: la doc dice {sorted(pares)}, el código {real.max_calls}/{real.period}"
