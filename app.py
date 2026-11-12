@@ -1074,7 +1074,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-982 · 2026-11-11] Una comida principal en dos tandas (misma franja, <30 min) se fusiona en una fila.
 # [P1-PLAN-LOTE-983 · 2026-11-11] Registro desde foto con cantidad en cada ingrediente + el coach siempre dice cuánto se pasó de la meta.
 # [P1-PLAN-LOTE-984 · 2026-11-11] Estimado del chat contra el catálogo de platos cocinados + renglón nombra lo que es + aviso sin «avena con pavo».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-984 · 2026-11-11"
+# [P1-PLAN-LOTE-985 · 2026-11-11] Con restricciones, el aviso de comida nombra opciones ya pasadas por el backstop clínico.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-985 · 2026-11-11"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

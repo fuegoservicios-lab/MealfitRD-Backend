@@ -458,6 +458,7 @@ def contexto_del_aviso(health: dict) -> dict:
         "objetivo": objetivo,
         "bloque": bloque,
         "restringido": bool(alergias or dieta_restrictiva or condiciones),
+        "no_le_gusta": no_le_gusta,   # [P1-PLAN-LOTE-985] para filtrar las opciones del aviso
     }
 
 
@@ -1580,6 +1581,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # [P1-PLAN-LOTE-960] La proteína de su Nevera (ya filtrada por el backstop clínico): el aviso propone
                 # con lo que tiene. Se calcula antes del estilo porque, con restricciones, son lo único que puede nombrar.
                 _nevera_aviso = __import__("nevera_del_coach").para_aviso(user_id, health, consumed, meal_to_check) if _ia_ok else ""
+                # [P1-PLAN-LOTE-985] Con restricciones, opciones sencillas YA pasadas por el backstop: el aviso dice QUÉ.
+                _opciones_aviso = (__import__("opciones_del_aviso").bloque(health, meal_to_check, _ctx_aviso.get("no_le_gusta"))
+                                   if _ia_ok and _ctx_aviso["restringido"] else "")
                 if nudge_style == "directo":
                     style_instruction = "Haz una pregunta o propuesta directa, proactiva y al grano sin rodeos sobre qué va a comer o preparar."
                 elif nudge_style == "sugestivo":
@@ -1589,8 +1593,10 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     # texto del coach que no pasa por ningún filtro determinista, así que la regla es no darle ocasión.
                     if _ctx_aviso["restringido"]:
                         style_instruction = "Haz una sugerencia suave y comprensiva, sin nombrar alimentos concretos."
-                        if _nevera_aviso:   # [P1-PLAN-LOTE-960] los de su Nevera ya pasaron el backstop clínico
-                            style_instruction = style_instruction[:-1] + " salvo los de SU NEVERA listados abajo."
+                        if _nevera_aviso or _opciones_aviso:   # [P1-PLAN-LOTE-960/985] ya pasaron el backstop clínico
+                            style_instruction = (style_instruction[:-1] + " salvo los de SU NEVERA listados abajo."
+                                                 + (" También puedes nombrar las OPCIONES COMPROBADAS de abajo."
+                                                    if _opciones_aviso else ""))
                 elif nudge_style == "gamificado":
                     # [AI-21: Erradicacion de cliches gamificados forzados]
                     style_instruction = (
@@ -1609,6 +1615,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # [P1-PLAN-LOTE-161] Las restricciones van DESPUÉS de la plantilla (no como hueco): un placeholder nuevo
                 # obligaría a cada `.format()` que la arma a conocerlo, y la cadena vacía no añade nada si no hay nada.
                 prompt += _ctx_aviso["bloque"]
+                prompt += _opciones_aviso   # [P1-PLAN-LOTE-985]
                 # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Mismo directive que el bloque
                 # "Resumen del día" arriba — ver esa nota para el contrato completo.
                 # [P1-PLAN-LOTE-413] lo que lleva HOY (qué registró y, con perfil suficiente, calorías/proteína contra su
