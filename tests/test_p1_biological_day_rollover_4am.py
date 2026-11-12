@@ -97,5 +97,5 @@ def test_chat_resolve_local_time_and_prompt_madrugada():
     assert "CONTEXTO TEMPORAL ACTUAL:" in ctx
     hora_local = chat_agent.hora_local_del_chat(240)
     if 0 <= int(hora_local) < 4:
-        assert "Madrugada antes de las 04:00 AM" in ctx
+        assert "Madrugada, antes de las 04:00" in ctx
 

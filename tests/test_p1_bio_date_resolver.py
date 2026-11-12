@@ -118,6 +118,6 @@ def test_system_prompt_madrugada_contiene_directiva_de_ayer_y_anoche():
             "strptime": datetime.strptime,
         }))
         prompt = chat_agent.build_temporal_context("2026-11-03", tz_offset=240)
-        assert "Madrugada antes de las 04:00 AM" in prompt
+        assert "Madrugada, antes de las 04:00" in prompt
         assert "days_ago=0" in prompt
         assert "anoche" in prompt.lower()
