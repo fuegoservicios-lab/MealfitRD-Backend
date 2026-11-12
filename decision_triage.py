@@ -229,6 +229,12 @@ def _excluido_por_region() -> bool:
 
 
 def _api_key() -> Optional[str]:
+    """Mismo patrón que `coach_voz._clave`: en el VPS la key de Gemini vive en `VISION_API_KEY` (el escáner ya va a
+    Google con ella); si el escáner no apunta a Google, la de Gemini del entorno."""
+    import os
+    k = (os.environ.get("VISION_API_KEY") or "").strip()
+    if k and "googleapis.com" in os.environ.get("MEALFIT_VISION_BASE_URL", ""):
+        return k
     try:
         from llm_provider import _google_api_key
         return _google_api_key()

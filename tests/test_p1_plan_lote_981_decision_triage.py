@@ -224,3 +224,13 @@ def test_reglas_deterministas_intactas():
 def test_marker():
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · ', _src("app.py"))
     assert m and int(m.group(1)) >= 981
+
+
+def test_key_de_vision_cuando_apunta_a_google(monkeypatch):
+    monkeypatch.setenv("VISION_API_KEY", "kv")
+    monkeypatch.setenv("MEALFIT_VISION_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+    assert dt._api_key() == "kv"
+    monkeypatch.setenv("MEALFIT_VISION_BASE_URL", "https://otro.example/v1")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    assert dt._api_key() is None
