@@ -66,7 +66,9 @@ def test_el_estado_y_requiere_atencion_cuentan_lo_mismo(monkeypatch):
 
 def test_los_avisos_se_leen_una_vez_por_carga(monkeypatch):
     _, _, capturadas = _resumen(monkeypatch)
-    assert sum(_ALERTAS in q for q, _ in capturadas) == 1
+    # lote 993: una lectura de las abiertas y otra de las resueltas recientes, una vez cada una
+    assert sum(_ALERTAS in q and "resolved_at IS NULL" in q for q, _ in capturadas) == 1
+    assert sum(_ALERTAS in q and "resolved_at >=" in q for q, _ in capturadas) == 1
     assert sum(_FALLIDOS in q for q, _ in capturadas) == 1
 
 

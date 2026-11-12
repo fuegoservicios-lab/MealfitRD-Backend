@@ -59,6 +59,23 @@ def _exigir_cabecera(x_admin_accion: Optional[str] = Header(None, alias="X-Admin
         raise HTTPException(status_code=403, detail="Falta la cabecera X-Admin-Accion.")
 
 
+class _Revisados(BaseModel):
+    # [P1-PLAN-LOTE-993] las huellas (16 hex) que «Requiere atención» manda con cada fila; nunca la clave con sus ids
+    huellas: List[str] = Field(min_length=1, max_length=1000)
+
+
+_AVISOS_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
+
+@router.post("/avisos/revisado", dependencies=[Depends(_exigir_cabecera), Depends(_AVISOS_LIMITER)])
+def api_admin_avisos_revisado(body: _Revisados, admin_id: str = Depends(require_admin)):
+    """[P1-PLAN-LOTE-993] «Marcar como revisado»: cierra esas alertas. Si la condición sigue, su productor la reabre."""
+    import admin_avisos
+    cerradas = admin_avisos.marcar_revisados(body.huellas)
+    _anotar_vista(admin_id, "marcar_avisos_revisados", None, {"pedidas": len(body.huellas), "cerradas": cerradas})
+    return {"ok": True, "cerradas": cerradas}
+
+
 class _Busqueda(BaseModel):
     email: str = Field(max_length=320)
 

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from admin_acceso import admin_ids
-from db import execute_sql_query
+from db import execute_sql_query, execute_sql_write
 
 logger = logging.getLogger(__name__)
 
@@ -289,22 +289,6 @@ def _gasto_micros(ctx: _Ctx, anterior: bool = False) -> int:
                     p).get("micros") or 0)
 
 
-def _alertas_abiertas() -> list:
-    """Alertas sin resolver agrupadas por tipo: [(tipo, nivel, n, primera)] de más grave a menos."""
-    filas = _todos("SELECT alert_key, severity, triggered_at FROM public.system_alerts WHERE resolved_at IS NULL "
-                   "ORDER BY triggered_at LIMIT 1000")
-    grupos: dict = {}
-    for r in filas:
-        tipo = _tipo_alerta(r.get("alert_key"))
-        nivel = _NIVEL_ALERTA.get(str(r.get("severity") or "").lower(), "info")
-        g = grupos.setdefault(tipo, {"nivel": nivel, "n": 0, "primera": r.get("triggered_at")})
-        g["n"] += 1
-        if _ORDEN_NIVEL[nivel] < _ORDEN_NIVEL[g["nivel"]]:
-            g["nivel"] = nivel
-    return sorted(((t, g["nivel"], g["n"], g["primera"]) for t, g in grupos.items()),
-                  key=lambda x: (_ORDEN_NIVEL[x[1]], -x[2]))
-
-
 def _cola_ahora() -> dict:
     """La cola de generación en este momento (todas las cuentas: es la salud del sistema, no el uso)."""
     return _uno("SELECT COUNT(*) FILTER (WHERE status = 'pending' AND execute_after > now()) AS programados, "
@@ -370,29 +354,10 @@ def _cambio_con_base(ctx: _Ctx, actual: int, antes: int, desde, **kw) -> tuple:
 
 
 def _items_atencion(ctx: _Ctx) -> list:
-    """Lo que pide atención, con su conteo `n`. SSOT del Resumen y de «Requiere atención»: antes cada uno contaba lo
-    suyo y el Resumen no veía los planes fallidos."""
-    def leer():
-        items = []
-        atrasados = int(_cola_ahora().get("atrasados") or 0)
-        if atrasados:
-            items.append({"nivel": "aviso", "titulo": "Bloques de plan atrasados", "n": atrasados,
-                          "detalle": "Debían empezar hace más de 2 horas y siguen esperando."})
-        fallidos = int(_uno("SELECT COUNT(*) AS n FROM public.meal_plans "
-                            "WHERE plan_data->>'generation_status' = 'failed' "
-                            f"AND created_at >= {_VENTANA} AND user_id::text <> ALL(%s::text[])",
-                            (ctx.dias, ctx.fuera)).get("n") or 0)
-        if fallidos:
-            items.append({"nivel": "aviso", "titulo": "Planes fallidos", "n": fallidos,
-                          "detalle": f"Planes creados en {ctx.dias} días que terminaron en error."})
-        for tipo, nivel, n, primera in _alertas_abiertas():
-            titulo, que_es = _ALERTA.get(tipo) or (f"Aviso técnico: {tipo.replace('_', ' ')}",
-                                                   "Sin descripción todavía.")
-            desde = f" Abierta desde el {primera:%d-%m}." if isinstance(primera, datetime) else ""
-            items.append({"nivel": nivel, "titulo": titulo, "n": n, "detalle": que_es + desde})
-        items.sort(key=lambda i: _ORDEN_NIVEL[i["nivel"]])
-        return items
-    return _memo(ctx, "atencion", leer)
+    """Lo que pide atención, con su conteo `n` y su `grupo`. SSOT del Resumen y de «Requiere atención» (lote 992); la
+    clasificación contra el estado actual vive en `admin_avisos` (lote 993)."""
+    import admin_avisos
+    return _memo(ctx, "atencion", lambda: admin_avisos.items(ctx))
 
 
 def _filas_activos_dia(ctx: _Ctx) -> list:
@@ -498,10 +463,15 @@ def bloque_resumen(ctx: _Ctx) -> dict:
     extra_gas = f"≈ {_usd(round(gasto / dias_reales * 30))} al mes al ritmo de estos {d} días" if gasto else None
 
     # Estado del sistema: lo mismo que lista «Requiere atención»
+    # [P1-PLAN-LOTE-993] solo cuenta lo que pide acción (activo + revisión); lo que espera a una cuenta inactiva y lo
+    # informativo se dicen aparte, y lo resuelto o lo que ya no aplica no se cuenta.
     items = _items_atencion(ctx)
-    criticas = sum(i["n"] for i in items if i["nivel"] == "critico")
-    avisos = sum(i["n"] for i in items if i["nivel"] == "aviso")
-    notas = sum(i["n"] for i in items if i["nivel"] == "info")
+    pide = [i for i in items if i.get("grupo", "activo") in ("activo", "revision")]
+    criticas = sum(i["n"] for i in pide if i["nivel"] == "critico")
+    avisos = sum(i["n"] for i in pide if i["nivel"] == "aviso")
+    notas = sum(i["n"] for i in items if i["nivel"] == "info" and i.get("grupo") != "espera"
+                and i.get("estado") not in ("resuelto", "obsoleto"))
+    esperan = sum(i["n"] for i in items if i.get("grupo") == "espera")
     if criticas:
         estado, tono = _plural(criticas, "crítico", "críticos"), "malo"
         extra_est = f"y {_plural(avisos, 'aviso', 'avisos')} por revisar" if avisos else None
@@ -510,6 +480,8 @@ def bloque_resumen(ctx: _Ctx) -> dict:
     else:
         estado, tono, extra_est = "Todo bien", "bueno", None
     ayuda_est = "Pulsa para ver el detalle." if (criticas or avisos) else "Nada que requiera acción."
+    if esperan:
+        ayuda_est += f" {_plural(esperan, 'aviso espera', 'avisos esperan')} a que vuelva una cuenta inactiva."
     if notas:
         ayuda_est += f" {_plural(notas, 'nota informativa', 'notas informativas')}."
 
@@ -541,15 +513,18 @@ def bloque_resumen(ctx: _Ctx) -> dict:
                 _serie(ctx, _filas_gasto_dia(ctx), _usd)),
         {"etiqueta": "Estado del sistema", "valor": estado, "tono": tono, "tono_valor": tono, "ayuda": ayuda_est,
          **({"extra": extra_est} if extra_est else {}),
-         **({"destino": "Requiere atención"} if (criticas or avisos or notas) else {})},
+         **({"destino": "Requiere atención"} if items else {})},
     ]}
 
 
 def bloque_atencion(ctx: _Ctx) -> dict:
     items = [{k: v for k, v in i.items() if k != "n"} | {"valor": _entero(i["n"])} for i in _items_atencion(ctx)]
-    return {"id": "atencion", "seccion": "Requiere atención", "titulo": "Avisos abiertos", "tipo": "avisos",
+    # [P1-PLAN-LOTE-993] el frontend agrupa por `grupo` (activo / revisión / espera / historial) y dice las fechas
+    import admin_avisos
+    return {"id": "atencion", "seccion": "Requiere atención", "titulo": "Estado y avisos", "tipo": "avisos",
             "items": items, "vacio": "Nada pendiente.",
-            "nota": "Rojo: actuar ya. Ámbar: revisar. Gris: informativo, no requiere acción."}
+            "nota": (f"Una cuenta se considera inactiva tras {admin_avisos._INACTIVO_DIAS} días sin registrar comida ni escribir al coach. "
+                     "«Marcar como revisado» cierra el aviso; si el problema sigue, vuelve a abrirse solo.")}
 
 
 def _etiqueta_dia(d, semanal: bool) -> str:
