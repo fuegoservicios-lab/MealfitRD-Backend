@@ -132,7 +132,11 @@ def test_execute_tools_preserves_days_ago_1_for_genuine_yesterday():
         "session_id": "sess-bb034",
     }
 
-    with patch("tools.db_log_consumed_meal", return_value="meal-bb034-2") as mock_db_log:
+    # [P1-PLAN-LOTE-986] La hora del usuario fija a media tarde: entre 00:00 y 03:59 el resolutor de madrugada
+    # (P1-BIO-DATE-RESOLVER) convierte «ayer cené» en hoy A PROPÓSITO, y con el reloj real este test caía en cada
+    # gate que cruzaba la medianoche (12-nov, 00:2x).
+    with patch("tools.db_log_consumed_meal", return_value="meal-bb034-2") as mock_db_log, \
+            patch("tools._hora_local_float", return_value=14.0):
         out = execute_tools(state)
 
         call_kwargs = mock_db_log.call_args[1]
