@@ -46,6 +46,8 @@ def _fake(query, params=None, fetch_one=False, fetch_all=False):
         return {"n": 0}
     if "FROM public.meal_plans" in q:
         return [{"estado": "complete", "n": 3}, {"estado": "partial", "n": 1}]
+    if "MIN(created_at)" in q and "llm_usage_events" in q:      # [P1-PLAN-LOTE-992] desde cuándo hay gasto
+        return {"desde": None}
     if "SUM(cost_usd_micros)" in q and "GROUP BY" in q:
         return [{"funcion": "vision_scan", "llamadas": 14, "micros": 30000}]
     if "SUM(cost_usd_micros)" in q:

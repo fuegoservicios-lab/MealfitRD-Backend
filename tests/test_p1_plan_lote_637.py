@@ -37,6 +37,11 @@ def _con(**respuestas):
     return f, capturadas
 
 
+def _tarjeta(r, etiqueta):
+    """[P1-PLAN-LOTE-992] por su nombre: el Resumen pasó de 4 tarjetas a 6 y el índice fijo ya no dice cuál es."""
+    return next(t for t in _bloque(r, "resumen")["tarjetas"] if t["etiqueta"] == etiqueta)
+
+
 _ADMIN_TIER = "plan_tier = 'admin'"
 _ALERTAS = "FROM public.system_alerts"
 _COLA = "FROM public.plan_chunk_queue"
@@ -105,7 +110,7 @@ def test_el_estado_del_sistema_no_alarma_por_notas(monkeypatch, alertas, atrasad
     cola = {"programados": 8, "listos": 0, "en_curso": 0, "atrasados": atrasados, "esperan_usuario": 0}
     f, _ = _con(**{_ALERTAS: alertas, _COLA: cola})
     monkeypatch.setattr(am, "execute_sql_query", f)
-    estado = _bloque(am.metricas(7), "resumen")["tarjetas"][3]
+    estado = _tarjeta(am.metricas(7), "Estado del sistema")
     assert (estado["valor"], estado["tono"]) == (esperado, tono)
     if len(alertas) == 6:
         assert "6 notas informativas" in estado["ayuda"]
@@ -123,13 +128,16 @@ def test_la_cola_atrasada_sale_en_atencion_y_la_programada_no(monkeypatch):
 
 def test_cada_cifra_se_compara_con_el_periodo_anterior(monkeypatch):
     def activos(q, p):
+        if "date_trunc" in q:                                          # la serie por día (lote 992: el Resumen la usa)
+            return []
         return {"n": 2 if "AND c.consumed_at <" in q else 5}           # el periodo anterior lleva la cota superior
     f, _ = _con(**{"COUNT(DISTINCT u)": activos})
     monkeypatch.setattr(am, "execute_sql_query", f)
-    t = _bloque(am.metricas(7), "resumen")["tarjetas"]
-    assert t[0]["valor"] == "5" and t[0]["cambio"] == "↑ 3 frente a los 7 días anteriores (2)"
-    assert t[0]["tono"] == "bueno"
-    assert t[2]["tono"] == "neutro"                               # el gasto se dice, no se juzga
+    r = am.metricas(7)
+    activos = _tarjeta(r, "Usuarios activos")
+    assert activos["valor"] == "5" and activos["cambio"] == "↑ 3 frente a los 7 días anteriores (2)"
+    assert activos["tono"] == "bueno"
+    assert _tarjeta(r, "Gasto de IA")["tono"] == "neutro"         # el gasto se dice, no se juzga
     assert am._cambio(1, 4, 30) == ("↓ 3 frente a los 30 días anteriores (4)", "malo")
     assert am._cambio(3, 3, 7) == ("Igual que los 7 días anteriores", "neutro")
 

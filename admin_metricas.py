@@ -136,9 +136,19 @@ _NOTA_LIBRE_PROHIBIDA = re.compile(r"\S*@\S*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 
 @dataclass
 class _Ctx:
-    """El periodo pedido y las cuentas que NO cuentan como usuarios (las de administración)."""
+    """El periodo pedido y las cuentas que NO cuentan como usuarios (las de administración).
+
+    [P1-PLAN-LOTE-992] `memo`: una consulta que usan dos bloques (los avisos del Resumen y de «Requiere atención», la
+    serie de activos y la del gasto) se hace UNA vez por carga del panel, y los dos bloques ven el mismo dato."""
     dias: int
     fuera: list = field(default_factory=list)
+    memo: dict = field(default_factory=dict)
+
+
+def _memo(ctx: _Ctx, clave: str, fn):
+    if clave not in ctx.memo:
+        ctx.memo[clave] = fn()
+    return ctx.memo[clave]
 
 
 def _texto_de_nota(v) -> str:
@@ -319,59 +329,224 @@ def _cambio(actual: int, antes: int, dias: int, fmt=_entero, sube_es_bueno: bool
     return texto, "bueno" if (diff > 0) == sube_es_bueno else "malo"
 
 
+# [P1-PLAN-LOTE-992 · 2026-11-12] El Resumen se rehízo («lo más útil posible y sin errores»). Medido en producción el
+# 12-nov antes del cambio, cinco fallos: (1) con críticos, «Estado del sistema» decía «2 críticos» y ESCONDÍA 13 avisos
+# y 4 bloques atrasados; (2) contaba sus avisos por su cuenta y no veía los «Planes fallidos» que sí salían en
+# «Requiere atención» — podía decir «Todo bien» con avisos debajo: ahora los dos leen la MISMA lista
+# (`_items_atencion`); (3) el tono del cambio pintaba la cifra grande («Cuentas nuevas: 1» en rojo, como una alarma):
+# el color de la cifra va aparte (`tono_valor`, solo en el estado); (4) «por usuario activo» dividía el gasto CON tus
+# pruebas entre los usuarios SIN ti — ahora el gasto de los usuarios entre los usuarios, y tus pruebas aparte;
+# (5) en 90 días el periodo anterior empieza antes de que exista el registro (el gasto, desde el 18-ago) y salía
+# «↑ frente a US$0.00»: sin base completa, se dice que no la hay. Nuevo: retención («Siguen activos»), comidas
+# registradas, la proyección mensual del gasto y una minigráfica por tarjeta.
+
+def _primer_registro(ctx: _Ctx, que: str):
+    """Cuándo empieza el registro: el de personas (la primera cuenta) o el del gasto (el primer evento de IA)."""
+    def leer():
+        if que == "gasto":
+            return _uno("SELECT MIN(created_at) AS desde FROM public.llm_usage_events").get("desde")
+        return _uno("SELECT MIN(created_at) AS desde FROM public.user_profiles WHERE id::text <> ALL(%s::text[])",
+                    (ctx.fuera,)).get("desde")
+    return _memo(ctx, f"primer_{que}", leer)
+
+
+def _base_completa(ctx: _Ctx, desde) -> bool:
+    """¿El periodo anterior entero cae dentro del registro? Sin registro alguno, los dos periodos son cero y sí."""
+    if not isinstance(desde, datetime):
+        return True
+    if desde.tzinfo is None:
+        desde = desde.replace(tzinfo=timezone.utc)
+    return desde <= datetime.now(timezone.utc) - timedelta(days=ctx.dias * 2)
+
+
+def _sin_base(desde) -> str:
+    return f"Sin comparación: hay datos desde el {desde.day} {_MES[desde.month]}"
+
+
+def _cambio_con_base(ctx: _Ctx, actual: int, antes: int, desde, **kw) -> tuple:
+    if not _base_completa(ctx, desde):
+        return (_sin_base(desde), "neutro")
+    return _cambio(actual, antes, ctx.dias, **kw)
+
+
+def _items_atencion(ctx: _Ctx) -> list:
+    """Lo que pide atención, con su conteo `n`. SSOT del Resumen y de «Requiere atención»: antes cada uno contaba lo
+    suyo y el Resumen no veía los planes fallidos."""
+    def leer():
+        items = []
+        atrasados = int(_cola_ahora().get("atrasados") or 0)
+        if atrasados:
+            items.append({"nivel": "aviso", "titulo": "Bloques de plan atrasados", "n": atrasados,
+                          "detalle": "Debían empezar hace más de 2 horas y siguen esperando."})
+        fallidos = int(_uno("SELECT COUNT(*) AS n FROM public.meal_plans "
+                            "WHERE plan_data->>'generation_status' = 'failed' "
+                            f"AND created_at >= {_VENTANA} AND user_id::text <> ALL(%s::text[])",
+                            (ctx.dias, ctx.fuera)).get("n") or 0)
+        if fallidos:
+            items.append({"nivel": "aviso", "titulo": "Planes fallidos", "n": fallidos,
+                          "detalle": f"Planes creados en {ctx.dias} días que terminaron en error."})
+        for tipo, nivel, n, primera in _alertas_abiertas():
+            titulo, que_es = _ALERTA.get(tipo) or (f"Aviso técnico: {tipo.replace('_', ' ')}",
+                                                   "Sin descripción todavía.")
+            desde = f" Abierta desde el {primera:%d-%m}." if isinstance(primera, datetime) else ""
+            items.append({"nivel": nivel, "titulo": titulo, "n": n, "detalle": que_es + desde})
+        items.sort(key=lambda i: _ORDEN_NIVEL[i["nivel"]])
+        return items
+    return _memo(ctx, "atencion", leer)
+
+
+def _filas_activos_dia(ctx: _Ctx) -> list:
+    def leer():
+        sql, params = _actividad_sql(ctx)
+        return _todos(f"SELECT date_trunc(%s, t AT TIME ZONE %s)::date AS d, COUNT(DISTINCT u) AS n FROM ({sql}) a "
+                      "GROUP BY 1", ("week" if ctx.dias > 31 else "day", _ZONA, *params))
+    return _memo(ctx, "activos_dia", leer)
+
+
+def _filas_gasto_dia(ctx: _Ctx) -> list:
+    return _memo(ctx, "gasto_dia", lambda: _todos(
+        "SELECT date_trunc(%s, created_at AT TIME ZONE %s)::date AS d, "
+        "COALESCE(SUM(cost_usd_micros), 0) AS n FROM public.llm_usage_events "
+        f"WHERE created_at >= {_VENTANA} GROUP BY 1", ("week" if ctx.dias > 31 else "day", _ZONA, ctx.dias)))
+
+
+def _filas_por_dia(ctx: _Ctx, tabla: str, col: str, col_usuario: str) -> list:
+    return _todos(f"SELECT date_trunc(%s, {col} AT TIME ZONE %s)::date AS d, COUNT(*) AS n FROM public.{tabla} "
+                  f"WHERE {col} >= {_VENTANA} AND {col_usuario}::text <> ALL(%s::text[]) GROUP BY 1",
+                  ("week" if ctx.dias > 31 else "day", _ZONA, ctx.dias, ctx.fuera))
+
+
+def _comidas(ctx: _Ctx, anterior: bool = False) -> int:
+    w, p = _rango("consumed_at", ctx.dias, anterior)
+    return int(_uno(f"SELECT COUNT(*) AS n FROM public.consumed_meals WHERE {w} AND user_id::text <> ALL(%s::text[])",
+                    (*p, ctx.fuera)).get("n") or 0)
+
+
+def _siguen_activos(ctx: _Ctx) -> tuple:
+    """(antes, siguen): personas activas en el periodo anterior y cuántas de ellas lo están también en este."""
+    sql_a, p_a = _actividad_sql(ctx)
+    sql_b, p_b = _actividad_sql(ctx, anterior=True)
+    r = _uno(f"SELECT COUNT(DISTINCT b.u) AS antes, COUNT(DISTINCT b.u) FILTER (WHERE b.u IN (SELECT a.u FROM ({sql_a}) a)) "
+             f"AS siguen FROM ({sql_b}) b", (*p_a, *p_b))
+    return int(r.get("antes") or 0), int(r.get("siguen") or 0)
+
+
+def _gasto_partes(ctx: _Ctx) -> dict:
+    """El gasto del periodo partido en usuarios / tus cuentas / sin usuario (procesos automáticos). Ninguna fila se
+    excluye: la suma es el gasto total."""
+    w, p = _rango("created_at", ctx.dias)
+    r = _uno("SELECT COALESCE(SUM(cost_usd_micros), 0) AS micros, "
+             "COALESCE(SUM(cost_usd_micros) FILTER (WHERE user_id IS NOT NULL "
+             "AND NOT (user_id::text = ANY(%s::text[]))), 0) AS usuarios, "
+             "COALESCE(SUM(cost_usd_micros) FILTER (WHERE user_id::text = ANY(%s::text[])), 0) AS tuyas "
+             f"FROM public.llm_usage_events WHERE {w}", (ctx.fuera, ctx.fuera, *p))
+    total = int(r.get("micros") or 0)
+    usuarios, tuyas = int(r.get("usuarios") or 0), int(r.get("tuyas") or 0)
+    return {"total": total, "usuarios": usuarios, "tuyas": tuyas, "sistema": max(0, total - usuarios - tuyas)}
+
+
+def _decimal(x: float) -> str:
+    return f"{x:,.1f}".rstrip("0").rstrip(".")
+
+
 def bloque_resumen(ctx: _Ctx) -> dict:
     d = ctx.dias
+    desde_personas, desde_gasto = _primer_registro(ctx, "personas"), _primer_registro(ctx, "gasto")
+    semanal = d > 31
+    unidad_mini = "Por semana" if semanal else "Por día"
+
+    # Usuarios activos
     activos, activos_antes = _activos(ctx), _activos(ctx, anterior=True)
+    t_act, tono_act = _cambio_con_base(ctx, activos, activos_antes, desde_personas)
+    mini_act = _serie(ctx, _filas_activos_dia(ctx), _entero)
+    ultimo = int(mini_act[-1]["valor"]) if mini_act else 0
+    extra_act = f"{'Esta semana' if semanal else 'Hoy'}: {_entero(ultimo)}"
+
+    # Siguen activos (retención)
+    antes, siguen = _siguen_activos(ctx)
+    if not _base_completa(ctx, desde_personas):
+        ret_valor, ret_extra = "—", _sin_base(desde_personas)
+    elif antes:
+        ret_valor = _pct(siguen / antes)
+        ret_extra = f"{_entero(siguen)} de {_plural(antes, 'persona activa', 'personas activas')} los {d} días anteriores"
+    else:
+        ret_valor, ret_extra = "—", f"Nadie estuvo activo los {d} días anteriores"
+
+    # Cuentas nuevas
     nuevas, nuevas_antes = _cuentas_nuevas(ctx), _cuentas_nuevas(ctx, anterior=True)
-    gasto, gasto_antes = _gasto_micros(ctx), _gasto_micros(ctx, anterior=True)
-    alertas = _alertas_abiertas()
-    criticas = sum(n for _, nivel, n, _ in alertas if nivel == "critico")
-    avisos = sum(n for _, nivel, n, _ in alertas if nivel == "aviso")
-    notas = sum(n for _, nivel, n, _ in alertas if nivel == "info")
-    atrasados = int(_cola_ahora().get("atrasados") or 0)
-    avisos += atrasados
+    t_nue, tono_nue = _cambio_con_base(ctx, nuevas, nuevas_antes, desde_personas)
+
+    # Comidas registradas
+    comidas, comidas_antes = _comidas(ctx), _comidas(ctx, anterior=True)
+    t_com, tono_com = _cambio_con_base(ctx, comidas, comidas_antes, desde_personas)
+
+    # Gasto de IA
+    partes = _gasto_partes(ctx)
+    gasto = partes["total"]
+    t_gas, _ = _cambio_con_base(ctx, gasto, _gasto_micros(ctx, anterior=True), desde_gasto, fmt=_usd,
+                                sube_es_bueno=None)
+    reparto = [f"Usuarios: {_usd(partes['usuarios'])}"
+               + (f" ({_usd(partes['usuarios'] // activos)} por activo)" if activos else ""),
+               f"tus pruebas: {_usd(partes['tuyas'])}"]
+    if partes["sistema"] >= 5_000:                                # medio centavo: por debajo, ruido de redondeo
+        reparto.append(f"procesos automáticos: {_usd(partes['sistema'])}")
+    # El ritmo se mide sobre lo que hay registrado: un periodo que empieza antes del registro no divide por días vacíos.
+    dias_reales = d
+    if isinstance(desde_gasto, datetime) and not _base_completa(ctx, desde_gasto):
+        desde_utc = desde_gasto if desde_gasto.tzinfo else desde_gasto.replace(tzinfo=timezone.utc)
+        dias_reales = max(1.0, min(d, (datetime.now(timezone.utc) - desde_utc).total_seconds() / 86400))
+    extra_gas = f"≈ {_usd(round(gasto / dias_reales * 30))} al mes al ritmo de estos {d} días" if gasto else None
+
+    # Estado del sistema: lo mismo que lista «Requiere atención»
+    items = _items_atencion(ctx)
+    criticas = sum(i["n"] for i in items if i["nivel"] == "critico")
+    avisos = sum(i["n"] for i in items if i["nivel"] == "aviso")
+    notas = sum(i["n"] for i in items if i["nivel"] == "info")
     if criticas:
         estado, tono = _plural(criticas, "crítico", "críticos"), "malo"
+        extra_est = f"y {_plural(avisos, 'aviso', 'avisos')} por revisar" if avisos else None
     elif avisos:
-        estado, tono = _plural(avisos, "aviso", "avisos"), "aviso"
+        estado, tono, extra_est = _plural(avisos, "aviso", "avisos"), "aviso", "por revisar"
     else:
-        estado, tono = "Todo bien", "bueno"
-    detalle_estado = ("Nada que requiera acción." if not (criticas or avisos) else "Detalle en «Requiere atención».")
+        estado, tono, extra_est = "Todo bien", "bueno", None
+    ayuda_est = "Pulsa para ver el detalle." if (criticas or avisos) else "Nada que requiera acción."
     if notas:
-        detalle_estado += f" {_plural(notas, 'nota informativa', 'notas informativas')}."
+        ayuda_est += f" {_plural(notas, 'nota informativa', 'notas informativas')}."
 
-    t_act, tono_act = _cambio(activos, activos_antes, d)
-    t_nue, tono_nue = _cambio(nuevas, nuevas_antes, d)
-    t_gas, _ = _cambio(gasto, gasto_antes, d, fmt=_usd, sube_es_bueno=None)
-    por_usuario = f"{_usd(gasto // activos)} por usuario activo. " if activos else ""
+    def tarjeta(etiqueta, valor, ayuda, cambio=None, tono_cambio="neutro", extra=None, mini=None):
+        t = {"etiqueta": etiqueta, "valor": valor, "tono": tono_cambio, "ayuda": ayuda}
+        if cambio:
+            t["cambio"] = cambio
+        if extra:
+            t["extra"] = extra
+        if mini is not None:
+            t["serie"] = mini
+            t["serie_titulo"] = unidad_mini
+        return t
+
     return {"id": "resumen", "seccion": "Resumen", "titulo": f"Últimos {d} días", "tipo": "resumen", "tarjetas": [
-        {"etiqueta": "Usuarios activos", "valor": _entero(activos), "cambio": t_act, "tono": tono_act,
-         "ayuda": "Personas que registraron una comida o escribieron al coach. Sin tus cuentas."},
-        {"etiqueta": "Cuentas nuevas", "valor": _entero(nuevas), "cambio": t_nue, "tono": tono_nue,
-         "ayuda": "Registros en el periodo. Sin tus cuentas."},
-        {"etiqueta": "Gasto de IA", "valor": _usd(gasto), "cambio": t_gas, "tono": "neutro",
-         "ayuda": f"{por_usuario}Incluye tus pruebas: el dinero sale igual."},
-        {"etiqueta": "Estado del sistema", "valor": estado, "tono": tono, "ayuda": detalle_estado},
+        tarjeta("Usuarios activos", _entero(activos),
+                "Personas que registraron una comida o escribieron al coach. Sin tus cuentas.",
+                t_act, tono_act, extra_act, mini_act),
+        tarjeta("Siguen activos", ret_valor,
+                "De quienes usaron la app el periodo anterior, cuántos volvieron en este. Sin tus cuentas.",
+                extra=ret_extra),
+        tarjeta("Cuentas nuevas", _entero(nuevas), "Registros en el periodo. Sin tus cuentas.", t_nue, tono_nue,
+                mini=_serie(ctx, _filas_por_dia(ctx, "user_profiles", "created_at", "id"), _entero)),
+        tarjeta("Comidas registradas", _entero(comidas),
+                "En el diario, por cualquier vía (plan, foto, a mano o coach). Sin tus cuentas.", t_com, tono_com,
+                f"{_decimal(comidas / activos)} por usuario activo" if activos else None,
+                _serie(ctx, _filas_por_dia(ctx, "consumed_meals", "consumed_at", "user_id"), _entero)),
+        tarjeta("Gasto de IA", _usd(gasto), " · ".join(reparto) + ".", t_gas, "neutro", extra_gas,
+                _serie(ctx, _filas_gasto_dia(ctx), _usd)),
+        {"etiqueta": "Estado del sistema", "valor": estado, "tono": tono, "tono_valor": tono, "ayuda": ayuda_est,
+         **({"extra": extra_est} if extra_est else {}),
+         **({"destino": "Requiere atención"} if (criticas or avisos or notas) else {})},
     ]}
 
 
 def bloque_atencion(ctx: _Ctx) -> dict:
-    items = []
-    atrasados = int(_cola_ahora().get("atrasados") or 0)
-    if atrasados:
-        items.append({"nivel": "aviso", "titulo": "Bloques de plan atrasados", "valor": _entero(atrasados),
-                      "detalle": "Debían empezar hace más de 2 horas y siguen esperando."})
-    fallidos = int(_uno("SELECT COUNT(*) AS n FROM public.meal_plans WHERE plan_data->>'generation_status' = 'failed' "
-                        f"AND created_at >= {_VENTANA} AND user_id::text <> ALL(%s::text[])",
-                        (ctx.dias, ctx.fuera)).get("n") or 0)
-    if fallidos:
-        items.append({"nivel": "aviso", "titulo": "Planes fallidos", "valor": _entero(fallidos),
-                      "detalle": f"Planes creados en {ctx.dias} días que terminaron en error."})
-    for tipo, nivel, n, primera in _alertas_abiertas():
-        titulo, que_es = _ALERTA.get(tipo) or (f"Aviso técnico: {tipo.replace('_', ' ')}", "Sin descripción todavía.")
-        desde = f" Abierta desde el {primera:%d-%m}." if isinstance(primera, datetime) else ""
-        items.append({"nivel": nivel, "titulo": titulo, "valor": _entero(n), "detalle": que_es + desde})
-    items.sort(key=lambda i: _ORDEN_NIVEL[i["nivel"]])
+    items = [{k: v for k, v in i.items() if k != "n"} | {"valor": _entero(i["n"])} for i in _items_atencion(ctx)]
     return {"id": "atencion", "seccion": "Requiere atención", "titulo": "Avisos abiertos", "tipo": "avisos",
             "items": items, "vacio": "Nada pendiente.",
             "nota": "Rojo: actuar ya. Ámbar: revisar. Gris: informativo, no requiere acción."}
@@ -412,9 +587,7 @@ def _serie(ctx: _Ctx, filas: list, fmt) -> list:
 
 def bloque_activos_dia(ctx: _Ctx) -> dict:
     unidad = "week" if ctx.dias > 31 else "day"
-    sql, params = _actividad_sql(ctx)
-    filas = _todos(f"SELECT date_trunc(%s, t AT TIME ZONE %s)::date AS d, COUNT(DISTINCT u) AS n FROM ({sql}) a "
-                   "GROUP BY 1", (unidad, _ZONA, *params))
+    filas = _filas_activos_dia(ctx)
     return {"id": "activos_dia", "seccion": "Usuarios",
             "titulo": "Usuarios activos por semana" if unidad == "week" else "Usuarios activos por día",
             "tipo": "serie", "puntos": _serie(ctx, filas, _entero),
@@ -592,9 +765,7 @@ def bloque_escaner(ctx: _Ctx) -> dict:
 
 def bloque_gasto_dia(ctx: _Ctx) -> dict:
     unidad = "week" if ctx.dias > 31 else "day"
-    filas = _todos("SELECT date_trunc(%s, created_at AT TIME ZONE %s)::date AS d, "
-                   "COALESCE(SUM(cost_usd_micros), 0) AS n FROM public.llm_usage_events "
-                   f"WHERE created_at >= {_VENTANA} GROUP BY 1", (unidad, _ZONA, ctx.dias))
+    filas = _filas_gasto_dia(ctx)
     return {"id": "gasto_dia", "seccion": "Costes",
             "titulo": "Gasto de IA por semana" if unidad == "week" else "Gasto de IA por día", "tipo": "serie",
             "puntos": _serie(ctx, filas, _usd), "nota": "Incluye tus pruebas."}
