@@ -5741,6 +5741,16 @@ def execute_tools(state: ChatState):
                         tool_messages.append(ToolMessage(content=_freno, tool_call_id=tool_id))
                         continue
 
+                # [P1-PLAN-LOTE-988 · 2026-11-12] «Dos paquetes de las de ayer» con cifras que no son n × esa porción:
+                # rechazo único con la cuenta (ver `referencia_a_registro`).
+                if tool_name == "log_consumed_meal" and _meal_calls_count <= 1:
+                    from referencia_a_registro import rechazo as _rechazo_ref
+                    _txt_ref = _extraer_ultimo_texto_usuario(messages)
+                    _rref = _rechazo_ref(_trusted_uid, _txt_ref, tool_args.get("calories"), state.get("tz_offset"))
+                    if _rref:
+                        tool_messages.append(ToolMessage(content=_rref, tool_call_id=tool_id))
+                        continue
+
                 # [P1-DELETE-GUARD · 2026-10-31] Prohibir correct_consumed_meal con delete=True
                 # si el usuario NO ha pedido borrar ni ha declarado que no se comió el alimento.
                 # Evita que el agente borre unilateralmente comidas ante erratas de teclado ("Tsurus blanca")
@@ -9910,6 +9920,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
         system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
                                                                    tz_offset=tz_offset)
+        # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
+        system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
         system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
@@ -10560,6 +10572,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
         system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
                                                                    tz_offset=tz_offset)
+        # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
+        system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
         system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
