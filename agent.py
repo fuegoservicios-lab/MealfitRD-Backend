@@ -5560,6 +5560,7 @@ def execute_tools(state: ChatState):
                 # [P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una
                 # comida ya registrada hoy (ej. 'fue parte del almuerzo', 'agrégalo al almuerzo'), fusionar en
                 # la fila existente sumando calorías, macros, ingredientes y adjuntos de foto.
+                _fusion_misma_franja = False   # [P1-PLAN-LOTE-982] la fusión por franja+TTL no la frena el guard de foto
                 if tool_name == "log_consumed_meal":
                     _fused_part_args = _intentar_fusionar_alimento_en_comida_existente(
                         _trusted_uid, tool_args, state.get("messages") or [], state.get("turn_plate_photos") or []
@@ -5571,6 +5572,7 @@ def execute_tools(state: ChatState):
                         )
                         tool_name = "correct_consumed_meal"
                         tool_args = _fused_part_args
+                        _fusion_misma_franja = True
                     else:
                         # [BB-054] Si era una adición implícita ('extra...', 'además...') pero no se fusionó
                         # (por ejemplo porque expiró el TTL de la comida previa), reclasificar el meal_type
@@ -5760,7 +5762,8 @@ def execute_tools(state: ChatState):
 
                 # [P1-PHOTO-DIARY-PROTECT · 2026-10-26] Prohibir que un turno con foto de plato nueva
                 # altere comidas anteriores del diario con correct_consumed_meal (salvo que sea la recién creada en el turno previo para rectificar).
-                if tool_name == "correct_consumed_meal" and (state.get("turn_photo_to_log") or state.get("turn_plate_photos")):
+                if (tool_name == "correct_consumed_meal" and not _fusion_misma_franja
+                        and (state.get("turn_photo_to_log") or state.get("turn_plate_photos"))):
                     target_id = str(tool_args.get("meal_id") or "").strip()
                     created_this_turn = _meals_created_this_turn(messages)
                     # [BB-051 · 2026-11-09] En turnos con foto de comida (turn_plate_photos / turn_photo_to_log),
@@ -6879,6 +6882,39 @@ def _detectar_slot_para_fusion(messages: list, tool_args: dict = None) -> Option
     return None
 
 
+_SLOTS_PRINCIPALES_FUSION = ("desayuno", "almuerzo", "cena")
+
+
+def _slot_principal_dentro_de_ttl(user_id: str, tool_args: dict, messages: list) -> Optional[str]:
+    """[P1-PLAN-LOTE-982 · 2026-11-11] Una comida principal partida en tandas es UNA comida: si llega otra del MISMO
+    slot principal (desayuno/almuerzo/cena) de hoy dentro del TTL de fusión (30 min) de la anterior, se fusiona en esa
+    fila aunque el usuario no diga «fue parte de la cena». Caso vivo del dueño (11-nov): 3 panes con pollo a las 20:15
+    y el plato de mangú a las 20:35 quedaron como DOS «Cena»; lo comió todo, en dos tandas. Supersede la regla de
+    P1-PHOTO-DIARY-FUSION («un plato nuevo con meal_type='cena' NUNCA se fusiona») SOLO dentro del TTL: pasado,
+    sigue siendo un registro aparte. Una repetición declarada («repetí», «otra porción») no entra: tiene su camino.
+    Knob `MEALFIT_SAME_SLOT_TTL_FUSION` (True). tooltip-anchor: P1-PLAN-LOTE-982"""
+    try:
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_SAME_SLOT_TTL_FUSION", True):
+            return None
+        if int((tool_args or {}).get("days_ago") or 0) > 0:
+            return None
+        from tools import _normalize_meal_type
+        slot = _normalize_meal_type((tool_args or {}).get("meal_type"))
+        if slot not in _SLOTS_PRINCIPALES_FUSION:
+            return None
+        from meal_registration_time import explicit_repeat_consumption
+        if explicit_repeat_consumption(messages or []):
+            return None
+        previa = _buscar_comida_previa_del_slot(user_id, slot)
+        if previa and _comida_dentro_de_ttl_fusion(previa, ttl_min=_FUSION_TTL_MINUTOS):
+            logger.info(f"🔗 [P1-PLAN-LOTE-982] {slot} dentro del TTL de la anterior ({previa.get('id')}): se fusiona")
+            return slot
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-LOTE-982] no-op: {e!r}")
+    return None
+
+
 def _buscar_comida_previa_del_slot(user_id: str, slot: str) -> Optional[dict]:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Busca la comida registrada más reciente de hoy en el slot indicado."""
     try:
@@ -6904,6 +6940,8 @@ def _intentar_fusionar_alimento_en_comida_existente(
     hoy (desayuno, almuerzo, cena), fusiona en la fila existente sumando calorías, macros,
     incrementando unidades en el nombre, unificando ingredientes y preservando fotos."""
     target_slot = _detectar_slot_para_fusion(messages, tool_args)
+    if not target_slot:
+        target_slot = _slot_principal_dentro_de_ttl(user_id, tool_args, messages)
     if not target_slot:
         return None
     
