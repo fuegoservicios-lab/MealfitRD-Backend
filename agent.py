@@ -5852,6 +5852,19 @@ def execute_tools(state: ChatState):
                     tool_args = _sanitizar_ingredientes_contra_alucinacion_foto(
                         tool_args, state.get("turn_plate_photos") or [], state.get("messages") or []
                     )
+                    # [P1-PLAN-LOTE-990 · 2026-11-12] Desde UNA foto de plato, el registro es lo que muestra la foto: ni
+                    # «omelet de 4 huevos» de sus hábitos ni arepitas inventadas, ni la fruta olvidada (rechazo único).
+                    if _meal_calls_count <= 1 and state.get("turn_plate_photos"):
+                        try:
+                            from fiel_a_la_foto import rechazo as _rechazo_foto
+                            _rfoto = _rechazo_foto(_trusted_uid, tool_args.get("meal_name"), tool_args.get("ingredients"),
+                                                   state.get("turn_plate_photos") or [], _extraer_ultimo_texto_usuario(messages))
+                        except Exception as _foto_err:                                     # noqa: BLE001
+                            logger.debug(f"[P1-PLAN-LOTE-990] no-op: {_foto_err!r}")
+                            _rfoto = None
+                        if _rfoto:
+                            tool_messages.append(ToolMessage(content=_rfoto, tool_call_id=tool_id))
+                            continue
                     # [BB-043] Promover plato fuerte por la tarde (≥ 450 kcal) a almuerzo si está vacío
                     from prompts.chat_agent import hora_local_del_chat
                     from tools import _hora_local_float
@@ -7845,6 +7858,8 @@ def _plate_photos_from_vision(vision) -> list:
         att_id = item.get("attachment_id") or item.get("id")
         out.append({
             "desc": (desc[:corte.start()] if corte else desc).strip()[:220],
+            # [P1-PLAN-LOTE-990] entera, con sus DUDAS: lo que el usuario puede elegir no es «inventado»
+            "desc_completa": desc[:1200],
             "kcal": kcal,
             "attachment_id": str(att_id) if att_id else None,
         })
