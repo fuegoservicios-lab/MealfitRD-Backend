@@ -54,7 +54,7 @@ corre en otro contexto, el turno no se ve y el freno no actúa (fail-open, sin e
 |---|---|---|
 | `MEALFIT_DECISION_TRIAGE_MODE` | `off` | `off` / `shadow` / `guard` |
 | `MEALFIT_DECISION_TRIAGE_MODEL` | `gemini-decision-1` | id del modelo |
-| `MEALFIT_DECISION_TRIAGE_TIMEOUT_S` | `0.4` | tope del HTTP, clamp [0,05; 5] |
+| `MEALFIT_DECISION_TRIAGE_TIMEOUT_S` | `0.4` | tope del HTTP, clamp [0,05; 5]. **En el VPS = 1.5**: medido el 11-nov, la 1.ª llamada (TLS en frío) tarda ~590 ms y las siguientes ~255 ms; en el chat va en paralelo, así que el tope largo no cuesta nada |
 | `MEALFIT_DECISION_TRIAGE_CHAT_WAIT_S` | `0.3` | cuánto espera el chat al resultado en la tool |
 | `MEALFIT_DECISION_BEVERAGE_BLOCK` | `0.80` | umbral del freno de bebida, clamp [0,5; 0,99] |
 | `MEALFIT_DECISION_MEDIA_REJECT` | `0.15` | umbral de foto «no es comida», clamp [0,01; 0,5] |
