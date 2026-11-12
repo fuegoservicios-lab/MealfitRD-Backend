@@ -5741,6 +5741,18 @@ def execute_tools(state: ChatState):
                         tool_messages.append(ToolMessage(content=_freno, tool_call_id=tool_id))
                         continue
 
+                # [P1-PLAN-LOTE-991 · 2026-11-12] «Me tomé la creatina» sin cantidad = SU toma (etiqueta o historial), no 1.
+                if tool_name == "log_consumed_meal" and tool_args.get("suplemento"):
+                    try:
+                        from suplementos import ajustar_toma as _ajustar_toma
+                        _toma = _ajustar_toma(_trusted_uid, tool_args, _extraer_ultimo_texto_usuario(messages))
+                        if _toma:
+                            logger.info(f"💊 [P1-PLAN-LOTE-991] toma ajustada {tool_args.get('porciones')} → "
+                                        f"{_toma.get('porciones')} ({str(tool_args.get('suplemento'))[:40]})")
+                            tool_args = _toma
+                    except Exception as _toma_err:                                     # noqa: BLE001
+                        logger.debug(f"[P1-PLAN-LOTE-991] no-op: {_toma_err!r}")
+
                 # [P1-PLAN-LOTE-988 · 2026-11-12] «Dos paquetes de las de ayer» con cifras que no son n × esa porción:
                 # rechazo único con la cuenta (ver `referencia_a_registro`).
                 if tool_name == "log_consumed_meal" and _meal_calls_count <= 1:

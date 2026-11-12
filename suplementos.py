@@ -58,6 +58,10 @@ def etiqueta_valida(etiqueta) -> dict | None:
     # [P1-PLAN-LOTE-292 · revisión I3] Atwater: las kcal no pueden pasar de lo que dan sus macros (+ margen de redondeo).
     if out["kcal"] > 4 * out["protein_g"] + 4 * out["carbs_g"] + 9 * out["fats_g"] + 40:
         return None
+    # [P1-PLAN-LOTE-991] cuántas unidades (cápsulas, scoops) son UNA toma: «Creatine 5000» = 6 cápsulas para 5 g
+    upt = _num(etiqueta.get("unidades_por_toma"))
+    if upt and 0 < upt <= 50:
+        out["unidades_por_toma"] = upt
     from supplement_labels import normalize
     facts = normalize(etiqueta.get("supplement_facts"))
     if facts:
@@ -219,6 +223,79 @@ def guardar(user_id, nombre, marca=None, porciones=None, unidad="scoop", etiquet
     return {"ok": True, "estado_nevera": estado, "etiqueta": e, "fuente": fuente}
 
 
+# ── [P1-PLAN-LOTE-991 · 2026-11-12] La toma habitual ──────────────────────────────────────────────────────────────
+# Caso vivo del dueño: «Me tomé la creatina» → «1 cápsula», con el pote en su Alacena y tres tomas previas de 5
+# cápsulas (y su mínimo son 6). La toma sale de la etiqueta (`unidades_por_toma`) o, sin ella, de lo que registró antes;
+# sin número en su mensaje, `ajustar_toma` la pone en el registro aunque el modelo escriba 1. tooltip-anchor: P1-PLAN-LOTE-991
+
+import re as _re
+
+_PALABRA_NUM = {"una": 1, "un": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
+                "ocho": 8, "nueve": 9, "diez": 10, "media": 0.5, "medio": 0.5}
+_UNIDAD_TXT = r"(?:c[aá]psulas?|capsulas?|pastillas?|tabletas?|scoops?|medidas?|cucharad(?:as?|itas?)|porci[oó]n(?:es)?|gramos?|g(?![a-z])|servicios?)"
+_CANTIDAD_EN_TEXTO = _re.compile(r"\d|(?<![a-z])(?:" + "|".join(_PALABRA_NUM) + r")\s+" + _UNIDAD_TXT, _re.IGNORECASE)
+_NUM_UNIDAD = _re.compile(r"(\d+(?:[.,]\d+)?|" + "|".join(_PALABRA_NUM) + r")\s+" + _UNIDAD_TXT, _re.IGNORECASE)
+
+
+def _fmt(n) -> str:
+    return str(int(n)) if float(n).is_integer() else f"{n:g}"
+
+
+def _a_num(v):
+    v = str(v).lower().replace(",", ".")
+    return _PALABRA_NUM.get(v) if v in _PALABRA_NUM else _num(v)
+
+
+def dosis_habitual(user_id: str, pote: dict) -> dict | None:
+    """{n, fuente}: unidades de UNA toma. Etiqueta primero; si no, la cantidad más repetida de sus últimos registros."""
+    e = etiqueta_valida((pote or {}).get("serving_label"))
+    if e and e.get("unidades_por_toma"):
+        return {"n": e["unidades_por_toma"], "fuente": "según su etiqueta o lo que él dijo"}
+    nombre = str((pote or {}).get("ingredient_name") or "").strip()
+    if not nombre or not user_id:
+        return None
+    from db_core import execute_sql_query
+    filas = execute_sql_query(
+        "SELECT meal_name FROM consumed_meals WHERE user_id = %s AND meal_name ILIKE %s "
+        "ORDER BY consumed_at DESC LIMIT 10", (user_id, "%" + nombre[:40] + "%"), fetch_all=True) or []
+    cuentas: dict = {}
+    for f in filas:
+        m = _NUM_UNIDAD.search(str(f.get("meal_name") or ""))
+        n = _a_num(m.group(1)) if m else None
+        if n and n > 1:          # un «1» es justo el error que esto corrige: no cuenta como hábito
+            cuentas[n] = cuentas.get(n, 0) + 1
+    if not cuentas:
+        return None
+    n = max(cuentas, key=lambda k: (cuentas[k], k))
+    return {"n": n, "fuente": "lo que registró antes"}
+
+
+def ajustar_toma(user_id: str, tool_args: dict, texto_usuario: str) -> dict | None:
+    """Args corregidos si es la toma de un pote, el usuario NO dijo cantidad y el modelo puso otra que su toma; si no, None."""
+    if not isinstance(tool_args, dict) or not tool_args.get("suplemento"):
+        return None
+    if _CANTIDAD_EN_TEXTO.search(str(texto_usuario or "")):
+        return None
+    pote = buscar(user_id, str(tool_args.get("suplemento")))
+    d = dosis_habitual(user_id, pote) if pote else None
+    if not d:
+        return None
+    n = d["n"]
+    actual = _num(tool_args.get("porciones")) or 1
+    if abs(actual - n) < 1e-9:
+        return None
+    u = (pote.get("serving_unit") or "porción")
+    u_pl = u if n == 1 else (u + ("es" if u.endswith("n") else "s"))
+    out = dict(tool_args, porciones=n)
+    nombre = str(tool_args.get("meal_name") or "")
+    nuevo = _NUM_UNIDAD.sub(f"{_fmt(n)} {u_pl}", nombre, count=1)
+    out["meal_name"] = nuevo if nuevo != nombre else f"{nombre}, {_fmt(n)} {u_pl}".strip(", ")
+    ings = tool_args.get("ingredients")
+    if isinstance(ings, list):
+        out["ingredients"] = [_NUM_UNIDAD.sub(f"{_fmt(n)} {u_pl}", str(i), count=1) for i in ings]
+    return out
+
+
 def descontar(user_id: str, fila_id, porciones) -> float:
     """Resta `porciones` del pote (nunca por debajo de 0) y devuelve las que quedan. Lo tomado manda: si tomó más de lo
     que el pote decía, se registra igual y el pote queda en 0."""
@@ -243,7 +320,9 @@ BLOQUE_CONOCIMIENTO = (
     "Para guardar un pote nuevo, guardar_suplemento: cuando lo pide o cuando manda la foto del pote o de su "
     "etiqueta, aunque no diga nada (la foto ES decir que lo tiene; P1-PLAN-LOTE-765). Sin su tabla, las cifras del "
     "frente del envase o buscar_etiqueta_en_internet con la marca y el producto, antes de pedirle la foto "
-    "(P1-PLAN-LOTE-767).")
+    "(P1-PLAN-LOTE-767). Si dice que se tomó un suplemento SIN decir cuánto («me tomé la creatina»), registra SU TOMA "
+    "(porciones = la de «SU TOMA» de su Alacena), NUNCA 1 por defecto; si dice otra cantidad, esa. Si te dice cuántas "
+    "son su toma, guárdalo con guardar_suplemento (etiqueta.unidades_por_toma) (P1-PLAN-LOTE-991).")
 
 
 def _potes(user_id):
@@ -280,7 +359,14 @@ def bloque_para_chat(user_id: str) -> str:
                 from supplement_labels import context
                 et += context(e['supplement_facts'])
             marca = f" ({p['brand']})" if p.get("brand") else ""
-            lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}")
+            toma = ""
+            try:
+                d = dosis_habitual(user_id, p)
+                if d:
+                    toma = f" — SU TOMA: {_fmt(d['n'])} {u} ({d['fuente']})"
+            except Exception:
+                pass
+            lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}{toma}")
         if lineas:
             out += " SU ALACENA: " + "; ".join(lineas) + "."
     return out

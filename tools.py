@@ -6687,6 +6687,7 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
     no diga nada: la foto de un pote de varias porciones ES decir que lo tiene [P1-PLAN-LOTE-765]. Funciona aunque su
     Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
     - etiqueta: {"gramos_porcion","kcal","protein_g","carbs_g","fats_g"} POR PORCIÓN, tal como la lee la foto o la dice él.
+      Si la etiqueta (o él) dice cuántas unidades son UNA toma («6 cápsulas = 5 g»), añade "unidades_por_toma".
       Para vitaminas/minerales añade supplement_facts completo de la foto; no lo conviertas a macros ni lo omitas.
     - fuente: 'foto' (tabla leída) | 'frente' (kcal y proteína del frente del envase: el sistema estima
       carbohidratos y grasa) | 'web' (buscar_etiqueta_en_internet) | 'marca' | 'estimado'. Sin etiqueta,
