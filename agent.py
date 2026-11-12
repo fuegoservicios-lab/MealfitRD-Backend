@@ -6821,6 +6821,11 @@ def _detectar_intencion_parte_de_comida(messages: list) -> Optional[str]:
                 any(s in t for s in slots_phrases) and any(c in t for c in consumption_triggers)
             )
             if es_intencion:
+                # [P1-PLAN-LOTE-986] La franja de la FRASE que casó («en el desayuno me comí…»), no la primera que se
+                # nombre: «este es mi almuerzo, en el desayuno me comí dos bagels» devolvía «almuerzo».
+                for _sp in slots_phrases:
+                    if _sp in t:
+                        return _sp.split()[-1]
                 if "almuerzo" in t or "lunch" in t:
                     return "almuerzo"
                 if "desayuno" in t or "breakfast" in t:
@@ -6943,6 +6948,28 @@ def _intentar_fusionar_alimento_en_comida_existente(
     if not target_slot:
         target_slot = _slot_principal_dentro_de_ttl(user_id, tool_args, messages)
     if not target_slot:
+        return None
+    # [P1-PLAN-LOTE-986 · 2026-11-11] Una comida que el modelo registra en OTRA franja principal no se fusiona en esta.
+    # Caso vivo (cuenta de prueba): «este es mi almuerzo, en el desayuno me comí dos bagels con jamón» — los bagels
+    # llegaron con meal_type=desayuno y acabaron dentro del almuerzo (1 fila de 1.050 kcal), y el coach dijo que
+    # estaban como desayuno. tooltip-anchor: P1-PLAN-LOTE-986
+    try:
+        from tools import _normalize_meal_type
+        _slot_propio = _normalize_meal_type((tool_args or {}).get("meal_type"))
+    except Exception:
+        _slot_propio = None
+    # Solo cuando el USUARIO nombró esa otra franja: «extra lata de atún» tras el desayuno, marcada «almuerzo» por la
+    # hora, sí es del desayuno (test_p1_photo_diary_protect).
+    _txt_usuario = ""
+    for _m in reversed(messages or []):
+        if isinstance(_m, HumanMessage) or getattr(_m, "type", None) in ("human", "user"):
+            _c = getattr(_m, "content", "")
+            _txt_usuario = (_c if isinstance(_c, str) else " ".join(
+                p.get("text", "") for p in (_c or []) if isinstance(p, dict))).lower()
+            break
+    if (_slot_propio in _SLOTS_PRINCIPALES_FUSION and _slot_propio != target_slot
+            and re.search("(?<![a-z])" + re.escape(_slot_propio) + "(?![a-z])", _txt_usuario)):
+        logger.info(f"🚫 [P1-PLAN-LOTE-986] {_slot_propio} (lo nombró el usuario) no se fusiona en {target_slot}")
         return None
     
     # [P1-PHOTO-DIARY-FUSION · 2026-10-30] Priorizar el ID exacto del turno previo si coincide con target_slot
