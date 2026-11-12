@@ -104,7 +104,8 @@ def test_el_conteo_esperado_de_archivos_sigue_siendo_verificable():
     # 2026-09-28: 535 (+43: lotes 365-744 de cinco sesiones; medido por el gate del 744).
     # 2026-09-29: 578 (+43: lotes 745-902; medido por el gate del 900-902).
     # 2026-10-01: 621 (+43: lotes 903-971 de varias sesiones; medido por el gate del frontend 961-971).
-    documentado = 621
+    # 2026-11-12: 662 (+41: lotes 972-992; medido por el gate del frontend del 992).
+    documentado = 662
     assert abs(reales - documentado) <= 40, (
         f"el config documenta {documentado} archivos y hay {reales}: actualiza la nota "
         "o la referencia deja de detectar una corrida incompleta")
