@@ -2000,7 +2000,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
     Incluye carbohidratos y grasas saludables si están disponibles.
-    NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras. Para granos, legumbres y pastas servidos en el plato, indica su estado preparado o cocido (ej. "arroz blanco cocido (≈200 g)", "habichuelas guisadas (≈150 g)").
+    NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado. Cada renglón con cantidad Y peso aproximado en gramos entre paréntesis, p. ej. "8 rodajas de plátano maduro (≈180 g)": sin el peso, "rodajas"/"lascas"/"trozos" se cuentan como piezas enteras. Para granos, legumbres y pastas servidos en el plato, indica su estado preparado o cocido (ej. "arroz blanco cocido (≈200 g)", "habichuelas guisadas (≈150 g)"). Cada renglón nombra LO QUE ES, no el plato: si el usuario dice «pollo de ensalada» (pollo con mayonesa y verduras), van "pollo desmenuzado (≈90 g)" y "lechuga, tomate y zanahoria (≈60 g)", nunca un renglón "ensalada de pollo" para las verduras. [P1-PLAN-LOTE-984]
     - food_facts / label_servings: nutrientes LEÍDOS de la etiqueta o dictados por el usuario, por porción, y número de porciones realmente consumidas. No inventes valores ni conviertas %VD.
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack' | 'suplemento'. Dedúcelo de lo que diga el usuario o de la hora. NUNCA uses 'desayuno', 'almuerzo', 'cena', 'merienda' o 'snack' para una toma de suplemento (creatina, proteínas, vitaminas, pastillas, cápsulas): un suplemento NO es una comida ni una merienda. Para suplementos usa SIEMPRE 'suplemento'.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. Máximo 7 días atrás. ÚSALO cuando el usuario declare que el consumo ocurrió OTRO día (ej. "eso fue ayer" o "ayer almorcé sancocho" → days_ago=1). PROHIBIDO usar days_ago > 0 si el usuario dice "desayuné lo mismo de ayer", "el mismo almuerzo de ayer pero sin X" o frases comparativas: en esos casos comió HOY (days_ago=0) usando como referencia o plantilla la comida de ayer. Máximo 7 días atrás; el diario nunca registra a futuro.
@@ -2079,6 +2079,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             return _rechazo_qty
     except Exception as _qty_err:
         logger.debug(f"[P1-PLAN-LOTE-983] no-op: {_qty_err!r}")
+
+    # [P1-PLAN-LOTE-984 · 2026-11-11] Un estimado muy corto contra los platos COCINADOS del catálogo (rechaza una vez).
+    try:
+        import contraste_con_catalogo as _ccc
+        _rechazo_cat = _ccc.rechazo(user_id, meal_name, calories, healthy_fats, ingredients)
+        if _rechazo_cat:
+            return _rechazo_cat
+    except Exception as _cat_err:
+        logger.debug(f"[P1-PLAN-LOTE-984] no-op: {_cat_err!r}")
 
     # [P1-CONSUMED-BACKDATE · 2026-07-12] Fecha real de consumo + guard dup.
     from datetime import datetime, timezone as _tz, timedelta as _td

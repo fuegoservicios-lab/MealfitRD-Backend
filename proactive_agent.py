@@ -155,6 +155,29 @@ def palabras_de_la_comida(meal: str, locale) -> dict:
     }
 
 
+def _sin_mezcla_rara(chat_llm, prompt: str, content: str, user_id, meal, locale) -> str:
+    """[P1-PLAN-LOTE-984] «Avena cremosa con pavo»: se regenera UNA vez con la corrección; si vuelve a salir, el aviso
+    fijo de esa comida (nunca se manda la mezcla). Ver `combinacion_del_aviso`."""
+    try:
+        import combinacion_del_aviso as _ca
+        if not content or not _ca.activo():
+            return content
+        mezcla = _ca.mezcla_rara(content)
+        if not mezcla:
+            return content
+        logger.warning(f"[P1-PLAN-LOTE-984] aviso de {meal} a {user_id} con mezcla rara «{mezcla}»: se regenera")
+        raw = chat_llm.invoke(prompt + _ca.CORRECCION).content
+        nuevo = (" ".join(b.get("text", "") for b in raw if isinstance(b, dict) and "text" in b).strip()
+                 if isinstance(raw, list) else str(raw or "").strip())
+        if nuevo and not _ca.mezcla_rara(nuevo):
+            return nuevo
+        from meal_reminders import texto_del_aviso
+        return texto_del_aviso(meal, locale)[1]
+    except Exception as e:                                                     # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-984] revisión de la mezcla no aplicada: {e!r}")
+        return content
+
+
 # [P1-PLAN-LOTE-133 · 2026-09-20] Las horas por defecto y la hora del aviso, fuera del bucle del cron: la app nativa
 # programa los MISMOS recordatorios en el teléfono (`GET /api/notifications/meal-reminders`) y dos copias de esta cuenta
 # habrían acabado avisando a horas distintas en el chat y en la pantalla.
@@ -1592,6 +1615,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # meta): sin esto el aviso no sabía nada del día y sonaba a plantilla
                 prompt += bloque_del_dia(consumed, health)
                 prompt += _nevera_aviso   # [P1-PLAN-LOTE-960]
+                prompt += __import__("combinacion_del_aviso").REGLA   # [P1-PLAN-LOTE-984] nada de «avena con pavo»
                 _es_espanol = not _nudge_locale or str(_nudge_locale).lower().startswith("es")
                 _prev_model = [str(m.get("content") or "").strip() for m in (recent or []) if m.get("role") == "model" and m.get("content")]
                 if _es_espanol and _prev_model:
@@ -1647,7 +1671,8 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 content = " ".join([b.get("text", "") for b in raw_content if isinstance(b, dict) and "text" in b]).strip()
             else:
                 content = str(raw_content).strip()
-            
+            content = _sin_mezcla_rara(chat_llm, prompt, content, user_id, meal_to_check, _nudge_locale)   # [P1-PLAN-LOTE-984]
+
             if content:
                 # [P1-PLAN-LOTE-161] El chat de HOY se elige aquí, cuando ya hay un aviso que escribir: si no toca
                 # avisar, no se abre ninguna conversación.
