@@ -8430,6 +8430,15 @@ def _rag_es_casual(prompt: str) -> bool:
     return False
 
 
+def _foto_con_etiqueta_corta(prompt: str) -> bool:
+    """[P1-PLAN-LOTE-996] El texto que acompaña a una foto es solo una etiqueta (vacío o ≤ 3 palabras, sin pregunta):
+    «Desayuno», «mi almuerzo», «cena de hoy». Con una pregunta («¿esto engorda?») sí se busca en la memoria."""
+    clean = (prompt or "").strip()
+    if "?" in clean or "¿" in clean:
+        return False
+    return len(clean.split()) <= 3
+
+
 def _rag_sin_router(prompt: str) -> dict:
     """[P1-PLAN-LOTE-684] Modo voz: la decisión de RAG SIN el LLM del router (~1,75 s medidos en el turno de voz
     del dueño). La charla corta no busca; lo demás busca con la frase tal cual: el router solo la reescribía, y el
@@ -10258,6 +10267,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # [AI-42: Short-circuit en chats simples/saludos] Salta sentimiento y router LLM para mensajes casuales cortos
     _es_simple_casual = not vision and _rag_es_casual(prompt)
     if _es_simple_casual:
+        _do_sentiment = False
+        _do_rag_router = False
+        rag_decision = {"skip": True}
+    elif vision and _foto_con_etiqueta_corta(prompt):
+        # [P1-PLAN-LOTE-996 · 2026-11-13] Foto + «Desayuno»: la foto ya dice qué comió; ni el tono de una palabra ni
+        # la memoria («preferencias para el desayuno») cambian el registro. Medido: 5,6 s antes del primer token
+        # (sentimiento y router 2 s en paralelo + embedding de Cohere 3,2 s) que ahora no se pagan.
         _do_sentiment = False
         _do_rag_router = False
         rag_decision = {"skip": True}

@@ -127,6 +127,7 @@ class ChatOpenAI(_LangChainChatOpenAI):
         generacion = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
         if _gh.es_gemini(self.model_name) and isinstance(chunk, dict):
             _gh.capturar_de_trozo(chunk, generacion)
+            _gh.uso_solo_al_final(chunk, generacion)   # [P1-PLAN-LOTE-996] uso acumulado ≠ uso por trozo
         return generacion
 
     # [P1-PLAN-LOTE-654 · 2026-09-27] Un proveedor sin saldo (Z.ai 1113, OpenAI insufficient_quota, DeepSeek 402) deja

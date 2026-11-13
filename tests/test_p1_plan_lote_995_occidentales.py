@@ -186,4 +186,4 @@ def test_el_permiso_nuevo_no_nombra_a_china():
 
 
 def test_marker():
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-995 · 2026-11-13"' in io.open(_BACKEND / "app.py", encoding="utf-8").read()
+    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-99' in io.open(_BACKEND / "app.py", encoding="utf-8").read()   # 995 o posterior

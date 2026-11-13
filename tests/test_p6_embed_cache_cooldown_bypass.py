@@ -201,7 +201,7 @@ def test_no_cooldown_redis_miss_calls_gemini_and_persists():
     with patch.object(sc, "get_master_ingredients", return_value=master), \
          patch("cache_manager.redis_client", fake_redis), \
          patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
-        cache = sc.get_semantic_cache()
+        cache = sc.get_semantic_cache(deadline_s=60)  # [P1-PLAN-LOTE-996] la init en frío es del calentador
 
     assert cache is not None
     assert cache["vectors"] == fake_vectors

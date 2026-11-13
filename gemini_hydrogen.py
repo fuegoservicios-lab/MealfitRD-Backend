@@ -127,6 +127,20 @@ def capturar_de_trozo(trozo: dict, generacion: Any) -> None:
         pass
 
 
+def uso_solo_al_final(trozo: dict, generacion: Any) -> None:
+    """[P1-PLAN-LOTE-996] En streaming Gemini manda el uso ACUMULADO en cada trozo (medido: 1512 → 1548 en dos
+    trozos) y LangChain suma el `usage_metadata` de todos: el coach registraba 2-6× los tokens reales. Solo el
+    trozo que cierra (con `finish_reason`) conserva el uso."""
+    try:
+        if generacion is None or getattr(generacion.message, "usage_metadata", None) is None:
+            return
+        choices = trozo.get("choices") or (trozo.get("chunk") or {}).get("choices") or []
+        if choices and not any((c or {}).get("finish_reason") for c in choices):
+            generacion.message.usage_metadata = None
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def reinyectar_firmas(payload: dict, mensajes: Iterable[Any]) -> None:
     """Antes de enviar a Gemini: cada tool_call del historial lleva su firma (o la de historia ajena)."""
     por_id = {}
