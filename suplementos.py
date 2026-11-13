@@ -338,6 +338,13 @@ def _potes(user_id):
 def bloque_para_chat(user_id: str) -> str:
     """El bloque 💊 del system prompt: el conocimiento fijo + SU ALACENA (cada pote con porciones y etiqueta)."""
     try:
+        from turn_cache import get_cached
+        _hit, _cached = get_cached("prefetch_suppl", user_id)
+        if _hit:
+            return _cached
+    except Exception:
+        pass
+    try:
         potes = _potes(user_id)
     except Exception:
         potes = []

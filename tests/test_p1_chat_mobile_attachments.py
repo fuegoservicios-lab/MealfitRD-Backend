@@ -135,7 +135,25 @@ def test_chat_route_renews_urls_and_checks_owner_or_signature():
     assert "signed = verify_chat_attachment_signature" in src
     assert "verified_user_id == attachment.get(\"user_id\")" in src
     assert "if not signed and not owned" in src
-    assert '"Cache-Control": "private, max-age=3600"' in src
+    assert '"Cache-Control": "private, max-age=604800, immutable"' in src
+
+
+def test_la_url_firmada_es_estable_dentro_de_su_tramo(monkeypatch):
+    """[FOTOS-CHAT-URL-ESTABLE] Con `expires = ahora + ttl` cada carga del historial daba otra URL para la misma foto
+    y la caché del navegador no acertaba nunca: la app re-descargaba todas las fotos del chat en cada arranque."""
+    import db_chat as m
+    monkeypatch.setenv("MEALFIT_CHAT_ATTACHMENT_SIGNING_SECRET", "s" * 40)
+    aid = "11111111-1111-4111-8111-111111111111"
+    ttl = 7 * 24 * 3600
+    base = 1_800_000_000 // ttl * ttl
+    monkeypatch.setattr(m.time, "time", lambda: base + 5)
+    primera = m.build_chat_attachment_url(aid)
+    monkeypatch.setattr(m.time, "time", lambda: base + ttl - 5)
+    assert m.build_chat_attachment_url(aid) == primera          # mismo tramo: misma URL
+    expires = int(primera.split("expires=")[1].split("&")[0])
+    assert expires - (base + ttl - 5) >= ttl                     # nunca vale menos de lo pedido
+    monkeypatch.setattr(m.time, "time", lambda: base + ttl + 5)
+    assert m.build_chat_attachment_url(aid) != primera          # tramo siguiente: se renueva
 
 
 def test_frontend_does_not_persist_temporary_signature_inside_prompt():

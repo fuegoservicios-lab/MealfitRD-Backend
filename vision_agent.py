@@ -3,7 +3,7 @@ import io
 import math
 import base64
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12] Gemini eliminado. ChatGLM acepta
@@ -1001,7 +1001,7 @@ def _resolve_vision_client(schema):
 # tarea, para que el router lo anote en `llm_usage_events` (libro de COSTO). ContextVar: el
 # router y `_invoke_structured_vision` corren en la misma tarea; fuera de ella, None.
 import contextvars as _cv_vision
-from typing import Optional
+from typing import Any, Optional
 
 _LAST_VISION_USAGE: "_cv_vision.ContextVar[Optional[dict]]" = _cv_vision.ContextVar("mealfit_last_vision_usage", default=None)
 
@@ -1046,6 +1046,46 @@ class _VisionUsageCapture:
         self.usage: Optional[dict] = None
 
     @staticmethod
+    def _usage_from_dict(src: Any) -> Optional[dict]:
+        if not isinstance(src, dict):
+            return None
+        inp = src.get("input_tokens")
+        if inp is None:
+            inp = src.get("prompt_tokens")
+        out = src.get("output_tokens")
+        if out is None:
+            out = src.get("completion_tokens")
+        if not inp and not out:
+            return None
+        cached = 0
+        in_det = src.get("input_token_details")
+        if isinstance(in_det, dict):
+            cached = in_det.get("cache_read") or in_det.get("cached") or 0
+        if not cached:
+            ptd = src.get("prompt_tokens_details")
+            if isinstance(ptd, dict):
+                cached = ptd.get("cached_tokens") or ptd.get("cache_read") or 0
+        if not cached:
+            cached = src.get("cached_content_token_count") or src.get("cached_tokens") or 0
+        reasoning = 0
+        out_det = src.get("output_token_details")
+        if isinstance(out_det, dict):
+            reasoning = out_det.get("reasoning") or 0
+        if not reasoning:
+            ctd = src.get("completion_tokens_details")
+            if isinstance(ctd, dict):
+                reasoning = ctd.get("reasoning_tokens") or 0
+        parsed = {
+            "input_tokens": inp,
+            "output_tokens": out,
+        }
+        if cached:
+            parsed["cached_tokens"] = int(cached)
+        if reasoning:
+            parsed["reasoning_tokens"] = int(reasoning)
+        return parsed
+
+    @staticmethod
     def _extract(response) -> Optional[dict]:
         try:
             gens = getattr(response, "generations", None) or []
@@ -1053,21 +1093,27 @@ class _VisionUsageCapture:
                 for gen in gen_list or []:
                     msg = getattr(gen, "message", None)
                     um = getattr(msg, "usage_metadata", None) if msg is not None else None
-                    if isinstance(um, dict) and (um.get("input_tokens") or um.get("output_tokens")):
-                        return {"input_tokens": um.get("input_tokens"), "output_tokens": um.get("output_tokens")}
+                    got = _VisionUsageCapture._usage_from_dict(um)
+                    if got:
+                        return got
+                    rm = getattr(msg, "response_metadata", None) if msg is not None else None
+                    if isinstance(rm, dict):
+                        got = _VisionUsageCapture._usage_from_dict(rm.get("token_usage") or rm.get("usage"))
+                        if got:
+                            return got
             lo = getattr(response, "llm_output", None) or {}
             tu = lo.get("token_usage") or lo.get("usage") or {}
-            if tu:
-                return {"input_tokens": tu.get("prompt_tokens") or tu.get("input_tokens"),
-                        "output_tokens": tu.get("completion_tokens") or tu.get("output_tokens")}
+            return _VisionUsageCapture._usage_from_dict(tu)
         except Exception:
             return None
-        return None
 
     def on_llm_end(self, response, **kwargs) -> None:
         got = self._extract(response)
         if got:
             self.usage = got
+
+    def on_chat_model_end(self, response, **kwargs) -> None:
+        self.on_llm_end(response, **kwargs)
 
     async def on_llm_end_async(self, response, **kwargs) -> None:  # pragma: no cover - alias defensivo
         self.on_llm_end(response, **kwargs)
@@ -1077,6 +1123,16 @@ class _VisionUsageCapture:
         if name.startswith("on_"):
             return lambda *a, **k: None
         raise AttributeError(name)
+
+
+def _vision_image_detail() -> str:
+    """Knob opt-in `MEALFIT_VISION_IMAGE_DETAIL` (low|medium|high; vacío = omitir para no cambiar sin benchmark)."""
+    try:
+        from knobs import _env_str
+        d = _env_str("MEALFIT_VISION_IMAGE_DETAIL", "").strip().lower()
+        return d if d in ("low", "medium", "high") else ""
+    except Exception:
+        return ""
 
 
 async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
@@ -1093,10 +1149,14 @@ async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
     `analyze_image_structured` (schema propio del caller)."""
     llm = _resolve_vision_client(schema)
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    image_payload = {"url": f"data:image/jpeg;base64,{image_b64}"}
+    _detail = _vision_image_detail()
+    if _detail:
+        image_payload["detail"] = _detail
     message = HumanMessage(
         content=[
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            {"type": "image_url", "image_url": image_payload},
         ]
     )
     # [P2-VISION-USAGE-TOKENS · 2026-09-04] El primer escaneo con Gemini dejó la fila de costo con

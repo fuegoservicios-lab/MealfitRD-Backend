@@ -622,6 +622,9 @@ async def api_inventory_photo_scan(
             node="pantry_photo_scan",
             input_tokens=_uso.get("input_tokens"),
             output_tokens=_uso.get("output_tokens"),
+            cached_tokens=_uso.get("cached_tokens"),
+            metadata=({"reasoning_tokens": _uso["reasoning_tokens"]}
+                      if _uso.get("reasoning_tokens") else None),
         )
     except Exception as _uso_err:
         logger.debug(f"[P1-PLAN-LOTE-53] coste de photo-scan no anotado: {_uso_err!r}")

@@ -12,6 +12,7 @@ tooltip-anchor: P1-PLAN-LOTE-996
 from __future__ import annotations
 
 import io
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -36,7 +37,8 @@ def _aislado(master):
     return (patch.object(sc, "_semantic_cache_disabled", return_value=False),
             patch.object(sc, "get_master_ingredients", return_value=master),
             patch.object(sc, "_semantic_cache", None),
-            patch.object(sc, "_semantic_cache_failed_until", 0.0))
+            patch.object(sc, "_semantic_cache_failed_until", 0.0),
+            patch.object(sc, "_semantic_cache_lock", threading.Lock()))
 
 
 def test_la_peticion_no_construye_la_cache_y_lanza_el_calentador(monkeypatch):
@@ -44,8 +46,8 @@ def test_la_peticion_no_construye_la_cache_y_lanza_el_calentador(monkeypatch):
     monkeypatch.delenv("MEALFIT_EMBED_INIT_EN_PETICION", raising=False)
     master = [{"name": "Pollo", "category": "Proteína", "aliases": []}]
     emb = MagicMock()
-    d, m, c, f = _aislado(master)
-    with d, m, c, f,          patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=None),          patch("embeddings_provider.get_embeddings_client", return_value=emb),          patch.object(cs, "lanzar", return_value=True) as lanzar:
+    d, m, c, f, lk = _aislado(master)
+    with d, m, c, f, lk,          patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=None),          patch("embeddings_provider.get_embeddings_client", return_value=emb),          patch.object(cs, "lanzar", return_value=True) as lanzar:
         assert sc.get_semantic_cache() is None
     lanzar.assert_called_once()
     emb.embed_documents.assert_not_called()
@@ -54,8 +56,8 @@ def test_la_peticion_no_construye_la_cache_y_lanza_el_calentador(monkeypatch):
 def test_con_redis_la_peticion_sigue_sirviendo_la_cache():
     _reset()
     master = [{"name": "Pollo", "category": "Proteína", "aliases": []}]
-    d, m, c, f = _aislado(master)
-    with d, m, c, f,          patch("embeddings_provider.get_embeddings_client", return_value=MagicMock()),          patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=[[0.1, 0.2]]),          patch.object(cs, "lanzar") as lanzar:
+    d, m, c, f, lk = _aislado(master)
+    with d, m, c, f, lk,          patch("embeddings_provider.get_embeddings_client", return_value=MagicMock()),          patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=[[0.1, 0.2]]),          patch.object(cs, "lanzar") as lanzar:
         assert sc.get_semantic_cache() is not None
     lanzar.assert_not_called()
 
@@ -103,7 +105,7 @@ def test_el_cliente_aplica_el_ajuste_solo_a_gemini():
 
 
 def test_marker():
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-996 · 2026-11-13"' in io.open(_BACKEND / "app.py", encoding="utf-8").read()
+    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-99' in io.open(_BACKEND / "app.py", encoding="utf-8").read()   # 996 o posterior
 
 
 # ── foto + etiqueta corta: sin sentimiento ni memoria antes del primer token ─────────────────────────

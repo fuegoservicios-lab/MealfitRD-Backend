@@ -60,9 +60,11 @@ Tooltip-anchor: P0-LLM-PROVIDER-MIGRATION-EMBEDDINGS · P1-COHERE-EMBED-V4.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import logging
 import os
 import threading
+import time
 from typing import List, Optional
 
 from knobs import _env_float, _env_int, _env_str
@@ -86,6 +88,26 @@ _warned_disabled = False
 _client = None
 _client_lock = threading.Lock()
 _client_provider_fingerprint = None
+
+# [Etapa 2 · Hydrogen Efficiency] Caché RAM corta (TTL) + singleflight para
+# embeddings de búsqueda (`purpose="query"`): elimina la doble llamada HTTP a
+# Cohere cuando `_rag_text_unit` y `_rag_visual_unit` embeben la misma query.
+_QUERY_CACHE_LOCK = threading.Lock()
+_QUERY_EMBED_CACHE: "OrderedDict[tuple, tuple[float, List[float]]]" = OrderedDict()
+_QUERY_INFLIGHT: "dict[tuple, threading.Event]" = {}
+_QUERY_CACHE_MAX = 256
+
+
+def _query_embed_cache_ttl_s() -> float:
+    try:
+        return max(0.0, float(_env_float("MEALFIT_QUERY_EMBED_CACHE_TTL_S", 120.0)))
+    except Exception:
+        return 120.0
+
+
+def clear_query_embed_cache() -> None:
+    with _QUERY_CACHE_LOCK:
+        _QUERY_EMBED_CACHE.clear()
 
 
 def _embeddings_provider() -> str:
@@ -302,15 +324,83 @@ def get_text_embedding(text: str, purpose: str = "query") -> Optional[List[float
             _warned_disabled = True
         return None
 
-    try:
+    if purpose == "query":
+        try:
+            from turn_cache import get_cached as _tc_get
+            _hit, _tc_vec = _tc_get("query_emb", f"{get_embeddings_model_id()}:{text}")
+            if _hit and isinstance(_tc_vec, list) and _tc_vec:
+                return list(_tc_vec)
+        except Exception:
+            pass
+
+    ttl_s = _query_embed_cache_ttl_s() if purpose == "query" else 0.0
+
+    def _compute() -> Optional[List[float]]:
         client = _build_client()
+        if ttl_s > 0.0:
+            ckey = (id(client), get_embeddings_model_id(), purpose, text)
+            now = time.monotonic()
+            with _QUERY_CACHE_LOCK:
+                hit = _QUERY_EMBED_CACHE.get(ckey)
+                if hit is not None:
+                    ts, vec = hit
+                    if now - ts <= ttl_s and vec:
+                        _QUERY_EMBED_CACHE.move_to_end(ckey)
+                        return list(vec)
+                    _QUERY_EMBED_CACHE.pop(ckey, None)
         if purpose == "document" and hasattr(client, "embed_documents"):
             emb = client.embed_documents([text])[0]
         else:
             emb = client.embed_query(text)
         if isinstance(emb, list) and emb:
-            return emb
+            if ttl_s > 0.0:
+                ckey = (id(client), get_embeddings_model_id(), purpose, text)
+                with _QUERY_CACHE_LOCK:
+                    _QUERY_EMBED_CACHE[ckey] = (time.monotonic(), list(emb))
+                    _QUERY_EMBED_CACHE.move_to_end(ckey)
+                    while len(_QUERY_EMBED_CACHE) > _QUERY_CACHE_MAX:
+                        _QUERY_EMBED_CACHE.popitem(last=False)
+            return list(emb)
         return None
+
+    try:
+        if purpose == "query":
+            sf_key = (_embeddings_provider(), get_embeddings_model_id(), purpose, text)
+            while True:
+                with _QUERY_CACHE_LOCK:
+                    ev = _QUERY_INFLIGHT.get(sf_key)
+                    if ev is None:
+                        ev = threading.Event()
+                        _QUERY_INFLIGHT[sf_key] = ev
+                        leader = True
+                    else:
+                        leader = False
+                if leader:
+                    try:
+                        res = _compute()
+                        if res:
+                            try:
+                                from turn_cache import set_cached as _tc_set
+                                _tc_set("query_emb", f"{get_embeddings_model_id()}:{text}", list(res))
+                            except Exception:
+                                pass
+                        return res
+                    finally:
+                        with _QUERY_CACHE_LOCK:
+                            _QUERY_INFLIGHT.pop(sf_key, None)
+                        ev.set()
+                ev.wait(timeout=15.0)
+                # Tras despertar, revisa cachés ya pobladas por el líder sin repetir llamada HTTP.
+                try:
+                    from turn_cache import get_cached as _tc_get
+                    _hit, _tc_vec = _tc_get("query_emb", f"{get_embeddings_model_id()}:{text}")
+                    if _hit and isinstance(_tc_vec, list) and _tc_vec:
+                        return list(_tc_vec)
+                except Exception:
+                    pass
+                res = _compute()
+                return res
+        return _compute()
     except Exception as e:
         # error-level (NO warning): convención P3-VISION-FAIL-ERROR-LOG /
         # P3-3-GET-EMBEDDING-LOGGER — una caída sostenida del provider debe

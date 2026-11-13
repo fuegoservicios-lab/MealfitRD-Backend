@@ -49,6 +49,17 @@ def leer_memoria(user_id: str) -> bool:
     sustituyen `db` por un stub no pueden romper su importación."""
     try:
         from db import execute_sql_query
+        try:
+            from turn_cache import current_turn_cache, get_cached
+            if current_turn_cache() is not None:
+                from db_core import execute_sql_query as _ssot_exec
+                if execute_sql_query is _ssot_exec:
+                    hit, prof = get_cached("profile", user_id)
+                    if hit and isinstance(prof, dict) and "long_term_memory_enabled" in prof:
+                        valor = prof.get("long_term_memory_enabled")
+                        return True if valor is None else bool(valor)
+        except Exception:
+            pass
         fila = execute_sql_query(
             "SELECT long_term_memory_enabled FROM user_profiles WHERE id = %s",
             (user_id,), fetch_one=True,

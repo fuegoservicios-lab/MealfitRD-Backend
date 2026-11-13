@@ -374,8 +374,19 @@ def build_clinical_form_from_profile(user_id: str) -> dict:
 
 
 def get_user_profile(user_id: str):
-    """Obtiene el perfil completo del usuario, incluyendo el health_profile."""
-    if not connection_pool: return None
+    """Obtiene el perfil completo del usuario, reutilizando la caché de turno si está activa."""
+    if not user_id or not connection_pool:
+        return None
+    from turn_cache import current_turn_cache, get_cached, set_cached
+    _use_turn_cache = current_turn_cache() is not None
+    if _use_turn_cache:
+        from db_core import execute_sql_query as _ssot_exec
+        _use_turn_cache = (execute_sql_query is _ssot_exec)
+    if _use_turn_cache:
+        hit, cached = get_cached("profile", user_id)
+        if hit and isinstance(cached, dict):
+            import copy
+            return copy.deepcopy(cached)
     try:
         from datetime import datetime, timezone
         row = execute_sql_query(
@@ -443,7 +454,11 @@ def get_user_profile(user_id: str):
         # [P1-PLAN-LOTE-772] El plan que la persona DISFRUTA: la cortesía se superpone al LEER, después de la
         # degradación (que sigue escribiendo solo lo pagado). Nunca se escribe de vuelta.
         from regalos_cuenta import superponer
-        return superponer(profile)
+        prof = superponer(profile)
+        if _use_turn_cache and isinstance(prof, dict):
+            import copy
+            set_cached("profile", user_id, copy.deepcopy(prof))
+        return prof
     except Exception as e:
         logger.error(f"Error obteniendo perfil: {e}")
         return None

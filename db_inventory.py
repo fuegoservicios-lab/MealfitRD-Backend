@@ -224,9 +224,8 @@ def _compute_dynamic_consumption_rates(
 # para la coherencia Σ(recetas) ↔ Σ(lista). Ambos ahora leen del mismo dict.
 from canonical_units import CANONICAL_UNIT_MAP as _CANONICAL_UNIT_MAP
 
-def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
-    """Obtiene los registros crudos de la base de datos para la despensa del usuario."""
-    if not _db_available(): return []
+def _fetch_raw_user_inventory_uncached(user_id: str) -> List[Dict[str, Any]]:
+    """Consulta cruda de la despensa del usuario."""
     try:
         # [P1-NEON-DB-MIGRATION · 2026-06-12] Casts de parity con PostgREST:
         # uuid→text (consumers comparan/serializan strings), numeric→float8
@@ -251,8 +250,24 @@ def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
             row["available_quantity"] = max(qty - reserved, 0.0)
         return rows
     except Exception as e:
-        logger.error(f"Error obteniendo user_inventory para {user_id}: {e}")
+        logger.error(f"Error obteniendo inventario crudo: {e}")
         return []
+
+
+def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
+    """Obtiene los registros crudos de la base de datos para la despensa del usuario."""
+    if not _db_available():
+        return []
+    try:
+        from turn_cache import current_turn_cache, get_or_load
+        if current_turn_cache() is not None:
+            from db_core import execute_sql_query as _ssot_exec
+            if execute_sql_query is _ssot_exec:
+                rows = get_or_load("raw_inv", user_id, lambda: _fetch_raw_user_inventory_uncached(user_id))
+                return [dict(r) for r in (rows or [])]
+    except Exception:
+        pass
+    return _fetch_raw_user_inventory_uncached(user_id)
 
 
 def _normalize_reservation_details(raw_details: Any) -> Dict[str, float]:
@@ -382,6 +397,37 @@ def _infer_shelf_life_days(name: str, category: str) -> int:
     return 14
 
 
+def _resolve_household_size(user_id: str, household_size: float | int | None) -> float:
+    """Resuelve el tamaño efectivo del hogar reutilizando el perfil en `turn_cache` si está disponible."""
+    if household_size is None:
+        try:
+            _hp_row = None
+            from turn_cache import current_turn_cache, get_cached
+            if current_turn_cache() is not None:
+                from db_core import execute_sql_query as _ssot_exec
+                if execute_sql_query is _ssot_exec:
+                    _hit, _prof = get_cached("profile", user_id)
+                    if _hit and isinstance(_prof, dict) and "health_profile" in _prof:
+                        _hp_row = {"health_profile": _prof.get("health_profile") or {}}
+            if _hp_row is None:
+                _hp_row = execute_sql_query(
+                    "SELECT health_profile FROM user_profiles WHERE id = %s LIMIT 1",
+                    (user_id,),
+                    fetch_one=True,
+                )
+            if _hp_row:
+                hp = _hp_row.get("health_profile") or {}
+                from constants import compute_household_multiplier
+                _eff = compute_household_multiplier(hp)
+                household_size = _eff if _eff > 1.0 else (hp.get("householdSize") or hp.get("household_size") or 1)
+        except Exception:
+            household_size = 1
+    try:
+        return max(1.0, float(household_size or 1))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def get_user_inventory(user_id: str, household_size: float | int | None = None) -> List[str]:
     """Obtiene la despensa del usuario formateada como lista de strings (ej: '2 unidades de Manzana').
 
@@ -392,28 +438,7 @@ def get_user_inventory(user_id: str, household_size: float | int | None = None) 
     """
     raw_items = get_raw_user_inventory(user_id)
     formatted = []
-
-    if household_size is None:
-        try:
-            _hp_row = execute_sql_query(
-                "SELECT health_profile FROM user_profiles WHERE id = %s LIMIT 1",
-                (user_id,),
-                fetch_one=True,
-            )
-            if _hp_row:
-                hp = _hp_row.get("health_profile") or {}
-                # [P1-3] Si el perfil tiene `householdComposition` lo usamos
-                # como multiplier efectivo; si no, fallback al escalar legacy.
-                from constants import compute_household_multiplier
-                _eff = compute_household_multiplier(hp)
-                household_size = _eff if _eff > 1.0 else (hp.get("householdSize") or hp.get("household_size") or 1)
-        except Exception:
-            household_size = 1
-    # Aceptar float (P1-3): adults=2 + children=2×0.6 = 3.2 personas equivalentes.
-    try:
-        household_size = max(1.0, float(household_size or 1))
-    except (TypeError, ValueError):
-        household_size = 1.0
+    household_size = _resolve_household_size(user_id, household_size)
 
     PANTRY_STAPLES = {
         'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',
@@ -525,28 +550,7 @@ def get_user_inventory_net(user_id: str, household_size: float | int | None = No
     """
     raw_items = get_raw_user_inventory(user_id)
     formatted = []
-
-    if household_size is None:
-        try:
-            _hp_row = execute_sql_query(
-                "SELECT health_profile FROM user_profiles WHERE id = %s LIMIT 1",
-                (user_id,),
-                fetch_one=True,
-            )
-            if _hp_row:
-                hp = _hp_row.get("health_profile") or {}
-                # [P1-3] Si el perfil tiene `householdComposition` lo usamos
-                # como multiplier efectivo; si no, fallback al escalar legacy.
-                from constants import compute_household_multiplier
-                _eff = compute_household_multiplier(hp)
-                household_size = _eff if _eff > 1.0 else (hp.get("householdSize") or hp.get("household_size") or 1)
-        except Exception:
-            household_size = 1
-    # Aceptar float (P1-3): adults=2 + children=2×0.6 = 3.2 personas equivalentes.
-    try:
-        household_size = max(1.0, float(household_size or 1))
-    except (TypeError, ValueError):
-        household_size = 1.0
+    household_size = _resolve_household_size(user_id, household_size)
 
     PANTRY_STAPLES = {
         'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',

@@ -162,7 +162,12 @@ def build_chat_attachment_url(attachment_id: str, ttl_seconds: int = 7 * 24 * 36
     base = f"/api/chat/attachments/{attachment_id}"
     if not secret:
         return base
-    expires = int(time.time()) + max(60, min(int(ttl_seconds), 30 * 24 * 3600))
+    # [FOTOS-CHAT-URL-ESTABLE · 2026-11-13] La caducidad va por TRAMOS, no «ahora + ttl»: con el segundo exacto, cada
+    # carga del historial firmaba una URL distinta para la MISMA foto y la caché del navegador no acertaba nunca (la
+    # app volvía a bajar todas las fotos del chat en cada arranque). Dentro de un tramo la URL es idéntica; vale entre
+    # 1 y 2 veces `ttl`, nunca menos de lo pedido.
+    ttl = max(60, min(int(ttl_seconds), 30 * 24 * 3600))
+    expires = (int(time.time()) // ttl + 2) * ttl
     payload = f"{attachment_id}:{expires}".encode("utf-8")
     signature = hmac.new(secret, payload, hashlib.sha256).hexdigest()
     return f"{base}?expires={expires}&sig={signature}"

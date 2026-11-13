@@ -488,20 +488,16 @@ def _peso_para_perfil(hp: dict, valor: float, unidad_explicita: Optional[str]):
 
 @tool
 def update_form_field(user_id: str, field: str, new_value: str) -> str:
-    """
-    Actualiza el formulario en tiempo real en la UI del usuario.
-    Campos válidos (field) y valores esperados (DEBES usar estos valores exactos en inglés para los selects):
-    - 'weight': Ej: "129" (solo números)
-    - 'height': Ej: "180" (en cm)
-    - 'age': Ej: "30"
-    - 'gender': "male" o "female"
-    - 'dietType': "balanced", "vegetarian" o "vegan"
-    - 'mainGoal': "lose_fat", "gain_muscle", "maintenance", o "performance"
-    - 'activityLevel': "sedentary", "light", "moderate", "active", o "athlete"
-    - 'budget': "low", "medium", "high", o "unlimited"
-    - 'cookingTime': "none", "30min", "1hour", o "plenty"
-    - 'allergies', 'medicalConditions', 'dislikes', 'struggles': Listas separadas por coma (Ej: "Lacteos, Gluten")
-    - 'country': el país donde vive y compra: "DO", "ES", "US", "MX", "PR" o "CO" (también vale el nombre del país)
+    """Actualiza un campo permanente en el formulario/perfil del usuario.
+    - 'weight'/'height'/'age': números ("129", "180", "30").
+    - 'gender': "male"|"female".
+    - 'dietType': "balanced"|"vegetarian"|"vegan".
+    - 'mainGoal': "lose_fat"|"gain_muscle"|"maintenance"|"performance".
+    - 'activityLevel': "sedentary"|"light"|"moderate"|"active"|"athlete".
+    - 'budget': "low"|"medium"|"high"|"unlimited".
+    - 'cookingTime': "none"|"30min"|"1hour"|"plenty".
+    - 'allergies'/'medicalConditions'/'dislikes'/'struggles': coma-separado ("Lacteos, Gluten").
+    - 'country': "DO"|"ES"|"US"|"MX"|"PR"|"CO" (o nombre).
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
@@ -4842,47 +4838,20 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
 
 @tool
 def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str, allow_pantry_expansion: bool = False) -> str:
+    """Modifica UNA comida puntual del plan activo (sin regenerar todo el plan).
+    - day_number: 1-based del día visible en el plan.
+    - meal_type: 'Desayuno'|'Almuerzo'|'Merienda'|'Cena'.
+    - changes: cambio solicitado.
+    - allow_pantry_expansion: true solo si autoriza comprar ingredientes extra.
     """
-    Modifica UNA comida específica del plan activo del usuario. No genera un plan nuevo, solo cambia la comida indicada.
-    Usa esta herramienta cuando el usuario pida un cambio puntual a una comida de su plan.
-    IMPORTANTE: day_number es la posición 1-based del día en el plan activo
-    (1 = primer día visible del menú).
-
-    Parámetros:
-    - user_id: ID del usuario
-    - day_number: posición 1-based del día en el plan (1 = primer día visible)
-    - meal_type: momento exacto del día: 'Desayuno', 'Almuerzo', 'Merienda' o 'Cena'
-    - changes: descripción en lenguaje natural del cambio solicitado por el usuario
-    - allow_pantry_expansion: ponlo en True SOLO SI el usuario explícitamente autoriza comprar ingredientes nuevos, ir al súper, o salir de la regla de zero-waste para esta comida. Por defecto es False.
-
-    [P3-NEW-7 · 2026-05-11] CONTRATO DE OWNERSHIP — LEER ANTES DE IMPLEMENTAR.
-    ────────────────────────────────────────────────────────────────────────
-    Esta tool es DUMMY hoy (retorna `"DUMMY_CALL_ACTUALLY_INTERCEPTED"`).
-    El agente LLM la "llama", pero el handler real intercepta en una capa
-    superior (`agent.py` `analyze_query` → router). La signature
-    `user_id: str` viene del prompt del LLM, NO de un check autenticado.
-
-    RIESGO: si un PR futuro implementa el cuerpo real (ej. delegar al
-    endpoint `/swap-meal/persist` o ejecutar UPDATE inline), DEBE:
-
-      1. Validar `user_id == verified_user_id` del contexto autenticado
-         (NUNCA confiar en el `user_id` que el LLM le pasó — prompt
-         injection puede inyectar un user_id ajeno).
-      2. Filtrar `AND user_id = %s` en TODA mutación SQL sobre
-         `meal_plans` o `user_inventory` (invariante I2 de CLAUDE.md).
-      3. Aplicar `acquire_meal_plan_advisory_lock(purpose='general')` si
-         hace full-overwrite de `plan_data` (invariante I7).
-      4. NO bypassear `verify_api_quota` — los cambios cuestan tokens
-         LLM downstream.
-
-    Sin estos guards, la implementación abre IDOR + lost-update + quota
-    burn simultáneamente. El test parser-based
-    `test_p3_new_7_modify_single_meal_dummy_contract.py` ancla este
-    contrato: detecta si la línea `return "DUMMY_CALL_..."` se reemplaza
-    sin que el body nuevo contenga los tokens canónicos de ownership.
-
-    Tooltip-anchor: P3-NEW-7-DUMMY-CONTRACT
-    """
+    # [P3-NEW-7 · 2026-05-11] CONTRATO DE OWNERSHIP — LEER ANTES DE IMPLEMENTAR.
+    # Esta tool es DUMMY hoy (retorna `"DUMMY_CALL_ACTUALLY_INTERCEPTED"`). Si en un PR
+    # futuro se implementa cuerpo real, DEBE:
+    #   1. Validar `user_id == verified_user_id` del contexto autenticado.
+    #   2. Filtrar `AND user_id = %s` en TODA mutación SQL sobre `meal_plans` o `user_inventory`.
+    #   3. Aplicar `acquire_meal_plan_advisory_lock(purpose='general')` (invariante I7).
+    #   4. NO bypassear `verify_api_quota` — sin estos guards abre IDOR / lost-update.
+    # Tooltip-anchor: P3-NEW-7-DUMMY-CONTRACT
     return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
 
 
@@ -5008,16 +4977,8 @@ def _search_deep_memory_cache_set(user_id: str, query_norm: str, value: str) -> 
 
 @tool
 def search_deep_memory(user_id: str, query: str) -> str:
-    """
-    Busca en la memoria profunda (archivo frío) los recuerdos históricos del usuario que ya fueron condensados y archivados.
-    Usa esta herramienta SOLO cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta,
-    o datos que no aparecen en la memoria reciente del chat.
-    Ejemplos: '¿Recuerdas qué comía al principio?', '¿Qué me costó más en las primeras semanas?',
-    '¿Cómo me sentía hace meses?', '¿Cuál era mi rutina anterior?'.
-    
-    Parámetros:
-    - user_id: ID del usuario
-    - query: palabra clave o frase corta para buscar en los archivos históricos (ej: 'adherencia', 'estrés', 'primera semana')
+    """Busca recuerdos históricos condensados SOLO cuando pregunte por su pasado lejano (no en la memoria reciente).
+    - query: palabra clave/frase corta ("adherencia", "primera semana").
     """
     logger.info(f"🔍 [TOOL EXECUTION] Buscando en memoria profunda para user {user_id}: '{query}'")
 
@@ -5083,14 +5044,7 @@ def _usuario_en_modo_contador(user_id) -> bool:
 
 @tool
 def check_shopping_list(user_id: str) -> str:
-    """
-    Herramienta de Consulta Matemática del Carrito (EL DELTA DE COMPRAS).
-    Usa esta herramienta SIEMPRE que el usuario pregunte qué ingredientes o qué cantidades le FALTAN comprar
-    o cuánto necesita de un ingrediente específico para su plan actual (ej: '¿cuántas libras de tomate debo comprar?', 'dame mi lista de compras').
-    NUNCA SUMES INGREDIENTES MANUALMENTE MIRANDO EL PLAN, INVOCA ESTA HERRAMIENTA. Hará la suma matemática exacta EXTRAEYENDO tu despensa actual.
-    
-    Parámetros:
-    - user_id: ID del usuario
+    """Calcula el delta matemático exacto de compras faltantes para el plan descontando Nevera actual (no sumes manual).
     """
     logger.info(f"🛒 [TOOL EXECUTION] Calculando lista de compras matemática para user {user_id}")
             
@@ -5557,15 +5511,7 @@ def _diary_date_str_for_user(user_id: str | None = None) -> str:
 
 @tool
 def check_hydration_today(user_id: str) -> str:
-    """Consulta cuantos vasos de agua ha registrado el usuario HOY y cual es
-    su meta diaria personalizada (calculada segun su peso + actividad).
-
-    Usa esta herramienta SIEMPRE que el usuario pregunte sobre su hidratacion
-    actual: '¿cuanta agua llevo?', '¿cumpli mi meta?', '¿voy bien con el agua?',
-    o cuando necesites contexto para decidir si recordarle tomar agua.
-
-    Devuelve un string con: vasos consumidos hoy, meta diaria, porcentaje
-    cumplido, y si la meta esta personalizada (peso del usuario) o es default.
+    """Consulta vasos de agua hoy y meta diaria personalizada. Usar ante «¿cuánta agua llevo?» o meta de hidratación.
     """
     logger.info(f"💧 [TOOL EXECUTION] check_hydration_today para user {user_id}")
     try:
@@ -5616,38 +5562,9 @@ def check_hydration_today(user_id: str) -> str:
 
 @tool
 def log_water_glass(user_id: str, count_delta: float = 1) -> str:
-    """Suma o resta vasos de agua al registro de hidratacion del usuario para HOY.
-
-    Acepta medios vasos (0.5) — un "sorbo" cuenta medio vaso.
-    Usa esta herramienta cuando el usuario diga que se tomo agua o que se equivoco:
-    - 'me tome un vaso' / 'marca uno mas' → count_delta=1 (default)
-    - 'me tome un sorbo / medio vaso' → count_delta=0.5
-    - 'una botella de agua' (500 ml / 16.9 oz) → count_delta=2
-    - 'media botella' → count_delta=1
-    - '3/4 botella' → count_delta=1.5
-    - '1 litro de agua' → count_delta=4
-    - 'termo 32 oz' → count_delta=4
-    - 'me tome 3 vasos seguidos' → count_delta=3
-    - 'borra el ultimo / me equivoque' → count_delta=-1
-    - 'resetea el dia' → primero check_hydration_today para saber el conteo
-      actual N, luego log_water_glass(count_delta=-N).
-
-    EQUIVALENCIAS ESTÁNDAR DE ENVASES COTIDIANOS (1 vaso = 250 ml / 8 oz):
-    - 1 botella comercial estándar (500 ml / 16.9 oz) = 2 vasos (count_delta=2)
-    - 1/2 botella de agua (250 ml) = 1 vaso (count_delta=1)
-    - 3/4 botella de agua (~375 ml) = 1.5 vasos (count_delta=1.5)
-    - 1 litro de agua = 4 vasos (count_delta=4)
-    - 1 termo mediano (20–24 oz / ~600–700 ml) = 2.5 vasos (count_delta=2.5)
-    - 1 termo grande / Stanley (32–40 oz / ~1–1.2 L) = 4 a 5 vasos (count_delta=4 o 5)
-
-    Para SETEAR un valor absoluto (ej: el usuario dice 'llevo 5 vasos'),
-    primero usa `check_hydration_today` para saber el conteo actual, calcula
-    el delta y pasa ese valor (5 - actual).
-
-    El delta se redondea automáticamente al múltiplo de 0.5 más cercano.
-    El conteo total queda clamped a [0, 50] (cap defensivo de la tabla).
-    Tras la mutacion, incluye SIEMPRE la etiqueta `[UI_ACTION: REFRESH_HYDRATION]`
-    en tu respuesta para que el Dashboard recargue el card de Hidratacion.
+    """Suma o resta vasos de agua HOY (redondeado a 0.5; rango 0..50). Incluye `[UI_ACTION: REFRESH_HYDRATION]`.
+    Equivalencias (1 vaso = 250 ml / 8 oz): 1 sorbo/medio = 0.5; 1 botella comercial estándar (500 ml) = 2 vasos; 1/2 botella = 1; 3/4 botella = 1.5 vasos; 1 L = 4 vasos; termo 20-24 oz = 2.5; termo 32-40 oz = 4-5.
+    Para corregir/restar usa negativo (`-1`); para fijar total absoluto ("llevo 5") lee `check_hydration_today` y pasa `5 - actual`.
     """
     logger.info(f"💧 [TOOL EXECUTION] log_water_glass user={user_id} delta={count_delta}")
     # [P3-WATER-HALF-GLASS · 2026-06-24 / BB-054 · 2026-11-06] Acepta enteros y medios vasos (0.5).
@@ -6036,20 +5953,8 @@ def _resolve_micro_nutrient(nutrient: str):
 
 @tool
 def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> str:
-    """
-    Sugiere alimentos del catálogo nutricional para mejorar un micronutriente del
-    plan del usuario, filtrando por sus alergias, rechazos y tipo de dieta.
-    Úsala cuando el usuario pregunte qué comer para subir (o reducir) un
-    micronutriente: "¿qué como para más fibra?", "necesito más hierro", "cómo subo
-    la vitamina D", "cómo bajo el sodio".
-
-    Parámetros:
-    - nutrient: nombre del nutriente (ej: "fibra", "hierro", "calcio", "vitamina D",
-      "vitamina B12", "potasio", "magnesio", "proteína", "sodio", "azúcar",
-      "grasa saturada", "colesterol").
-    - top_n: cuántos alimentos sugerir (default 6).
-
-    Devuelve una lista rankeada de alimentos del catálogo con su aporte por 100g.
+    """Sugiere alimentos del catálogo por 100g para ajustar un nutriente (fibra, hierro, calcio, vitamina D, B12, potasio, magnesio, proteína, sodio, azúcar, grasa saturada, colesterol) filtrados por alergias/dieta.
+    - top_n: cantidad (default 6).
     """
     logger.info(f"🥗 [TOOL EXECUTION] suggest_foods_for_nutrient nutrient='{nutrient}' user={user_id}")
     try:
@@ -6371,10 +6276,7 @@ def regenerate_full_day(user_id: str, day_number: int) -> str:
 
 @tool
 def check_clinical_profile(user_id: str) -> str:
-    """
-    Consulta el Perfil Clínico Avanzado del usuario: laboratorios (glucosa, HbA1c, colesterol, LDL/HDL, triglicéridos, creatinina, TFG, TSH, ácido úrico, hemoglobina, vitamina D), historial de peso, digestión y entrenamiento.
-    Úsala SOLO cuando el usuario pregunte por sus valores clínicos o laboratorios (ej: '¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis laboratorios afectan mi plan?'). Son datos sensibles: bajo demanda, NO en cada turno.
-    Al responder: cita los valores tal cual, interpreta con prudencia de coach (no diagnostiques) y recuérdale que esto NO sustituye una consulta médica.
+    """Consulta bajo demanda laboratorios, historial de peso, digestión y entrenamiento SOLO cuando pregunte por valores clínicos. Cita valores con prudencia (NO diagnostiques) y recuerda que no sustituye consulta médica.
     """
     # LIVE-TOOL CONTRACT: `user_id` viene force-overrideado por P0-AGENT-1.
     logger.info(f"🩺 [TOOL EXECUTION] check_clinical_profile user={user_id}")
@@ -6736,14 +6638,8 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
 
 @tool
 def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: str = None) -> str:
-    """
-    Busca en internet la tabla nutricional (POR PORCIÓN) de UN suplemento por su marca y su nombre, cuando no tienes su
-    tabla: la foto muestra el pote sin la tabla ni cifras en el frente, o el usuario te dice la marca y el producto.
-    Úsala UNA vez por producto y ANTES de pedirle la foto de la tabla. Con lo que encuentre, guarda el pote con
-    guardar_suplemento fuente='web'. Si no la encuentra, no vuelvas a buscarla: guárdalo sin etiqueta y pide la foto.
-    - marca: tal como se lee (ej. 'Optimum Nutrition').
-    - producto: el nombre del producto (ej. 'Gold Standard 100% Whey').
-    - sabor: si se lee (cambia las cifras).
+    """Busca tabla nutricional por porción en internet (UNA vez por producto, antes de pedir foto trasera) si falta la tabla. Luego guarda con `guardar_suplemento(..., fuente='web')`.
+    - marca, producto, sabor (opcional si aplica).
     """
     # [P1-PLAN-LOTE-767 · 2026-09-29] tooltip-anchor: P1-PLAN-LOTE-767-BUSCAR (motor: etiqueta_web.py)
     if not user_id or str(user_id).strip().lower().startswith("guest"):

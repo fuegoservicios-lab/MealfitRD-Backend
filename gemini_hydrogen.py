@@ -160,3 +160,69 @@ def reinyectar_firmas(payload: dict, mensajes: Iterable[Any]) -> None:
 
 def es_gemini(model: Optional[str]) -> bool:
     return str(model or "").strip().lower().startswith("gemini")
+
+
+_ANCHOR_TAG_OPEN = "<manual_operativo_bioboros>"
+_ANCHOR_TAG_CLOSE = "</manual_operativo_bioboros>"
+_ANCHOR_SYS_CORTO = (
+    "Eres el coach nutricional y clínico de Bioboros. Sigue al pie de la letra "
+    "el manual operativo fijado en el primer mensaje del usuario."
+)
+_ANCHOR_ACK = "Manual operativo de Bioboros cargado y activo."
+
+
+def cache_anchor_activo() -> bool:
+    """`MEALFIT_GEMINI_CROSS_USER_CACHE_ANCHOR` (False desde el lote 998): ancla el manual estático como turno inicial.
+
+    APAGADO: pasa el manual de rol sistema a rol usuario (el modelo obedece menos lo que llega como usuario y un texto
+    del usuario puede contradecirlo) y el beneficio no está medido: la sonda del 13-nov (6 variantes, 17,8 k tokens)
+    no devolvió tokens cacheados en NINGUNA, ni con el prompt idéntico. Encenderlo solo para un A/B contra la
+    telemetría de `cached_tokens` de `llm_usage_events`."""
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_GEMINI_CROSS_USER_CACHE_ANCHOR", False)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _cache_anchor_min_chars() -> int:
+    try:
+        from knobs import _env_int
+        return max(1000, int(_env_int("MEALFIT_GEMINI_CACHE_ANCHOR_MIN_CHARS", 7000)))
+    except Exception:  # noqa: BLE001
+        return 7000
+
+
+def anclar_manual_estatico(payload: dict, *, minimo_chars: Optional[int] = None) -> bool:
+    """Reescribe `[system(manual), user(...), ...]` a `[system(corto), user(manual), assistant(ack), user(...)]`.
+
+    En Gemini (`generateContent` / OpenAI-compat), el prefijo `systemInstruction` largo no comparte
+    cache implícito entre usuarios/sesiones distintas, mientras que el bloque estático en `contents[0]`
+    sí alcanza >90% `cached_tokens` cross-user (verificado en pruebas vivas). Idempotente.
+    """
+    if not isinstance(payload, dict) or not cache_anchor_activo():
+        return False
+    msgs = payload.get("messages")
+    if not isinstance(msgs, list) or len(msgs) < 2:
+        return False
+    m0, m1 = msgs[0], msgs[1]
+    if not isinstance(m0, dict) or m0.get("role") != "system":
+        return False
+    if not isinstance(m1, dict) or m1.get("role") != "user":
+        return False
+    sys_txt = m0.get("content")
+    if not isinstance(sys_txt, str):
+        return False
+    umbral = _cache_anchor_min_chars() if minimo_chars is None else int(minimo_chars)
+    if len(sys_txt) < umbral or _ANCHOR_TAG_OPEN in sys_txt:
+        return False
+    m1_content = m1.get("content")
+    if isinstance(m1_content, str) and _ANCHOR_TAG_OPEN in m1_content:
+        return False
+    payload["messages"] = [
+        {"role": "system", "content": _ANCHOR_SYS_CORTO},
+        {"role": "user", "content": f"{_ANCHOR_TAG_OPEN}\n{sys_txt}\n{_ANCHOR_TAG_CLOSE}"},
+        {"role": "assistant", "content": _ANCHOR_ACK},
+        *msgs[1:],
+    ]
+    return True

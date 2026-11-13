@@ -115,6 +115,11 @@ class ChatOpenAI(_LangChainChatOpenAI):
                 _gh.reinyectar_firmas(payload, self._convert_input(input_).to_messages())
             except Exception:  # noqa: BLE001
                 pass
+            # [P1-PLAN-LOTE-997] Ancla el manual estático en contents[0..1] para cache implícito cross-user.
+            try:
+                _gh.anclar_manual_estatico(payload)
+            except Exception:  # noqa: BLE001
+                pass
         return payload
 
     def _create_chat_result(self, response, generation_info=None):

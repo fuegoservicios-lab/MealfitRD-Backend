@@ -336,6 +336,17 @@ def bloque_aviso(proteinas: list, falta_p: Optional[float], franja: Optional[str
 
 def _filas(user_id: str) -> list:
     from db import execute_sql_query
+    try:
+        from turn_cache import current_turn_cache
+        if current_turn_cache() is not None:
+            from db_core import execute_sql_query as _ssot_exec
+            if execute_sql_query is _ssot_exec:
+                import db_inventory as _dbi
+                if _dbi.execute_sql_query is _ssot_exec:
+                    raw = _dbi.get_raw_user_inventory(user_id) or []
+                    return sorted(raw, key=lambda r: str(r.get("ingredient_name") or ""))[:120]
+    except Exception:
+        pass
     return execute_sql_query(
         "SELECT ingredient_name, quantity::float8 AS quantity, unit, created_at, updated_at, master_ingredient_id "
         "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0 "

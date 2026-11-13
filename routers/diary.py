@@ -824,6 +824,9 @@ async def api_diary_upload(
                     node="vision_scan",
                     input_tokens=_vision_usage.get("input_tokens"),
                     output_tokens=_vision_usage.get("output_tokens"),
+                    cached_tokens=_vision_usage.get("cached_tokens"),
+                    metadata=({"reasoning_tokens": _vision_usage["reasoning_tokens"]}
+                              if _vision_usage.get("reasoning_tokens") else None),
                 )
 
             # 4. Guardar en DB en segundo plano (embedding + insert).

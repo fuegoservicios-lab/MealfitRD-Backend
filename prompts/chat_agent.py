@@ -550,6 +550,7 @@ _REGLA_UNA_LLAMADA_POR_COMIDA = (
 
 def build_tools_instructions(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas disponibles para el agente."""
+    _uid_tail = f"\n\nEl user_id del usuario actual es: {user_id}"
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada. ATENCIÓN: Lee atentamente los parámetros de esta herramienta, debes usar valores exactos en INGLÉS como 'lose_fat', 'vegetarian', 'male', etc. para que la UI los reconozca.
@@ -574,9 +575,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}
 2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
-3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.
-
-El user_id del usuario actual es: {user_id}"""
+3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.{_uid_tail}"""
 
 
 # [P1-PLAN-LOTE-900 · 2026-09-29] «Activa la hidratación» acabó en un vaso anotado: el coach no sabía que puede tocar
@@ -604,6 +603,7 @@ def _app_settings_bullet() -> str:
 
 def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
     """Genera el bloque de instrucciones de herramientas para el stream (versión compacta)."""
+    _uid_tail = f"\n\nEl user_id actual es: {user_id}"
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male'). [P1-PLAN-LOTE-53] Un gusto también es un dato de perfil: 'no me gusta el pescado' → `dislikes`; 'soy alérgico a X' → `allergies`; 'tengo diabetes' → `medicalConditions`. Guárdalo aunque el usuario lo diga molesto o diga que ya te lo había dicho.
@@ -626,9 +626,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}
 2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
-3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.
-
-El user_id actual es: {user_id}"""
+3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.{_uid_tail}"""
 
 
 def build_inventory_context(inventory_str: str, shopping_delta_str: str,
@@ -1593,3 +1591,26 @@ def build_message_language_directive(prompt, locale) -> str:
         return build_language_directive(det)
     except Exception:
         return ""
+
+
+_UID_SENTINEL_ESTATICO = "__BIOBOROS_STATIC_UID__"
+
+
+def build_tools_instructions_estaticas(plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
+    """Versión sin `user_id` de `build_tools_instructions` para prefijo estático cacheable."""
+    raw = build_tools_instructions(
+        _UID_SENTINEL_ESTATICO,
+        plan_en_pausa=plan_en_pausa,
+        contador_sin_plan=contador_sin_plan,
+    )
+    return raw.replace(f"\n\nEl user_id del usuario actual es: {_UID_SENTINEL_ESTATICO}", "")
+
+
+def build_tools_instructions_stream_estaticas(plan_en_pausa: bool = False, contador_sin_plan: bool = False) -> str:
+    """Versión sin `user_id` de `build_tools_instructions_stream` para prefijo estático cacheable."""
+    raw = build_tools_instructions_stream(
+        _UID_SENTINEL_ESTATICO,
+        plan_en_pausa=plan_en_pausa,
+        contador_sin_plan=contador_sin_plan,
+    )
+    return raw.replace(f"\n\nEl user_id actual es: {_UID_SENTINEL_ESTATICO}", "")

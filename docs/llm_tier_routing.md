@@ -417,3 +417,22 @@ cae al proveedor alterno (sin key o con Luna caída). Y el registro de la noche:
 El bench de arriba dejó un plan (perfil 90 kg, target 198 g, piso 90 % = 178,2 g) en `max_attempts` y entregado DEGRADADO con el banner «regenéralo». Leído intento a intento: el 1 salió a 177 g (1,2 g bajo el piso), el 2 a 167 g y el 3 a 176 g; el plan entregado, tras el último re-encuadre, medía 184/199/201 g. El déficit no lo abre el modelo: lo abren los topes de porción que corren DESPUÉS del cerrador (`P1-PROTEIN-FLOOR-LAST-WORD`: el cap tiene la última palabra por diseño), así que otro intento del LLM vuelve a caer en el mismo recorte — dos intentos y ~5 min para acabar donde empezó, con un banner que pide quemar otro crédito. En producción (90 días, 11 planes con días, solo lectura) ninguno cayó por esto y los dos que quedaron entre el 85 y el 90 % se entregaron válidos.
 
 Cambio: `MEALFIT_PROTEIN_FLOOR_RETRY_TOLERANCE_PCT` (0,05) rebaja el umbral de RECHAZO a 85 % en los tres sitios que deciden «¿vale otro intento?» (gate de review, promoción del surgical regen y backstop final). El piso sigue en 90 %: los cerradores apuntan a él, la directiva del reintento lo pide y el módulo del último recorte lo mide sin tolerancia; un día tolerado queda escrito en `plan_data._protein_floor_tolerated`. Bariátrica (80 %, relajada a propósito) y renal (exento) no cambian; 0 = conducta anterior sin redeploy. Con la tolerancia, aquel plan se habría entregado válido en el intento 1.
+
+### Eficiencia del coach en Gemini 4 Hydrogen: qué quedó encendido y qué no (P1-PLAN-LOTE-997 → 998 · 2026-11-13)
+
+Medido en producción (13-nov, tras el 996): cada llamada del coach manda ~34 500 tokens; la 1.ª de cada turno llega con 0
+cacheados (~$0,052, 2,9 s) y la 2.ª del mismo turno cachea el 93 % (~$0,005, 2,3 s).
+
+| Palanca | Default | Por qué |
+|---|---|---|
+| Lecturas previas en paralelo (`MEALFIT_CHAT_PREFETCH_PARALLEL`), atajo sin RAG para «comí X» / «cuánto me queda» (`MEALFIT_CHAT_FASTPATH_PRESENT_LOGS`), caché de embeddings de consulta (`MEALFIT_QUERY_EMBED_CACHE_TTL_S`), deduplicación por turno (`turn_cache`, con el handoff del router) | **ON** | Bajan latencia sin tocar lo que ve el modelo. |
+| Telemetría de `cached_tokens` y `reasoning_tokens` (`llm_usage_events`) | **ON** | Es la vara para decidir lo demás. |
+| Manual compacto (`MEALFIT_CHAT_PROMPT_COMPACT_ENABLED`) | **OFF** | No deduplica: el legacy (63 k) tiene 0 frases repetidas de 429 y el compacto (12 k) descarta 42 de 54 reglas con etiqueta (alergias, errores técnicos, bebida ligera…). Solo se enciende si `test_p1_plan_lote_998` demuestra que conserva las reglas. |
+| Ancla del manual en rol usuario (`MEALFIT_GEMINI_CROSS_USER_CACHE_ANCHOR`) y contexto volátil en el último mensaje de usuario (`MEALFIT_CHAT_SPLIT_VOLATILE_SYS_PROMPT`) | **OFF** | Cambian el rol del manual y del bloque clínico sin beneficio medido: la sonda del 13-nov (6 variantes sobre 17,8 k tokens, con el servidor) no devolvió tokens cacheados en ninguna, ni con el prompt idéntico. A/B por knob contra `cached_tokens`. |
+| Catálogo fijo de herramientas en Gemini (`MEALFIT_CHAT_TOOL_GATING_ON_GEMINI`) | **True** (recorta) | El recorte ahorra ~12 k caracteres de esquema por llamada (núcleo 13,4 k vs 25,9 k). `update_form_field` entra al núcleo: el recorte por palabras la dejaba fuera en «soy alérgico al maní / soy vegano / tengo diabetes». |
+| Docstrings de las 19 herramientas | 11 con su texto original | Las 11 que llevan reglas (registro, corrección, Nevera, suplementos, ajustes, regenerar…) conservan el texto que nació de errores reales; las informativas siguen compactas (29,9 k → 25,9 k). |
+
+**Caché explícita de Gemini** (`cachedContents`): descartada por ahora. Con el tráfico actual (decenas de turnos/día) el
+almacenamiento por hora costaría casi lo que ahorra; revisar cuando `llm_usage_events` muestre >1 turno/hora sostenido, y
+recordar que con `cached_content` el payload NO puede llevar `system_instruction` ni `tools` (habría que sacarlos en
+`ChatOpenAI._get_request_payload`).

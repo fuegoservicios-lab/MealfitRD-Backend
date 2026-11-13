@@ -42,6 +42,13 @@ import traceback
 from datetime import date, datetime, timezone, timedelta
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
 from memory_manager import build_memory_context
+from turn_cache import (
+    turn_cache_scope as _tc_scope,
+    consume_handoff as _tc_consume_handoff,
+    set_cached as _tc_set_cached,
+    clear_reads as _tc_clear_reads,
+    submit_with_context as _tc_submit,
+)
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -591,13 +598,22 @@ from prompts.chat_agent import (
     build_circadian_context,
     build_temporal_proactive_context,
     build_tools_instructions,
+    build_tools_instructions_estaticas,
     build_tools_instructions_stream,
+    build_tools_instructions_stream_estaticas,
     build_inventory_context,
     build_user_identity_context,
     build_clinical_guard_context,
     build_language_directive,
     build_message_language_directive,   # [P1-PLAN-LOTE-81]
 )
+from prompts.coach_compact import build_coach_static_manual
+
+_ORIG_CHAT_AGENT_INLINE = CHAT_AGENT_INLINE_PROMPT
+_ORIG_CHAT_STREAM_INLINE = CHAT_STREAM_INLINE_PROMPT
+_ORIG_CHAT_VOICE_MODE = CHAT_VOICE_MODE_PROMPT
+_ORIG_BUILD_TOOLS_INSTR = build_tools_instructions
+_ORIG_BUILD_TOOLS_INSTR_STREAM = build_tools_instructions_stream
 # [P1-CHAT-PAST-DAYS · 2026-07-27] Memoria de días pasados — doc:
 # backend/docs/chat_past_days_memory.md
 from chat_history_context import (
@@ -781,6 +797,13 @@ def _chat_prompt_static_prefix() -> bool:
     semántico). Flip a False revierte al orden legacy sin redeploy. Tooltip-
     anchor: P2-CHAT-PROMPT-STATIC-PREFIX."""
     return _env_bool("MEALFIT_CHAT_PROMPT_STATIC_PREFIX", True)
+
+
+def _chat_prompt_compact_enabled() -> bool:
+    """[P1-PLAN-LOTE-998] APAGADO por defecto. El manual compacto (~12k chars) NO es una deduplicación: el legacy (63k)
+    casi no repite frases (0 de 429) y el compacto descarta 42 de 54 reglas con etiqueta (alergias, errores técnicos,
+    bebida ligera, corrección en franjas múltiples...). Solo se enciende tras medir con replay que conserva el comportamiento."""
+    return _env_bool("MEALFIT_CHAT_PROMPT_COMPACT_ENABLED", False)
 
 # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] Timeouts per-LLM-invoke y graph-total.
 # Pre-fix: las 5 callsites de `ChatGoogleGenerativeAI(...)` se construían SIN
@@ -4371,6 +4394,45 @@ def _sanitize_tool_call_history(messages: list) -> list:
     return result
 
 
+_VOLATILE_SYS_SPLIT_MARKER = "\n<!--MEALFIT_VOLATILE_SYS_SPLIT-->\n"
+
+
+def _chat_split_volatile_sys_prompt() -> bool:
+    """[P1-PLAN-LOTE-997 → 998: APAGADO por defecto] Separa el prefijo estático del contexto volátil por turno/usuario
+    (el volátil viaja en el último mensaje de usuario). Mover el bloque clínico/alergias de rol sistema a rol usuario
+    es un cambio de comportamiento sin beneficio medido (la sonda del 13-nov no vio aciertos de caché en ninguna
+    variante). Encender con MEALFIT_CHAT_SPLIT_VOLATILE_SYS_PROMPT=1 solo para A/B con la telemetría de cached_tokens."""
+    return _env_bool("MEALFIT_CHAT_SPLIT_VOLATILE_SYS_PROMPT", False)
+
+
+def _tool_gating_enabled_for_model(model_name: Optional[str]) -> bool:
+    """[P1-PLAN-LOTE-997 → 998] El gating por turno SIGUE activo también en Gemini (default True): el catálogo fijo
+    de 19 herramientas mete ~25 k caracteres en CADA llamada sin un beneficio de caché demostrado. Para fijar el
+    catálogo (A/B de caché): MEALFIT_CHAT_TOOL_GATING_ON_GEMINI=0."""
+    from gemini_hydrogen import es_gemini
+    if es_gemini(model_name):
+        return _env_bool("MEALFIT_CHAT_TOOL_GATING_ON_GEMINI", True)
+    return _env_bool("MEALFIT_CHAT_TOOL_GATING_ENABLED", True)
+
+
+def _merge_volatile_into_human_message(msg: HumanMessage, volatile_ctx: str) -> HumanMessage:
+    """Inyecta el contexto volátil al inicio de la última intervención humana sin mutar
+    el objeto original ni generar mensajes `user` consecutivos."""
+    header = f"[Contexto operativo del turno]\n{volatile_ctx}\n\n[Mensaje del usuario]\n"
+    orig = getattr(msg, "content", "")
+    if isinstance(orig, list):
+        new_content = [{"type": "text", "text": header}, *orig]
+    else:
+        new_content = f"{header}{orig or ''}"
+    return HumanMessage(
+        content=new_content,
+        id=getattr(msg, "id", None),
+        name=getattr(msg, "name", None),
+        additional_kwargs=dict(getattr(msg, "additional_kwargs", None) or {}),
+        response_metadata=dict(getattr(msg, "response_metadata", None) or {}),
+    )
+
+
 def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
     """Payload del modelo: system prompt fresco + historial saneado.
 
@@ -4382,7 +4444,17 @@ def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
     se conservan, y se envían con rol de usuario: un mensaje de sistema a mitad de
     conversación no todos los proveedores OpenAI-compatibles lo aceptan, uno de usuario
     sí. Los de turnos anteriores siguen fuera (son exigencias ya caducadas).
+
+    [P1-PLAN-LOTE-997] Cuando `sys_prompt` contiene `_VOLATILE_SYS_SPLIT_MARKER`, solo la
+    porción estática global permanece en `SystemMessage[0]`; el bloque volátil se
+    inyecta en el último `HumanMessage` para preservar implicit prompt caching entre usuarios.
     """
+    static_sys = sys_prompt or ""
+    volatile_sys = ""
+    if _chat_split_volatile_sys_prompt() and _VOLATILE_SYS_SPLIT_MARKER in static_sys:
+        static_sys, volatile_sys = static_sys.split(_VOLATILE_SYS_SPLIT_MARKER, 1)
+        volatile_sys = volatile_sys.strip()
+
     ultimo_humano = -1
     for idx, m in enumerate(messages):
         if isinstance(m, HumanMessage):
@@ -4393,9 +4465,14 @@ def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
             if idx > ultimo_humano and ultimo_humano >= 0:
                 historial.append(HumanMessage(content=f"[Instrucción del sistema] {m.content}"))
             continue
+        if idx == ultimo_humano and volatile_sys and isinstance(m, HumanMessage):
+            historial.append(_merge_volatile_into_human_message(m, volatile_sys))
+            continue
         historial.append(m)
-    llm_messages = [SystemMessage(content=sys_prompt)] if sys_prompt else []
+    llm_messages = [SystemMessage(content=static_sys)] if static_sys else []
     llm_messages.extend(_sanitize_tool_call_history(historial))
+    if volatile_sys and ultimo_humano < 0:
+        llm_messages.append(HumanMessage(content=f"[Contexto operativo del turno]\n{volatile_sys}"))
     return llm_messages
 
 
@@ -4506,6 +4583,10 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
         "proponer_comida",
         "consultar_dia_del_plan",
         "search_deep_memory",
+        # [P1-PLAN-LOTE-998] El manual manda usar `update_form_field` «INMEDIATAMENTE» ante cualquier dato permanente
+        # («soy alérgico al maní», «soy vegano», «tengo diabetes», «vivo en México»), y el recorte por palabras solo la
+        # dejaba pasar con «peso/kg/libras…»: en esas frases el coach no tenía la herramienta que el prompt le exige.
+        "update_form_field",
     }
     needed = set(_CORE_NAMES)
 
@@ -4541,9 +4622,10 @@ def call_model(state: ChatState):
     # [P0-LLM-PROVIDER-MIGRATION] Identidad para tier-routing (paid→pro). Guests
     # (session_id) resuelven a flash via fail-cheap del router.
     _model_uid = state.get("user_id") or state.get("session_id")
+    _cb_model = _chat_agent_model_name(_model_uid)
     # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, el principal reintenta UNA vez (el default del
     # cliente son 2: con timeouts de 30 s el turno moría antes de llegar a ningún respaldo).
-    _fallback_model = _chat_agent_fallback_model(_chat_agent_model_name(_model_uid))
+    _fallback_model = _chat_agent_fallback_model(_cb_model)
     _primary_retry_kwargs = {"max_retries": 1} if _fallback_model else {}
     chat_llm = ChatGLM(
         model=_chat_agent_model_name(_model_uid),
@@ -4552,8 +4634,13 @@ def call_model(state: ChatState):
         **_primary_retry_kwargs,
         **_kwargs_de_razonamiento_modo_voz(state),
     )
-    # [AI-41: Tool Gating Dinamico]
-    active_tools = _select_tools_for_turn(agent_tools, state)
+    # [AI-41: Tool Gating Dinamico] / [P1-PLAN-LOTE-997] En Gemini mantenemos
+    # el catálogo canónico fijo para preservar el implicit prompt caching global.
+    active_tools = (
+        _select_tools_for_turn(agent_tools, state)
+        if _tool_gating_enabled_for_model(_cb_model)
+        else list(agent_tools)
+    )
     llm_with_tools = chat_llm.bind_tools(active_tools)
 
     # [P1-CHAT-CB · 2026-05-19] Gate per-modelo. Si el breaker está abierto
@@ -4563,12 +4650,6 @@ def call_model(state: ChatState):
     # latencia + tokens. Se reabre automáticamente cuando expira la ventana.
     # `record_success` / `record_failure` actualizan el estado para que el
     # resto del repo (pipeline de plan-gen, swap, etc.) vea el mismo breaker.
-    #
-    # NOTA: `_chat_agent_model_name(_model_uid)` se llama 2x (callsite del
-    # constructor arriba + aquí) con el MISMO uid — el modelo del gate CB debe
-    # coincidir con el del LLM construido (tier-routing P0-LLM-PROVIDER-MIGRATION).
-    # Costo trivial: tier lookup cacheado con TTL en llm_provider.
-    _cb_model = _chat_agent_model_name(_model_uid)
     _cb = _get_circuit_breaker(_cb_model)
     import time as _time_chat
     _chat_invoke_start = _time_chat.time()
@@ -4662,8 +4743,13 @@ def call_model(state: ChatState):
         )
         try:
             chat_llm = _build_chat_fallback_llm(_fallback_model)
+            _fb_tools = (
+                _select_tools_for_turn(agent_tools, state)
+                if _tool_gating_enabled_for_model(_fallback_model)
+                else list(agent_tools)
+            )
             _chat_invoke_start = _time_chat.time()
-            response = chat_llm.bind_tools(active_tools).invoke(llm_messages)
+            response = chat_llm.bind_tools(_fb_tools).invoke(llm_messages)
             _cb_model = _fallback_model
         except Exception as _fb_exc:
             logger.error(
@@ -8448,6 +8534,52 @@ def _rag_sin_router(prompt: str) -> dict:
     return {"skip": False, "query": prompt}
 
 
+def _chat_fastpath_present_logs() -> bool:
+    """[P1-PLAN-LOTE-997] Evita LLM router + Cohere embeddings en registros de comida/agua
+    presentes auto-contenidos o consultas estrictas del presupuesto calórico/hídrico de HOY."""
+    return _env_bool("MEALFIT_CHAT_FASTPATH_PRESENT_LOGS", True)
+
+
+_PRESENT_LOG_DISALLOW_RE = re.compile(
+    r"\b(?:ayer|antier|anteayer|anoche|antes|semana|mes|meses|manana|lunes|martes|"
+    r"miercoles|jueves|viernes|sabado|domingo|pasado|pasada|hace|siempre|nunca|suelo|"
+    r"solia|acostumbro|primero|principio|recuerd\w*|acuerd\w*|alerg\w*|intoler\w*|"
+    r"medic\w*|doctor\w*|enferm\w*|diabet\w*|hipertens\w*|colesterol|glucosa|labs|"
+    r"analisis|laboratorio\w*|favorit\w*|gust\w*|odi\w*|prefier\w*|suplement\w*|"
+    r"creatina|proteina en polvo|pastill\w*|capsul\w*|plan|menu|dieta|cambi\w*|"
+    r"sustit\w*|reemplaz\w*|quit\w*|pon|borr\w*|elimin\w*|corrig\w*|mal|equivoc\w*|"
+    r"explic\w*|por que|dijiste|prometiste|recomiend\w*|sugier\w*|deberia\w*|puedo|"
+    r"receta\w*|prepar\w*|cocin\w*|ingrediente\w*|eso|esa|ese|las de|los de|lo de|"
+    r"mismo|misma|repetir|parecid\w*|otra vez|como el|como la|etiqueta\w*|tabla)\b"
+)
+_PRESENT_LOG_ALLOW_RE = re.compile(
+    r"(?:^|\b)(?:me\s+)?(?:desayune|almorce|cene|merende|pique|comi|tome|bebi|anota|registra|anote)\b"
+    r"|(?:^|\b)\d+(?:[.,]\d+)?\s*(?:vasos?|botellas?|litros?|ml|oz|onzas?|tazas?)\s+de\s+agua\b"
+)
+_TODAY_BUDGET_QUESTION_RE = re.compile(
+    r"\b(?:cuant[oa]s?\s+(?:calorias|kcal|proteina|carbohidratos|carbos?|grasas?|macros?|agua|vasos?)"
+    r"\s+(?:me\s+)?(?:quedan|faltan|llevo|he\s+consumido|van)"
+    r"|como\s+voy\s+(?:hoy|con\s+(?:el\s+agua|mis\s+calorias|mis\s+macros))"
+    r"|que\s+me\s+(?:falta|queda)\s+(?:hoy|por\s+comer|de\s+agua))\b"
+)
+
+
+def _rag_es_presente_sin_rag(prompt: str) -> bool:
+    """[P1-PLAN-LOTE-997] Determinista: True solo para logs del presente o dudas del saldo de hoy
+    que no dependen de hechos históricos ni memoria vectorial."""
+    raw = (prompt or "").strip()
+    if not raw or len(raw) > 220:
+        return False
+    norm = re.sub(r"\s+", " ", strip_accents(raw).lower()).strip()
+    if not norm or _PRESENT_LOG_DISALLOW_RE.search(norm):
+        return False
+    if "?" in raw or "¿" in raw:
+        return bool(_TODAY_BUDGET_QUESTION_RE.search(norm))
+    if len(norm.split()) < 2:
+        return False
+    return bool(_PRESENT_LOG_ALLOW_RE.search(norm))
+
+
 def rag_query_router(prompt: str) -> dict:
     """
     Decide si un mensaje del usuario amerita búsqueda RAG y, si sí,
@@ -8751,6 +8883,20 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
         return ""
 
 
+def _tc_prefetched_past_days(user_id: str, plan_id: Optional[str], local_date_str: Optional[str],
+                              tz_offset: Optional[int], current_plan) -> Optional[str]:
+    try:
+        from turn_cache import get_cached
+        _pf_key = (
+            user_id, plan_id, local_date_str, tz_offset,
+            bool(current_plan), str((current_plan or {}).get("generation_status") or ""),
+        )
+        _hit, _cached = get_cached("prefetch_past_days", _pf_key)
+        return _cached if _hit else None
+    except Exception:
+        return None
+
+
 def _build_past_days_context(user_id: str, current_plan, local_date_str: Optional[str] = None,
                               tz_offset: Optional[int] = None, plan_id: Optional[str] = None) -> str:
     """[P1-CHAT-PAST-DAYS · 2026-07-27] Los dos bloques de días pasados:
@@ -8802,6 +8948,9 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         else:
             out = build_past_plan_days_block(current_plan, today, days_back=days_back,
                                              tz_offset_mins=tz_offset_mins)
+        _pf_past = _tc_prefetched_past_days(user_id, plan_id, local_date_str, tz_offset, current_plan)
+        if _pf_past is not None:
+            return _pf_past
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
         # una 2ª pasada al LLM ni un bloque nuevo): días PENDIENTE/ATRASADO.
         out += _build_pending_days_lines_block(user_id, current_plan, today, plan_id=plan_id)
@@ -9202,6 +9351,17 @@ def _build_pantry_context(user_id: Optional[str], nevera_on: Optional[bool] = No
             return BLOQUE_PROMPT_NEVERA_APAGADA
     except Exception as e:
         logger.warning(f"⚠️ [P1-NEVERA-OPCIONAL] estado de la Nevera ilegible en el chat (queda activa): {e}")
+    if nevera_on is not None:
+        try:
+            from turn_cache import get_cached
+            _hit, _cached = get_cached("prefetch_pantry", (user_id, bool(nevera_on)))
+            if _hit:
+                return _cached
+        except Exception as _exc:
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] _build_pantry_context turn_cache: %s: %s",
+                type(_exc).__name__, str(_exc)[:160],
+            )
     try:
         from knobs import _env_bool as _pc_env_bool
         if not _pc_env_bool("MEALFIT_CHAT_PANTRY_SNAPSHOT", True):
@@ -9584,6 +9744,151 @@ def _build_final_content_from_messages(messages: list) -> str:
     return out
 
 
+def _safe_suplementos_bloque_para_chat(user_id: str) -> str:
+    from suplementos import bloque_para_chat
+    return bloque_para_chat(user_id)
+
+
+def _chat_prefetch_enabled() -> bool:
+    """[P1-PLAN-LOTE-997] Paraleliza lecturas independientes pre-TTFT con Fase 1/2."""
+    return _env_bool("MEALFIT_CHAT_PREFETCH_PARALLEL", True)
+
+
+class _ChatContextPrefetcher:
+    """[P1-PLAN-LOTE-997] Ejecuta en paralelo las lecturas de BD independientes del turno
+    durante Fase 1/2 para eliminar el waterfall pre-TTFT en `chat_with_agent` y
+    `chat_with_agent_stream`."""
+
+    def __init__(self, session_id: str, user_id: Optional[str], current_plan,
+                 local_date: Optional[str], tz_offset: Optional[int],
+                 memoria_on: bool, nevera_on: bool):
+        self.session_id = session_id
+        self.user_id = user_id
+        self.current_plan = current_plan
+        self.local_date = local_date
+        self.tz_offset = tz_offset
+        self.tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
+        self.memoria_on = bool(memoria_on)
+        self.nevera_on = bool(nevera_on)
+        self._is_auth = bool(user_id and user_id != "guest")
+        self._executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._futures: dict = {}
+        self._data: dict = {}
+        self._done_flags: dict = {}
+
+    def start(self):
+        if not _chat_prefetch_enabled():
+            return self
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=6, thread_name_prefix="chat_ctx_pf",
+        )
+        ex = self._executor
+        mem_uid = self.user_id if self.memoria_on else None
+        self._futures["memory"] = _tc_submit(
+            ex, build_memory_context, self.session_id, mem_uid,
+        )
+        if not self._is_auth:
+            return self
+        uid = self.user_id
+        if self.nevera_on:
+            from db_inventory import get_user_inventory
+            self._futures["user_phys_inv"] = _tc_submit(ex, get_user_inventory, uid)
+
+        def _load_plan_and_past_days():
+            plan_rec = get_latest_usable_meal_plan_with_id(uid)
+            past_ctx = _build_past_days_context(
+                uid, self.current_plan, local_date_str=self.local_date,
+                tz_offset=self.tz_offset, plan_id=(plan_rec or {}).get("id"),
+            )
+            return plan_rec, past_ctx
+
+        self._futures["plan_and_past"] = _tc_submit(ex, _load_plan_and_past_days)
+        self._futures["consumed_today"] = _tc_submit(
+            ex, get_consumed_meals_today, uid,
+            date_str=self.local_date, tz_offset_mins=self.tz_diario,
+        )
+        self._futures["suppl"] = _tc_submit(ex, _safe_suplementos_bloque_para_chat, uid)
+        self._futures["prev_conv"] = _tc_submit(
+            ex, _conversacion_de_dias_anteriores, self.session_id, self.local_date, self.tz_offset,
+        )
+        self._futures["prev_sess"] = _tc_submit(ex, _contexto_sesion_previa, uid, self.session_id)
+        self._futures["hydration"] = _tc_submit(
+            ex, _build_hydration_context, uid, local_date_str=self.local_date,
+        )
+        self._futures["pantry"] = _tc_submit(
+            ex, _build_pantry_context, uid, nevera_on=self.nevera_on,
+        )
+        return self
+
+    def resolve_memory(self) -> dict:
+        if "memory" in self._data:
+            return self._data["memory"]
+        fut = self._futures.pop("memory", None)
+        if fut is not None:
+            try:
+                self._data["memory"] = fut.result()
+                return self._data["memory"]
+            except Exception as _me:
+                logger.debug("[P1-PLAN-LOTE-997] prefetch memory fallback: %r", _me)
+        session_id = self.session_id
+        user_id = self.user_id
+        self._data["memory"] = (
+            build_memory_context(session_id, user_id)
+            if self.memoria_on
+            else build_memory_context(session_id, None)
+        )
+        return self._data["memory"]
+
+    def resolve_all(self):
+        self.resolve_memory()
+        try:
+            for key, fut in list(self._futures.items()):
+                try:
+                    val = fut.result()
+                    if key == "plan_and_past":
+                        plan_rec, past_ctx = val
+                        self._data["plan_record"] = plan_rec
+                        self._done_flags["plan_record"] = True
+                        if isinstance(past_ctx, str):
+                            _pf_key = (
+                                self.user_id, (plan_rec or {}).get("id"), self.local_date, self.tz_offset,
+                                bool(self.current_plan), str((self.current_plan or {}).get("generation_status") or ""),
+                            )
+                            _tc_set_cached("prefetch_past_days", _pf_key, past_ctx)
+                    elif key == "suppl":
+                        if isinstance(val, str):
+                            _tc_set_cached("prefetch_suppl", self.user_id, val)
+                    elif key == "pantry":
+                        if isinstance(val, str):
+                            _tc_set_cached("prefetch_pantry", (self.user_id, bool(self.nevera_on)), val)
+                    else:
+                        self._data[key] = val
+                        self._done_flags[key] = True
+                except Exception as _pe:
+                    logger.debug("[P1-PLAN-LOTE-997] prefetch %s fallback: %r", key, _pe)
+        finally:
+            self._futures.clear()
+            if self._executor is not None:
+                self._executor.shutdown(wait=True)
+                self._executor = None
+
+    def close(self):
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+
+    def take(self, key: str):
+        if self._done_flags.pop(key, False):
+            return True, self._data.pop(key)
+        return False, None
+
+    def pop_or(self, key: str, loader):
+        hit, val = self.take(key)
+        if hit:
+            return val
+        return loader()
+
+
 def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None):
     # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Wall-clock total para el path
     # non-stream del chat. Pre-fix: solo el stream emitía
@@ -9597,410 +9902,469 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     _chat_total_started_at = _time_chat_total.monotonic()
     _chat_total_outcome = "ok"
 
-    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
-    #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
-    #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
-    #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
-    #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
-    #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
-    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
-    _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
-    _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
-    _memoria_on = _memoria_activa_para_chat(user_id)   # [P1-PLAN-LOTE-717] una vez por turno; ilegible ⇒ pausada
-
-
-    # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
-    memory = (build_memory_context(session_id, user_id) if _memoria_on   # [P1-DREAMING-1] user_id → modelo del usuario
-              else build_memory_context(session_id, None))              # [P1-PLAN-LOTE-717] pausada: sin ese modelo
-
-
-    # === RAG INJECTION (con Query Routing inteligente) ===
-    user_facts_text = ""
-    visual_facts_text = ""
-
-    if user_id and _memoria_on:   # [P1-PLAN-LOTE-717] pausada ⇒ ni router, ni hechos, ni diario visual
-        rag_decision = rag_query_router(prompt)
-
-        if not rag_decision.get("skip"):
-            optimized_query = rag_decision.get("query", prompt)
-            logger.info(f"🔍 [CHAT RAG] Buscando con query optimizada: '{optimized_query}'")
-
-            # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos round-trips de embedding
-            # (texto vía gemini-embedding-001 vs multimodal vía
-            # gemini-embedding-2) usan el MISMO `optimized_query`, golpean
-            # modelos distintos y sus búsquedas vectoriales son independientes.
-            # Antes corrían en serie (≈2× latencia de embedding en cache-miss).
-            # Ahora corren concurrentes en un ThreadPoolExecutor (este path es
-            # sync y corre en el threadpool de FastAPI). try/except POR-UNIDAD
-            # preserva el aislamiento de fallos + el metric de observabilidad
-            # P3-CHAT-OBSERVABILITY (ahora cada unidad falla independiente, lo
-            # cual es estrictamente mejor que abortar la visual si la textual
-            # falla). Idéntico al sibling stream.
-            def _rag_text_unit():
-                try:
-                    query_emb = get_embedding(optimized_query)
-                    if query_emb:
-                        facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
-                        if facts_data:
-                            logger.info(f"🧠 [CHAT RAG] Hechos textuales recuperados: {len(facts_data)}")
-                            return "\n".join([f"• {item['fact']}" for item in facts_data])
-                except Exception as e:
-                    _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent")
-                    logger.error(f"⚠️ [CHAT RAG] Error recuperando hechos textuales: {e}")
-                return ""
-
-            def _rag_visual_unit():
-                try:
-                    visual_query_emb = get_multimodal_embedding(optimized_query)
-                    if visual_query_emb:
-                        visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
-                        if visual_data:
-                            logger.debug(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
-                            return "\n".join([f"• {item['description']}" for item in visual_data])
-                except Exception as e:
-                    _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent")
-                    logger.error(f"⚠️ [CHAT RAG VISUAL] Error recuperando memoria visual: {e}")
-                return ""
-
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _rag_ex:
-                    _f_text = _rag_ex.submit(_rag_text_unit)
-                    _f_visual = _rag_ex.submit(_rag_visual_unit)
-                    user_facts_text = _f_text.result() or ""
-                    visual_facts_text = _f_visual.result() or ""
-            except Exception as e:
-                logger.error(f"⚠️ [CHAT RAG] Error en ejecución concurrente de embeddings: {e}")
-
-    rag_context = ""
-    if user_facts_text or visual_facts_text:
-        rag_context = "\n--- MEMORIA VECTORIAL (RAG) ---\nContexto recuperado de interacciones pasadas relevante a la pregunta actual:\n"
-        if user_facts_text:
-            rag_context += f"{user_facts_text}\n"
-        if visual_facts_text:
-            rag_context += f"Inventario Visual y Fotos:\n{visual_facts_text}\n"
-        rag_context += "Úsalo para responder de forma súper personalizada.\n"
-        rag_context += "⚠️ REGLA DE CONFLICTO: Si hay conflicto entre el historial reciente o los resúmenes y estos Hechos Permanentes, LOS HECHOS PERMANENTES SON LA LEY y tienen prioridad absoluta.\n"
-        rag_context += "---------------------------------------------\n"
-
-    # [P1-PLAN-LOTE-137] AUSENTE no es «standard»: la rama corta del contador no pregunta el horario, y sembrar
-    # «Día Clásico» le aplicaba «rigor estricto» de crononutrición a quien nunca dijo a qué hora vive.
-    schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
-    _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
-    # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
-    # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
-    # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
-    # de la ÚNICA puerta (`country_for_form_data`); un segundo canonicalizador aquí sería la
-    # tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+    _pf = None
+    # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
+    # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
+    _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
+    _scope.__enter__()
     try:
-        from constants import country_for_form_data as _cffd_coach
-        _coach_country = _cffd_coach(form_data or {})
-    except Exception:
-        _coach_country = "DO"
-    # Determinar si es un usuario autenticado o invitado
-    is_authenticated = user_id and user_id != session_id and user_id != "guest"
 
-    # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
-    # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
-    # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
-    if _chat_prompt_static_prefix():
-        system_prompt = CHAT_AGENT_INLINE_PROMPT
-        system_prompt += coach_country_context(_coach_country)
-        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
-        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
-                                                  contador_sin_plan=_contador_sin_plan)
-        # --- bloques dinámicos (volátiles) al final ---
-        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        system_prompt += build_circadian_context(schedule_type)
-        system_prompt += build_temporal_proactive_context()
-        if rag_context:
-            system_prompt += f"\n{rag_context}"
-    else:
-        system_prompt = CHAT_AGENT_INLINE_PROMPT
-        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        system_prompt += build_circadian_context(schedule_type)
-        system_prompt += build_temporal_proactive_context()
-        system_prompt += coach_country_context(_coach_country)
-        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
-        if rag_context:
-            system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
-                                                  contador_sin_plan=_contador_sin_plan)
+        # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
+        #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
+        #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
+        #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
+        #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
+        #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+        plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+        _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
+        _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
+        _memoria_on = _memoria_activa_para_chat(user_id)   # [P1-PLAN-LOTE-717] una vez por turno; ilegible ⇒ pausada
 
-    inventory_str = ""
-    shopping_delta_str = ""
-    # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
-    # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
-    # para que `plan_record` esté siempre en scope más abajo, incluso si el
-    # try revienta antes de la asignación o si `user_id` es guest.
-    plan_record = None
+        _pf = _ChatContextPrefetcher(
+            session_id, user_id, current_plan, local_date, tz_offset, _memoria_on, _nevera_on,
+        ).start()
 
-    if user_id and user_id != "guest":
-        try:
-            from db_inventory import get_user_inventory
-            user_phys_inv = get_user_inventory(user_id) if _nevera_on else []   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
-            if user_phys_inv:
-                inventory_str = ", ".join(user_phys_inv)
-                
-            from db_plans import get_latest_usable_meal_plan_with_id
-            plan_record = get_latest_usable_meal_plan_with_id(user_id)
-            if plan_record and "plan_data" in plan_record:
-                from shopping_calculator import get_shopping_list_delta
-                delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
-                if delta_list:
-                    shopping_delta_str = ", ".join(delta_list)
-        except Exception as e:
-            logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
+        # === RAG INJECTION (con Query Routing inteligente) ===
+        user_facts_text = ""
+        visual_facts_text = ""
 
-    # Fallbacks
-    # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `current_plan` (parámetro de esta función) SÍ
-    # está en scope aquí — a diferencia de `swap_meal`, tanto el guest (que lo manda en el
-    # body) como el autenticado (hidratado desde BD arriba) traen el plan completo. Derivamos
-    # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
-    # persona-semana cuando el plan real es multi-semana/household>1.
-    _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
-    # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada NO hay respaldo: `current_pantry_ingredients` llega en el
-    # `form_data` del chat desde `health_profile` (cada generación guarda ahí su payload) y sería la Nevera de la última
-    # renovación presentada como «lo que tiene AHORA», contra la orden de no mencionarla.
-    if not inventory_str and form_data and _nevera_on:
-        current_pantry = form_data.get("current_pantry_ingredients", [])
-        if current_pantry and isinstance(current_pantry, list):
-            from shopping_calculator import aggregate_shopping_list
-            cleaned_pantry = aggregate_shopping_list(
-                [item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2],
-                num_days=_vp_num_days, multiplier=_vp_multiplier,
-            )
-            inventory_str = ", ".join(cleaned_pantry)
-
-    if not shopping_delta_str and form_data:
-        current_shopping = form_data.get("current_shopping_list", [])
-        if current_shopping and isinstance(current_shopping, list):
-            from shopping_calculator import aggregate_shopping_list
-            cleaned_shop = aggregate_shopping_list(
-                [item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2],
-                num_days=_vp_num_days, multiplier=_vp_multiplier,
-            )
-            shopping_delta_str = ", ".join(cleaned_shop)
-
-    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
-    # plan deja de ser una obligacion pendiente. El inventario se lee igual en modo
-    # contador MIENTRAS la Nevera esté encendida. [P1-NEVERA-OPCIONAL · 2026-09-23]
-    # Apagada (modo contador, a mano o por el apagado automático) `nevera_activa=False`
-    # quita la línea del inventario —ni su contenido ni «Vacío»— y el bloque de
-    # `_build_pantry_context` da la orden de no mencionarla.
-    system_prompt += build_inventory_context(
-        inventory_str, shopping_delta_str,
-        plan_en_pausa=bool(current_plan) and plan_vigente is None,
-        sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
-        nevera_activa=_nevera_on,    # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: sin línea de inventario (ni «Vacío»)
-    )
-
-    # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
-    # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
-    # chat coach — reusa el mismo builder del generador de planes. Retorna "" si
-    # el usuario no llenó el panel → no-op. Así el coach responde más preciso
-    # (qué le ENCANTA, qué cocina prefiere, qué equipo tiene) sin tocar las
-    # restricciones clínicas, que siguen viniendo de form_data estructurado.
-    if form_data:
-        try:
-            from prompts.plan_generator import build_super_personalization_context
-            system_prompt += build_super_personalization_context(form_data)
-        except Exception as _sp_err:
-            logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
-
-    # [P3-CHAT-IDENTITY · 2026-06-20] Bloque de identidad + datos corporales
-    # (nombre/sexo/edad/peso/altura/objetivo) → el coach SABE con quién habla y
-    # personaliza (te saluda por tu nombre, adapta consejos por sexo/edad/objetivo).
-    # Aditivo, NO clínico (no toca alergias/condiciones ni los macros del plan).
-    # Best-effort: el nombre solo se carga para usuarios autenticados.
-    try:
-        _id_name = ""
-        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
-        # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
-        # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
-        # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
-        # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
-        # (Addendum §2: "Guests ⇒ es-DO always").
-        _coach_locale = "es-DO"
-        if user_id and user_id != session_id and user_id != "guest":
-            _profile_for_prompt = get_user_profile(user_id) or {}
-            _id_name = _profile_for_prompt.get("full_name") or ""
-            _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
-        system_prompt += build_user_identity_context(form_data or {}, _id_name)
-        # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
-        # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
-        # porque las alergias «viven en sus bloques estrictos» — cierto para el
-        # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
-        # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
-        # yendo a buscarla él. Ver `build_clinical_guard_context`.
-        system_prompt += build_clinical_guard_context(form_data or {})
-        system_prompt += _daily_goal_context(form_data, plan_vigente)  # [P1-PLAN-LOTE-53]
-        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
-        # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
-        # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
-        system_prompt += build_language_directive(_coach_locale)
-        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
-    except Exception as _id_err:
-        logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
-
-    if current_plan:
-        # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
-        # de serializar (shopping agregados, coherence telemetry, archived days).
-        # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Encuadre por modo (helper
-        # compartido con el stream): en pausa, el plan viaja pero NO como lo de hoy.
-        # Este bloque recibe `current_plan` A PROPÓSITO — es el único que debe ver
-        # el plan real en pausa (PAUSADO ≠ AMPUTADO).
-        system_prompt += _plan_context_for_chat(user_id, current_plan)
-        system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
-
-    from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
-    _n_sup = normalizar_suplementos(form_data)
-    if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
-        selected_supps = _n_sup["toma"]
-        if selected_supps:
-            from constants import SUPPLEMENT_NAMES as SUPP_NAMES
-            names = [SUPP_NAMES.get(s, s) for s in selected_supps]
-            system_prompt += f"\n💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos."
-        else:
-            system_prompt += "\n💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación."
-    # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
-    if user_id and user_id != "guest":
-        try:
-            from suplementos import bloque_para_chat
-            system_prompt += bloque_para_chat(user_id)
-        except Exception as _sup_err:
-            logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
-
-    if memory.get('summary_context'):
-        system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
-    
-    # Inyectar contexto del diario del día (paridad con stream)
-    if user_id and user_id != "guest":
-        try:
-            # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Paridad EXACTA con el
-            # stream (`chat_with_agent_stream`), incluido el clamp y el `None` preservado:
-            # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no nulos para
-            # usar el día local, así que inventar un offset aquí cambiaría la ventana de los
-            # clientes que no mandan ninguno. Sin esto la ventana era la del huso por
-            # defecto: para un usuario en Madrid a las 00:30, la cena de anoche entraba como
-            # "registrado HOY" — el mismo defecto que `P1-DIARY-TZ-DEFAULT-RD` cerró en el
-            # stream y que este path nunca heredó.
-            _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
-            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
-            _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
-            if consumed_today:
-                total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([  # [P1-DIARY-CHAT-BRIDGE · 2026-11-05]
-                    _format_consumed_meal_line(m) for m in consumed_today
-                ])
-                
-                target_calories = form_data.get("target_calories") if form_data else None
-                # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
-                # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
-                # congelado presentadas como la meta de HOY, mientras el dashboard del
-                # contador pintaba otras. El coach y su propia pantalla decian cifras
-                # distintas. Sin plan vigente se usan las metas del modo seguimiento --
-                # `get_nutrition_targets`, la MISMA funcion pura que sirve
-                # /api/nutrition/targets, sin roundtrip HTTP.
-                if not target_calories and plan_vigente:
-                    target_calories = plan_vigente.get("calories")
-                if not target_calories and form_data:
-                    try:
-                        from nutrition_calculator import get_nutrition_targets
-                        target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
-                    except Exception as _tgt_e:
-                        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
-                
-                system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
-                # Repeated dishes may be genuinely consumed twice; the diary remains authoritative.
-                system_prompt += (
-                    " Varias filas pueden ser alimentos del mismo desayuno/almuerzo/cena o porciones repetidas. "
-                    "Mismo plato, calorías o franja NO prueban duplicado: respeta todos los totales del diario. "
-                    "Solo una repetición accidental confirmada por el usuario autoriza tratar una fila como sobrante."
-                )
-                # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
-                # día — las MISMAS que la card 'Progreso en Tiempo Real'.
-                system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)
-
-                if target_calories:
-                    try:
-                        target_cal_int = int(target_calories)
-                        system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
-                        # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
-                        # comidas del plan restantes hoy — SSOT compartida con el
-                        # path stream (`_build_today_remaining_context`).
-                        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] El `None` hacía
-                        # que "las comidas que te quedan HOY" se resolvieran contra el día del
-                        # servidor: en Madrid a las 00:30 el coach listaba las del día anterior.
-                        system_prompt += _build_today_remaining_context(
-                            plan_vigente, consumed_today, target_cal_int, total_consumed,
-                            local_date_str=local_date,
-                        )
-                    except ValueError:
-                        pass
+        if user_id and _memoria_on:   # [P1-PLAN-LOTE-717] pausada ⇒ ni router, ni hechos, ni diario visual
+            if _chat_fastpath_present_logs() and _rag_es_presente_sin_rag(prompt):
+                rag_decision = {"skip": True}
             else:
-                system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
-        except Exception as e:
-            logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
+                rag_decision = rag_query_router(prompt)
 
-        # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
-        system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
-        # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
-        system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
-        # [AI-32] Puente con la sesión anterior reciente si aplica.
-        system_prompt += _contexto_sesion_previa(user_id, session_id)
-        # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
-        # viva si el toggle está activo.
-        # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
-        # (con `None` resuelve el día server-side desde `user_id` vía `_local_date_str_for_user`,
-        # que sí conoce el huso del usuario). Se le pasa `local_date` por PARIDAD con el stream:
-        # cuando el cliente ya mandó su fecha, usarla ahorra el round-trip y elimina la última
-        # forma en que los bloques de este prompt podían discrepar entre sí sobre qué día es hoy.
-        system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
-        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
-        system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
-        # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
-        system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
-                                                                   tz_offset=tz_offset)
-        # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
-        system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
-        # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
-        # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
-        # path ya recibe el `tz_offset` del cliente igual que el stream.
-        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
-        # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
-        # y permite filtrar el COUNT de la cola por `meal_plan_id`.
-        # [P3-CHAT-NONSTREAM-RD-DATE · 2026-08-23] … y la paridad que el comentario de
-        # arriba DECLARABA no existía: el stream pasa `local_date_str`/`tz_offset` y este
-        # path los omitía, así que "los días pasados" se contaban desde el día del
-        # servidor. Para un usuario en Madrid a las 00:30 eso desplaza la ventana entera
-        # un día: le resume el menú de anteayer como si fuera el de ayer.
-        system_prompt += _build_past_days_context(
-            user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
-            plan_id=(plan_record or {}).get("id"),
+            if not rag_decision.get("skip"):
+                optimized_query = rag_decision.get("query", prompt)
+                logger.info(f"🔍 [CHAT RAG] Buscando con query optimizada: '{optimized_query}'")
+
+                # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos round-trips de embedding
+                # (texto vía gemini-embedding-001 vs multimodal vía
+                # gemini-embedding-2) usan el MISMO `optimized_query`, golpean
+                # modelos distintos y sus búsquedas vectoriales son independientes.
+                # Antes corrían en serie (≈2× latencia de embedding en cache-miss).
+                # Ahora corren concurrentes en un ThreadPoolExecutor (este path es
+                # sync y corre en el threadpool de FastAPI). try/except POR-UNIDAD
+                # preserva el aislamiento de fallos + el metric de observabilidad
+                # P3-CHAT-OBSERVABILITY (ahora cada unidad falla independiente, lo
+                # cual es estrictamente mejor que abortar la visual si la textual
+                # falla). Idéntico al sibling stream.
+                def _rag_text_unit():
+                    try:
+                        query_emb = get_embedding(optimized_query)
+                        if query_emb:
+                            facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
+                            if facts_data:
+                                logger.info(f"🧠 [CHAT RAG] Hechos textuales recuperados: {len(facts_data)}")
+                                return "\n".join([f"• {item['fact']}" for item in facts_data])
+                    except Exception as e:
+                        _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent")
+                        logger.error(f"⚠️ [CHAT RAG] Error recuperando hechos textuales: {e}")
+                    return ""
+
+                def _rag_visual_unit():
+                    try:
+                        visual_query_emb = get_multimodal_embedding(optimized_query)
+                        if visual_query_emb:
+                            visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
+                            if visual_data:
+                                logger.debug(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
+                                return "\n".join([f"• {item['description']}" for item in visual_data])
+                    except Exception as e:
+                        _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent")
+                        logger.error(f"⚠️ [CHAT RAG VISUAL] Error recuperando memoria visual: {e}")
+                    return ""
+
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _rag_ex:
+                        _f_text = _rag_ex.submit(_rag_text_unit)
+                        _f_visual = _rag_ex.submit(_rag_visual_unit)
+                        user_facts_text = _f_text.result() or ""
+                        visual_facts_text = _f_visual.result() or ""
+                except Exception as e:
+                    logger.error(f"⚠️ [CHAT RAG] Error en ejecución concurrente de embeddings: {e}")
+
+        _pf.resolve_all()
+        memory = _pf.resolve_memory()
+
+        rag_context = ""
+        if user_facts_text or visual_facts_text:
+            rag_context = "\n--- MEMORIA VECTORIAL (RAG) ---\nContexto recuperado de interacciones pasadas relevante a la pregunta actual:\n"
+            if user_facts_text:
+                rag_context += f"{user_facts_text}\n"
+            if visual_facts_text:
+                rag_context += f"Inventario Visual y Fotos:\n{visual_facts_text}\n"
+            rag_context += "Úsalo para responder de forma súper personalizada.\n"
+            rag_context += "⚠️ REGLA DE CONFLICTO: Si hay conflicto entre el historial reciente o los resúmenes y estos Hechos Permanentes, LOS HECHOS PERMANENTES SON LA LEY y tienen prioridad absoluta.\n"
+            rag_context += "---------------------------------------------\n"
+
+        # [P1-PLAN-LOTE-137] AUSENTE no es «standard»: la rama corta del contador no pregunta el horario, y sembrar
+        # «Día Clásico» le aplicaba «rigor estricto» de crononutrición a quien nunca dijo a qué hora vive.
+        schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
+        _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
+        # [P2-COACH-COUNTRY · 2026-08-21] La `<biblioteca_culinaria_local>` son SEIS platos
+        # dominicanos con sus tiempos de digestión, y el prompt no los ofrece: ORDENA citarlos.
+        # A un español eso le llega como una reprimenda por una yaroa que no comió. El país sale
+        # de la ÚNICA puerta (`country_for_form_data`); un segundo canonicalizador aquí sería la
+        # tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+        try:
+            from constants import country_for_form_data as _cffd_coach
+            _coach_country = _cffd_coach(form_data or {})
+        except Exception:
+            _coach_country = "DO"
+        # Determinar si es un usuario autenticado o invitado
+        is_authenticated = user_id and user_id != session_id and user_id != "guest"
+
+        # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
+        # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
+        # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
+        if _chat_prompt_static_prefix():
+            _split_volatile = _chat_split_volatile_sys_prompt()
+            _pausa = bool(current_plan) and plan_vigente is None
+            _est_kw = {"plan_en_pausa": _pausa, "contador_sin_plan": _contador_sin_plan}
+            if (_chat_prompt_compact_enabled()
+                    and CHAT_AGENT_INLINE_PROMPT is _ORIG_CHAT_AGENT_INLINE
+                    and build_tools_instructions is _ORIG_BUILD_TOOLS_INSTR):
+                system_prompt = build_coach_static_manual(
+                    country=_coach_country,
+                    is_call_mode=False,
+                    stream=False,
+                    **_est_kw,
+                )
+                if _split_volatile:
+                    system_prompt += _VOLATILE_SYS_SPLIT_MARKER
+                system_prompt += f"El user_id del usuario actual es: {user_id}"
+            else:
+                system_prompt = CHAT_AGENT_INLINE_PROMPT
+                system_prompt += coach_country_context(_coach_country)
+                system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+                _use_static_tools = _split_volatile and (build_tools_instructions is _ORIG_BUILD_TOOLS_INSTR)
+                _tools_block = (
+                    build_tools_instructions_estaticas(**_est_kw)
+                    if _use_static_tools
+                    else build_tools_instructions(
+                        user_id,
+                        plan_en_pausa=_pausa,
+                        contador_sin_plan=_contador_sin_plan,
+                    )
+                )
+                system_prompt += _tools_block
+                if _split_volatile and _tools_block:
+                    system_prompt += _VOLATILE_SYS_SPLIT_MARKER
+                    if _use_static_tools:
+                        system_prompt += f"El user_id del usuario actual es: {user_id}"
+            # --- bloques dinámicos (volátiles) al final ---
+            system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+            system_prompt += build_circadian_context(schedule_type)
+            system_prompt += build_temporal_proactive_context()
+            if rag_context:
+                system_prompt += f"\n{rag_context}"
+        else:
+            system_prompt = CHAT_AGENT_INLINE_PROMPT
+            system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+            system_prompt += build_circadian_context(schedule_type)
+            system_prompt += build_temporal_proactive_context()
+            system_prompt += coach_country_context(_coach_country)
+            system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+            if rag_context:
+                system_prompt += f"\n{rag_context}"
+            system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
+                                                      contador_sin_plan=_contador_sin_plan)
+
+        inventory_str = ""
+        shopping_delta_str = ""
+        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
+        # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
+        # para que `plan_record` esté siempre en scope más abajo, incluso si el
+        # try revienta antes de la asignación o si `user_id` es guest.
+        plan_record = None
+
+        if user_id and user_id != "guest":
+            try:
+                from db_inventory import get_user_inventory
+                _pf_has_inv, _pf_inv = _pf.take("user_phys_inv") if _nevera_on else (False, [])
+                user_phys_inv = _pf_inv if _pf_has_inv else (
+                    get_user_inventory(user_id) if _nevera_on else []
+                )   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
+                if user_phys_inv:
+                    inventory_str = ", ".join(user_phys_inv)
+                    
+                from db_plans import get_latest_usable_meal_plan_with_id
+                plan_record = _pf.pop_or("plan_record", lambda: get_latest_usable_meal_plan_with_id(user_id))
+                if plan_record and "plan_data" in plan_record:
+                    from shopping_calculator import get_shopping_list_delta
+                    delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
+                    if delta_list:
+                        shopping_delta_str = ", ".join(delta_list)
+            except Exception as e:
+                logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
+
+        # Fallbacks
+        # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `current_plan` (parámetro de esta función) SÍ
+        # está en scope aquí — a diferencia de `swap_meal`, tanto el guest (que lo manda en el
+        # body) como el autenticado (hidratado desde BD arriba) traen el plan completo. Derivamos
+        # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
+        # persona-semana cuando el plan real es multi-semana/household>1.
+        _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
+        # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada NO hay respaldo: `current_pantry_ingredients` llega en el
+        # `form_data` del chat desde `health_profile` (cada generación guarda ahí su payload) y sería la Nevera de la última
+        # renovación presentada como «lo que tiene AHORA», contra la orden de no mencionarla.
+        if not inventory_str and form_data and _nevera_on:
+            current_pantry = form_data.get("current_pantry_ingredients", [])
+            if current_pantry and isinstance(current_pantry, list):
+                from shopping_calculator import aggregate_shopping_list
+                cleaned_pantry = aggregate_shopping_list(
+                    [item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2],
+                    num_days=_vp_num_days, multiplier=_vp_multiplier,
+                )
+                inventory_str = ", ".join(cleaned_pantry)
+
+        if not shopping_delta_str and form_data:
+            current_shopping = form_data.get("current_shopping_list", [])
+            if current_shopping and isinstance(current_shopping, list):
+                from shopping_calculator import aggregate_shopping_list
+                cleaned_shop = aggregate_shopping_list(
+                    [item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2],
+                    num_days=_vp_num_days, multiplier=_vp_multiplier,
+                )
+                shopping_delta_str = ", ".join(cleaned_shop)
+
+        # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
+        # plan deja de ser una obligacion pendiente. El inventario se lee igual en modo
+        # contador MIENTRAS la Nevera esté encendida. [P1-NEVERA-OPCIONAL · 2026-09-23]
+        # Apagada (modo contador, a mano o por el apagado automático) `nevera_activa=False`
+        # quita la línea del inventario —ni su contenido ni «Vacío»— y el bloque de
+        # `_build_pantry_context` da la orden de no mencionarla.
+        system_prompt += build_inventory_context(
+            inventory_str, shopping_delta_str,
+            plan_en_pausa=bool(current_plan) and plan_vigente is None,
+            sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
+            nevera_activa=_nevera_on,    # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: sin línea de inventario (ni «Vacío»)
         )
 
-    # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] REFUERZO de la directiva de idioma como
-    # ÚLTIMO bloque del system prompt. La directiva de T3 (arriba, junto a la identidad)
-    # quedaba enterrada bajo ~40 bloques españoles (plan JSON, culinary KB, tools, RAG...)
-    # y el modelo la desobedecía: primer usuario real con locale='en-US' (2026-08-18
-    # 23:14 UTC, session b9f147ca) recibió la respuesta en español con la directiva YA
-    # en el prompt — la señal dominante (todo el prompt + «hola» del usuario en español)
-    # ganó a una instrucción a mitad de contexto. Recency manda en adherencia: la misma
-    # directiva, repetida al FINAL, es lo último que el modelo lee antes de responder.
-    # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
-    try:
-        # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
-        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
-        system_prompt += build_language_directive(_coach_locale)
-    except Exception as _exc:
-        # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
-        # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
-        # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
-        # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
-        logger.debug(
-            "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
-            type(_exc).__name__, str(_exc)[:160])
+        # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
+        # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
+        # chat coach — reusa el mismo builder del generador de planes. Retorna "" si
+        # el usuario no llenó el panel → no-op. Así el coach responde más preciso
+        # (qué le ENCANTA, qué cocina prefiere, qué equipo tiene) sin tocar las
+        # restricciones clínicas, que siguen viniendo de form_data estructurado.
+        if form_data:
+            try:
+                from prompts.plan_generator import build_super_personalization_context
+                system_prompt += build_super_personalization_context(form_data)
+            except Exception as _sp_err:
+                logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
+
+        # [P3-CHAT-IDENTITY · 2026-06-20] Bloque de identidad + datos corporales
+        # (nombre/sexo/edad/peso/altura/objetivo) → el coach SABE con quién habla y
+        # personaliza (te saluda por tu nombre, adapta consejos por sexo/edad/objetivo).
+        # Aditivo, NO clínico (no toca alergias/condiciones ni los macros del plan).
+        # Best-effort: el nombre solo se carga para usuarios autenticados.
+        try:
+            _id_name = ""
+            # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
+            # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
+            # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
+            # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
+            # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
+            # (Addendum §2: "Guests ⇒ es-DO always").
+            _coach_locale = "es-DO"
+            if user_id and user_id != session_id and user_id != "guest":
+                _profile_for_prompt = get_user_profile(user_id) or {}
+                _id_name = _profile_for_prompt.get("full_name") or ""
+                _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
+            system_prompt += build_user_identity_context(form_data or {}, _id_name)
+            # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
+            # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
+            # porque las alergias «viven en sus bloques estrictos» — cierto para el
+            # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
+            # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
+            # yendo a buscarla él. Ver `build_clinical_guard_context`.
+            system_prompt += build_clinical_guard_context(form_data or {})
+            system_prompt += _daily_goal_context(form_data, plan_vigente)  # [P1-PLAN-LOTE-53]
+            # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
+            # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
+            # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
+            system_prompt += build_language_directive(_coach_locale)
+            system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
+        except Exception as _id_err:
+            logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
+
+        if current_plan:
+            # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
+            # de serializar (shopping agregados, coherence telemetry, archived days).
+            # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Encuadre por modo (helper
+            # compartido con el stream): en pausa, el plan viaja pero NO como lo de hoy.
+            # Este bloque recibe `current_plan` A PROPÓSITO — es el único que debe ver
+            # el plan real en pausa (PAUSADO ≠ AMPUTADO).
+            system_prompt += _plan_context_for_chat(user_id, current_plan)
+            system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
+
+        from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
+        _n_sup = normalizar_suplementos(form_data)
+        if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
+            selected_supps = _n_sup["toma"]
+            if selected_supps:
+                from constants import SUPPLEMENT_NAMES as SUPP_NAMES
+                names = [SUPP_NAMES.get(s, s) for s in selected_supps]
+                system_prompt += f"\n💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos."
+            else:
+                system_prompt += "\n💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación."
+        # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
+        if user_id and user_id != "guest":
+            try:
+                from suplementos import bloque_para_chat
+                system_prompt += bloque_para_chat(user_id)
+            except Exception as _sup_err:
+                logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
+
+        if memory.get('summary_context'):
+            system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
+    
+        # Inyectar contexto del diario del día (paridad con stream)
+        if user_id and user_id != "guest":
+            try:
+                # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Paridad EXACTA con el
+                # stream (`chat_with_agent_stream`), incluido el clamp y el `None` preservado:
+                # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no nulos para
+                # usar el día local, así que inventar un offset aquí cambiaría la ventana de los
+                # clientes que no mandan ninguno. Sin esto la ventana era la del huso por
+                # defecto: para un usuario en Madrid a las 00:30, la cena de anoche entraba como
+                # "registrado HOY" — el mismo defecto que `P1-DIARY-TZ-DEFAULT-RD` cerró en el
+                # stream y que este path nunca heredó.
+                _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
+                consumed_today = _pf.pop_or(
+                    "consumed_today",
+                    lambda: get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario),
+                )
+                _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
+                if consumed_today:
+                    total_consumed = sum(m.get('calories', 0) for m in consumed_today)
+                    meals_text = ", ".join([  # [P1-DIARY-CHAT-BRIDGE · 2026-11-05]
+                        _format_consumed_meal_line(m) for m in consumed_today
+                    ])
+                    
+                    target_calories = form_data.get("target_calories") if form_data else None
+                    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
+                    # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
+                    # congelado presentadas como la meta de HOY, mientras el dashboard del
+                    # contador pintaba otras. El coach y su propia pantalla decian cifras
+                    # distintas. Sin plan vigente se usan las metas del modo seguimiento --
+                    # `get_nutrition_targets`, la MISMA funcion pura que sirve
+                    # /api/nutrition/targets, sin roundtrip HTTP.
+                    if not target_calories and plan_vigente:
+                        target_calories = plan_vigente.get("calories")
+                    if not target_calories and form_data:
+                        try:
+                            from nutrition_calculator import get_nutrition_targets
+                            target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
+                        except Exception as _tgt_e:
+                            logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
+                    
+                    system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
+                    # Repeated dishes may be genuinely consumed twice; the diary remains authoritative.
+                    system_prompt += (
+                        " Varias filas pueden ser alimentos del mismo desayuno/almuerzo/cena o porciones repetidas. "
+                        "Mismo plato, calorías o franja NO prueban duplicado: respeta todos los totales del diario. "
+                        "Solo una repetición accidental confirmada por el usuario autoriza tratar una fila como sobrante."
+                    )
+                    # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
+                    # día — las MISMAS que la card 'Progreso en Tiempo Real'.
+                    system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)
+
+                    if target_calories:
+                        try:
+                            target_cal_int = int(target_calories)
+                            system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
+                            # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
+                            # comidas del plan restantes hoy — SSOT compartida con el
+                            # path stream (`_build_today_remaining_context`).
+                            # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] El `None` hacía
+                            # que "las comidas que te quedan HOY" se resolvieran contra el día del
+                            # servidor: en Madrid a las 00:30 el coach listaba las del día anterior.
+                            system_prompt += _build_today_remaining_context(
+                                plan_vigente, consumed_today, target_cal_int, total_consumed,
+                                local_date_str=local_date,
+                            )
+                        except ValueError:
+                            pass
+                else:
+                    system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
+            except Exception as e:
+                logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
+
+            # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
+            system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
+            # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
+            _hit_prev_conv, _val_prev_conv = _pf.take("prev_conv")
+            if _hit_prev_conv:
+                system_prompt += _val_prev_conv
+            else:
+                system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
+            # [AI-32] Puente con la sesión anterior reciente si aplica.
+            system_prompt += _pf.pop_or(
+                "prev_sess", lambda: _contexto_sesion_previa(user_id, session_id),
+            )
+            # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
+            # viva si el toggle está activo.
+            # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Este bloque NO estaba roto
+            # (con `None` resuelve el día server-side desde `user_id` vía `_local_date_str_for_user`,
+            # que sí conoce el huso del usuario). Se le pasa `local_date` por PARIDAD con el stream:
+            # cuando el cliente ya mandó su fecha, usarla ahorra el round-trip y elimina la última
+            # forma en que los bloques de este prompt podían discrepar entre sí sobre qué día es hoy.
+            system_prompt += _pf.pop_or(
+                "hydration", lambda: _build_hydration_context(user_id, local_date_str=local_date),
+            )
+            # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
+            system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
+            # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
+            system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
+                                                                       tz_offset=tz_offset)
+            # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
+            system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
+            # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
+            system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
+            # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
+            # path ya recibe el `tz_offset` del cliente igual que el stream.
+            # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
+            # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
+            # y permite filtrar el COUNT de la cola por `meal_plan_id`.
+            # [P3-CHAT-NONSTREAM-RD-DATE · 2026-08-23] … y la paridad que el comentario de
+            # arriba DECLARABA no existía: el stream pasa `local_date_str`/`tz_offset` y este
+            # path los omitía, así que "los días pasados" se contaban desde el día del
+            # servidor. Para un usuario en Madrid a las 00:30 eso desplaza la ventana entera
+            # un día: le resume el menú de anteayer como si fuera el de ayer.
+            system_prompt += _build_past_days_context(
+                user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
+                plan_id=(plan_record or {}).get("id"),
+            )
+
+        # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] REFUERZO de la directiva de idioma como
+        # ÚLTIMO bloque del system prompt. La directiva de T3 (arriba, junto a la identidad)
+        # quedaba enterrada bajo ~40 bloques españoles (plan JSON, culinary KB, tools, RAG...)
+        # y el modelo la desobedecía: primer usuario real con locale='en-US' (2026-08-18
+        # 23:14 UTC, session b9f147ca) recibió la respuesta en español con la directiva YA
+        # en el prompt — la señal dominante (todo el prompt + «hola» del usuario en español)
+        # ganó a una instrucción a mitad de contexto. Recency manda en adherencia: la misma
+        # directiva, repetida al FINAL, es lo último que el modelo lee antes de responder.
+        # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
+        try:
+            # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
+            system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
+            system_prompt += build_language_directive(_coach_locale)
+        except Exception as _exc:
+            # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
+            # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
+            # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
+            # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
+                type(_exc).__name__, str(_exc)[:160])
+    finally:
+        if _pf is not None:
+            _pf.close()
+        _tc_clear_reads()
+        _scope.__exit__(None, None, None)
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -10216,451 +10580,516 @@ def _chat_stream_error_payload(exc: BaseException) -> dict:
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis", vision: Optional[dict] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
-    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
-    #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
-    #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
-    #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
-    #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
-    #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
-    # [P1-CHAT-ORPHAN-TURN-TRUTH] El registro del turno vivo lo hace `_tracks_active_turn`.
-    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
-    _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
-    _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
-
-    # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
-    # cosechar sentimiento: la instrucción se normaliza una sola vez aguas
-    # arriba de las ramas static-prefix y legacy. Fail-safe conserva DO.
+    _pf = None
+    # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
+    # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
+    _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
+    _scope.__enter__()
     try:
-        from constants import country_for_form_data as _cffd_coach
-        _coach_country = _cffd_coach(form_data or {})
-    except Exception:
-        _coach_country = "DO"
 
-    _memoria_on = _memoria_activa_para_chat(user_id)   # [P1-PLAN-LOTE-717] una vez por turno; ilegible ⇒ pausada
-    memory = (build_memory_context(session_id, user_id) if _memoria_on   # [P1-DREAMING-1] user_id → modelo del usuario
-              else build_memory_context(session_id, None))              # [P1-PLAN-LOTE-717] pausada: sin ese modelo
+        # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
+        #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
+        #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
+        #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
+        #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
+        #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+        # [P1-CHAT-ORPHAN-TURN-TRUTH] El registro del turno vivo lo hace `_tracks_active_turn`.
+        plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+        _contador_sin_plan = _contador_sin_plan_para_prompt(user_id, current_plan)
+        _nevera_on = _nevera_activa_para_chat(user_id)   # [P1-NEVERA-OPCIONAL · 2026-09-23] una vez por turno
 
-    # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
-    # [P3-GENCHUNK-SPEED · 2026-06-01] FASE 1 — `classify_sentiment` (gate
-    # plus/ultra/admin) y `rag_query_router` (gate basic+) son LLM calls
-    # independientes: ambas solo leen `prompt` y ninguna consume el output de
-    # la otra. Antes corrían en serie antes del primer token (≈2 round-trips
-    # Flash-Lite seriales sobre el critical path de TTFT). Ahora concurrentes
-    # en un ThreadPoolExecutor (este path es un generador sync en el threadpool
-    # de FastAPI). Ambas helpers tienen fallback seguro interno (neutral /
-    # {skip:False,query:prompt}) y short-circuits propios (rag_router salta
-    # mensajes casuales y tiene CB fast-path), así que la concurrencia NO añade
-    # superficie de error ni cambia los inputs al LLM principal.
-    sentiment_result = {}
-    user_facts_text = ""
-    visual_facts_text = ""
-    # [P1-TIER-PARITY · 2026-07-12] Decisión de producto del owner: TODOS los
-    # tiers (incluido gratis) tienen los MISMOS privilegios de features — la
-    # única diferencia entre planes son las CANTIDADES de créditos
-    # (auth._TIER_LIMITS). Pre-fix: sentimiento solo plus+ y RAG excluía a
-    # gratis. Guests (sin cuenta) siguen fuera del RAG: no tienen user_facts.
-    _do_sentiment = True
-    # [P1-PLAN-LOTE-717 · 2026-09-28] Memoria pausada (o ilegible) ⇒ sin RAG: ni router, ni hechos, ni diario visual.
-    _do_rag = bool(user_id) and user_id != "guest" and _memoria_on
-    _do_rag_router = _do_rag
-    rag_decision = None
-    # [AI-42: Short-circuit en chats simples/saludos] Salta sentimiento y router LLM para mensajes casuales cortos
-    _es_simple_casual = not vision and _rag_es_casual(prompt)
-    if _es_simple_casual:
-        _do_sentiment = False
-        _do_rag_router = False
-        rag_decision = {"skip": True}
-    elif vision and _foto_con_etiqueta_corta(prompt):
-        # [P1-PLAN-LOTE-996 · 2026-11-13] Foto + «Desayuno»: la foto ya dice qué comió; ni el tono de una palabra ni
-        # la memoria («preferencias para el desayuno») cambian el registro. Medido: 5,6 s antes del primer token
-        # (sentimiento y router 2 s en paralelo + embedding de Cohere 3,2 s) que ahora no se pagan.
-        _do_sentiment = False
-        _do_rag_router = False
-        rag_decision = {"skip": True}
-    elif is_call_mode:
-        # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz (para TODOS los tiers: la paridad de arriba no cambia): ni clasificador
-        # de sentimiento (el prompt de voz ya fija el tono, y es solo tono: no tiene papel de seguridad) ni el LLM del
-        # router de RAG (`_rag_sin_router` decide sin él). Medido en el turno de voz del dueño: 1,00 s y 1,75 s en
-        # paralelo antes del primer token.
-        _do_sentiment = False
-        _do_rag_router = False
-        rag_decision = _rag_sin_router(prompt) if _do_rag else None
-    if _do_sentiment or _do_rag_router:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
-            _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
-            _f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag_router else None
-            if _f_sent is not None:
-                try:
-                    sentiment_result = _f_sent.result() or {}
-                    if sentiment_result.get("instruction"):
-                        sentiment_result["instruction"] = normalize_personality_instruction_for_country(
-                            sentiment_result["instruction"], _coach_country
-                        )
-                except Exception as _se:
-                    logger.warning(f"⚠️ [CHAT SENTIMENT] fallo (neutral fallback): {_se}")
-                    sentiment_result = {}
-            if _f_rag is not None:
-                try:
-                    rag_decision = _f_rag.result()
-                except Exception as _re2:
-                    logger.warning(f"⚠️ [CHAT RAG ROUTER] fallo: {_re2}")
-                    rag_decision = None
-
-    # RAG INJECTION (con Query Routing inteligente) — FASE 2
-    if _do_rag and rag_decision and not rag_decision.get("skip"):
-        optimized_query = rag_decision.get("query", prompt)
-
-        # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos embeddings (texto vs
-        # multimodal) sobre el MISMO `optimized_query` son independientes →
-        # concurrentes. try/except por-unidad preserva el aislamiento de fallos
-        # + el metric P3-CHAT-OBSERVABILITY. Espejo exacto del path non-stream.
-        def _rag_text_unit():
-            try:
-                query_emb = get_embedding(optimized_query)
-                if query_emb:
-                    facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
-                    if facts_data:
-                        return "\n".join([f"• {item['fact']}" for item in facts_data])
-            except Exception as e:
-                _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent_stream")
-                logger.error(f"⚠️ [CHAT RAG] Error texto (stream): {e}")
-            return ""
-
-        def _rag_visual_unit():
-            try:
-                visual_query_emb = get_multimodal_embedding(optimized_query)
-                if visual_query_emb:
-                    visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
-                    if visual_data:
-                        return "\n".join([f"• {item['description']}" for item in visual_data])
-            except Exception as e:
-                _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent_stream")
-                logger.error(f"⚠️ [CHAT RAG VISUAL] Error visual (stream): {e}")
-            return ""
-
+        # [P1-COACH-PERSONA-CURIOSIDAD-DO · 2026-08-23] País resuelto antes de
+        # cosechar sentimiento: la instrucción se normaliza una sola vez aguas
+        # arriba de las ramas static-prefix y legacy. Fail-safe conserva DO.
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _rag_ex:
-                _f_text = _rag_ex.submit(_rag_text_unit)
-                _f_visual = _rag_ex.submit(_rag_visual_unit)
-                user_facts_text = _f_text.result() or ""
-                visual_facts_text = _f_visual.result() or ""
-        except Exception as e:
-            logger.error(f"⚠️ [CHAT RAG] Error concurrente (stream): {e}")
+            from constants import country_for_form_data as _cffd_coach
+            _coach_country = _cffd_coach(form_data or {})
+        except Exception:
+            _coach_country = "DO"
 
-    rag_context = ""
-    if user_facts_text or visual_facts_text:
-        rag_context = "\n--- MEMORIA VECTORIAL (RAG) ---\n"
-        if user_facts_text: rag_context += f"{user_facts_text}\n"
-        if visual_facts_text: rag_context += f"Inventario Visual:\n{visual_facts_text}\n"
-        rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
+        _memoria_on = _memoria_activa_para_chat(user_id)   # [P1-PLAN-LOTE-717] una vez por turno; ilegible ⇒ pausada
+        _pf = _ChatContextPrefetcher(
+            session_id, user_id, current_plan, local_date, tz_offset, _memoria_on, _nevera_on,
+        ).start()
 
-    # [P1-PLAN-LOTE-137] AUSENTE no es «standard»: la rama corta del contador no pregunta el horario, y sembrar
-    # «Día Clásico» le aplicaba «rigor estricto» de crononutrición a quien nunca dijo a qué hora vive.
-    schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
-    _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
-    _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
-    # [P1-PLAN-LOTE-694 / BB-036] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
-    from respuestas_de_la_foto import marcar_rotulo, preparar_vision, foto_para_anotar as _foto_para_anotar
-    vision = marcar_rotulo(vision, prompt)
-    if memory and isinstance(memory, dict) and memory.get("recent_messages"):
-        vision = marcar_rotulo(vision, prompt, recent_messages=memory["recent_messages"])
-    vision = preparar_vision(vision)
-
-    # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
-    # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
-    # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
-    if _chat_prompt_static_prefix():
-        system_prompt = _base_inline
-        system_prompt += coach_country_context(_coach_country)
-        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
-        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
-                                                         contador_sin_plan=_contador_sin_plan)
-        # --- bloques dinámicos (volátiles) al final ---
-        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        system_prompt += build_circadian_context(schedule_type)
-        system_prompt += build_temporal_proactive_context()
-        # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
-        if sentiment_result.get("instruction"):
-            system_prompt += f"\n\n{sentiment_result['instruction']}"
-        if rag_context:
-            system_prompt += f"\n{rag_context}"
-    else:
-        system_prompt = _base_inline
-        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
-        system_prompt += build_circadian_context(schedule_type)
-        system_prompt += build_temporal_proactive_context()
-        # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
-        if sentiment_result.get("instruction"):
-            system_prompt += f"\n\n{sentiment_result['instruction']}"
-        system_prompt += coach_country_context(_coach_country)
-        system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
-        if rag_context: system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
-                                                         contador_sin_plan=_contador_sin_plan)
-
-    inventory_str = ""
-    shopping_delta_str = ""
-    # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
-    # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
-    # para que `plan_record` esté siempre en scope más abajo, incluso si el
-    # try revienta antes de la asignación o si `user_id` es guest.
-    plan_record = None
-
-    if user_id and user_id != "guest":
-        try:
-            from db_inventory import get_user_inventory
-            user_phys_inv = get_user_inventory(user_id) if _nevera_on else []   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
-            if user_phys_inv:
-                inventory_str = ", ".join(user_phys_inv)
-                
-            from db_plans import get_latest_usable_meal_plan_with_id
-            plan_record = get_latest_usable_meal_plan_with_id(user_id)
-            if plan_record and "plan_data" in plan_record:
-                from shopping_calculator import get_shopping_list_delta
-                delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
-                if delta_list:
-                    shopping_delta_str = ", ".join(delta_list)
-        except Exception as e:
-            logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
-
-    # Fallbacks
-    # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `current_plan` (parámetro de esta función) SÍ
-    # está en scope aquí — a diferencia de `swap_meal`, tanto el guest (que lo manda en el
-    # body) como el autenticado (hidratado desde BD arriba) traen el plan completo. Derivamos
-    # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
-    # persona-semana cuando el plan real es multi-semana/household>1.
-    _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
-    # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada NO hay respaldo: `current_pantry_ingredients` llega en el
-    # `form_data` del chat desde `health_profile` (cada generación guarda ahí su payload) y sería la Nevera de la última
-    # renovación presentada como «lo que tiene AHORA», contra la orden de no mencionarla.
-    if not inventory_str and form_data and _nevera_on:
-        current_pantry = form_data.get("current_pantry_ingredients", [])
-        if current_pantry and isinstance(current_pantry, list):
-            from shopping_calculator import aggregate_shopping_list
-            cleaned_pantry = aggregate_shopping_list(
-                [item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2],
-                num_days=_vp_num_days, multiplier=_vp_multiplier,
-            )
-            inventory_str = ", ".join(cleaned_pantry)
-
-    if not shopping_delta_str and form_data:
-        current_shopping = form_data.get("current_shopping_list", [])
-        if current_shopping and isinstance(current_shopping, list):
-            from shopping_calculator import aggregate_shopping_list
-            cleaned_shop = aggregate_shopping_list(
-                [item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2],
-                num_days=_vp_num_days, multiplier=_vp_multiplier,
-            )
-            shopping_delta_str = ", ".join(cleaned_shop)
-
-    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
-    # plan deja de ser una obligacion pendiente. El inventario se lee igual en modo
-    # contador MIENTRAS la Nevera esté encendida. [P1-NEVERA-OPCIONAL · 2026-09-23]
-    # Apagada (modo contador, a mano o por el apagado automático) `nevera_activa=False`
-    # quita la línea del inventario —ni su contenido ni «Vacío»— y el bloque de
-    # `_build_pantry_context` da la orden de no mencionarla.
-    system_prompt += build_inventory_context(
-        inventory_str, shopping_delta_str,
-        plan_en_pausa=bool(current_plan) and plan_vigente is None,
-        sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
-        nevera_activa=_nevera_on,    # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: sin línea de inventario (ni «Vacío»)
-    )
-
-    # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
-    # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
-    # chat coach — reusa el mismo builder del generador de planes. Retorna "" si
-    # el usuario no llenó el panel → no-op. Así el coach responde más preciso
-    # (qué le ENCANTA, qué cocina prefiere, qué equipo tiene) sin tocar las
-    # restricciones clínicas, que siguen viniendo de form_data estructurado.
-    if form_data:
-        try:
-            from prompts.plan_generator import build_super_personalization_context
-            system_prompt += build_super_personalization_context(form_data)
-        except Exception as _sp_err:
-            logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
-
-    # [P3-CHAT-IDENTITY · 2026-06-20] Identidad + datos corporales (paridad con el
-    # path no-stream). El coach conoce nombre/sexo/edad/peso/altura/objetivo y
-    # personaliza. Aditivo, no clínico. Nombre solo para autenticados (best-effort).
-    try:
-        _id_name = ""
-        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
-        # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
-        # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
-        # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
-        # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
-        # (Addendum §2: "Guests ⇒ es-DO always").
-        _coach_locale = "es-DO"
-        if user_id and user_id != session_id and user_id != "guest":
-            _profile_for_prompt = get_user_profile(user_id) or {}
-            _id_name = _profile_for_prompt.get("full_name") or ""
-            _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
-        system_prompt += build_user_identity_context(form_data or {}, _id_name)
-        # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
-        # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
-        # porque las alergias «viven en sus bloques estrictos» — cierto para el
-        # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
-        # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
-        # yendo a buscarla él. Ver `build_clinical_guard_context`.
-        system_prompt += build_clinical_guard_context(form_data or {})
-        system_prompt += _daily_goal_context(form_data, plan_vigente)  # [P1-PLAN-LOTE-53]
-        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
-        # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
-        # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
-        system_prompt += build_language_directive(_coach_locale)
-        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
-    except Exception as _id_err:
-        logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
-
-    if current_plan:
-        # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
-        # _prune_plan_for_chat) antes de serializar — paridad con el path no-stream.
-        # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Mismo helper que el path
-        # no-stream — la divergencia entre ambos ya costó bugs (P1-CHAT-PAST-DAYS).
-        system_prompt += _plan_context_for_chat(user_id, current_plan)
-        system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
-
-    from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
-    _n_sup = normalizar_suplementos(form_data)
-    if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
-        selected_supps = _n_sup["toma"]
-        if selected_supps:
-            from constants import SUPPLEMENT_NAMES as SUPP_NAMES
-            names = [SUPP_NAMES.get(s, s) for s in selected_supps]
-            system_prompt += f"💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos.\n"
-        else:
-            system_prompt += "💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación.\n"
-    # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
-    if user_id and user_id != "guest":
-        try:
-            from suplementos import bloque_para_chat
-            system_prompt += bloque_para_chat(user_id)
-        except Exception as _sup_err:
-            logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
-
-    if memory.get('summary_context'):
-        system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
-        
-    if user_id and user_id != "guest":
-        try:
-            # [P1-CHAT-PAST-DAYS · 2026-07-28] Clamp al rango de husos, como los
-            # otros dos consumidores del mismo `tz_offset`. Un valor basura no
-            # revienta: vacía `DIARIO DE HOY` en silencio. `None` se PRESERVA —
-            # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no
-            # nulos para usar el día local; inventar 240 ahí cambiaría la
-            # ventana de los clientes que no mandan offset.
-            _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
-            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
-            _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
-            if consumed_today:
-                total_consumed = sum(m.get('calories', 0) for m in consumed_today)
-                meals_text = ", ".join([  # [P1-DIARY-CHAT-BRIDGE · 2026-11-05]
-                    _format_consumed_meal_line(m) for m in consumed_today
-                ])
-                
-                target_calories = form_data.get("target_calories") if form_data else None
-                # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
-                # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
-                # congelado presentadas como la meta de HOY, mientras el dashboard del
-                # contador pintaba otras. El coach y su propia pantalla decian cifras
-                # distintas. Sin plan vigente se usan las metas del modo seguimiento --
-                # `get_nutrition_targets`, la MISMA funcion pura que sirve
-                # /api/nutrition/targets, sin roundtrip HTTP.
-                if not target_calories and plan_vigente:
-                    target_calories = plan_vigente.get("calories")
-                if not target_calories and form_data:
+        # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
+        # [P3-GENCHUNK-SPEED · 2026-06-01] FASE 1 — `classify_sentiment` (gate
+        # plus/ultra/admin) y `rag_query_router` (gate basic+) son LLM calls
+        # independientes: ambas solo leen `prompt` y ninguna consume el output de
+        # la otra. Antes corrían en serie antes del primer token (≈2 round-trips
+        # Flash-Lite seriales sobre el critical path de TTFT). Ahora concurrentes
+        # en un ThreadPoolExecutor (este path es un generador sync en el threadpool
+        # de FastAPI). Ambas helpers tienen fallback seguro interno (neutral /
+        # {skip:False,query:prompt}) y short-circuits propios (rag_router salta
+        # mensajes casuales y tiene CB fast-path), así que la concurrencia NO añade
+        # superficie de error ni cambia los inputs al LLM principal.
+        sentiment_result = {}
+        user_facts_text = ""
+        visual_facts_text = ""
+        # [P1-TIER-PARITY · 2026-07-12] Decisión de producto del owner: TODOS los
+        # tiers (incluido gratis) tienen los MISMOS privilegios de features — la
+        # única diferencia entre planes son las CANTIDADES de créditos
+        # (auth._TIER_LIMITS). Pre-fix: sentimiento solo plus+ y RAG excluía a
+        # gratis. Guests (sin cuenta) siguen fuera del RAG: no tienen user_facts.
+        _do_sentiment = True
+        # [P1-PLAN-LOTE-717 · 2026-09-28] Memoria pausada (o ilegible) ⇒ sin RAG: ni router, ni hechos, ni diario visual.
+        _do_rag = bool(user_id) and user_id != "guest" and _memoria_on
+        _do_rag_router = _do_rag
+        rag_decision = None
+        # [AI-42: Short-circuit en chats simples/saludos] Salta sentimiento y router LLM para mensajes casuales cortos
+        _es_simple_casual = not vision and _rag_es_casual(prompt)
+        if _es_simple_casual:
+            _do_sentiment = False
+            _do_rag_router = False
+            rag_decision = {"skip": True}
+        elif vision and _foto_con_etiqueta_corta(prompt):
+            # [P1-PLAN-LOTE-996 · 2026-11-13] Foto + «Desayuno»: la foto ya dice qué comió; ni el tono de una palabra ni
+            # la memoria («preferencias para el desayuno») cambian el registro. Medido: 5,6 s antes del primer token
+            # (sentimiento y router 2 s en paralelo + embedding de Cohere 3,2 s) que ahora no se pagan.
+            _do_sentiment = False
+            _do_rag_router = False
+            rag_decision = {"skip": True}
+        elif is_call_mode:
+            # [P1-PLAN-LOTE-684 · 2026-09-28] Modo voz (para TODOS los tiers: la paridad de arriba no cambia): ni clasificador
+            # de sentimiento (el prompt de voz ya fija el tono, y es solo tono: no tiene papel de seguridad) ni el LLM del
+            # router de RAG (`_rag_sin_router` decide sin él). Medido en el turno de voz del dueño: 1,00 s y 1,75 s en
+            # paralelo antes del primer token.
+            _do_sentiment = False
+            _do_rag_router = False
+            rag_decision = _rag_sin_router(prompt) if _do_rag else None
+        elif not vision and _chat_fastpath_present_logs() and _rag_es_presente_sin_rag(prompt):
+            # [P1-PLAN-LOTE-997] Log del presente o consulta estricta de presupuesto calórico/hídrico de hoy:
+            # preserva sentimiento (empatía) pero evita LLM router + Cohere RAG (~3,5 s).
+            _do_rag_router = False
+            rag_decision = {"skip": True}
+        if _do_sentiment or _do_rag_router:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
+                _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
+                _f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag_router else None
+                if _f_sent is not None:
                     try:
-                        from nutrition_calculator import get_nutrition_targets
-                        target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
-                    except Exception as _tgt_e:
-                        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
-                
-                system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Una comida nueva en pasado se añade sin preguntar aunque ya existan otras en esa franja. No la conviertas en snack por haber otra cena ni preguntes por qué repite. Corrige una fila solo cuando el usuario diga que la anterior estaba mal."
-                # Repeated dishes may be genuinely consumed twice; the diary remains authoritative.
-                system_prompt += (
-                    " Varias filas pueden ser alimentos del mismo desayuno/almuerzo/cena o porciones repetidas. "
-                    "Mismo plato, calorías o franja NO prueban duplicado: respeta todos los totales del diario. "
-                    "Solo una repetición accidental confirmada por el usuario autoriza tratar una fila como sobrante."
+                        sentiment_result = _f_sent.result() or {}
+                        if sentiment_result.get("instruction"):
+                            sentiment_result["instruction"] = normalize_personality_instruction_for_country(
+                                sentiment_result["instruction"], _coach_country
+                            )
+                    except Exception as _se:
+                        logger.warning(f"⚠️ [CHAT SENTIMENT] fallo (neutral fallback): {_se}")
+                        sentiment_result = {}
+                if _f_rag is not None:
+                    try:
+                        rag_decision = _f_rag.result()
+                    except Exception as _re2:
+                        logger.warning(f"⚠️ [CHAT RAG ROUTER] fallo: {_re2}")
+                        rag_decision = None
+
+        # RAG INJECTION (con Query Routing inteligente) — FASE 2
+        if _do_rag and rag_decision and not rag_decision.get("skip"):
+            optimized_query = rag_decision.get("query", prompt)
+
+            # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos embeddings (texto vs
+            # multimodal) sobre el MISMO `optimized_query` son independientes →
+            # concurrentes. try/except por-unidad preserva el aislamiento de fallos
+            # + el metric P3-CHAT-OBSERVABILITY. Espejo exacto del path non-stream.
+            def _rag_text_unit():
+                try:
+                    query_emb = get_embedding(optimized_query)
+                    if query_emb:
+                        facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
+                        if facts_data:
+                            return "\n".join([f"• {item['fact']}" for item in facts_data])
+                except Exception as e:
+                    _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent_stream")
+                    logger.error(f"⚠️ [CHAT RAG] Error texto (stream): {e}")
+                return ""
+
+            def _rag_visual_unit():
+                try:
+                    visual_query_emb = get_multimodal_embedding(optimized_query)
+                    if visual_query_emb:
+                        visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
+                        if visual_data:
+                            return "\n".join([f"• {item['description']}" for item in visual_data])
+                except Exception as e:
+                    _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent_stream")
+                    logger.error(f"⚠️ [CHAT RAG VISUAL] Error visual (stream): {e}")
+                return ""
+
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _rag_ex:
+                    _f_text = _rag_ex.submit(_rag_text_unit)
+                    _f_visual = _rag_ex.submit(_rag_visual_unit)
+                    user_facts_text = _f_text.result() or ""
+                    visual_facts_text = _f_visual.result() or ""
+            except Exception as e:
+                logger.error(f"⚠️ [CHAT RAG] Error concurrente (stream): {e}")
+
+        _pf.resolve_all()
+        memory = _pf.resolve_memory()
+
+        rag_context = ""
+        if user_facts_text or visual_facts_text:
+            rag_context = "\n--- MEMORIA VECTORIAL (RAG) ---\n"
+            if user_facts_text: rag_context += f"{user_facts_text}\n"
+            if visual_facts_text: rag_context += f"Inventario Visual:\n{visual_facts_text}\n"
+            rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
+
+        # [P1-PLAN-LOTE-137] AUSENTE no es «standard»: la rama corta del contador no pregunta el horario, y sembrar
+        # «Día Clásico» le aplicaba «rigor estricto» de crononutrición a quien nunca dijo a qué hora vive.
+        schedule_type = (form_data.get("scheduleType") or "") if form_data else ""
+        _diario_de_hoy = None   # [P1-PLAN-LOTE-132] lo llena el bloque DIARIO DE HOY; None = no se pudo leer
+        _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
+        # [P1-PLAN-LOTE-694 / BB-036] «Mi cena» + foto: el texto que solo nombra la comida es el RÓTULO del plato
+        from respuestas_de_la_foto import marcar_rotulo, preparar_vision, foto_para_anotar as _foto_para_anotar
+        vision = marcar_rotulo(vision, prompt)
+        if memory and isinstance(memory, dict) and memory.get("recent_messages"):
+            vision = marcar_rotulo(vision, prompt, recent_messages=memory["recent_messages"])
+        vision = preparar_vision(vision)
+
+        # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
+        # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
+        # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
+        if _chat_prompt_static_prefix():
+            _split_volatile = _chat_split_volatile_sys_prompt()
+            _pausa = bool(current_plan) and plan_vigente is None
+            _est_kw = {"plan_en_pausa": _pausa, "contador_sin_plan": _contador_sin_plan}
+            _orig_base = _ORIG_CHAT_VOICE_MODE if is_call_mode else _ORIG_CHAT_STREAM_INLINE
+            if (_chat_prompt_compact_enabled()
+                    and _base_inline is _orig_base
+                    and build_tools_instructions_stream is _ORIG_BUILD_TOOLS_INSTR_STREAM):
+                system_prompt = build_coach_static_manual(
+                    country=_coach_country,
+                    is_call_mode=is_call_mode,
+                    stream=True,
+                    **_est_kw,
                 )
-                # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
-                # día — las MISMAS que la card 'Progreso en Tiempo Real'.
-                system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)
-                
-                if target_calories:
-                    try:
-                        target_cal_int = int(target_calories)
-                        system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
-                        # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
-                        # comidas del plan restantes hoy — SSOT compartida con el
-                        # path non-stream (`_build_today_remaining_context`).
-                        system_prompt += _build_today_remaining_context(
-                            plan_vigente, consumed_today, target_cal_int, total_consumed,
-                            local_date_str=local_date,
-                        )
-                    except ValueError:
-                        pass
+                if _split_volatile:
+                    system_prompt += _VOLATILE_SYS_SPLIT_MARKER
+                system_prompt += f"El user_id actual es: {user_id}"
             else:
-                system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
-        except Exception as e:
-            logger.error(f"⚠️ Error inyectando contexto de diario: {e}")
+                system_prompt = _base_inline
+                system_prompt += coach_country_context(_coach_country)
+                system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+                _use_static_tools = _split_volatile and (build_tools_instructions_stream is _ORIG_BUILD_TOOLS_INSTR_STREAM)
+                _tools_block = (
+                    build_tools_instructions_stream_estaticas(**_est_kw)
+                    if _use_static_tools
+                    else build_tools_instructions_stream(
+                        user_id,
+                        plan_en_pausa=_pausa,
+                        contador_sin_plan=_contador_sin_plan,
+                    )
+                )
+                system_prompt += _tools_block
+                if _split_volatile and _tools_block:
+                    system_prompt += _VOLATILE_SYS_SPLIT_MARKER
+                    if _use_static_tools:
+                        system_prompt += f"El user_id actual es: {user_id}"
+            # --- bloques dinámicos (volátiles) al final ---
+            system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+            system_prompt += build_circadian_context(schedule_type)
+            system_prompt += build_temporal_proactive_context()
+            # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
+            if sentiment_result.get("instruction"):
+                system_prompt += f"\n\n{sentiment_result['instruction']}"
+            if rag_context:
+                system_prompt += f"\n{rag_context}"
+        else:
+            system_prompt = _base_inline
+            system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
+            system_prompt += build_circadian_context(schedule_type)
+            system_prompt += build_temporal_proactive_context()
+            # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
+            if sentiment_result.get("instruction"):
+                system_prompt += f"\n\n{sentiment_result['instruction']}"
+            system_prompt += coach_country_context(_coach_country)
+            system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+            if rag_context: system_prompt += f"\n{rag_context}"
+            system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None,
+                                                             contador_sin_plan=_contador_sin_plan)
 
-        # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
-        system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
-        # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
-        system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
-        # [AI-32] Puente con la sesión anterior reciente si aplica.
-        system_prompt += _contexto_sesion_previa(user_id, session_id)
-        # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
-        # viva si el toggle está activo. El stream path SÍ recibe
-        # `local_date` del cliente, que pasamos al helper para mayor
-        # precisión en zonas horarias no-UTC.
-        system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
-        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
-        system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
-        # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
-        system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
-                                                                   tz_offset=tz_offset)
-        # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
-        system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
-        # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
-        # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
-        # (índice barato) + diario real. Va DESPUÉS del DIARIO DE HOY y del
-        # prefijo estático — ver docs/chat_past_days_memory.md §3 Pieza 2.
-        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
-        # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
-        # y permite filtrar el COUNT de la cola por `meal_plan_id`.
-        system_prompt += _build_past_days_context(
-            user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
-            plan_id=(plan_record or {}).get("id"),
+        inventory_str = ""
+        shopping_delta_str = ""
+        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
+        # (que ya resuelve `get_latest_usable_meal_plan_with_id` para el shopping-delta)
+        # para que `plan_record` esté siempre en scope más abajo, incluso si el
+        # try revienta antes de la asignación o si `user_id` es guest.
+        plan_record = None
+
+        if user_id and user_id != "guest":
+            try:
+                from db_inventory import get_user_inventory
+                _pf_has_inv, _pf_inv = _pf.take("user_phys_inv") if _nevera_on else (False, [])
+                user_phys_inv = _pf_inv if _pf_has_inv else (
+                    get_user_inventory(user_id) if _nevera_on else []
+                )   # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: no se lee
+                if user_phys_inv:
+                    inventory_str = ", ".join(user_phys_inv)
+                    
+                from db_plans import get_latest_usable_meal_plan_with_id
+                plan_record = _pf.pop_or("plan_record", lambda: get_latest_usable_meal_plan_with_id(user_id))
+                if plan_record and "plan_data" in plan_record:
+                    from shopping_calculator import get_shopping_list_delta
+                    delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
+                    if delta_list:
+                        shopping_delta_str = ", ".join(delta_list)
+            except Exception as e:
+                logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
+
+        # Fallbacks
+        # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `current_plan` (parámetro de esta función) SÍ
+        # está en scope aquí — a diferencia de `swap_meal`, tanto el guest (que lo manda en el
+        # body) como el autenticado (hidratado desde BD arriba) traen el plan completo. Derivamos
+        # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
+        # persona-semana cuando el plan real es multi-semana/household>1.
+        _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
+        # [P1-NEVERA-OPCIONAL · 2026-09-23] Con la Nevera apagada NO hay respaldo: `current_pantry_ingredients` llega en el
+        # `form_data` del chat desde `health_profile` (cada generación guarda ahí su payload) y sería la Nevera de la última
+        # renovación presentada como «lo que tiene AHORA», contra la orden de no mencionarla.
+        if not inventory_str and form_data and _nevera_on:
+            current_pantry = form_data.get("current_pantry_ingredients", [])
+            if current_pantry and isinstance(current_pantry, list):
+                from shopping_calculator import aggregate_shopping_list
+                cleaned_pantry = aggregate_shopping_list(
+                    [item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2],
+                    num_days=_vp_num_days, multiplier=_vp_multiplier,
+                )
+                inventory_str = ", ".join(cleaned_pantry)
+
+        if not shopping_delta_str and form_data:
+            current_shopping = form_data.get("current_shopping_list", [])
+            if current_shopping and isinstance(current_shopping, list):
+                from shopping_calculator import aggregate_shopping_list
+                cleaned_shop = aggregate_shopping_list(
+                    [item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2],
+                    num_days=_vp_num_days, multiplier=_vp_multiplier,
+                )
+                shopping_delta_str = ", ".join(cleaned_shop)
+
+        # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
+        # plan deja de ser una obligacion pendiente. El inventario se lee igual en modo
+        # contador MIENTRAS la Nevera esté encendida. [P1-NEVERA-OPCIONAL · 2026-09-23]
+        # Apagada (modo contador, a mano o por el apagado automático) `nevera_activa=False`
+        # quita la línea del inventario —ni su contenido ni «Vacío»— y el bloque de
+        # `_build_pantry_context` da la orden de no mencionarla.
+        system_prompt += build_inventory_context(
+            inventory_str, shopping_delta_str,
+            plan_en_pausa=bool(current_plan) and plan_vigente is None,
+            sin_plan=not current_plan,   # [P1-PLAN-LOTE-137] sin plan no hay «lista para su plan actual»
+            nevera_activa=_nevera_on,    # [P1-NEVERA-OPCIONAL · 2026-09-23] apagada: sin línea de inventario (ni «Vacío»)
         )
 
-    # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] Mismo refuerzo final que el path
-    # no-stream (la divergencia entre ambos ya costó bugs — P1-CHAT-PAST-DAYS,
-    # P1-CHAT-PAUSED-PROMPT-BLOCKS): la directiva de idioma repetida como ÚLTIMO
-    # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
-    # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
-    # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
-    # [P1-PLAN-LOTE-687 · 2026-09-28] …y va al FINAL, UNA vez para las dos ramas: a mitad del prompt (posición 25.595
-    # de 36.550, con el diario, el plan y los días anteriores detrás) el modelo no la vio y contestó «No me llegó el
-    # detalle de esa foto» a una foto de plato perfectamente analizada.
-    system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
-    # [P1-PLAN-LOTE-686 · 2026-09-28] Modo voz: el recordatorio de las reglas V al FINAL, detrás de todos los bloques de
-    # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
-    if is_call_mode:
-        system_prompt += CHAT_VOICE_MODE_RECORDATORIO
-    try:
-        # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
-        system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
-        system_prompt += build_language_directive(_coach_locale)
-    except Exception as _exc:
-        # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
-        # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
-        # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
-        # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
-        logger.debug(
-            "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
-            type(_exc).__name__, str(_exc)[:160])
+        # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
+        # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
+        # chat coach — reusa el mismo builder del generador de planes. Retorna "" si
+        # el usuario no llenó el panel → no-op. Así el coach responde más preciso
+        # (qué le ENCANTA, qué cocina prefiere, qué equipo tiene) sin tocar las
+        # restricciones clínicas, que siguen viniendo de form_data estructurado.
+        if form_data:
+            try:
+                from prompts.plan_generator import build_super_personalization_context
+                system_prompt += build_super_personalization_context(form_data)
+            except Exception as _sp_err:
+                logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
+
+        # [P3-CHAT-IDENTITY · 2026-06-20] Identidad + datos corporales (paridad con el
+        # path no-stream). El coach conoce nombre/sexo/edad/peso/altura/objetivo y
+        # personaliza. Aditivo, no clínico. Nombre solo para autenticados (best-effort).
+        try:
+            _id_name = ""
+            # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
+            # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
+            # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
+            # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
+            # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
+            # (Addendum §2: "Guests ⇒ es-DO always").
+            _coach_locale = "es-DO"
+            if user_id and user_id != session_id and user_id != "guest":
+                _profile_for_prompt = get_user_profile(user_id) or {}
+                _id_name = _profile_for_prompt.get("full_name") or ""
+                _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
+            system_prompt += build_user_identity_context(form_data or {}, _id_name)
+            # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
+            # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
+            # porque las alergias «viven en sus bloques estrictos» — cierto para el
+            # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
+            # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
+            # yendo a buscarla él. Ver `build_clinical_guard_context`.
+            system_prompt += build_clinical_guard_context(form_data or {})
+            system_prompt += _daily_goal_context(form_data, plan_vigente)  # [P1-PLAN-LOTE-53]
+            # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
+            # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
+            # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
+            system_prompt += build_language_directive(_coach_locale)
+            system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
+        except Exception as _id_err:
+            logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
+
+        if current_plan:
+            # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
+            # _prune_plan_for_chat) antes de serializar — paridad con el path no-stream.
+            # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Mismo helper que el path
+            # no-stream — la divergencia entre ambos ya costó bugs (P1-CHAT-PAST-DAYS).
+            system_prompt += _plan_context_for_chat(user_id, current_plan)
+            system_prompt += _prep_time_context_for_chat(plan_vigente)  # [P1-PLAN-LOTE-53]
+
+        from suplementos import normalizar_suplementos   # [P1-PLAN-LOTE-292]
+        _n_sup = normalizar_suplementos(form_data)
+        if form_data and (_n_sup["toma"] or _n_sup["recomendar"]):
+            selected_supps = _n_sup["toma"]
+            if selected_supps:
+                from constants import SUPPLEMENT_NAMES as SUPP_NAMES
+                names = [SUPP_NAMES.get(s, s) for s in selected_supps]
+                system_prompt += f"💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos.\n"
+            else:
+                system_prompt += "💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación.\n"
+        # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
+        if user_id and user_id != "guest":
+            try:
+                from suplementos import bloque_para_chat
+                system_prompt += bloque_para_chat(user_id)
+            except Exception as _sup_err:
+                logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
+
+        if memory.get('summary_context'):
+            system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
+            
+        if user_id and user_id != "guest":
+            try:
+                # [P1-CHAT-PAST-DAYS · 2026-07-28] Clamp al rango de husos, como los
+                # otros dos consumidores del mismo `tz_offset`. Un valor basura no
+                # revienta: vacía `DIARIO DE HOY` en silencio. `None` se PRESERVA —
+                # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no
+                # nulos para usar el día local; inventar 240 ahí cambiaría la
+                # ventana de los clientes que no mandan offset.
+                _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
+                consumed_today = _pf.pop_or(
+                    "consumed_today",
+                    lambda: get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario),
+                )
+                _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
+                if consumed_today:
+                    total_consumed = sum(m.get('calories', 0) for m in consumed_today)
+                    meals_text = ", ".join([  # [P1-DIARY-CHAT-BRIDGE · 2026-11-05]
+                        _format_consumed_meal_line(m) for m in consumed_today
+                    ])
+                    
+                    target_calories = form_data.get("target_calories") if form_data else None
+                    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
+                    # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
+                    # congelado presentadas como la meta de HOY, mientras el dashboard del
+                    # contador pintaba otras. El coach y su propia pantalla decian cifras
+                    # distintas. Sin plan vigente se usan las metas del modo seguimiento --
+                    # `get_nutrition_targets`, la MISMA funcion pura que sirve
+                    # /api/nutrition/targets, sin roundtrip HTTP.
+                    if not target_calories and plan_vigente:
+                        target_calories = plan_vigente.get("calories")
+                    if not target_calories and form_data:
+                        try:
+                            from nutrition_calculator import get_nutrition_targets
+                            target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
+                        except Exception as _tgt_e:
+                            logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
+                    
+                    system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Una comida nueva en pasado se añade sin preguntar aunque ya existan otras en esa franja. No la conviertas en snack por haber otra cena ni preguntes por qué repite. Corrige una fila solo cuando el usuario diga que la anterior estaba mal."
+                    # Repeated dishes may be genuinely consumed twice; the diary remains authoritative.
+                    system_prompt += (
+                        " Varias filas pueden ser alimentos del mismo desayuno/almuerzo/cena o porciones repetidas. "
+                        "Mismo plato, calorías o franja NO prueban duplicado: respeta todos los totales del diario. "
+                        "Solo una repetición accidental confirmada por el usuario autoriza tratar una fila como sobrante."
+                    )
+                    # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
+                    # día — las MISMAS que la card 'Progreso en Tiempo Real'.
+                    system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)
+                    
+                    if target_calories:
+                        try:
+                            target_cal_int = int(target_calories)
+                            system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
+                            # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
+                            # comidas del plan restantes hoy — SSOT compartida con el
+                            # path non-stream (`_build_today_remaining_context`).
+                            system_prompt += _build_today_remaining_context(
+                                plan_vigente, consumed_today, target_cal_int, total_consumed,
+                                local_date_str=local_date,
+                            )
+                        except ValueError:
+                            pass
+                else:
+                    system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
+            except Exception as e:
+                logger.error(f"⚠️ Error inyectando contexto de diario: {e}")
+
+            # [P1-PLAN-LOTE-132 · 2026-09-20] Lo que le FALTA hoy, con la resta hecha y la hora (SSOT de los dos paths).
+            system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)
+            # [P1-PLAN-LOTE-168 · 2026-09-23] Si el chat viene de días anteriores, sus totales viejos no son los de hoy.
+            _hit_prev_conv, _val_prev_conv = _pf.take("prev_conv")
+            if _hit_prev_conv:
+                system_prompt += _val_prev_conv
+            else:
+                system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)
+            # [AI-32] Puente con la sesión anterior reciente si aplica.
+            system_prompt += _pf.pop_or(
+                "prev_sess", lambda: _contexto_sesion_previa(user_id, session_id),
+            )
+            # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
+            # viva si el toggle está activo. El stream path SÍ recibe
+            # `local_date` del cliente, que pasamos al helper para mayor
+            # precisión en zonas horarias no-UTC.
+            system_prompt += _pf.pop_or(
+                "hydration", lambda: _build_hydration_context(user_id, local_date_str=local_date),
+            )
+            # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
+            system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)
+            # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
+            system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
+                                                                       tz_offset=tz_offset)
+            # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
+            system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
+            # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
+            system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
+            # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
+            # (índice barato) + diario real. Va DESPUÉS del DIARIO DE HOY y del
+            # prefijo estático — ver docs/chat_past_days_memory.md §3 Pieza 2.
+            # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
+            # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
+            # y permite filtrar el COUNT de la cola por `meal_plan_id`.
+            system_prompt += _build_past_days_context(
+                user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
+                plan_id=(plan_record or {}).get("id"),
+            )
+
+        # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] Mismo refuerzo final que el path
+        # no-stream (la divergencia entre ambos ya costó bugs — P1-CHAT-PAST-DAYS,
+        # P1-CHAT-PAUSED-PROMPT-BLOCKS): la directiva de idioma repetida como ÚLTIMO
+        # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
+        # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
+        # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL] la foto es contexto de SISTEMA, no turno del usuario.
+        # [P1-PLAN-LOTE-687 · 2026-09-28] …y va al FINAL, UNA vez para las dos ramas: a mitad del prompt (posición 25.595
+        # de 36.550, con el diario, el plan y los días anteriores detrás) el modelo no la vio y contestó «No me llegó el
+        # detalle de esa foto» a una foto de plato perfectamente analizada.
+        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
+        # [P1-PLAN-LOTE-686 · 2026-09-28] Modo voz: el recordatorio de las reglas V al FINAL, detrás de todos los bloques de
+        # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
+        if is_call_mode:
+            system_prompt += CHAT_VOICE_MODE_RECORDATORIO
+        try:
+            # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
+            system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda
+            system_prompt += build_language_directive(_coach_locale)
+        except Exception as _exc:
+            # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
+            # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
+            # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
+            # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
+                type(_exc).__name__, str(_exc)[:160])
+    finally:
+        if _pf is not None:
+            _pf.close()
+        _tc_clear_reads()
+        _scope.__exit__(None, None, None)
 
     config = {"configurable": {"thread_id": session_id}}
 

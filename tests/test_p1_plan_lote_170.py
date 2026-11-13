@@ -38,7 +38,7 @@ def _bloque_plugins(cap: str) -> str:
 
 def test_systembars_sin_escuchador_de_margenes():
     cap = _front("capacitor.config.ts")
-    assert "SystemBars: { insetsHandling: 'disable' }," in _bloque_plugins(cap)
+    assert "SystemBars: { insetsHandling: 'disable', style: 'DARK' }," in _bloque_plugins(cap)
     assert "insetsHandling: 'css'" not in cap
 
 
@@ -53,12 +53,15 @@ def test_la_ventana_no_es_de_borde_a_borde():
     teclado. Si subes el target, este test te obliga a volver a pensar el manejo de márgenes."""
     variables = _front("android/variables.gradle")
     m = re.search(r"targetSdkVersion\s*=\s*(\d+)", variables)
-    assert m and int(m.group(1)) <= 34
+    # [ANDROID-PLAY-TARGET-36 · 2026-11-13] Era `<= 34`. Play exige 36; los márgenes los maneja MainActivity.
+    assert m and int(m.group(1)) >= 36
     nativo = "\n".join(
         p.read_text(encoding="utf-8")
         for p in (_FRONT / "android" / "app" / "src" / "main" / "java").rglob("*.java")
     )
     assert "setDecorFitsSystemWindows" not in nativo and "EdgeToEdge" not in nativo
+    assert "setOnApplyWindowInsetsListener" in nativo
+    assert "Math.max(barras.bottom, teclado.bottom)" in nativo
 
 
 def test_apk_nuevo_sin_tocar_el_umbral_de_ota():

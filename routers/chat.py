@@ -323,7 +323,9 @@ def api_get_chat_attachment(
         content=attachment.get("content") or b"",
         media_type=attachment.get("content_type") or "application/octet-stream",
         headers={
-            "Cache-Control": "private, max-age=3600",
+            # [FOTOS-CHAT-URL-ESTABLE · 2026-11-13] Era 1 h. Un adjunto no cambia nunca (su id es su contenido) y la
+            # URL firmada ya es estable por tramos: 7 días en la caché PRIVADA del dispositivo, sin revalidar.
+            "Cache-Control": "private, max-age=604800, immutable",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": "inline",
         },
@@ -923,23 +925,26 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         else:
             save_message(session_id, "user", prompt, user_id=_db_user_id)
         
-        # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
-        form_data = merge_form_data_with_profile(
-            user_id if user_id != "guest" and user_id != session_id else "",
-            form_data
-        )
-        rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
-        __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
-        __import__("decision_triage").iniciar_turno(prompt, user_id)   # [P1-DECISION-TRIAGE] BB-076: en paralelo, fail-open
-        
-        plan_tier = "gratis"
-        if user_id and user_id != "guest":
-            profile_sync = get_user_profile(user_id)
-            if profile_sync:
-                plan_tier = profile_sync.get("plan_tier", "gratis")
-        
-        if not current_plan and user_id and user_id != "guest":
-            current_plan = get_latest_meal_plan(user_id)
+        from turn_cache import turn_cache_scope, stash_handoff
+        with turn_cache_scope():
+            # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
+            form_data = merge_form_data_with_profile(
+                user_id if user_id != "guest" and user_id != session_id else "",
+                form_data
+            )
+            rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
+            __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
+            __import__("decision_triage").iniciar_turno(prompt, user_id)   # [P1-DECISION-TRIAGE] BB-076: en paralelo, fail-open
+
+            plan_tier = "gratis"
+            if user_id and user_id != "guest":
+                profile_sync = get_user_profile(user_id)
+                if profile_sync:
+                    plan_tier = profile_sync.get("plan_tier", "gratis")
+
+            if not current_plan and user_id and user_id != "guest":
+                current_plan = get_latest_meal_plan(user_id)
+            stash_handoff(user_id, session_id)
             
         
         # Iniciar generación del título de inmediato en paralelo
@@ -1260,17 +1265,20 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         _db_user_id = _resolve_user_id_for_db(user_id, session_id)
         save_message(session_id, "user", prompt, user_id=_db_user_id)
 
-        # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
-        form_data = merge_form_data_with_profile(
-            user_id if user_id != "guest" and user_id != session_id else "",
-            form_data
-        )
-        rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
-        __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
-        __import__("decision_triage").iniciar_turno(prompt, user_id)   # [P1-DECISION-TRIAGE] BB-076: en paralelo, fail-open
+        from turn_cache import turn_cache_scope, stash_handoff
+        with turn_cache_scope():
+            # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
+            form_data = merge_form_data_with_profile(
+                user_id if user_id != "guest" and user_id != session_id else "",
+                form_data
+            )
+            rechazar_si_menor((form_data or {}).get("age"), origen="chat (perfil fundido)")   # [P1-PLAN-LOTE-846]
+            __import__("region_ia").fijar_pais((form_data or {}).get("country"))   # [P1-PLAN-LOTE-937] la UE, a su proveedor
+            __import__("decision_triage").iniciar_turno(prompt, user_id)   # [P1-DECISION-TRIAGE] BB-076: en paralelo, fail-open
 
-        if not current_plan and user_id and user_id != "guest":
-            current_plan = get_latest_meal_plan(user_id)
+            if not current_plan and user_id and user_id != "guest":
+                current_plan = get_latest_meal_plan(user_id)
+            stash_handoff(user_id, session_id)
 
         response_text, updated_fields, new_plan = chat_with_agent(
             session_id,

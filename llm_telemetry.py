@@ -201,20 +201,41 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
         if not usage:
             try:
                 resp_meta = getattr(result, "response_metadata", None) or {}
-                usage = resp_meta.get("usage_metadata") if isinstance(resp_meta, dict) else None
+                if isinstance(resp_meta, dict):
+                    usage = (
+                        resp_meta.get("usage_metadata")
+                        or resp_meta.get("token_usage")
+                        or resp_meta.get("usage")
+                    )
             except Exception:
                 usage = None
         if not usage or not isinstance(usage, dict):
             return
 
         input_tokens = usage.get("input_tokens")
+        if input_tokens is None:
+            input_tokens = usage.get("prompt_tokens")
         output_tokens = usage.get("output_tokens")
+        if output_tokens is None:
+            output_tokens = usage.get("completion_tokens")
         cached_tokens = 0
         details = usage.get("input_token_details")
         if isinstance(details, dict):
             cached_tokens = details.get("cache_read") or details.get("cached") or 0
         if not cached_tokens:
-            cached_tokens = usage.get("cached_content_token_count", 0) or 0
+            ptd = usage.get("prompt_tokens_details")
+            if isinstance(ptd, dict):
+                cached_tokens = ptd.get("cached_tokens") or ptd.get("cache_read") or 0
+        if not cached_tokens:
+            cached_tokens = usage.get("cached_content_token_count", 0) or usage.get("cached_tokens", 0) or 0
+        reasoning_tokens = 0
+        out_details = usage.get("output_token_details")
+        if isinstance(out_details, dict):
+            reasoning_tokens = out_details.get("reasoning") or 0
+        if not reasoning_tokens:
+            ctd = usage.get("completion_tokens_details")
+            if isinstance(ctd, dict):
+                reasoning_tokens = ctd.get("reasoning_tokens") or 0
 
         # [P1-COST-INSTRUMENTATION-PHASE2 · 2026-05-16] Inyecta el nombre
         # del nodo desde el ContextVar `_current_node_var`. Si la llamada
@@ -275,6 +296,7 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
             metadata={
                 "duration_s": round(float(duration_s), 3),
                 **({"corr": _attr_corr} if _attr_corr and _attr_corr != "-" else {}),
+                **({"reasoning_tokens": int(reasoning_tokens)} if reasoning_tokens else {}),
             },
         )
     except Exception as _e_emit:

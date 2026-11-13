@@ -89,6 +89,16 @@ def nevera_activa(user_id: Optional[str]) -> bool:
     if not user_id or user_id == "guest" or not interruptor_disponible():
         return True
     try:
+        from turn_cache import current_turn_cache, get_cached
+        if current_turn_cache() is not None:
+            from db_core import execute_sql_query as _ssot_exec
+            if execute_sql_query is _ssot_exec:
+                hit, prof = get_cached("profile", user_id)
+                if hit and isinstance(prof, dict) and "nevera_enabled" in prof and "plan_mode" in prof:
+                    return nevera_activa_de(prof)
+    except Exception:
+        pass
+    try:
         row = execute_sql_query(
             "SELECT plan_mode, nevera_enabled FROM user_profiles WHERE id = %s",
             (user_id,), fetch_one=True,

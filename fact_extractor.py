@@ -663,7 +663,14 @@ def get_embedding(text: str, purpose: str = "query") -> list:
     model_id = get_embeddings_model_id()
     if purpose not in ("query", "document"):
         purpose = "query"
-    return _cached_text_embedding(text, model_id, purpose)
+    emb = _cached_text_embedding(text, model_id, purpose)
+    if emb and purpose == "query":
+        try:
+            from turn_cache import set_cached as _tc_set
+            _tc_set("query_emb", f"{model_id}:{text}", list(emb))
+        except Exception:
+            pass
+    return emb
 
 CRITICAL_CATEGORIES = {"condicion_medica", "alergia", "dieta", "objetivo"}
 
