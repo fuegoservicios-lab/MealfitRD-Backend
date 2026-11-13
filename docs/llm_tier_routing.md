@@ -437,7 +437,11 @@ cacheados (~$0,052, 2,9 s) y la 2.ª del mismo turno cachea el 93 % (~$0,005, 2,
 1. **Caché explícita de Gemini: imposible con este modelo.** `POST /v1beta/cachedContents` con `models/gemini-4-hydrogen`
    responde 400 «Explicit caching is not supported for models/gemini-4-hydrogen». Solo queda el caché implícito
    (best-effort, sin control nuestro): por eso las palancas de prefijo se miden, no se asumen.
-2. **Achicar el manual (63 k): no por módulos.** Anatomía medida: el bloque de herramientas pesa 30 k y 24 k son las reglas
+2. **Achicar el manual (63 k): solo lo que no pierde nada, y ya está ON** (`MEALFIT_CHAT_PROMPT_LEAN`, `prompts/coach_lean.py`):
+   quita las 48 etiquetas de procedencia (1,9 k) y el bullet de las herramientas que el turno no liga (compras, Nevera,
+   nutrientes, perfil clínico; ~1,2 k), decidido por la misma `_select_tools_for_turn` que el esquema; con foto, voz o gating
+   apagado no poda. Prueba de paridad por replay offline: `test_p1_plan_lote_998_lean_sin_perdida.py` (24 frases × 2 caminos).
+   Reescribir las reglas de log/correct (24 k) NO se hizo: no por módulos. Anatomía medida: el bloque de herramientas pesa 30 k y 24 k son las reglas
    de `log_consumed_meal`/`correct_consumed_meal` (siempre ligadas); lo que un recorte por herramienta podría quitar
    (compras, Nevera, nutrientes, perfil clínico, ajustes) suma ~2 k (<3 %). Achicar de verdad exige reescribir esas reglas,
    y eso solo se hace con una batería de replay de las 54 reglas etiquetadas (no con un recorte a ciegas: ver el compacto).

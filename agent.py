@@ -4415,6 +4415,23 @@ def _tool_gating_enabled_for_model(model_name: Optional[str]) -> bool:
     return _env_bool("MEALFIT_CHAT_TOOL_GATING_ENABLED", True)
 
 
+def _adelgazar_prompt_coach(system_prompt: str, prompt: str, *, user_id=None, con_foto: bool = False,
+                            modo_voz: bool = False) -> str:
+    """[P1-PLAN-LOTE-998] Recorte sin pérdida del manual estático (etiquetas de procedencia + bullets de herramientas que
+    este turno no liga). Misma decisión que `call_model`: `_select_tools_for_turn`. Fail-open: ante cualquier fallo, el
+    prompt intacto. Ver prompts/coach_lean.py."""
+    try:
+        from prompts.coach_lean import adelgazar
+        ligadas = None
+        if (not con_foto and not modo_voz and (prompt or "").strip()
+                and _tool_gating_enabled_for_model(_chat_agent_model_name(user_id))):
+            ligadas = {t.name for t in _select_tools_for_turn(
+                agent_tools, {"messages": [HumanMessage(content=prompt)]})}
+        return adelgazar(system_prompt, ligadas)
+    except Exception:
+        return system_prompt
+
+
 def _merge_volatile_into_human_message(msg: HumanMessage, volatile_ctx: str) -> HumanMessage:
     """Inyecta el contexto volátil al inicio de la última intervención humana sin mutar
     el objeto original ni generar mensajes `user` consecutivos."""
@@ -10053,6 +10070,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     system_prompt += _VOLATILE_SYS_SPLIT_MARKER
                     if _use_static_tools:
                         system_prompt += f"El user_id del usuario actual es: {user_id}"
+            system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id)
             # --- bloques dinámicos (volátiles) al final ---
             system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
             system_prompt += build_circadian_context(schedule_type)
@@ -10785,6 +10803,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     system_prompt += _VOLATILE_SYS_SPLIT_MARKER
                     if _use_static_tools:
                         system_prompt += f"El user_id actual es: {user_id}"
+            system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id, con_foto=bool(vision),
+                                                    modo_voz=bool(is_call_mode))
             # --- bloques dinámicos (volátiles) al final ---
             system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
             system_prompt += build_circadian_context(schedule_type)
