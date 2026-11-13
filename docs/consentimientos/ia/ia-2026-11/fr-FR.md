@@ -4,7 +4,7 @@ Versión sin proveedores en China (P1-PLAN-LOTE-995, 13-nov-2026): sale el prove
 
 - Versión: `ia-2026-11`
 - Idioma: `fr-FR`
-- SHA-256 (`text_sha256`): `dbf8f85dede335a550142cf04e10fcd57f98e5637a00e28cb93d9f9389449ce7`
+- SHA-256 (`text_sha256`): `4faf186862178a122d862aeeb7be8c873683cf87c3283fc38cd407d82abadad8`
 - Fuente: `frontend/src/consent/textoDeLaHoja.js` y el catálogo del idioma.
 
 <!-- texto:inicio -->
@@ -16,7 +16,7 @@ Reçoit votre profil de santé (âge, poids, pathologies, médicaments, allergie
 Pour générer votre plan, vérifier qu’il est sûr, estimer ce que vous notez, servir de relais au coach, et écouter et répondre en mode voix en direct.
 Google Gemini
 États-Unis
-Reçoit vos messages avec le coach et ce dont il a besoin pour vous répondre (votre profil de santé, votre plan, votre nom et ce que vous notez), les photos que vous scannez ou envoyez au chat, ce que vous écrivez pour les préciser et votre pays ; en mode voix, le texte qu’il lit à voix haute.
+Reçoit vos messages avec le coach et ce dont il a besoin pour vous répondre (votre profil de santé, votre plan, votre nom et ce que vous notez), les photos que vous scannez ou envoyez au chat, ce que vous écrivez pour les préciser et votre pays ; en mode voix, le texte qu’il lit à voix haute.
 Pour vous répondre dans le coach, reconnaître les aliments et générer la voix.
 Cohere
 Serveurs principalement aux États-Unis
