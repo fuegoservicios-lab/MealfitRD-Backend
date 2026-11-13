@@ -92,6 +92,9 @@ def openai_model_tools_sin_razonar(model) -> bool:
     return str(model or "").strip().lower().startswith(_OPENAI_TOOLS_SIN_RAZONAR_PREFIXES)
 
 
+import gemini_hydrogen as _gh  # [P1-PLAN-LOTE-995]
+
+
 class ChatOpenAI(_LangChainChatOpenAI):
     """`ChatOpenAI` de LangChain + el filtro de temperatura que su versión aún no aplica a la familia gpt-6.
 
@@ -106,7 +109,25 @@ class ChatOpenAI(_LangChainChatOpenAI):
                 payload.pop("temperature", None)
         if payload.get("tools") and openai_model_tools_sin_razonar(payload.get("model") or self.model_name):
             payload["reasoning_effort"] = "none"   # [P1-PLAN-LOTE-600] tools + esfuerzo ⇒ 400 en chat completions
+        if _gh.es_gemini(payload.get("model") or self.model_name):
+            # [P1-PLAN-LOTE-995] Gemini exige de vuelta la firma de razonamiento de cada tool_call.
+            try:
+                _gh.reinyectar_firmas(payload, self._convert_input(input_).to_messages())
+            except Exception:  # noqa: BLE001
+                pass
         return payload
+
+    def _create_chat_result(self, response, generation_info=None):
+        resultado = super()._create_chat_result(response, generation_info)
+        if _gh.es_gemini(self.model_name):
+            _gh.capturar_de_respuesta(response, resultado)
+        return resultado
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        generacion = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        if _gh.es_gemini(self.model_name) and isinstance(chunk, dict):
+            _gh.capturar_de_trozo(chunk, generacion)
+        return generacion
 
     # [P1-PLAN-LOTE-654 · 2026-09-27] Un proveedor sin saldo (Z.ai 1113, OpenAI insufficient_quota, DeepSeek 402) deja
     # un `system_alert`; el error se re-lanza tal cual, así que breaker, reintentos y red cruzada deciden como antes.
@@ -189,9 +210,13 @@ def llm_provider_name() -> str:
     llamada, no al importar: el rollback es cambiar el knob y reiniciar, sin redeploy.
     [P1-PLAN-LOTE-937] Un usuario de la UE (país del formulario o del perfil) va a OpenAI, no a DeepSeek."""
     _forzado = __import__("region_ia").proveedor_forzado()
-    if _forzado in _LLM_PROVIDERS:
+    if _forzado in _LLM_PROVIDERS and not (_gh.proveedor_en_china(_forzado) and not _gh.permitir_china()):
         return _forzado
-    return _env_str("MEALFIT_LLM_PROVIDER", "zai", choices=set(_LLM_PROVIDERS)) or "zai"
+    _p = _env_str("MEALFIT_LLM_PROVIDER", "openai", choices=set(_LLM_PROVIDERS)) or "openai"
+    # [P1-PLAN-LOTE-995] Sin permiso explícito, ningún proveedor en China: el knob viejo cae a OpenAI.
+    if _gh.proveedor_en_china(_p) and not _gh.permitir_china():
+        return "openai"
+    return _p
 
 # [P1-NET-LUNA · P1-REVIEWER-TIER-MODELS · P1-REVIEWER-SOL-HARD · 2026-07-31]
 # IDs OpenAI gpt-5.6 en uso: luna = red cross-provider del pipeline + reviewer
@@ -335,6 +360,11 @@ def _openai_text_model(model: str) -> str:
         return _env_str("MEALFIT_OPENAI_PRO_MODEL", GPT6_LUNA) or GPT6_LUNA
     if m in (GLM_FLASH, DEEPSEEK_FLASH):
         return _env_str("MEALFIT_OPENAI_FLASH_MODEL", GPT6_LUNA) or GPT6_LUNA
+    if _gh.es_id_chino(m):
+        # [P1-PLAN-LOTE-995] cualquier otro ID de DeepSeek/GLM (p. ej. uno fijado por knob) va a OpenAI.
+        _pro = "pro" in m or m == "glm-5.3"
+        return (_env_str("MEALFIT_OPENAI_PRO_MODEL" if _pro else "MEALFIT_OPENAI_FLASH_MODEL", GPT6_LUNA)
+                or GPT6_LUNA)
     return model
 
 
@@ -600,15 +630,33 @@ class ChatGLM(ChatOpenAI):
         # [P1-PLAN-LOTE-600] Un ID `deepseek-*` FIJADO va a DeepSeek sea cual sea el proveedor por defecto: con el
         # texto en OpenAI, la red post-fallo (`MEALFIT_PRO_MODEL=deepseek-flash`) sigue en OTRO proveedor.
         if base_url is None and str(model or "").strip().lower().startswith("deepseek"):
-            base_url = _deepseek_base_url()
-            api_key = api_key or _deepseek_api_key()
+            if _gh.permitir_china():
+                base_url = _deepseek_base_url()
+                api_key = api_key or _deepseek_api_key()
+            else:
+                model = _openai_text_model(model)   # [P1-PLAN-LOTE-995] el ID fijado a China va a OpenAI
+        _gemini = base_url is None and _gh.es_gemini(model)
+        if _gemini:
+            # [P1-PLAN-LOTE-995] Gemini (coach, escáner) por su capa compatible con OpenAI.
+            base_url = GEMINI_OPENAI_BASE_URL
+            api_key = api_key or _google_api_key()
         _openai_por_defecto = base_url is None and llm_provider_name() == "openai"
         # [P0-GLM-MIGRATION · 2026-09-02] GLM razona siempre: aquí se fija el ESFUERZO.
         # Contrato con los callsites heredados: `extra_body.thinking.effort` (vocabulario
         # del proveedor anterior) y `thinking.type=disabled` se TRADUCEN — el primero a
         # `reasoning_effort`, el segundo a `low` — porque Z.ai rechaza ambos tal cual.
         # `reasoning_effort` explícito del callsite gana; si no hay ninguno, default del knob.
-        if _is_glm_provider(base_url):
+        if _gemini:
+            _extra = dict(kwargs.get("extra_body") or {})
+            _think = _extra.pop("thinking", None)
+            _legacy_eff = _think.get("effort") if isinstance(_think, dict) else None
+            kwargs["reasoning_effort"] = _gh.esfuerzo_gemini(
+                kwargs.get("reasoning_effort") or _legacy_eff or _GLM_DEFAULT_REASONING_EFFORT)
+            if _extra:
+                kwargs["extra_body"] = _extra
+            else:
+                kwargs.pop("extra_body", None)
+        elif _is_glm_provider(base_url):
             _extra = dict(kwargs.get("extra_body") or {})
             _think = _extra.get("thinking")
             _legacy_eff = None
@@ -751,7 +799,7 @@ def _google_api_key() -> str:
     `_openai_api_key`: NUNCA argumento del callsite. Las líneas llevan el marker inline que
     `test_p0_llm_provider_migration` exige para la costura de VISIÓN (única excepción viva
     al blanket anti-Gemini; el pipeline de planes sigue vetado)."""
-    _k = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")  # [P1-VISION-GEMINI-FLASH]
+    _k = _gh.clave_gemini()  # [P1-VISION-GEMINI-FLASH] (+ `VISION_API_KEY` del escáner, P1-PLAN-LOTE-995)
     if not _k:
         raise RuntimeError("modelo Gemini pedido sin la key de Gemini en el entorno")
     return _k

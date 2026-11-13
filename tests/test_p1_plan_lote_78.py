@@ -7,6 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BACKEND = Path(__file__).resolve().parents[1]
 
 

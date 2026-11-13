@@ -36,6 +36,9 @@ from pathlib import Path
 
 import pytest
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BACKEND = Path(__file__).resolve().parent.parent
 _G = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
 # [P1-PLAN-LOTE-32] los semáforos distribuidos y su cota local se movieron del grafo a llm_concurrency.py

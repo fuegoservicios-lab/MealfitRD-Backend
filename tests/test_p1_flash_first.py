@@ -14,6 +14,9 @@ import graph_orchestrator as g
 import llm_provider as lp
 import pytest
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BAR = {"medicalConditions": ["Cirugía Bariátrica (manga gástrica)"]}
 _NON = {"medicalConditions": ["Diabetes tipo 2"]}
 
@@ -88,7 +91,7 @@ def test_previous_provider_fully_removed():
     import pathlib
     lp_src = pathlib.Path(lp.__file__).read_text(encoding="utf-8")
     g_src = pathlib.Path(g.__file__).read_text(encoding="utf-8")
-    assert '_env_str("MEALFIT_LLM_PROVIDER", "zai"' in lp_src
+    assert '_env_str("MEALFIT_LLM_PROVIDER", "openai"' in lp_src   # [P1-PLAN-LOTE-995]
     assert _old not in g_src.lower()
     assert "z.ai" in lp_src
     # en el orquestador no debe quedar el model id de glm ni el knob

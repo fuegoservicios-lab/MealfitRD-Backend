@@ -10,8 +10,8 @@ POR QUÉ
     Auditoría 2026-09-29, fila 4 y §A.1. Doc: `backend/docs/consentimiento_ia.md`.
 
 QUÉ ES «VIGENTE»
-    La cuenta aceptó la versión ACTUAL (`AI_CONSENT_VERSION`) con las DOS claves de IA (`ai_processing` y
-    `ai_transfer_cn`) y no lo retiró después. `analytics` va aparte, es opcional y no cuenta para la IA.
+    La cuenta aceptó la versión ACTUAL (`AI_CONSENT_VERSION`, clave `ai_processing`) —o la ANTERIOR con sus dos claves
+    (`ai_processing` y `ai_transfer_cn`), que cubría más— y no lo retiró después (P1-PLAN-LOTE-995). `analytics` va aparte, es opcional y no cuenta para la IA.
 
 DÓNDE VIVE
     `public.user_consents` es el registro de solo inserción (cada decisión, una fila: demostrable, art. 7.1) y las
@@ -59,10 +59,18 @@ logger = logging.getLogger(__name__)
 #: La versión del texto aceptado. Subirla vuelve a pedir el permiso a TODOS y el backend rechaza la vieja: cambiar de
 #: proveedor (también por knob), de datos o de país es cambiar de versión, y se sube ANTES de activar el cambio.
 #: Espejo en `frontend/src/consent/version.js` (test de paridad).
-AI_CONSENT_VERSION = "ia-2026-10-voz"
+AI_CONSENT_VERSION = "ia-2026-11"
+
+#: [P1-PLAN-LOTE-995 · 2026-11-13] La versión anterior nombraba a DeepSeek (China) además de OpenAI, Google y Cohere, y
+#: pedía una casilla aparte para China. La de ahora quita a DeepSeek: es un SUBCONJUNTO de lo ya aceptado, así que quien
+#: aceptó la anterior (con sus dos casillas) sigue con permiso y no se le vuelve a preguntar. Conceder de nuevo ya solo se
+#: hace con la versión actual.
+AI_CONSENT_VERSION_ANTERIOR = "ia-2026-10-voz"
 
 CLAVES = ("ai_processing", "ai_transfer_cn", "analytics")
-CLAVES_IA = ("ai_processing", "ai_transfer_cn")
+#: Lo que se anota al conceder la versión actual. `ai_transfer_cn` queda para leer el registro de la anterior.
+CLAVES_IA = ("ai_processing",)
+CLAVES_IA_ANTERIOR = ("ai_processing", "ai_transfer_cn")
 PLATAFORMAS = ("ios", "android", "web")
 MODOS = ("off", "log", "block")
 CABECERA_INVITADO = "X-Bioboros-AI-Consent"
@@ -144,10 +152,13 @@ def _leer_fila(uid: str) -> Optional[dict]:
 
 def _fila_vigente(fila) -> bool:
     fila = fila or {}
-    return (fila.get("ai_consent_version") == AI_CONSENT_VERSION
-            and fila.get("ai_consent_at") is not None
-            and fila.get("ai_cn_transfer_at") is not None
-            and fila.get("ai_consent_revoked_at") is None)
+    if fila.get("ai_consent_at") is None or fila.get("ai_consent_revoked_at") is not None:
+        return False
+    v = fila.get("ai_consent_version")
+    if v == AI_CONSENT_VERSION:
+        return True
+    # [P1-PLAN-LOTE-995] la anterior vale con sus DOS casillas (la de China incluida): cubría más de lo que se usa hoy
+    return v == AI_CONSENT_VERSION_ANTERIOR and fila.get("ai_cn_transfer_at") is not None
 
 
 def _motivo(fila) -> str:
@@ -307,7 +318,7 @@ def condicion_sql_permiso(columna_usuario: str) -> str:
     usuario en el SQL."""
     if not _RE_COLUMNA.match(columna_usuario or ""):
         raise ValueError(f"columna no válida para el gate del permiso: {columna_usuario!r}")
-    if not _RE_VERSION.match(AI_CONSENT_VERSION):
+    if not (_RE_VERSION.match(AI_CONSENT_VERSION) and _RE_VERSION.match(AI_CONSENT_VERSION_ANTERIOR)):
         raise ValueError("AI_CONSENT_VERSION no puede ir como literal en SQL")
     m = modo()
     if m == "off":
@@ -316,8 +327,9 @@ def condicion_sql_permiso(columna_usuario: str) -> str:
         return (f"NOT EXISTS (SELECT 1 FROM public.user_profiles upc WHERE upc.id = {columna_usuario} "
                 "AND upc.ai_consent_revoked_at IS NOT NULL)")
     return (f"EXISTS (SELECT 1 FROM public.user_profiles upc WHERE upc.id = {columna_usuario} "
-            f"AND upc.ai_consent_version = '{AI_CONSENT_VERSION}' AND upc.ai_consent_at IS NOT NULL "
-            "AND upc.ai_cn_transfer_at IS NOT NULL AND upc.ai_consent_revoked_at IS NULL)")
+            f"AND upc.ai_consent_at IS NOT NULL AND upc.ai_consent_revoked_at IS NULL "
+            f"AND (upc.ai_consent_version = '{AI_CONSENT_VERSION}' OR (upc.ai_consent_version = "
+            f"'{AI_CONSENT_VERSION_ANTERIOR}' AND upc.ai_cn_transfer_at IS NOT NULL)))")
 
 
 def fragmento_sql_permiso(columna_usuario: str) -> str:
@@ -328,8 +340,9 @@ def fragmento_sql_permiso(columna_usuario: str) -> str:
 
 # ───────────────────────────────────────────────────────────────── escribir decisiones
 def validar_peticion(data) -> dict:
-    """Valida el cuerpo de `POST /api/consents` y `POST /api/consents/guest`. Conceder la IA exige las DOS claves a
-    true; `analytics` es opcional e independiente. Lanza `ErrorDeConsentimiento` (409 versión vieja, 422 el resto)."""
+    """Valida el cuerpo de `POST /api/consents` y `POST /api/consents/guest`. Conceder la IA exige `ai_processing` a
+    true (desde P1-PLAN-LOTE-995 ya no hay casilla de China; si un cliente la manda, no se anota); `analytics` es
+    opcional e independiente. Lanza `ErrorDeConsentimiento` (409 versión vieja, 422 el resto)."""
     def _mal(codigo, mensaje):
         return ErrorDeConsentimiento(422, codigo, mensaje)
 
@@ -342,13 +355,13 @@ def validar_peticion(data) -> dict:
         v = data.get(clave)
         if v is not None and not isinstance(v, bool):
             raise _mal("ai_consent_invalid_field", f"«{clave}» tiene que ser true o false.")
-    p, cn = data.get("ai_processing"), data.get("ai_transfer_cn")
-    if p is None and cn is None:
+    p = data.get("ai_processing")
+    if p is None:
         ia = False
-    elif p is True and cn is True:
+    elif p is True:
         ia = True
     else:
-        raise _mal("ai_consent_incomplete", "Para activar la IA hacen falta las dos casillas. "
+        raise _mal("ai_consent_incomplete", "Para activar la IA hace falta marcar la casilla. "
                                             "Para quitar el permiso, usa «Retirar mi permiso».")
     analytics = data.get("analytics")
     if not ia and analytics is None:
@@ -440,7 +453,8 @@ def registrar(user_id, *, ia: bool, analytics: Optional[bool] = None, locale: Op
                                     app_build, "cuenta"))
         sets, params = [], []
         if ia:
-            sets += ["ai_consent_version = %s", "ai_consent_at = now()", "ai_cn_transfer_at = now()",
+            # [P1-PLAN-LOTE-995] sin casilla de China: `ai_cn_transfer_at` no se estampa (queda la de la anterior).
+            sets += ["ai_consent_version = %s", "ai_consent_at = now()",
                      "ai_consent_revoked_at = NULL", "ai_consent_paused_at = NULL"]
             params.append(AI_CONSENT_VERSION)
         if analytics is not None:
@@ -569,14 +583,22 @@ def adoptar_de_invitado(session_id, user_id) -> dict:
         ultima = {f["consent_key"]: f for f in filas}  # en orden ASC: gana la más reciente de cada clave
         p, c = ultima.get("ai_processing"), ultima.get("ai_transfer_cn")
         actualizado = False
-        if (p and c and p["granted"] and c["granted"]
-                and p["version"] == AI_CONSENT_VERSION and c["version"] == AI_CONSENT_VERSION):
+        if p and p["granted"] and p["version"] == AI_CONSENT_VERSION:
+            fecha = p["created_at"]
+            cur.execute(
+                "UPDATE user_profiles SET ai_consent_version = %s, ai_consent_at = %s, "
+                "ai_consent_revoked_at = NULL WHERE id = %s AND (ai_consent_at IS NULL OR ai_consent_at < %s) "
+                "AND (ai_consent_revoked_at IS NULL OR ai_consent_revoked_at < %s)",
+                (AI_CONSENT_VERSION, fecha, uid, fecha, fecha))
+            actualizado = int(cur.rowcount or 0) > 0
+        elif (p and c and p["granted"] and c["granted"]
+                and p["version"] == AI_CONSENT_VERSION_ANTERIOR and c["version"] == AI_CONSENT_VERSION_ANTERIOR):
             fecha = max(p["created_at"], c["created_at"])
             cur.execute(
                 "UPDATE user_profiles SET ai_consent_version = %s, ai_consent_at = %s, ai_cn_transfer_at = %s, "
                 "ai_consent_revoked_at = NULL WHERE id = %s AND (ai_consent_at IS NULL OR ai_consent_at < %s) "
                 "AND (ai_consent_revoked_at IS NULL OR ai_consent_revoked_at < %s)",
-                (AI_CONSENT_VERSION, p["created_at"], c["created_at"], uid, fecha, fecha))
+                (AI_CONSENT_VERSION_ANTERIOR, p["created_at"], c["created_at"], uid, fecha, fecha))
             actualizado = int(cur.rowcount or 0) > 0
         a = ultima.get("analytics")
         if a is not None:
@@ -603,7 +625,7 @@ def _decidir_peticion(verified_user_id, cabecera) -> str:
     if uid:
         return _motivo(_leer_fila(uid))
     c = cabecera.strip() if isinstance(cabecera, str) else ""
-    if c == AI_CONSENT_VERSION:
+    if c in (AI_CONSENT_VERSION, AI_CONSENT_VERSION_ANTERIOR):
         return "invitado_con_cabecera"
     return "invitado_version_vieja" if c else "invitado_sin_cabecera"
 
@@ -679,7 +701,7 @@ async def embeddings_de_la_peticion(
 
 
 __all__ = [
-    "AI_CONSENT_VERSION", "CLAVES", "CLAVES_IA", "PLATAFORMAS", "MODOS", "ORIGENES", "CABECERA_INVITADO",
+    "AI_CONSENT_VERSION", "AI_CONSENT_VERSION_ANTERIOR", "CLAVES", "CLAVES_IA", "CLAVES_IA_ANTERIOR", "PLATAFORMAS", "MODOS", "ORIGENES", "CABECERA_INVITADO",
     "ERROR_REQUERIDO", "MENSAJE_REQUERIDO", "modo", "ErrorDeConsentimiento", "PerfilInexistente", "cuerpo_del_error",
     "instalar", "estado_de_fila", "estado", "vigente", "permite_ia", "condicion_sql_permiso", "fragmento_sql_permiso",
     "embeddings_de_usuario", "por_usuario", "embeddings_permitidos", "embeddings_de_la_peticion",

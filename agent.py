@@ -653,6 +653,11 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
     override = _env_str("MEALFIT_CHAT_AGENT_MODEL", "")
     if override:
         return override
+    # [P1-PLAN-LOTE-995 · 2026-11-13] El coach va con Gemini 4 Hydrogen (decisión del dueño), con la key de Gemini;
+    # sin ella, el router por tier de siempre. El respaldo (GPT-6 Luna) cubre una caída de Google.
+    from gemini_hydrogen import GEMINI_HYDROGEN, hay_key_gemini
+    if hay_key_gemini():
+        return GEMINI_HYDROGEN
     return resolve_model_for_user(user_id)
 
 # [P1-SWAP-LUNA · 2026-08-05] El swap (y por herencia `regenerate-day`, que es un bucle

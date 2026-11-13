@@ -922,6 +922,9 @@ _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     # Fila EXACTA por modelo, no un prefijo: `test_p0_llm_provider_migration` exige que un
     # gemini desconocido siga costando None (no adivinar precios).
     "gemini-3.8-flash": {"input": 750_000, "output": 3_750_000, "cached": 75_000},  # [P1-VISION-GEMINI-FLASH]
+    # [P1-PLAN-LOTE-995] Gemini 4 Hydrogen (12-nov-2026, aistudio.google.com/docs/pricing, Standard): $1,50 / $7,50,
+    # cacheado $0,075, plano en todo el contexto de 1M. Coach y escáner.
+    "gemini-4-hydrogen": {"input": 1_500_000, "output": 7_500_000, "cached": 75_000},  # [P1-VISION-GEMINI-FLASH]
     # [P1-PLAN-LOTE-685] La voz del coach (coach_voz.py): texto US$0,50/M y AUDIO US$6/M (25 tokens por segundo), precio
     # oficial leído el 28-sep hasta el 31-dic-2026; el 1-ene-2027 se DUPLICA. Longest-prefix: sin esta fila caería en la de arriba.
     "gemini-3.8-flash-lite-tts": {"input": 500_000, "output": 6_000_000, "cached": 0},  # [P1-PLAN-LOTE-685-VOZ]

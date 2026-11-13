@@ -12,6 +12,9 @@ from pathlib import Path
 
 import pytest
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BACKEND = Path(__file__).resolve().parents[1]
 
 
@@ -56,7 +59,7 @@ def test_usage_event_records_the_effective_model_under_deepseek(captura, monkeyp
 
 def test_usage_event_keeps_the_model_under_zai_and_for_openai_ids(captura, monkeypatch):
     db_profiles, escritos = captura
-    monkeypatch.delenv("MEALFIT_LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("MEALFIT_LLM_PROVIDER", "zai")   # [P1-PLAN-LOTE-995] el default ya es openai
     db_profiles.log_llm_usage_event(model="glm-5.3-flash", node="x", input_tokens=10, output_tokens=10)
     assert "glm-5.3-flash" in escritos[-1]
     monkeypatch.setenv("MEALFIT_LLM_PROVIDER", "deepseek")

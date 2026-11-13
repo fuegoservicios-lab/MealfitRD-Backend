@@ -1,5 +1,28 @@
 # Router de modelos LLM por tier (P0-LLM-PROVIDER-MIGRATION · 2026-06-12 · P1-FLASH-PRIMARY · 2026-07-31)
 
+
+## [P1-PLAN-LOTE-995 · 2026-11-13] Solo proveedores occidentales; Gemini 4 Hydrogen en el coach y el escáner
+
+Decisión del dueño: fuera DeepSeek y Z.ai y sus avisos de China. Medido antes (14 días de `llm_usage_events`): cero
+llamadas a China (gpt-6-luna 1.053, gemini-3.8-flash 104, gemini-decision-1 40, gpt-live-1 11).
+
+- **Bloqueo**: `gemini_hydrogen.permitir_china()` (knob `MEALFIT_PERMITIR_PROVEEDORES_CHINA`, default False). Sin él,
+  `llm_provider_name()` resuelve a `openai` aunque el knob o el país forzado digan `deepseek`/`zai`, y un ID
+  `deepseek-*`/`glm-*` fijado se traduce a `MEALFIT_OPENAI_{FLASH,PRO}_MODEL` (gpt-6-luna). La fontanería de Z.ai y
+  DeepSeek se conserva para un rollback A SABIENDAS (y exige volver a nombrarlos en el permiso y en las políticas).
+- **Coach**: `agent._chat_agent_model_name` → `gemini-4-hydrogen` si hay key de Gemini (`GEMINI_API_KEY`/`GOOGLE_API_KEY`
+  o `VISION_API_KEY` cuando el escáner va a Google); respaldo cruzado GPT-6 Luna. Esfuerzo `low` (Hydrogen razona en
+  `high` por defecto). Rollback: `MEALFIT_CHAT_AGENT_MODEL=gpt-6-luna`.
+- **Escáner**: `MEALFIT_VISION_MODEL=gemini-4-hydrogen` (knob del VPS) con `MEALFIT_VISION_REASONING_EFFORT` (low).
+- **Firma de razonamiento**: con tools, Gemini exige de vuelta `extra_content.google.thought_signature` de cada tool_call;
+  langchain-openai la tiraba y la segunda vuelta daba 400. `llm_provider.ChatOpenAI` la guarda en
+  `additional_kwargs["gemini_firmas"]` (respuesta entera y streaming, donde llega con `index: None`) y la reinyecta;
+  la historia ajena lleva `skip_thought_signature_validator`. Medido contra el API: t1 ~1,8 s, t2 ~0,8 s.
+- **Costo**: Hydrogen $1,50 in / $0,075 cacheado / $7,50 out por 1M (tabla de `db_profiles`). Al volumen de 14 días el
+  coach pasa de ~$0,70 (Luna) a ~$10; el escáner, de ~$0,52 a ~$1 (y la 3.8 Flash sube a ese precio el 1-ene-2027).
+- **Permiso**: `ia-2026-11` (una casilla, sin China); `ia-2026-10-voz` sigue valiendo con sus dos casillas.
+Test: `tests/test_p1_plan_lote_995_occidentales.py`.
+
 ## [P1-PLAN-LOTE-171 · 2026-09-23] Luna = GPT-6 Luna (`gpt-6-luna`)
 
 OpenAI publicó GPT-6 Sol y GPT-6 Luna el 22-sep. Desde este lote **toda Luna por defecto es `gpt-6-luna`**

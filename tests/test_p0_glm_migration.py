@@ -21,6 +21,9 @@ import pytest
 
 import llm_provider as lp
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BACKEND = Path(__file__).resolve().parent.parent
 
 
@@ -100,5 +103,6 @@ def test_e_marker_bumped_and_no_old_name_in_provider_module():
     # [P0-DEEPSEEK-FLASH · 2026-09-16] El proveedor de junio vuelve, pero solo como ALTERNO por knob
     # (Z.ai sin saldo el 16-sep; decisión del dueño): el default sigue siendo zai y DeepSeek nace con
     # knob + test ancla propios (`test_p0_deepseek_flash.py`), como pedía P1-SINGLE-PROVIDER-RESTORE.
-    assert '_env_str("mealfit_llm_provider", "zai"' in lp_src
+    # [P1-PLAN-LOTE-995] y desde el 13-nov el default es openai: ningún proveedor en China salvo a sabiendas.
+    assert '_env_str("mealfit_llm_provider", "openai"' in lp_src
     assert "p0-deepseek-flash" in lp_src

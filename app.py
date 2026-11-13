@@ -1078,7 +1078,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-986 · 2026-11-11] Una comida de otra franja principal no se fusiona en esta (bagels del desayuno dentro del almuerzo).
 # [P1-PLAN-LOTE-987 · 2026-11-12] «Dos paquetes de las de ayer»: la porcion es la del registro, sin preguntar.
 # [P1-PLAN-LOTE-991 · 2026-11-12] «me tomé la creatina» sin cantidad = su toma (etiqueta o historial), no 1 cápsula.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-993 · 2026-11-12"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-995 · 2026-11-13"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

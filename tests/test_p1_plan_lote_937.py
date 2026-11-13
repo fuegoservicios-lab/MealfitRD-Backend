@@ -21,6 +21,9 @@ import llm_provider as lp
 import nevera_exigida as ne
 import region_ia as ri
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
 

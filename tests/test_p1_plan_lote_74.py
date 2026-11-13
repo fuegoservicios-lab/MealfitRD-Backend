@@ -14,6 +14,9 @@ from pathlib import Path
 
 import pytest
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 _BACKEND = Path(__file__).resolve().parents[1]
 
 
@@ -39,17 +42,25 @@ def deepseek(lp, monkeypatch):
 
 # ── Con el knob por defecto, nada cambia ──────────────────────────────────────────────────────────
 
-def test_default_provider_is_zai_and_untouched(lp):
+def test_default_provider_is_openai(lp):
+    """[P1-PLAN-LOTE-995] El default ya no es zai: OpenAI (los IDs GLM se traducen a su par)."""
+    assert lp.llm_provider_name() == "openai"
+    llm = lp.ChatGLM(model=lp.GLM_FLASH)
+    assert "api.openai.com" in (llm.openai_api_base or "")
+    assert lp._is_glm_provider() is False and lp._is_deepseek_provider() is False
+
+
+def test_zai_por_knob_sigue_funcionando_a_sabiendas(lp, monkeypatch):
+    monkeypatch.setenv("MEALFIT_LLM_PROVIDER", "zai")
     assert lp.llm_provider_name() == "zai"
     llm = lp.ChatGLM(model=lp.GLM_FLASH)
     assert "api.z.ai/api/paas/v4" in (llm.openai_api_base or "")
     assert llm.model_name == lp.GLM_FLASH
-    assert lp._is_glm_provider() is True and lp._is_deepseek_provider() is False
 
 
-def test_unknown_provider_value_falls_back_to_zai(lp, monkeypatch):
+def test_unknown_provider_value_falls_back_to_openai(lp, monkeypatch):
     monkeypatch.setenv("MEALFIT_LLM_PROVIDER", "ollama")
-    assert lp.llm_provider_name() == "zai"
+    assert lp.llm_provider_name() == "openai"
 
 
 # ── Con el knob en deepseek ───────────────────────────────────────────────────────────────────────
@@ -162,7 +173,9 @@ SUPERFICIES = {"llm_provider.py", "db_profiles.py", "app.py", ".env.example", "d
                # [P1-PLAN-LOTE-980] la versión vigente del mismo texto, que añade la voz (consentimientos.AI_CONSENT_VERSION)
                *(f"docs/consentimientos/ia/ia-2026-10-voz/{loc}.md" for loc in ("es-DO", "en-US", "pt-BR", "fr-FR", "it-IT")),
                # [P1-PLAN-LOTE-849] lo abierto al dueño: la transferencia a China de datos de la UE (con un abogado)
-               "docs/app_store_legal.md"}
+               "docs/app_store_legal.md",
+               # [P1-PLAN-LOTE-995] el bloqueo de los proveedores en China y el permiso que sigue valiendo de la anterior
+               "gemini_hydrogen.py", "consentimientos.py"}
 
 
 def _menciones(token: str) -> set:
@@ -188,4 +201,4 @@ def test_the_provider_lives_only_in_its_surfaces_and_never_by_its_june_names():
     assert _menciones(token) == SUPERFICIES, _menciones(token) ^ SUPERFICIES
     for legado in (token + "-chat", token + "-reasoner", "chat" + token, "langchain_" + token):
         assert not _menciones(legado), legado
-    assert '_env_str("MEALFIT_LLM_PROVIDER", "zai"' in _src("llm_provider.py")
+    assert '_env_str("MEALFIT_LLM_PROVIDER", "openai"' in _src("llm_provider.py")   # [P1-PLAN-LOTE-995]

@@ -973,12 +973,16 @@ def _resolve_vision_client(schema):
         # cliente ChatOpenAI PLANO (sin `thinking` ni defaults de Z.ai), base URL por defecto
         # si el knob viene vacío, key `VISION_API_KEY` > la de Gemini del entorno.
         # `temperature=0.1` sí se respeta aquí (no es familia gpt-5).
+        # [P1-PLAN-LOTE-995] Gemini 4 Hydrogen razona en `high` por defecto: en una foto eso es espera y tokens de
+        # salida facturados. Knob `MEALFIT_VISION_REASONING_EFFORT` (low|medium|high|xhigh, default low).
+        from gemini_hydrogen import esfuerzo_gemini
         llm = ChatOpenAI(
             model=model,
             temperature=0.1,
             base_url=base_url or GEMINI_OPENAI_BASE_URL,
             api_key=explicit_key or _google_api_key(),
             timeout=timeout,
+            reasoning_effort=esfuerzo_gemini(_env_str("MEALFIT_VISION_REASONING_EFFORT", "low")),
         )
     else:
         # [P0-LLM-PROVIDER-MIGRATION] Cliente OpenAI-compatible con

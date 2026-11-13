@@ -919,3 +919,14 @@ def _reportar_telemetria_fantasma():
             "completó, y eso conviene saberlo antes de que la corrida sea contra prod.",
             file=_sys_tel.stderr,
         )
+
+
+@pytest.fixture
+def proveedor_chino_a_sabiendas(monkeypatch):
+    """[P1-PLAN-LOTE-995 · 2026-11-13] Desde este lote ningún proveedor en China se usa salvo
+    `MEALFIT_PERMITIR_PROVEEDORES_CHINA` encendido a sabiendas. Los ficheros que prueban la fontanería de Z.ai y
+    DeepSeek (que se conserva para ese rollback) la encienden con esto, y con el proveedor de entonces (`zai`) si el
+    test no fija otro. Lo que el default hace hoy lo prueba `test_p1_plan_lote_995_occidentales.py`."""
+    monkeypatch.setenv("MEALFIT_PERMITIR_PROVEEDORES_CHINA", "1")
+    if not os.environ.get("MEALFIT_LLM_PROVIDER"):
+        monkeypatch.setenv("MEALFIT_LLM_PROVIDER", "zai")

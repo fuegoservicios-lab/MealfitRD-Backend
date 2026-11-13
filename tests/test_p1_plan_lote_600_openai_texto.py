@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import pytest
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 
 @pytest.fixture
 def lp(monkeypatch):
@@ -71,7 +74,8 @@ def test_un_id_deepseek_fijado_va_a_deepseek(openai):
     assert (red.extra_body or {}).get("thinking") == {"type": "enabled"}              # la rama DeepSeek de siempre
 
 
-def test_con_el_knob_por_defecto_nada_cambia(lp):
+def test_con_el_knob_en_zai_nada_cambia(lp, monkeypatch):
+    monkeypatch.setenv("MEALFIT_LLM_PROVIDER", "zai")   # [P1-PLAN-LOTE-995] el default ya es openai
     llm = lp.ChatGLM(model=lp.GLM_FLASH)
     assert "api.z.ai" in (llm.openai_api_base or "") and llm.model_name == lp.GLM_FLASH
 

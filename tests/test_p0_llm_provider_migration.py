@@ -32,6 +32,9 @@ from pathlib import Path
 
 import pytest
 
+# [P1-PLAN-LOTE-995] Prueba la fontanería de Z.ai/DeepSeek: la enciende a sabiendas (conftest).
+pytestmark = pytest.mark.usefixtures("proveedor_chino_a_sabiendas")
+
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
@@ -105,7 +108,11 @@ _ETIQUETA_WEB_SEAM_MARKER = "[P1-PLAN-LOTE-767-ETIQUETA-WEB]"
 # sin SDK. Devuelve PROBABILIDADES, nunca texto: no razona por el coach ni escribe en la base — solo prefiltra una foto
 # o frena una vez una bebida ambigua. La key sale de `llm_provider._google_api_key` (no nombra la variable).
 _DECISION_TRIAGE_SEAM_MARKER = "[P1-DECISION-TRIAGE]"
-_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER, _ETIQUETA_WEB_SEAM_MARKER, _DECISION_TRIAGE_SEAM_MARKER)
+# [P1-PLAN-LOTE-995 · 2026-11-13] Quinta costura, decidida por el dueño: el COACH con Gemini 4 Hydrogen por la capa
+# compatible con OpenAI (`gemini_hydrogen.py`); el pipeline de planes sigue en OpenAI.
+_HYDROGEN_SEAM_MARKER = "[P1-PLAN-LOTE-995]"
+_SEAM_MARKERS = (_VISION_SEAM_MARKER, _VOICE_SEAM_MARKER, _ETIQUETA_WEB_SEAM_MARKER, _DECISION_TRIAGE_SEAM_MARKER,
+                 _HYDROGEN_SEAM_MARKER)
 
 
 def test_a_blanket_no_gemini_in_prod_code():
