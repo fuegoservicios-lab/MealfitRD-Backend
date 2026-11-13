@@ -432,7 +432,14 @@ cacheados (~$0,052, 2,9 s) y la 2.ª del mismo turno cachea el 93 % (~$0,005, 2,
 | Catálogo fijo de herramientas en Gemini (`MEALFIT_CHAT_TOOL_GATING_ON_GEMINI`) | **True** (recorta) | El recorte ahorra ~12 k caracteres de esquema por llamada (núcleo 13,4 k vs 25,9 k). `update_form_field` entra al núcleo: el recorte por palabras la dejaba fuera en «soy alérgico al maní / soy vegano / tengo diabetes». |
 | Docstrings de las 19 herramientas | 11 con su texto original | Las 11 que llevan reglas (registro, corrección, Nevera, suplementos, ajustes, regenerar…) conservan el texto que nació de errores reales; las informativas siguen compactas (29,9 k → 25,9 k). |
 
-**Caché explícita de Gemini** (`cachedContents`): descartada por ahora. Con el tráfico actual (decenas de turnos/día) el
-almacenamiento por hora costaría casi lo que ahorra; revisar cuando `llm_usage_events` muestre >1 turno/hora sostenido, y
-recordar que con `cached_content` el payload NO puede llevar `system_instruction` ni `tools` (habría que sacarlos en
-`ChatOpenAI._get_request_payload`).
+**Cierre de los tres pendientes del 998 (13-nov, con evidencia):**
+
+1. **Caché explícita de Gemini: imposible con este modelo.** `POST /v1beta/cachedContents` con `models/gemini-4-hydrogen`
+   responde 400 «Explicit caching is not supported for models/gemini-4-hydrogen». Solo queda el caché implícito
+   (best-effort, sin control nuestro): por eso las palancas de prefijo se miden, no se asumen.
+2. **Achicar el manual (63 k): no por módulos.** Anatomía medida: el bloque de herramientas pesa 30 k y 24 k son las reglas
+   de `log_consumed_meal`/`correct_consumed_meal` (siempre ligadas); lo que un recorte por herramienta podría quitar
+   (compras, Nevera, nutrientes, perfil clínico, ajustes) suma ~2 k (<3 %). Achicar de verdad exige reescribir esas reglas,
+   y eso solo se hace con una batería de replay de las 54 reglas etiquetadas (no con un recorte a ciegas: ver el compacto).
+3. **Palancas de prefijo (ancla / split / catálogo fijo): decididas OFF.** Reevaluar con `scripts/medir_cache_coach.py`
+   cuando haya >50 llamadas/día de Hydrogen (hoy ~13, casi todas del dueño); una palanca por vez, 24 h cada una.
