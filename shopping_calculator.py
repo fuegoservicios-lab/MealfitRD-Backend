@@ -261,9 +261,6 @@ EMBED_INIT_DEADLINE_S     = max(5.0, _knob_env_float("MEALFIT_EMBED_INIT_DEADLIN
 # thread para siempre. Bajarlo a ≤30 reabre el bug: la init nunca termina, nunca persiste a Redis
 # y toda la resolución de ingredientes cae al Regex Fast-Path.
 EMBED_WARM_DEADLINE_S     = max(60.0, _knob_env_float("MEALFIT_EMBED_WARM_DEADLINE_S",    600.0))
-# [P1-PLAN-LOTE-996 · 2026-11-13] False (default): una petición nunca hace la init en frío (lanza el calentador
-# y usa el Regex Fast-Path). True vuelve a la conducta previa (la petición intenta la init con 30 s).
-EMBED_INIT_EN_PETICION    = _knob_env_bool("MEALFIT_EMBED_INIT_EN_PETICION", False)
 
 
 def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label, deadline=None):
@@ -497,36 +494,6 @@ def invalidate_master_cache():
         except Exception:
             pass
 
-_calentador_vivo = False
-
-
-def _lanzar_calentador_semantico() -> bool:
-    """[P1-PLAN-LOTE-996] Un único hilo daemon que construye la caché con el plazo del calentador
-    (`EMBED_WARM_DEADLINE_S`) y la persiste a Redis. Devuelve True si lo lanzó."""
-    global _calentador_vivo
-    if _calentador_vivo:
-        return False
-    _calentador_vivo = True
-
-    def _correr():
-        global _calentador_vivo
-        try:
-            _time.sleep(0.2)   # deja que la petición que lo lanzó suelte el lock
-            get_semantic_cache(deadline_s=EMBED_WARM_DEADLINE_S)
-        except Exception:  # noqa: BLE001 — best-effort: el fast-path sigue sirviendo
-            pass
-        finally:
-            _calentador_vivo = False
-
-    try:
-        _threading.Thread(target=_correr, name="embed-cache-warmer-peticion", daemon=True).start()
-        logging.info("🔥 [P1-PLAN-LOTE-996] Caché semántica sin construir: calentador lanzado en segundo plano.")
-        return True
-    except Exception:  # noqa: BLE001
-        _calentador_vivo = False
-        return False
-
-
 def get_semantic_cache(deadline_s: float | None = None):
     """Devuelve el caché semántico (master_list + vectors + embeddings_client).
 
@@ -643,12 +610,10 @@ def get_semantic_cache(deadline_s: float | None = None):
         if _time.time() < _semantic_cache_failed_until:
             return None
 
-        # [P1-PLAN-LOTE-996 · 2026-11-13] Una PETICIÓN (sin plazo propio) nunca construye la caché desde cero:
-        # con 354 alimentos en lotes de 3 y 3 s entre lotes la init necesita ~6 min, así que el plazo de 30 s la
-        # abortaba SIEMPRE y el usuario se comía esos 30 s (medido: «me comí esto» del coach, 55 s de los que 32
-        # fueron esto). Lanza el calentador en segundo plano y sigue por el Regex Fast-Path ahora mismo.
-        if deadline_s is None and not EMBED_INIT_EN_PETICION:
-            _lanzar_calentador_semantico()
+        # [P1-PLAN-LOTE-996] Una petición nunca hace la init en frío (~6 min): calentador + fast-path. Ver calentador_semantico.
+        import calentador_semantico as _cs
+        if deadline_s is None and not _cs.init_en_peticion():
+            _cs.lanzar(lambda: get_semantic_cache(deadline_s=EMBED_WARM_DEADLINE_S))
             return None
 
         try:

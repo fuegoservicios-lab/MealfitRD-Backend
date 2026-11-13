@@ -22,22 +22,30 @@ import shopping_calculator as sc
 _BACKEND = Path(__file__).resolve().parent.parent
 
 
+import calentador_semantico as cs
+
+
 def _reset():
     sc._semantic_cache = None
     sc._semantic_cache_failed_until = 0.0
-    sc._calentador_vivo = False
+    cs._vivo = False
 
 
-def test_la_peticion_no_construye_la_cache_y_lanza_el_calentador():
+def _aislado(master):
+    """Lo que otras pruebas de la batería dejan cambiado (kill-switch, lock, caché) no decide aquí."""
+    return (patch.object(sc, "_semantic_cache_disabled", return_value=False),
+            patch.object(sc, "get_master_ingredients", return_value=master),
+            patch.object(sc, "_semantic_cache", None),
+            patch.object(sc, "_semantic_cache_failed_until", 0.0))
+
+
+def test_la_peticion_no_construye_la_cache_y_lanza_el_calentador(monkeypatch):
     _reset()
+    monkeypatch.delenv("MEALFIT_EMBED_INIT_EN_PETICION", raising=False)
     master = [{"name": "Pollo", "category": "Proteína", "aliases": []}]
-    fake_redis = MagicMock()
-    fake_redis.get.return_value = None
     emb = MagicMock()
-    with patch.object(sc, "get_master_ingredients", return_value=master), \
-         patch("cache_manager.redis_client", fake_redis), \
-         patch("embeddings_provider.get_embeddings_client", return_value=emb), \
-         patch.object(sc, "_lanzar_calentador_semantico", return_value=True) as lanzar:
+    d, m, c, f = _aislado(master)
+    with d, m, c, f,          patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=None),          patch("embeddings_provider.get_embeddings_client", return_value=emb),          patch.object(cs, "lanzar", return_value=True) as lanzar:
         assert sc.get_semantic_cache() is None
     lanzar.assert_called_once()
     emb.embed_documents.assert_not_called()
@@ -46,20 +54,21 @@ def test_la_peticion_no_construye_la_cache_y_lanza_el_calentador():
 def test_con_redis_la_peticion_sigue_sirviendo_la_cache():
     _reset()
     master = [{"name": "Pollo", "category": "Proteína", "aliases": []}]
-    with patch.object(sc, "get_master_ingredients", return_value=master), \
-         patch("embeddings_provider.get_embeddings_client", return_value=MagicMock()), \
-         patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=[[0.1, 0.2]]), \
-         patch.object(sc, "_lanzar_calentador_semantico") as lanzar:
+    d, m, c, f = _aislado(master)
+    with d, m, c, f,          patch("embeddings_provider.get_embeddings_client", return_value=MagicMock()),          patch.object(sc, "_try_load_embed_vectors_from_redis", return_value=[[0.1, 0.2]]),          patch.object(cs, "lanzar") as lanzar:
         assert sc.get_semantic_cache() is not None
     lanzar.assert_not_called()
-    _reset()
 
 
 def test_un_solo_calentador_a_la_vez():
-    _reset()
-    sc._calentador_vivo = True
-    assert sc._lanzar_calentador_semantico() is False
-    _reset()
+    cs._vivo = True
+    assert cs.lanzar(lambda: None) is False
+    cs._vivo = False
+
+
+def test_el_codigo_nuevo_vive_en_su_modulo():
+    src = io.open(_BACKEND / "shopping_calculator.py", encoding="utf-8").read()
+    assert "_cs.lanzar(lambda: get_semantic_cache(deadline_s=EMBED_WARM_DEADLINE_S))" in src
 
 
 def _gen(uso):
