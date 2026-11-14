@@ -255,6 +255,9 @@ def construir_llm_turno_dificil(
 
     rkw = dict(retry_kwargs or {})
     if llm_provider.is_openai_model(model):
+        _m_low = str(model or "").strip().lower()
+        if "terra" in _m_low and _m_low.startswith("gpt-6") and "use_responses_api" not in rkw:
+            rkw["use_responses_api"] = True
         return llm_provider.build_chat_llm(
             model,
             timeout=timeout_s,

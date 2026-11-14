@@ -108,7 +108,11 @@ class ChatOpenAI(_LangChainChatOpenAI):
         if openai_model_only_default_temperature(payload.get("model") or self.model_name):
             if payload.get("temperature") not in (None, 1, 1.0):
                 payload.pop("temperature", None)
-        if payload.get("tools") and openai_model_tools_sin_razonar(payload.get("model") or self.model_name):
+        if (
+            payload.get("tools")
+            and openai_model_tools_sin_razonar(payload.get("model") or self.model_name)
+            and not getattr(self, "use_responses_api", False)
+        ):
             payload["reasoning_effort"] = "none"   # [P1-PLAN-LOTE-600] tools + esfuerzo ⇒ 400 en chat completions
         _model = payload.get("model") or self.model_name
         if _gh.es_gemini(_model):
@@ -896,5 +900,8 @@ def build_chat_llm(model: str, **kwargs):
     (el nodo más caro) durante la primera corrida del canario Luna.
     """
     if is_openai_model(model):
+        _m_low = str(model or "").strip().lower()
+        if "terra" in _m_low and _m_low.startswith("gpt-6") and "use_responses_api" not in kwargs:
+            kwargs["use_responses_api"] = True
         return ChatOpenAI(model=model, api_key=_openai_api_key(), **kwargs)
     return ChatGLM(model=model, **kwargs)

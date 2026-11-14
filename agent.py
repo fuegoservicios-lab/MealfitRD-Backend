@@ -4584,6 +4584,8 @@ def _build_chat_fallback_llm(model: str):
     if is_openai_model(model):
         if "luna" in m or "terra" in m or m.startswith(("o1", "o3", "o4")):
             kwargs["reasoning_effort"] = _env_str("MEALFIT_CHAT_AGENT_FALLBACK_EFFORT", "low") or "low"
+        if "terra" in m and m.startswith("gpt-6"):
+            kwargs["use_responses_api"] = True
     else:
         kwargs["temperature"] = 0.7
     return build_chat_llm(model, timeout=_chat_agent_llm_timeout_s(), **kwargs)
@@ -5609,6 +5611,162 @@ def _parallel_read_tools_enabled() -> bool:
     return _env_bool("MEALFIT_CHAT_PARALLEL_READ_TOOLS", True)
 
 
+_SOURCE_INTENT_PROFILE_RE = re.compile(
+    r"\b(mi perfil|guarda(?:lo|r)?(?:\s+en|\s+eso)?|actualiza\s+mi|cambia(?:r)?\s+(?:mi|el|la|los|las)|"
+    r"ponme|an[oó]tame\s+en|soy\s+al[eé]rgic[oa]|tengo\s+alergia|diagnost|soy\s+diab[eé]tic|"
+    r"hipertens|cel[ií]ac|vegetari|vegan|no\s+como\s+|no\s+me\s+gusta|"
+    r"mi\s+(?:peso|estatura|altura|edad|meta|objetivo|dieta|alergia|condici[oó]n)|"
+    r"(?:activa|desactiva|enciende|apaga|prende|oculta|muestra|quita)\s+(?:la|el|las|los)?\s*"
+    r"(?:hidrataci[oó]n|agua|nevera|despensa|memoria|generador|recordatorio|notificaci[oó]n|tema|modo)|"
+    r"modo\s+(?:oscuro|claro)|tema\s+(?:oscuro|claro)|cambia(?:r)?\s+(?:de\s+)?idioma|"
+    r"(?:set|update|change|enable|disable|turn\s+on|turn\s+off|save)\s+(?:my|the|dark|light|theme|language|profile|allergy))\b",
+    re.IGNORECASE,
+)
+
+
+def _guard_source_intent_mutation(
+    tool_name: str,
+    tool_args,
+    state: dict,
+    messages: list,
+) -> Optional[str]:
+    """[P1-PLAN-LOTE-1009 · G-20] Impide que `update_form_field` o `cambiar_ajuste_de_la_app` se
+    disparen automáticamente desde una foto o resultado web (`buscar_etiqueta_en_internet`) sin
+    intención explícita del usuario en su propio mensaje."""
+    if tool_name not in ("update_form_field", "cambiar_ajuste_de_la_app"):
+        return None
+
+    has_photo = bool(state.get("turn_plate_photos") or state.get("turn_photo_to_log"))
+    last_human_idx = -1
+    raw_user_txt = ""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if isinstance(m, HumanMessage) or getattr(m, "type", None) in ("human", "user"):
+            last_human_idx = i
+            c = getattr(m, "content", "")
+            raw_user_txt = c if isinstance(c, str) else " ".join(
+                p.get("text", "") for p in (c or []) if isinstance(p, dict)
+            )
+            break
+
+    has_web_source = False
+    for m in (messages[last_human_idx + 1:] if last_human_idx >= 0 else messages):
+        for tc in (getattr(m, "tool_calls", None) or []):
+            tname = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+            if tname == "buscar_etiqueta_en_internet":
+                has_web_source = True
+                break
+        if isinstance(m, ToolMessage) and "etiqueta" in str(getattr(m, "content", "")).lower() and "fuente" in str(getattr(m, "content", "")).lower():
+            has_web_source = True
+
+    clean_user = raw_user_txt.replace("📷", " ").strip()
+    if not (has_photo or has_web_source or "[imagen" in clean_user.lower() or "[foto" in clean_user.lower()):
+        return None
+
+    # Nota del contexto inyectado ([Sistema: ...]) no cuenta como petición del usuario
+    clean_user = re.sub(r"\[Sistema:[^\]]*\]", " ", clean_user, flags=re.IGNORECASE).strip()
+    if len(clean_user) >= 4 and _SOURCE_INTENT_PROFILE_RE.search(clean_user):
+        return None
+
+    logger.warning(
+        f"🛡️ [G-20 SOURCE-INTENT-GUARD] Bloqueado {tool_name}({tool_args if isinstance(tool_args, dict) else '?'}) "
+        f"por venir de fuente foto/web sin petición explícita (texto={clean_user[:60]!r})."
+    )
+    return (
+        "BLOQUEADO: La foto o etiqueta consultada en este turno NO autoriza cambiar el perfil ni los ajustes "
+        "de la app porque el usuario no lo pidió explícitamente. Responde únicamente sobre el alimento o producto."
+    )
+
+
+_FAST_CONFIRM_TOOL_NAMES = frozenset({
+    "log_water_glass",
+    "cambiar_ajuste_de_la_app",
+    "abrir_pantalla_de_la_app",
+})
+_FAST_CONFIRM_ERROR_MARKERS = (
+    "error", "no registrado", "bloqueado", "[tool_error]", "[validation_error]",
+    "⚠️", "no pude", "no esta disponible", "no está disponible", "fue 0",
+    "desconocido", "inválid", "invalido",
+)
+_RE_FAST_WATER = re.compile(
+    r"se\s+(sumaron|restaron)\s+([0-9]+(?:\.[0-9]+)?)\s+vaso\(s\)\.\s*"
+    r"El usuario ahora lleva\s+([0-9]+(?:\.[0-9]+)?)\s+de\s+([0-9]+(?:\.[0-9]+)?)\s+vasos hoy\.(.*)",
+    re.IGNORECASE | re.DOTALL,
+)
+_RE_COMPOUND_QUERY_ES = re.compile(
+    r"[?¿]|\b(y\s+dime|y\s+qu[eé]|y\s+cu[aá]nt|pero\s+|adem[aá]s|recomi[eé]nda|puedo\s+|qu[eé]\s+tal)\b",
+    re.IGNORECASE,
+)
+
+
+def _fast_confirm_tools_enabled() -> bool:
+    from knobs import _env_bool
+    return _env_bool("MEALFIT_CHAT_FAST_TOOL_CONFIRM_ENABLED", True)
+
+
+def _maybe_append_fast_tool_confirmation(
+    tool_messages: list,
+    state: dict,
+    messages: list,
+) -> Optional[AIMessage]:
+    """[P1-PLAN-LOTE-1009 · G-07] Compone la respuesta final determinista tras una única tool
+    simple (`log_water_glass`, `cambiar_ajuste_de_la_app`, `abrir_pantalla_de_la_app`) cuando no hay
+    errores, alertas ni preguntas adicionales, ahorrando la 2.ª llamada al modelo (~1.3 s)."""
+    if not _fast_confirm_tools_enabled() or state.get("modo_voz"):
+        return None
+    if len(tool_messages) != 1:
+        return None
+    last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+    tool_calls = getattr(last_ai, "tool_calls", None) or []
+    if len(tool_calls) != 1:
+        return None
+
+    tc = tool_calls[0]
+    tname = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+    if tname not in _FAST_CONFIRM_TOOL_NAMES:
+        return None
+
+    sys_prompt = str(state.get("sys_prompt") or "")
+    if "INSTRUCCIÓN DE IDIOMA" in sys_prompt or "LANGUAGE DIRECTIVE" in sys_prompt:
+        return None
+
+    user_txt = _extraer_ultimo_texto_usuario(messages)
+    if _RE_COMPOUND_QUERY_ES.search(user_txt or ""):
+        return None
+
+    res_text = str(getattr(tool_messages[0], "content", "") or "").strip()
+    if not res_text:
+        return None
+    res_low = res_text.lower()
+    if any(marker in res_low for marker in _FAST_CONFIRM_ERROR_MARKERS):
+        return None
+
+    fast_reply = ""
+    if tname == "log_water_glass":
+        m = _RE_FAST_WATER.search(res_text)
+        if not m:
+            return None
+        verb, qty, total, goal, extra = m.group(1).lower(), m.group(2), m.group(3), m.group(4), (m.group(5) or "").strip()
+        accion = "Sumé" if verb == "sumaron" else "Resté"
+        plural = "s" if qty != "1" else ""
+        reached = " ¡Meta del día alcanzada!" if ("cumplio su meta" in extra.lower() or "cumplió su meta" in extra.lower()) else ""
+        fast_reply = f"¡Listo! {accion} {qty} vaso{plural} de agua; llevas **{total} de {goal} vasos** hoy.{reached}"
+        if "hidratación" in extra.lower() or "hidratacion" in extra.lower() or "tarjeta" in extra.lower():
+            fast_reply += " Activé tu tarjeta de Hidratación para que lo veas."
+    elif tname in ("cambiar_ajuste_de_la_app", "abrir_pantalla_de_la_app"):
+        clean = re.sub(r"<<AJUSTE_APP_JSON:.*?>>", "", res_text, flags=re.DOTALL).strip()
+        if not clean or len(clean) > 280:
+            return None
+        fast_reply = clean
+
+    if not fast_reply:
+        return None
+
+    ai_confirm = AIMessage(content=fast_reply, additional_kwargs={"fast_tool_confirm": True})
+    tool_messages.append(ai_confirm)
+    return ai_confirm
+
+
 def _exec_read_only_tool_call(
     tool_call: dict,
     trusted_uid: Optional[str],
@@ -6264,8 +6422,13 @@ def execute_tools(state: ChatState):
             except Exception:
                 _PydanticValidationError = ValueError  # fallback inocuo
 
+            _src_guard_blocked = False
             try:
-                if tool_name == "update_form_field":
+                _src_block = _guard_source_intent_mutation(tool_name, tool_args, state, messages)
+                if _src_block:
+                    _src_guard_blocked = True
+                    tool_result = _src_block
+                elif tool_name == "update_form_field":
                     field = tool_args.get("field")
                     new_value = tool_args.get("new_value", "")
 
@@ -6594,7 +6757,7 @@ def execute_tools(state: ChatState):
                 _pt_tools.record_tool(
                     _open_tool_name,
                     int((time.monotonic() - _open_tool_t0) * 1000),
-                    guard_blocked=False,
+                    guard_blocked=_src_guard_blocked,
                 )
                 _open_tool_t0 = None
 
@@ -6605,7 +6768,8 @@ def execute_tools(state: ChatState):
                 guard_blocked=True,
             )
             _open_tool_t0 = None
-            
+
+    _maybe_append_fast_tool_confirmation(tool_messages, state, state.get("messages") or [])
     return {
         "messages": tool_messages,
         "updated_fields": updated_fields,
@@ -8517,6 +8681,17 @@ def route_tools(state: ChatState):
 
     return END
 
+def route_after_tools(state: ChatState):
+    """[P1-PLAN-LOTE-1009 · G-07] Si `execute_tools` ya emitió una confirmación determinista
+    tras una única tool simple, cierra el grafo sin segunda llamada LLM."""
+    msgs = state.get("messages") or []
+    if msgs and isinstance(msgs[-1], AIMessage) and not getattr(msgs[-1], "tool_calls", None):
+        ak = getattr(msgs[-1], "additional_kwargs", None)
+        if isinstance(ak, dict) and ak.get("fast_tool_confirm") is True:
+            return END
+    return "call_model"
+
+
 # Removido el MemorySaver global estático
 # chat_memory_saver = MemorySaver()
 chat_builder = StateGraph(ChatState)
@@ -8531,7 +8706,7 @@ chat_builder.add_edge(START, "call_model")
 chat_builder.add_conditional_edges(
     "call_model", route_tools, ["execute_tools", "nudge_diary_tool", "nudge_plate_photo", "nudge_photo_to_log", END]
 )
-chat_builder.add_edge("execute_tools", "call_model")
+chat_builder.add_conditional_edges("execute_tools", route_after_tools, ["call_model", END])
 chat_builder.add_edge("nudge_diary_tool", "call_model")
 chat_builder.add_edge("nudge_plate_photo", "call_model")
 chat_builder.add_edge("nudge_photo_to_log", "call_model")
@@ -12052,6 +12227,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
+    if _chunks_yielded == 0 and final_content and _stream_outcome == "ok":
+        try:
+            _pt.mark_first_word("fast_tool_confirm")
+            yield f"data: {json.dumps({'type': 'chunk', 'text': final_content})}\n\n"
+            _chunks_yielded += 1
+        except Exception:
+            pass
     try:
         yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"
         _pt.mark_done(_stream_outcome, _chat_agent_model_name())   # [P1-PLAN-LOTE-1001] tras emitir el `done`

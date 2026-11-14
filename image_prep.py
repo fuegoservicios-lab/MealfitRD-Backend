@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover - depende de la instalación del host
     _PIL_AVAILABLE = False
 
 _DEFAULT_MAX_SIDE_PX = 1024
-_JPEG_QUALITY = 85
+_JPEG_QUALITY = 80
 
 
 def vision_max_side_px() -> int:
@@ -102,8 +102,9 @@ def prepare_image_for_vision(raw: bytes, max_side: int | None = None) -> tuple[b
 
             # Convertir a RGB ANTES de guardar JPEG — un PNG con canal alpha
             # (RGBA/P con transparencia) revienta el encoder JPEG con OSError.
+            # Resampling.BILINEAR es ~3x más rápido que LANCZOS manteniendo nitidez VLM.
             resized_img = img.convert("RGB").resize(
-                (new_w, new_h), Image.Resampling.LANCZOS
+                (new_w, new_h), Image.Resampling.BILINEAR
             )
             buf = io.BytesIO()
             resized_img.save(buf, format="JPEG", quality=_JPEG_QUALITY)

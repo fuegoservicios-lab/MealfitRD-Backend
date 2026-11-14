@@ -949,6 +949,41 @@ def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None) -> dict:
     return result
 
 
+def _extract_vision_usage_from_raw(raw_msg: Any) -> Optional[dict]:
+    """[P1-PLAN-LOTE-1009 · G-05] Extrae tokens de `AIMessage.usage_metadata` o `response_metadata`
+    cuando `with_structured_output(..., include_raw=True)` devuelve el mensaje crudo."""
+    if raw_msg is None:
+        return None
+    out: dict = {}
+    um = getattr(raw_msg, "usage_metadata", None)
+    if um is not None:
+        in_t = um.get("input_tokens") if isinstance(um, dict) else getattr(um, "input_tokens", None)
+        out_t = um.get("output_tokens") if isinstance(um, dict) else getattr(um, "output_tokens", None)
+        details = um.get("input_token_details") if isinstance(um, dict) else getattr(um, "input_token_details", None)
+        cached = (details.get("cache_read") if isinstance(details, dict) else getattr(details, "cache_read", None)) if details else None
+        if in_t is not None:
+            out["input_tokens"] = int(in_t)
+        if out_t is not None:
+            out["output_tokens"] = int(out_t)
+        if cached is not None:
+            out["cached_tokens"] = int(cached)
+    if not out:
+        rm = getattr(raw_msg, "response_metadata", None) or {}
+        if isinstance(rm, dict):
+            tu = rm.get("token_usage") or rm.get("usage") or {}
+            if isinstance(tu, dict):
+                in_t = tu.get("prompt_tokens") if tu.get("prompt_tokens") is not None else tu.get("input_tokens")
+                out_t = tu.get("completion_tokens") if tu.get("completion_tokens") is not None else tu.get("output_tokens")
+                if in_t is not None:
+                    out["input_tokens"] = int(in_t)
+                if out_t is not None:
+                    out["output_tokens"] = int(out_t)
+                pd = tu.get("prompt_tokens_details") or {}
+                if isinstance(pd, dict) and pd.get("cached_tokens") is not None:
+                    out["cached_tokens"] = int(pd["cached_tokens"])
+    return out or None
+
+
 def _resolve_vision_client(schema):
     """[P1-VISION-NO-LOCAL · 2026-07-28] Construye + configura el cliente LLM
     del provider CLOUD (`openai_compatible`) con salida estructurada a
@@ -1008,7 +1043,10 @@ def _resolve_vision_client(schema):
             api_key=explicit_key,
             timeout=timeout,
         )
-    return llm.with_structured_output(schema)
+    try:
+        return llm.with_structured_output(schema, include_raw=True)
+    except TypeError:
+        return llm.with_structured_output(schema)
 
 
 # [P2-VISION-USAGE-TOKENS · 2026-09-04] usage (tokens) de la ÚLTIMA llamada de visión de esta
@@ -1265,10 +1303,23 @@ async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
     _runnable = llm.with_config(callbacks=[_cb]) if hasattr(llm, "with_config") else llm
     _reset_last_vision_usage()
     _t_llm = time.perf_counter()
+    _usage: Optional[dict] = None
     try:
-        return await _runnable.ainvoke([message])
+        raw_or_parsed = await _runnable.ainvoke([message])
+        if isinstance(raw_or_parsed, dict) and "parsed" in raw_or_parsed and "raw" in raw_or_parsed:
+            _usage = _extract_vision_usage_from_raw(raw_or_parsed.get("raw"))
+            _err = raw_or_parsed.get("parsing_error")
+            if _err is not None and raw_or_parsed.get("parsed") is None:
+                raise _err if isinstance(_err, BaseException) else ValueError(str(_err))
+            return raw_or_parsed.get("parsed")
+        return raw_or_parsed
     finally:
-        _set_last_vision_usage(_cb.usage)
+        merged_usage = dict(_cb.usage) if isinstance(_cb.usage, dict) else {}
+        if isinstance(_usage, dict):
+            for _k, _v in _usage.items():
+                if _k not in merged_usage or merged_usage.get(_k) is None:
+                    merged_usage[_k] = _v
+        _set_last_vision_usage(merged_usage or None)
         _merge_vision_meta(llm_ms=round((time.perf_counter() - _t_llm) * 1000.0, 2))
 
 
