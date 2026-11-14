@@ -1658,7 +1658,7 @@ def admin_cost_by_node(request: Request, hours: int = 24):
 
 
 @router.get("/admin/chat-perf")
-def admin_chat_perf(request: Request, hours: int = 168):
+def admin_chat_perf(request: Request, hours: int = 168, include_insights: bool = False):
     """[P1-PLAN-LOTE-1001 · G-01] Percentiles p50/p90 por fase del turno (servidor + cliente)
     y por herramienta desde `pipeline_metrics` (`chat_turn_phases`, `chat_client_perf`)."""
     _verify_admin_token(request.headers.get("authorization"))
@@ -1666,16 +1666,44 @@ def admin_chat_perf(request: Request, hours: int = 168):
 
     window_h = max(1, min(720, int(hours) if hours else 168))
     try:
-        from chat_phase_metrics import query_chat_efficiency_breakdown, query_chat_phase_percentiles
+        from chat_phase_metrics import (
+            query_chat_efficiency_breakdown,
+            query_chat_ops_insights,
+            query_chat_phase_percentiles,
+        )
 
         summary = query_chat_phase_percentiles(window_h)
         try:
             summary["efficiency"] = query_chat_efficiency_breakdown(window_h)
         except Exception:
             pass
+        if include_insights:
+            try:
+                summary["insights"] = query_chat_ops_insights(window_h)
+            except Exception:
+                pass
         return {"success": True, **summary}
     except Exception as e:
         logger.warning(f"[G-01 CHAT-PERF] query falló: {e}")
+        raise HTTPException(status_code=503, detail="DB query falló (best-effort).")
+
+
+@router.get("/admin/chat-insights")
+def admin_chat_insights(request: Request, hours: int = 168, limit: int = 20):
+    """[P1-PLAN-LOTE-1011 · G-16/G-27/G-29] Feedback negativo, turnos lentos (>15s) y
+    efectividad de nudges internos y proactivos."""
+    _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)
+
+    window_h = max(1, min(720, int(hours) if hours else 168))
+    row_limit = max(1, min(100, int(limit) if limit else 20))
+    try:
+        from chat_phase_metrics import query_chat_ops_insights
+
+        insights = query_chat_ops_insights(window_h, limit=row_limit)
+        return {"success": True, **insights}
+    except Exception as e:
+        logger.warning(f"[G-16/G-29 CHAT-INSIGHTS] query falló: {e}")
         raise HTTPException(status_code=503, detail="DB query falló (best-effort).")
 
 

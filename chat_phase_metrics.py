@@ -541,3 +541,124 @@ def query_chat_efficiency_breakdown(hours: int = 168) -> dict[str, Any]:
         },
         "by_nudge": nudge_rows or [],
     }
+
+
+def query_chat_ops_insights(hours: int = 168, limit: int = 20) -> dict[str, Any]:
+    """[P1-PLAN-LOTE-1011 · G-16/G-27/G-29] Insights operativos del coach:
+    - negative_feedback: mensajes con valoracion negativa reciente (`public.agent_messages`) [G-16]
+    - slow_turns: turnos con latencia > 15 s y desglose de fases [G-29]
+    - nudge_outcomes: tasa de exito por nudge interno (`chat_turn_phases`)
+    - proactive_nudge_outcomes: respuesta y registro por tipo de aviso proactivo (`public.nudge_outcomes`) [G-27]
+    """
+    window_h = max(1, min(720, int(hours) if hours else 168))
+    row_limit = max(1, min(100, int(limit) if limit else 20))
+    from db_core import execute_sql_query
+
+    neg_rows = execute_sql_query(
+        """
+        SELECT
+            id::text AS message_id,
+            session_id::text AS session_id,
+            user_id::text AS user_id,
+            LEFT(COALESCE(content, ''), 240) AS preview,
+            created_at::text AS created_at
+        FROM public.agent_messages
+        WHERE feedback = 'down'
+          AND created_at > NOW() - make_interval(hours => %s)
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (window_h, row_limit),
+        fetch_all=True,
+    )
+
+    slow_rows = execute_sql_query(
+        """
+        SELECT
+            COALESCE(metadata->>'corr', '') AS corr,
+            COALESCE(metadata->>'model', '') AS model,
+            COALESCE(metadata->>'outcome', '') AS outcome,
+            ROUND(duration_ms::numeric)::int AS duration_ms,
+            NULLIF(metadata->>'context_build_ms', '')::int AS context_build_ms,
+            NULLIF(metadata->>'first_word_ms', '')::int AS first_word_ms,
+            NULLIF(metadata->>'llm_total_ms', '')::int AS llm_total_ms,
+            NULLIF(metadata->>'tools_total_ms', '')::int AS tools_total_ms,
+            NULLIF(metadata->>'llm_calls_count', '')::int AS llm_calls_count,
+            created_at::text AS created_at
+        FROM public.pipeline_metrics
+        WHERE node = %s
+          AND created_at > NOW() - make_interval(hours => %s)
+          AND duration_ms > 15000
+        ORDER BY duration_ms DESC, created_at DESC
+        LIMIT %s
+        """,
+        (_NODE_TURN_PHASES, window_h, row_limit),
+        fetch_all=True,
+    )
+
+    nudge_outcome_rows = execute_sql_query(
+        """
+        SELECT
+            n AS nudge_name,
+            COUNT(*)::int AS turns,
+            ROUND(
+                COUNT(*) FILTER (WHERE COALESCE(metadata->>'outcome', 'ok') = 'ok')::numeric
+                / NULLIF(COUNT(*), 0),
+                3
+            )::float AS ok_rate,
+            ROUND(AVG(NULLIF(metadata->>'llm_calls_count', '')::numeric)::numeric, 2)::float AS avg_llm_calls
+        FROM public.pipeline_metrics,
+             LATERAL jsonb_array_elements_text(metadata->'nudges') AS n
+        WHERE node = %s
+          AND created_at > NOW() - make_interval(hours => %s)
+          AND jsonb_typeof(metadata->'nudges') = 'array'
+        GROUP BY 1
+        ORDER BY turns DESC, nudge_name ASC
+        LIMIT %s
+        """,
+        (_NODE_TURN_PHASES, window_h, row_limit),
+        fetch_all=True,
+    )
+
+    proactive_rows: list[dict[str, Any]] = []
+    try:
+        proactive_rows = (
+            execute_sql_query(
+                """
+                SELECT
+                    COALESCE(nudge_type, '') AS nudge_type,
+                    COUNT(*)::int AS sent,
+                    COUNT(*) FILTER (WHERE COALESCE(responded, FALSE))::int AS responded,
+                    COUNT(*) FILTER (WHERE COALESCE(meal_logged, FALSE))::int AS meal_logged,
+                    ROUND(
+                        COUNT(*) FILTER (WHERE COALESCE(responded, FALSE))::numeric
+                        / NULLIF(COUNT(*), 0),
+                        3
+                    )::float AS response_rate,
+                    ROUND(
+                        COUNT(*) FILTER (WHERE COALESCE(meal_logged, FALSE))::numeric
+                        / NULLIF(COUNT(*), 0),
+                        3
+                    )::float AS meal_log_rate
+                FROM public.nudge_outcomes
+                WHERE sent_at > NOW() - make_interval(hours => %s)
+                GROUP BY 1
+                ORDER BY sent DESC, nudge_type ASC
+                LIMIT %s
+                """,
+                (window_h, row_limit),
+                fetch_all=True,
+            )
+            or []
+        )
+    except Exception:
+        proactive_rows = []
+
+    return {
+        "window_hours": window_h,
+        "limit": row_limit,
+        "negative_feedback": neg_rows or [],
+        "slow_turns": slow_rows or [],
+        "nudge_outcomes": nudge_outcome_rows or [],
+        "proactive_nudge_outcomes": proactive_rows or [],
+    }
