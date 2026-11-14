@@ -156,9 +156,11 @@ def test_g06_docs_and_pfix_updated():
     assert "gemini-4-hydrogen" in docs
     assert "model_effective_changed" in docs
 
+    import re as _re
     import app as app_mod
 
-    assert app_mod._LAST_KNOWN_PFIX.startswith("P1-PLAN-LOTE-1001")
+    m = _re.match(r"P1-PLAN-LOTE-(\d+)", app_mod._LAST_KNOWN_PFIX or "")
+    assert m and int(m.group(1)) >= 1001, app_mod._LAST_KNOWN_PFIX
 
 
 # ---------------------------------------------------------------------------

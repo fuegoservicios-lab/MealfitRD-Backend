@@ -5964,6 +5964,38 @@ def execute_tools(state: ChatState):
                         tool_args.pop("delete", None)
                         tool_args["force"] = True
 
+                # [P1-PLAN-LOTE-1002 · 2026-11-14] Guard multi-foto en fusión (`correct_consumed_meal`):
+                # si el usuario subió >= 2 fotos de comida (ej. pan de agua + jugo de lechoza) y el modelo
+                # solo sumó una a la cena previa omitiendo el pan, bloquear UNA vez antes de escribir en BD.
+                if (tool_name == "correct_consumed_meal" and not bool(tool_args.get("delete"))
+                        and len(state.get("turn_plate_photos") or []) >= 2):
+                    from multiphoto_completeness import detectar_bloqueo_multifoto_fusion
+                    from tools import _leer_fila_diario
+                    _plate_photos_guard = state.get("turn_plate_photos") or []
+                    _target_fid = str(tool_args.get("meal_id") or "").strip()
+                    _orig_fila = _leer_fila_diario(_trusted_uid, _target_fid) if _target_fid else None
+                    _diary_calls_msg = [dict(tool_args)]
+                    for _tc_s in (getattr(last_message, "tool_calls", None) or []):
+                        _tc_s_name = _tc_s.get("name") if isinstance(_tc_s, dict) else getattr(_tc_s, "name", None)
+                        _tc_s_id = _tc_s.get("id") if isinstance(_tc_s, dict) else getattr(_tc_s, "id", None)
+                        if _tc_s_name in ("log_consumed_meal", "correct_consumed_meal") and _tc_s_id != tool_id:
+                            _diary_calls_msg.append((_tc_s.get("args") if isinstance(_tc_s, dict) else getattr(_tc_s, "args", None)) or {})
+                    _bloqueo_multifoto = detectar_bloqueo_multifoto_fusion(
+                        _plate_photos_guard,
+                        tool_args,
+                        _diary_calls_msg,
+                        messages,
+                        user_text=_extraer_ultimo_texto_usuario(messages),
+                        orig_meal=_orig_fila,
+                    )
+                    if _bloqueo_multifoto:
+                        logger.warning(
+                            f"🥖 [P1-PLAN-LOTE-1002] Bloqueado correct_consumed_meal multi-foto por foto(s) omitida(s) "
+                            f"(user={str(state.get('user_id'))[:8]})."
+                        )
+                        tool_messages.append(ToolMessage(content=_bloqueo_multifoto, tool_call_id=tool_id))
+                        continue
+
                 # [P1-ANTI-CLONE-GUARD · 2026-10-29] Prohibir clonar/duplicar comidas en el mismo turno
                 # (ej. el modelo anota un plato como almuerzo y en el siguiente loop lo anota como desayuno).
                 if tool_name == "log_consumed_meal":
@@ -8201,6 +8233,22 @@ def nudge_plate_photo(state: ChatState):
         prev_name = registros[0].get("meal_name") or "la comida anterior"
         prev_type = registros[0].get("meal_type") or "almuerzo"
         kcal_foto = int(fotos[0]["kcal"]) if fotos and fotos[0].get("kcal") else 450
+        _all_photos = state.get("turn_plate_photos") or []
+        if len(_all_photos) >= 2:   # [P1-PLAN-LOTE-1002] multi-foto: sumar lo ya anotado + la(s) foto(s) faltante(s)
+            prev_kcal = sum(int(float(r.get("calories") or 0)) for r in registros)
+            miss_kcal = sum(int(float(f.get("kcal") or 0)) for f in fotos if f.get("kcal"))
+            total_est = prev_kcal + miss_kcal if (prev_kcal and miss_kcal) else kcal_foto
+            return {
+                "messages": [SystemMessage(content=(
+                    f"ALTO. En este turno multi-foto ({len(_all_photos)} fotos) registraste «{prev_name}» "
+                    f"(~{prev_kcal} kcal), pero dejaste fuera: {lista}.\n"
+                    f"Usa `correct_consumed_meal` con el ID_REGISTRO_DIARIO recién creado para unificar TODO "
+                    f"(«{prev_name}» + {lista}) sumando sus calorías (~{total_est} kcal en total) y macros, "
+                    f"o llama a `log_consumed_meal` aparte si corresponden a comidas separadas.\n"
+                    f"PROHIBIDO preguntar si se lo comió o pedir confirmaciones innecesarias."
+                ))],
+                "plate_photo_retried": True,
+            }
         return {
             "messages": [SystemMessage(content=(
                 f"ALTO. Registraste únicamente una parte o ingrediente aislado («{prev_name}»), pero el usuario te mandó "
@@ -8261,10 +8309,18 @@ def route_tools(state: ChatState):
         return "nudge_plate_photo"
 
     # [P1-PLAN-LOTE-694] ¿El turno era ANOTAR la foto y acabó sin registro de la comida nueva? («¿Ya te lo comiste?»)
-    # Un correct_consumed_meal sobre una comida anterior NO satisface el registro de una foto nueva.
+    # Un correct_consumed_meal sobre una comida anterior NO satisface el registro de una foto nueva, salvo fusión explícita exitosa (Lote 1002).
     if (state.get("turn_photo_to_log") and not state.get("photo_log_retried")
             and not _tool_called_this_turn(messages, ("log_consumed_meal",))):
-        return "nudge_photo_to_log"
+        from multiphoto_completeness import fusion_explicita_exitosa_este_turno
+        if not fusion_explicita_exitosa_este_turno(
+            messages,
+            state.get("turn_plate_photos") or [],
+            solicitud_explicita=_es_solicitud_explicita_de_corregir_diario(messages),
+            correct_called=_tool_called_this_turn(messages, ("correct_consumed_meal",)),
+            user_text=_extraer_ultimo_texto_usuario(messages),
+        ):
+            return "nudge_photo_to_log"
 
     return END
 

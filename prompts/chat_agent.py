@@ -1306,6 +1306,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         has_loose_items = False
         has_label = False
         has_plate = False   # [P1-PLAN-LOTE-168]
+        plate_descs: list[str] = []   # [P1-PLAN-LOTE-1002]
         unavailable = 0
         for index, item in enumerate(items, start=1):
             item_kind = str(item.get("kind") or "unavailable")
@@ -1328,7 +1329,9 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
                 unavailable += 1
             else:
                 label = "PLATO/COMIDA"
-                has_plate = has_plate or bool(description)
+                if description:
+                    has_plate = True
+                    plate_descs.append(description.split("DUDAS")[0].split("(Estimación:")[0].strip())
             lines.append(f"{index}. {label}: {description or 'sin descripción fiable'}")
         instruction = (
             "Interpreta las fotos como un conjunto ordenado y no mezcles ingredientes entre imágenes. "
@@ -1347,6 +1350,9 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
             instruction += " " + _etiqueta
         if has_plate:   # [P1-PLAN-LOTE-168] una foto de plato con análisis: cómo registrarla junto a otra comida
             instruction += " " + _PLATO_INSTRUCCION
+            if len(plate_descs) >= 2:   # [P1-PLAN-LOTE-1002] recordar todas las fotos cuando hay >= 2 platos/alimentos
+                from multiphoto_completeness import construir_recordatorio_multifoto
+                instruction += construir_recordatorio_multifoto(plate_descs)
             instruction += _con_dudas(" ".join(lines))   # [P1-PLAN-LOTE-305]
             instruction += _respuestas   # [P1-PLAN-LOTE-690]
         if unavailable:
