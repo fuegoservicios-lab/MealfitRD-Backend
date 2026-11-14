@@ -1,8 +1,10 @@
 import os
 import io
 import math
+import time
 import base64
 import asyncio
+from contextlib import contextmanager
 from typing import Any, Optional
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
@@ -1016,18 +1018,64 @@ import contextvars as _cv_vision
 from typing import Any, Optional
 
 _LAST_VISION_USAGE: "_cv_vision.ContextVar[Optional[dict]]" = _cv_vision.ContextVar("mealfit_last_vision_usage", default=None)
+_LAST_VISION_META: "_cv_vision.ContextVar[Optional[dict]]" = _cv_vision.ContextVar("mealfit_last_vision_meta", default=None)
+# Caja mutable por request para sobrevivir a asyncio.gather (que copia ContextVars a tareas hijas)
+_VISION_USAGE_SLOT: "_cv_vision.ContextVar[Optional[list]]" = _cv_vision.ContextVar("mealfit_vision_usage_slot", default=None)
+
+
+@contextmanager
+def vision_usage_scope():
+    """Aisla usage y tiempos de sub-fases de visión por request, propagando desde subtareas."""
+    slot: list = [None, {}]
+    tok = _VISION_USAGE_SLOT.set(slot)
+    try:
+        yield slot
+    finally:
+        _VISION_USAGE_SLOT.reset(tok)
 
 
 def _reset_last_vision_usage() -> None:
     try:
         _LAST_VISION_USAGE.set(None)
+        slot = _VISION_USAGE_SLOT.get()
+        if slot is not None:
+            slot[0] = None
+    except Exception:
+        pass
+
+
+def _reset_last_vision_meta() -> None:
+    try:
+        _LAST_VISION_META.set(None)
+        slot = _VISION_USAGE_SLOT.get()
+        if slot is not None:
+            slot[1] = {}
+    except Exception:
+        pass
+
+
+def _merge_vision_meta(**fields) -> None:
+    try:
+        clean = {k: v for k, v in fields.items() if v is not None}
+        if not clean:
+            return
+        cur = dict(_LAST_VISION_META.get() or {})
+        cur.update(clean)
+        _LAST_VISION_META.set(cur)
+        slot = _VISION_USAGE_SLOT.get()
+        if slot is not None and isinstance(slot[1], dict):
+            slot[1].update(clean)
     except Exception:
         pass
 
 
 def _set_last_vision_usage(usage: Optional[dict]) -> None:
     try:
-        _LAST_VISION_USAGE.set(usage or None)
+        val = usage or None
+        _LAST_VISION_USAGE.set(val)
+        slot = _VISION_USAGE_SLOT.get()
+        if slot is not None:
+            slot[0] = val
     except Exception:
         pass
 
@@ -1035,9 +1083,23 @@ def _set_last_vision_usage(usage: Optional[dict]) -> None:
 def get_last_vision_usage() -> Optional[dict]:
     """{'input_tokens': int|None, 'output_tokens': int|None} de la última llamada de visión, o None."""
     try:
+        slot = _VISION_USAGE_SLOT.get()
+        if slot is not None:
+            return slot[0]
         return _LAST_VISION_USAGE.get()
     except Exception:
         return None
+
+
+def get_last_vision_meta() -> dict:
+    """Metadatos de latencia y resize de la última llamada de visión."""
+    try:
+        slot = _VISION_USAGE_SLOT.get()
+        if slot is not None and isinstance(slot[1], dict):
+            return dict(slot[1])
+        return dict(_LAST_VISION_META.get() or {})
+    except Exception:
+        return {}
 
 
 class _VisionUsageCapture:
@@ -1098,7 +1160,7 @@ class _VisionUsageCapture:
         return parsed
 
     @staticmethod
-    def _extract(response) -> Optional[dict]:
+    def _extract(response, kwargs: Optional[dict] = None) -> Optional[dict]:
         try:
             gens = getattr(response, "generations", None) or []
             for gen_list in gens:
@@ -1110,17 +1172,41 @@ class _VisionUsageCapture:
                         return got
                     rm = getattr(msg, "response_metadata", None) if msg is not None else None
                     if isinstance(rm, dict):
-                        got = _VisionUsageCapture._usage_from_dict(rm.get("token_usage") or rm.get("usage"))
+                        got = _VisionUsageCapture._usage_from_dict(
+                            rm.get("token_usage") or rm.get("usage") or rm
+                        )
+                        if got:
+                            return got
+                    ak = getattr(msg, "additional_kwargs", None) if msg is not None else None
+                    if isinstance(ak, dict):
+                        got = _VisionUsageCapture._usage_from_dict(
+                            ak.get("usage_metadata") or ak.get("token_usage") or ak.get("usage")
+                        )
+                        if got:
+                            return got
+                    gi = getattr(gen, "generation_info", None)
+                    if isinstance(gi, dict):
+                        got = _VisionUsageCapture._usage_from_dict(
+                            gi.get("usage_metadata") or gi.get("token_usage") or gi.get("usage")
+                        )
                         if got:
                             return got
             lo = getattr(response, "llm_output", None) or {}
-            tu = lo.get("token_usage") or lo.get("usage") or {}
-            return _VisionUsageCapture._usage_from_dict(tu)
+            if isinstance(lo, dict):
+                tu = lo.get("token_usage") or lo.get("usage") or lo
+                got = _VisionUsageCapture._usage_from_dict(tu)
+                if got:
+                    return got
+            if isinstance(kwargs, dict):
+                return _VisionUsageCapture._usage_from_dict(
+                    kwargs.get("usage_metadata") or kwargs.get("token_usage") or kwargs.get("usage")
+                )
+            return None
         except Exception:
             return None
 
     def on_llm_end(self, response, **kwargs) -> None:
-        got = self._extract(response)
+        got = self._extract(response, kwargs)
         if got:
             self.usage = got
 
@@ -1178,10 +1264,28 @@ async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
     _cb = _VisionUsageCapture()
     _runnable = llm.with_config(callbacks=[_cb]) if hasattr(llm, "with_config") else llm
     _reset_last_vision_usage()
+    _t_llm = time.perf_counter()
     try:
         return await _runnable.ainvoke([message])
     finally:
         _set_last_vision_usage(_cb.usage)
+        _merge_vision_meta(llm_ms=round((time.perf_counter() - _t_llm) * 1000.0, 2))
+
+
+def _prepare_image_with_metrics(image_bytes: bytes) -> tuple[bytes, dict]:
+    """Redimensiona la imagen y registra `resize_ms` + `resize_info` en la telemetría de sub-fases."""
+    _reset_last_vision_meta()
+    _t_resize = time.perf_counter()
+    resized_bytes, resize_info = prepare_image_for_vision(image_bytes)
+    _resize_ms = round((time.perf_counter() - _t_resize) * 1000.0, 2)
+    _merge_vision_meta(resize_ms=_resize_ms, resize_info=resize_info)
+    logger.info(
+        f"[P1-VISION-LUNA] resize original_bytes={resize_info['original_bytes']} "
+        f"sent_bytes={resize_info['sent_bytes']} original_wh={resize_info['original_wh']} "
+        f"sent_wh={resize_info['sent_wh']} resized={resize_info['resized']} "
+        f"skipped_reason={resize_info['skipped_reason']} resize_ms={_resize_ms}"
+    )
+    return resized_bytes, resize_info
 
 
 async def analyze_image_structured(image_bytes: bytes, prompt: str, schema):
@@ -1194,13 +1298,7 @@ async def analyze_image_structured(image_bytes: bytes, prompt: str, schema):
     cualquier error (red, parseo, provider caído) — el caller (endpoint
     FastAPI) decide cómo degradar; el escáner de Nevera lo mapea a HTTP 502,
     el mismo contrato que tenía con Ollama."""
-    image_bytes, resize_info = prepare_image_for_vision(image_bytes)
-    logger.info(
-        f"[P1-VISION-LUNA] resize original_bytes={resize_info['original_bytes']} "
-        f"sent_bytes={resize_info['sent_bytes']} original_wh={resize_info['original_wh']} "
-        f"sent_wh={resize_info['sent_wh']} resized={resize_info['resized']} "
-        f"skipped_reason={resize_info['skipped_reason']}"
-    )
+    image_bytes, _resize_info = _prepare_image_with_metrics(image_bytes)
     return await _invoke_structured_vision(image_bytes, prompt, schema)
 
 
@@ -1300,8 +1398,11 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
             _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais),   # [P1-PLAN-LOTE-347/628] + aclaración y país
             _MealVisionResult,
         )
+        _t_san = time.perf_counter()
         data = response.model_dump() if response else {}
-        return _coerce_meal_scan(data, aclaracion=aclaracion)
+        out = _coerce_meal_scan(data, aclaracion=aclaracion)
+        _merge_vision_meta(sanitize_ms=round((time.perf_counter() - _t_san) * 1000.0, 2))
+        return out
 
     except Exception as e:
         # [P3-VISION-FAIL-ERROR-LOG · 2026-05-30] error-level (NO warning) para
@@ -1365,13 +1466,7 @@ async def process_image_with_vision(image_bytes: bytes, aclaracion=None, pais=No
     # pasan los bytes antes de salir al provider. Telemetría a `info`: audita
     # el ahorro real en prod (6,6x medido 3024x4032→1024px, ver
     # backend/docs/vision_luna.md).
-    image_bytes, resize_info = prepare_image_for_vision(image_bytes)
-    logger.info(
-        f"[P1-VISION-LUNA] resize original_bytes={resize_info['original_bytes']} "
-        f"sent_bytes={resize_info['sent_bytes']} original_wh={resize_info['original_wh']} "
-        f"sent_wh={resize_info['sent_wh']} resized={resize_info['resized']} "
-        f"skipped_reason={resize_info['skipped_reason']}"
-    )
+    image_bytes, resize_info = _prepare_image_with_metrics(image_bytes)
 
     # [P1-PLAN-LOTE-347] la aclaración solo viaja si la hay: la llamada de siempre no cambia de forma
     # [P1-PLAN-LOTE-628] …y el país, solo fuera de RD

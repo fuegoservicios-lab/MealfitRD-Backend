@@ -1083,8 +1083,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1002 · 2026-11-14] Guard de completitud multi-foto en fusión (`correct_consumed_meal`) y registro, evitando omisiones silenciosas como «pan de agua» cuando el usuario responde dudas de una sola foto.
 # [P1-PLAN-LOTE-1003 · 2026-11-14] (G-02) Prefijo estático cross-user sin `user_id`, subconjunto estable de tools intra-turno, `prompt_cache_key` + `prompt_cache_retention="24h"` fail-open en OpenAI y captura de multifoto en `prompt_desglose`
 # [P1-PLAN-LOTE-1004 · 2026-11-14] (G-04 + G-15) Puerta automática de batería corta (19 casos, `evaluador.py`, `ledger.jsonl`, `--fail-on-regression`) y matriz de cobertura 54/54 reglas del coach (`rule_coverage.py`).
-# [P1-PLAN-LOTE-1005 · 2026-11-14] (G-03 + G-31) Resumen de días pasados (>= anteayer) + `consultar_dia_del_plan(fuente=...)`, deduplicación y poda de instrucciones no ligadas en `coach_lean.py` y compactación de `ToolMessage`s previos (<= 24k toks, 54/54 reglas) (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1005 · 2026-11-14"
+# [P1-PLAN-LOTE-1005 · 2026-11-14] (G-03 + G-31) Resumen de días pasados (>= anteayer) + `consultar_dia_del_plan(fuente=...)`, deduplicación y poda de instrucciones no ligadas en `coach_lean.py` y compactación de `ToolMessage`s previos (<= 24k toks, 54/54 reglas).
+# [P1-PLAN-LOTE-1006 · 2026-11-14] (G-05 + G-17) Tracking de tokens de `vision_scan` fuera de `if is_food:`, `vision_usage_scope()` seguro bajo `asyncio.gather`, desglose de sub-fases (`resize_ms`, `llm_ms`, `sanitize_ms`, `attachment_ms`, `locale_ms`, `total_ms`) en `vision_scan_resultado` y subida paralela de adjunto en chat (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1006 · 2026-11-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

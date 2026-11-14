@@ -33,8 +33,9 @@ from db import (
 )
 from vision_agent import (
     process_image_with_vision, get_multimodal_embedding,
-    _vision_model_name,
+    _vision_model_name, vision_usage_scope, get_last_vision_meta,
 )
+from knobs import _env_bool
 # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top — verificado que
 # `cron_tasks` NO importa `routers.diary` (no circular). El late import dentro
 # del handler era frágil: un refactor que renombrara `trigger_incremental_learning`
@@ -612,9 +613,13 @@ async def api_diary_upload(
         # object storage no esté configurado. Guardamos el JPEG ya acotado por el
         # cliente en Neon y lo servimos por URL HMAC temporal. Guests siguen
         # fail-closed: no se atribuye media a una identidad no verificada.
-        if purpose == "chat" and actual_user_id and session_id:
+        _t_vision = time.perf_counter()
+        _fases_ms: dict[str, float] = {}
+
+        async def _persist_chat_attachment():
+            _t_att = time.perf_counter()
             await asyncio.to_thread(get_or_create_session, session_id, user_id=actual_user_id)
-            attachment_id = await asyncio.to_thread(
+            aid = await asyncio.to_thread(
                 create_chat_attachment,
                 session_id,
                 actual_user_id,
@@ -622,64 +627,122 @@ async def api_diary_upload(
                 sniffed_ct,
                 file.filename,
             )
-            if attachment_id:
-                image_url = build_chat_attachment_url(attachment_id)
-                upload_success = True
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="No pudimos guardar la imagen de forma privada. Reintenta en un momento.",
-                )
+            _fases_ms["attachment_ms"] = round((time.perf_counter() - _t_att) * 1000.0, 2)
+            return aid
 
-        # 3. Procesar imagen con Visión SINCRÓNICAMENTE
-        logger.info("\n-------------------------------------------------------------")
-        logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
-        _t_vision = time.perf_counter()
-        # [P1-PLAN-LOTE-628] el país del perfil: la foto se lee con el sentido que tiene allí (en RD, nada cambia)
-        from pais_del_estimador import pais_del_usuario
-        _pais = await pais_del_usuario(verified_user_id)
-        # [P1-DECISION-TRIAGE · 2026-11-11] BB-077: Gemini Decision 1 mira si la foto es comida. En `guard` va ANTES
-        # de la visión (tope 0,4 s) y, si es casi seguro que no lo es, la visión no se gasta; en `shadow` corre en
-        # paralelo y solo se registra. Con `aclaracion` (re-análisis de la MISMA foto) no se consulta. Fail-open.
-        import decision_triage as _dt
-        _dt_modo = _dt.modo() if not aclaracion else "off"
-        _dt_media = {"data": file_bytes, "mime_type": sniffed_ct}
-        _dt_res = None
-        if _dt_modo == "guard":
-            _dt_res = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
-            if _dt.foto_rechazada(_dt_res):
-                vision_result = _dt.payload_no_comida()
+        async def _run_vision_pipeline():
+            # 3. Procesar imagen con Visión SINCRÓNICAMENTE
+            logger.info("\n-------------------------------------------------------------")
+            logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
+            # [P1-PLAN-LOTE-628] el país del perfil: la foto se lee con el sentido que tiene allí (en RD, nada cambia)
+            from pais_del_estimador import pais_del_usuario
+            _t_pais = time.perf_counter()
+            _pais = await pais_del_usuario(verified_user_id)
+            _fases_ms["pais_ms"] = round((time.perf_counter() - _t_pais) * 1000.0, 2)
+            # [P1-DECISION-TRIAGE · 2026-11-11] BB-077: Gemini Decision 1 mira si la foto es comida. En `guard` va ANTES
+            # de la visión (tope 0,4 s) y, si es casi seguro que no lo es, la visión no se gasta; en `shadow` corre en
+            # paralelo y solo se registra. Con `aclaracion` (re-análisis de la MISMA foto) no se consulta. Fail-open.
+            import decision_triage as _dt
+            _dt_modo_local = _dt.modo() if not aclaracion else "off"
+            _dt_media = {"data": file_bytes, "mime_type": sniffed_ct}
+            _dt_res_local = None
+            _t_vis = time.perf_counter()
+            if _dt_modo_local == "guard":
+                _t_tr = time.perf_counter()
+                _dt_res_local = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
+                _fases_ms["triage_ms"] = round((time.perf_counter() - _t_tr) * 1000.0, 2)
+                if _dt.foto_rechazada(_dt_res_local):
+                    _vr = _dt.payload_no_comida()
+                else:
+                    _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
+            elif _dt_modo_local == "shadow":
+                _dt_res_local, _vr = await asyncio.gather(
+                    _dt.run_triage_async(media=_dt_media, user_id=actual_user_id),
+                    process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais),
+                )
             else:
-                vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
-        elif _dt_modo == "shadow":
-            _dt_res, vision_result = await asyncio.gather(
-                _dt.run_triage_async(media=_dt_media, user_id=actual_user_id),
-                process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais),
-            )
-        else:
-            vision_result = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
-        if _dt_modo != "off":
-            try:
-                background_tasks.add_task(_dt.registrar_metrica, actual_user_id, "decision_triage_media",
-                                          float(_dt_res.latency_ms if _dt_res else 0), {
-                                              "mode": _dt_modo, "ok": _dt_res is not None,
-                                              "p_food": _dt_res.si(_dt.Q_MEDIA) if _dt_res else None,
-                                              "rejected": bool(isinstance(vision_result, dict)
-                                                               and vision_result.get("triage_rejected")),
-                                              "vision_is_food": (vision_result or {}).get("is_food")
-                                              if isinstance(vision_result, dict) else None,
-                                          })
-            except Exception:
-                pass
-        # [P1-PLAN-LOTE-575] cuánto tardó y si sirvió, para el panel (ni la foto ni su texto). En SEGUNDO PLANO: esperarla
-        # aquí con el pool saturado podía sumar segundos al escaneo de cualquier usuario (revisión final).
-        try:
-            background_tasks.add_task(registrar_vision_scan, actual_user_id,
-                                      duracion_ms=(time.perf_counter() - _t_vision) * 1000.0,
-                                      resultado=vision_result, purpose=purpose)
-        except Exception:
-            pass
+                _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
+            _fases_ms["vision_ms"] = round((time.perf_counter() - _t_vis) * 1000.0, 2)
+            return _dt_modo_local, _dt_res_local, _vr
+
+        with vision_usage_scope():
+            if (
+                purpose == "chat"
+                and actual_user_id
+                and session_id
+                and _env_bool("MEALFIT_CHAT_UPLOAD_PARALLEL_ATTACHMENT", True)
+            ):
+                attachment_id, (_dt_modo, _dt_res, vision_result) = await asyncio.gather(
+                    _persist_chat_attachment(),
+                    _run_vision_pipeline(),
+                )
+                if attachment_id:
+                    image_url = build_chat_attachment_url(attachment_id)
+                    upload_success = True
+                else:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="No pudimos guardar la imagen de forma privada. Reintenta en un momento.",
+                    )
+            else:
+                if purpose == "chat" and actual_user_id and session_id:
+                    attachment_id = await _persist_chat_attachment()
+                    if attachment_id:
+                        image_url = build_chat_attachment_url(attachment_id)
+                        upload_success = True
+                    else:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="No pudimos guardar la imagen de forma privada. Reintenta en un momento.",
+                        )
+                _dt_modo, _dt_res, vision_result = await _run_vision_pipeline()
+
+            _vmeta = get_last_vision_meta()
+            for _mk in ("resize_ms", "llm_ms", "sanitize_ms"):
+                if isinstance(_vmeta.get(_mk), (int, float)):
+                    _fases_ms[_mk] = float(_vmeta[_mk])
+            _resize_info = _vmeta.get("resize_info") if isinstance(_vmeta.get("resize_info"), dict) else None
+
+            if _dt_modo != "off":
+                try:
+                    import decision_triage as _dt_bg
+                    background_tasks.add_task(_dt_bg.registrar_metrica, actual_user_id, "decision_triage_media",
+                                              float(_dt_res.latency_ms if _dt_res else 0), {
+                                                  "mode": _dt_modo, "ok": _dt_res is not None,
+                                                  "p_food": _dt_res.si(_dt_bg.Q_MEDIA) if _dt_res else None,
+                                                  "rejected": bool(isinstance(vision_result, dict)
+                                                                   and vision_result.get("triage_rejected")),
+                                                  "vision_is_food": (vision_result or {}).get("is_food")
+                                                  if isinstance(vision_result, dict) else None,
+                                              })
+                except Exception:
+                    pass
         
+            # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28
+            # → P1-VISION-NO-LOCAL · 2026-07-28 → P1-PLAN-LOTE-1006 · 2026-11-14]
+            # El gasto real (modelo + tokens + USD) va a `llm_usage_events` (`node="vision_scan"`).
+            # FUERA de `if is_food:` para no perder `is_food=False` ni fallos tras llamar al modelo;
+            # sólo se omite si triage `guard` rechazó antes de invocar visión.
+            _triage_rejected = bool(isinstance(vision_result, dict) and vision_result.get("triage_rejected"))
+            if not _triage_rejected:
+                try:
+                    from vision_agent import get_last_vision_usage as _glvu
+                    _vision_usage = _glvu() or {}
+                except Exception:
+                    _vision_usage = {}
+                if actual_user_id and actual_user_id != session_id:
+                    await asyncio.to_thread(
+                        log_llm_usage_event,
+                        user_id=actual_user_id,
+                        model=_vision_model_name(),
+                        node="vision_scan",
+                        input_tokens=_vision_usage.get("input_tokens"),
+                        output_tokens=_vision_usage.get("output_tokens"),
+                        cached_tokens=_vision_usage.get("cached_tokens"),
+                        metadata=({"reasoning_tokens": _vision_usage["reasoning_tokens"]}
+                                  if _vision_usage.get("reasoning_tokens") else None),
+                    )
+
         description = vision_result.get("description", "No se pudo analizar la imagen.")
         is_food = vision_result.get("is_food", False)
         calories = vision_result.get("calories", 0)
@@ -782,52 +845,8 @@ async def api_diary_upload(
                     )
             # ------------------------------------------------------------
 
-            # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28
-            # → P1-VISION-NO-LOCAL · 2026-07-28] Encender un provider CLOUD
-            # pago (Luna) reabría el bug que P1-MEAL-SCAN-GEMMA cerró:
-            # `log_api_usage` escribía en `api_usage` (libro de CUOTA de
-            # planes) y `get_monthly_api_usage` cuenta TODA fila sin filtrar
-            # endpoint — 3 scans/día agotarían el cap gratis (15/mes) en 5
-            # días, congelando la generación de planes por fotografiar
-            # comida. El gasto real (modelo + tokens si el provider los
-            # devuelve + USD) va a `llm_usage_events` (libro de COSTO, NO de
-            # cuota) vía `log_llm_usage_event` — sigue siendo auditable
-            # (mismo sitio del canario de Luna) sin cobrarle un plan al
-            # usuario. `log_llm_usage_event` es best-effort y ya silencia sus
-            # propias excepciones — no envolver en otro try.
-            #
-            # [P1-VISION-NO-LOCAL] El gate ANTES excluía el path LOCAL
-            # (`not is_vision_local()`, gemma/Ollama costo cero): sin
-            # provider local, esa rama nunca podía ser False, así que el
-            # accessor quedaba muerto — eliminado junto con el resto de
-            # Ollama. Con un ÚNICO provider (cloud), esta rama SIEMPRE emite
-            # la fila cuando hay usuario autenticado; no hay condición de
-            # provider que verificar.
-            # [P2-VISION-USAGE-TOKENS · 2026-09-04] tokens reales del proveedor (antes NULL): sin ellos
-            # `compute_llm_cost_micros` no puede poner precio a la foto. Se lee ANTES del gate para no
-            # engordar la ventana de 900 chars que ancla `test_p1_vision_luna`.
-            try:
-                from vision_agent import get_last_vision_usage as _glvu
-                _vision_usage = _glvu() or {}
-            except Exception:
-                _vision_usage = {}
-            if actual_user_id and actual_user_id != session_id:
-                # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
-                # `_vision_model_name()` es el modelo del ÚNICO provider de
-                # visión (`openai_compatible`) — accessor vivo de
-                # vision_agent, no un literal hardcodeado que se
-                # desincronizaría de MEALFIT_VISION_MODEL.
-                await asyncio.to_thread(
-                    log_llm_usage_event,
-                    user_id=actual_user_id,
-                    model=_vision_model_name(),
-                    node="vision_scan",
-                    input_tokens=_vision_usage.get("input_tokens"),
-                    output_tokens=_vision_usage.get("output_tokens"),
-                    cached_tokens=_vision_usage.get("cached_tokens"),
-                    metadata=({"reasoning_tokens": _vision_usage["reasoning_tokens"]}
-                              if _vision_usage.get("reasoning_tokens") else None),
-                )
+            # [P1-PLAN-LOTE-1006] el registro en `llm_usage_events` (`node="vision_scan"`) ahora se emite
+            # antes de `if is_food:` para cubrir también `is_food=False` y fallos tras llamar al modelo.
 
             # 4. Guardar en DB en segundo plano (embedding + insert).
             # `description` se persiste limpio (sin poison_pill) — la
@@ -854,6 +873,7 @@ async def api_diary_upload(
         dudas_out = vision_result.get("dudas") or []
         if (is_food and purpose == "diary" and meal_name) or dudas_out:
             # [P1-PLAN-LOTE-626] el idioma se resuelve UNA vez: el plato, sus ingredientes y sus dudas, a la vez
+            _t_loc = time.perf_counter()
             _loc = await _locale_del_escaner(locale, verified_user_id)
             _nombres = (_nombres_para_mostrar(meal_name, items_out, _loc, verified_user_id)
                         if is_food and purpose == "diary" and meal_name else None)
@@ -862,6 +882,19 @@ async def api_diary_upload(
                     _nombres, _dudas_para_mostrar(dudas_out, _loc, verified_user_id))
             else:
                 dudas_out = await _dudas_para_mostrar(dudas_out, _loc, verified_user_id)
+            _fases_ms["locale_ms"] = round((time.perf_counter() - _t_loc) * 1000.0, 2)
+
+        _total_vision_ms = (time.perf_counter() - _t_vision) * 1000.0
+        _fases_ms["total_ms"] = round(_total_vision_ms, 2)
+        # [P1-PLAN-LOTE-575 / LOTE-1006] cuánto tardó por sub-fase y si sirvió, para el panel (ni foto ni texto).
+        try:
+            background_tasks.add_task(registrar_vision_scan, actual_user_id,
+                                      duracion_ms=_total_vision_ms,
+                                      resultado=vision_result, purpose=purpose,
+                                      fases_ms=_fases_ms, modelo=_vision_model_name(),
+                                      resize_info=_resize_info)
+        except Exception:
+            pass
 
         return {
             "success": True,

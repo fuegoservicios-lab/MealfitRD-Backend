@@ -77,11 +77,40 @@ def _insertar(user_id: Optional[str], node: str, duracion_ms: float, metadata: d
         logger.debug(f"[P1-PLAN-LOTE-575] señal {node} no-op: {e!r}")
 
 
-def registrar_vision_scan(user_id: Optional[str], *, duracion_ms: float, resultado, purpose: str) -> None:
+def registrar_vision_scan(
+    user_id: Optional[str],
+    *,
+    duracion_ms: float,
+    resultado,
+    purpose: str,
+    fases_ms: Optional[dict] = None,
+    modelo: Optional[str] = None,
+    resize_info: Optional[dict] = None,
+) -> None:
     kind = resultado.get("photo_kind") if isinstance(resultado, dict) else ""
-    _insertar(user_id, "vision_scan_resultado", duracion_ms,
-              {"resultado": resultado_del_analisis(resultado), "photo_kind": str(kind or "")[:16],
-               "purpose": str(purpose or "")[:16]})
+    meta: dict = {
+        "resultado": resultado_del_analisis(resultado),
+        "photo_kind": str(kind or "")[:16],
+        "purpose": str(purpose or "")[:16],
+    }
+    if modelo:
+        meta["modelo"] = str(modelo)[:64]
+    if isinstance(fases_ms, dict) and fases_ms:
+        limpio = {
+            str(k)[:24]: round(float(v), 2)
+            for k, v in list(fases_ms.items())[:12]
+            if isinstance(v, (int, float)) and math.isfinite(float(v)) and float(v) >= 0
+        }
+        if limpio:
+            meta["fases_ms"] = limpio
+    if isinstance(resize_info, dict) and resize_info:
+        meta["resize"] = {
+            "original_bytes": _entero(resize_info.get("original_bytes"), 50_000_000),
+            "sent_bytes": _entero(resize_info.get("sent_bytes"), 50_000_000),
+            "resized": bool(resize_info.get("resized")),
+            "sent_wh": str(resize_info.get("sent_wh") or "")[:24],
+        }
+    _insertar(user_id, "vision_scan_resultado", duracion_ms, meta)
 
 
 def registrar_scan_outcome(user_id: str, resumen: dict) -> None:
