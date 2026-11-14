@@ -1080,8 +1080,9 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-991 · 2026-11-12] «me tomé la creatina» sin cantidad = su toma (etiqueta o historial), no 1 cápsula.
 # [P1-PLAN-LOTE-1000 · 2026-11-13] Orden cache-first del prompt, fast-path de sentimiento en registros objetivos, dieta de contexto por turno, telemetría LLM auxiliar y alerta de gasto diario.
 # [P1-PLAN-LOTE-1001 · 2026-11-14] (G-06 + G-01) Visibilidad de modelos efectivos en /health/version con alerta de desvío entre arranques (`system_alerts.model_effective_changed`) y telemetría por fase del turno ligada por `corr` en `pipeline_metrics` (`chat_turn_phases` + `chat_client_perf`).
-# [P1-PLAN-LOTE-1002 · 2026-11-14] Guard de completitud multi-foto en fusión (`correct_consumed_meal`) y registro, evitando omisiones silenciosas como «pan de agua» cuando el usuario responde dudas de una sola foto (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1002 · 2026-11-14"
+# [P1-PLAN-LOTE-1002 · 2026-11-14] Guard de completitud multi-foto en fusión (`correct_consumed_meal`) y registro, evitando omisiones silenciosas como «pan de agua» cuando el usuario responde dudas de una sola foto.
+# [P1-PLAN-LOTE-1003 · 2026-11-14] (G-02) Prefijo estático cross-user sin `user_id`, subconjunto estable de tools intra-turno, `prompt_cache_key` + `prompt_cache_retention="24h"` fail-open en OpenAI y captura de multifoto en `prompt_desglose` (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1003 · 2026-11-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

@@ -93,6 +93,7 @@ def openai_model_tools_sin_razonar(model) -> bool:
 
 
 import gemini_hydrogen as _gh  # [P1-PLAN-LOTE-995]
+import openai_prompt_cache as _opc  # [P1-PLAN-LOTE-1003]
 
 
 class ChatOpenAI(_LangChainChatOpenAI):
@@ -109,7 +110,8 @@ class ChatOpenAI(_LangChainChatOpenAI):
                 payload.pop("temperature", None)
         if payload.get("tools") and openai_model_tools_sin_razonar(payload.get("model") or self.model_name):
             payload["reasoning_effort"] = "none"   # [P1-PLAN-LOTE-600] tools + esfuerzo ⇒ 400 en chat completions
-        if _gh.es_gemini(payload.get("model") or self.model_name):
+        _model = payload.get("model") or self.model_name
+        if _gh.es_gemini(_model):
             # [P1-PLAN-LOTE-995] Gemini exige de vuelta la firma de razonamiento de cada tool_call.
             try:
                 _gh.reinyectar_firmas(payload, self._convert_input(input_).to_messages())
@@ -120,7 +122,28 @@ class ChatOpenAI(_LangChainChatOpenAI):
                 _gh.anclar_manual_estatico(payload)
             except Exception:  # noqa: BLE001
                 pass
+        else:
+            _base = getattr(self, "openai_api_base", None)
+            _base_es_openai = (_base is None and is_openai_model(_model)) or (
+                _base is not None and _is_openai_provider(_base)
+            )
+            if (
+                _base_es_openai
+                and is_openai_model(_model)
+                and not _is_glm_provider(_base)
+                and not _is_deepseek_provider(_base)
+            ):
+                try:
+                    _opc.inyectar_openai_prompt_cache(payload, model_name=_model)
+                except Exception:  # noqa: BLE001
+                    pass
         return payload
+
+    def _intentar_reintento_cache(self, exc: Exception) -> bool:
+        try:
+            return _opc.registrar_error_param_cache(exc, str(self.model_name or ""))
+        except Exception:  # noqa: BLE001
+            return False
 
     def _create_chat_result(self, response, generation_info=None):
         resultado = super()._create_chat_result(response, generation_info)
@@ -148,6 +171,12 @@ class ChatOpenAI(_LangChainChatOpenAI):
         try:
             return super()._generate(*args, **kwargs)
         except Exception as exc:
+            if self._intentar_reintento_cache(exc):
+                try:
+                    return super()._generate(*args, **kwargs)
+                except Exception as retry_exc:
+                    self._avisar_saldo(retry_exc)
+                    raise
             self._avisar_saldo(exc)
             raise
 
@@ -155,21 +184,47 @@ class ChatOpenAI(_LangChainChatOpenAI):
         try:
             return await super()._agenerate(*args, **kwargs)
         except Exception as exc:
+            if self._intentar_reintento_cache(exc):
+                try:
+                    return await super()._agenerate(*args, **kwargs)
+                except Exception as retry_exc:
+                    self._avisar_saldo(retry_exc)
+                    raise
             self._avisar_saldo(exc)
             raise
 
     def _stream(self, *args, **kwargs):
+        yielded = False
         try:
-            yield from super()._stream(*args, **kwargs)
+            for trozo in super()._stream(*args, **kwargs):
+                yielded = True
+                yield trozo
         except Exception as exc:
+            if not yielded and self._intentar_reintento_cache(exc):
+                try:
+                    yield from super()._stream(*args, **kwargs)
+                    return
+                except Exception as retry_exc:
+                    self._avisar_saldo(retry_exc)
+                    raise
             self._avisar_saldo(exc)
             raise
 
     async def _astream(self, *args, **kwargs):
+        yielded = False
         try:
             async for trozo in super()._astream(*args, **kwargs):
+                yielded = True
                 yield trozo
         except Exception as exc:
+            if not yielded and self._intentar_reintento_cache(exc):
+                try:
+                    async for trozo in super()._astream(*args, **kwargs):
+                        yield trozo
+                    return
+                except Exception as retry_exc:
+                    self._avisar_saldo(retry_exc)
+                    raise
             self._avisar_saldo(exc)
             raise
 

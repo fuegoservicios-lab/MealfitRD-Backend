@@ -4577,10 +4577,13 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     if state.get("turn_plate_photos") or state.get("turn_photo_to_log") or state.get("modo_voz"):
         return base_tools
 
+    import openai_prompt_cache as _opc
     messages = state.get("messages", [])
-    # Si el ultimo mensaje ya fue un tool call, mantener todas para dar seguimiento a la ejecucion
+    # Si el ultimo mensaje ya fue un tool call, mantener el subconjunto del turno (G-02)
+    # salvo que el knob este desactivado (fallback legacy a todas las herramientas).
     if messages and getattr(messages[-1], "type", None) == "tool":
-        return base_tools
+        if not _opc.stable_tool_subset_activo():
+            return base_tools
 
     last_user_text = ""
     for m in reversed(messages):
@@ -4627,6 +4630,7 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     if any(k in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):
         needed.update({"buscar_etiqueta_en_internet"})
 
+    needed.update(_opc.tools_usadas_en_turno(messages))
     selected = [t for t in base_tools if getattr(t, "name", "") in needed]
     return selected if len(selected) >= 5 else base_tools
 
@@ -10173,9 +10177,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
         # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
         if _chat_prompt_static_prefix():
+            import openai_prompt_cache as _opc
             _split_volatile = _chat_split_volatile_sys_prompt()
             _pausa = bool(current_plan) and plan_vigente is None
             _est_kw = {"plan_en_pausa": _pausa, "contador_sin_plan": _contador_sin_plan}
+            _use_static_tools = False
             if (_chat_prompt_compact_enabled()
                     and CHAT_AGENT_INLINE_PROMPT is _ORIG_CHAT_AGENT_INLINE
                     and build_tools_instructions is _ORIG_BUILD_TOOLS_INSTR):
@@ -10195,7 +10201,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 system_prompt += coach_country_context(_coach_country)
                 system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
                 _bd_pais_chars = len(system_prompt) - _bd_manual_chars
-                _use_static_tools = _split_volatile and (build_tools_instructions is _ORIG_BUILD_TOOLS_INSTR)
+                _use_static_tools = (
+                    (_split_volatile or _opc.static_prefix_no_uid_activo())
+                    and (build_tools_instructions is _ORIG_BUILD_TOOLS_INSTR)
+                )
                 _tools_block = (
                     build_tools_instructions_estaticas(**_est_kw)
                     if _use_static_tools
@@ -10215,6 +10224,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id)
             _bd_lean_ahorro = max(0, _bd_antes_lean - len(system_prompt))
             _bd_prefijo_chars = len(system_prompt)
+            if _use_static_tools and not _split_volatile:
+                system_prompt += f"\n\nEl user_id del usuario actual es: {user_id}"
             # --- bloques dinámicos (volátiles) al final ---
             system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
             system_prompt += build_circadian_context(schedule_type)
@@ -10976,10 +10987,12 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
         # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
         if _chat_prompt_static_prefix():
+            import openai_prompt_cache as _opc
             _split_volatile = _chat_split_volatile_sys_prompt()
             _pausa = bool(current_plan) and plan_vigente is None
             _est_kw = {"plan_en_pausa": _pausa, "contador_sin_plan": _contador_sin_plan}
             _orig_base = _ORIG_CHAT_VOICE_MODE if is_call_mode else _ORIG_CHAT_STREAM_INLINE
+            _use_static_tools = False
             if (_chat_prompt_compact_enabled()
                     and _base_inline is _orig_base
                     and build_tools_instructions_stream is _ORIG_BUILD_TOOLS_INSTR_STREAM):
@@ -10999,7 +11012,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 system_prompt += coach_country_context(_coach_country)
                 system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
                 _bd_pais_chars = len(system_prompt) - _bd_manual_chars
-                _use_static_tools = _split_volatile and (build_tools_instructions_stream is _ORIG_BUILD_TOOLS_INSTR_STREAM)
+                _use_static_tools = (
+                    (_split_volatile or _opc.static_prefix_no_uid_activo())
+                    and (build_tools_instructions_stream is _ORIG_BUILD_TOOLS_INSTR_STREAM)
+                )
                 _tools_block = (
                     build_tools_instructions_stream_estaticas(**_est_kw)
                     if _use_static_tools
@@ -11020,6 +11036,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                                     modo_voz=bool(is_call_mode))
             _bd_lean_ahorro = max(0, _bd_antes_lean - len(system_prompt))
             _bd_prefijo_chars = len(system_prompt)
+            if _use_static_tools and not _split_volatile:
+                system_prompt += f"\n\nEl user_id actual es: {user_id}"
             # --- bloques dinámicos (volátiles) al final ---
             system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
             system_prompt += build_circadian_context(schedule_type)

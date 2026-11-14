@@ -54,7 +54,7 @@ _VOLATILE_BLOCK_SPECS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("plan_hoy", re.compile(r"\n\n📅 HOY es ")),
     ("dias_pasados_plan", re.compile(r"\n\n📖 DÍAS QUE YA PASARON")),
     ("dias_pasados_diario", re.compile(r"\n\n🍽️ DIARIO REAL DE DÍAS ANTERIORES")),
-    ("vision", re.compile(r"\n\n📷 CONTEXTO DE (?:VARIAS FOTOS|FOTO):")),
+    ("vision", re.compile(r"\n\n📷 CONTEXTO DE (?:VARIAS FOTOS(?:\s*\(en orden\))?|FOTO):")),
     ("modo_voz_rec", re.compile(r"\n\nRECORDATORIO FINAL — MODO VOZ")),
     ("refuerzo_idioma", re.compile(_LANG_HEADER_RE)),
 )
