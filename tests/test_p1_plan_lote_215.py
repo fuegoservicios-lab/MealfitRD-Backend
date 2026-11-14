@@ -27,6 +27,15 @@ WEEKLY = {"shopping": {"main_cycle_days": 7, "fresh_topup_days": None, "freezer_
           "diet": {"type": "balanced", "allergies": []}}
 
 
+# [CI-PERFIL-PRODUCCION · 2026-11-14] (mismo patrón que el lote 65 / F8) Este arnés usa alimentos sin catálogo de precios:
+# con `MEALFIT_VERIFIED_INGREDIENTS_ONLY` en el valor de PRODUCCIÓN (el job «Backend pytest (produccion)» del CI, sin
+# base de datos) el filtro de verificados los dropea todos y la lista sale vacía. El fichero declara el knob que
+# necesita en vez de heredar el `setdefault` global de `conftest.py`.
+@pytest.fixture(autouse=True)
+def _verified_only_off(monkeypatch):
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
+
+
 @pytest.fixture(autouse=True)
 def _sin_rastro_de_compra_unica():
     """`set_single_trip_notes` es estado de módulo: que la última lista de compra única de este fichero no le cambie

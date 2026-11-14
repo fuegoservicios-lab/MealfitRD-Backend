@@ -23,6 +23,7 @@ _BACKEND = Path(__file__).resolve().parents[1]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
+import pytest  # noqa: E402
 import shopping_calculator as sc  # noqa: E402
 
 _MASTER = {
@@ -31,6 +32,15 @@ _MASTER = {
     "Tomate": {"name": "Tomate", "category": "Vegetales", "shelf_life_days": 7, "density_g_per_unit": 100,
                "default_unit": "unidad"},
 }
+
+
+# [CI-PERFIL-PRODUCCION · 2026-11-14] (mismo patrón que el lote 65 / F8) Este arnés usa alimentos sin catálogo de precios:
+# con `MEALFIT_VERIFIED_INGREDIENTS_ONLY` en el valor de PRODUCCIÓN (el job «Backend pytest (produccion)» del CI, sin
+# base de datos) el filtro de verificados los dropea todos y la lista sale vacía. El fichero declara el knob que
+# necesita en vez de heredar el `setdefault` global de `conftest.py`.
+@pytest.fixture(autouse=True)
+def _verified_only_off(monkeypatch):
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
 
 
 def _agregar(compra_unica: bool, monkeypatch):

@@ -233,8 +233,20 @@ def test_buscar_subconjunto_inverso_y_proteger_etiqueta_foto(monkeypatch):
     assert "1340 kcal" in blk and "277 g carbohidratos" in blk and "Mass gainer GNC Bulk 1340" not in blk
 
 
-def test_proponer_comidas_rota_entre_dias_en_banda_de_empate():
+
+def _catalogo_del_snapshot(monkeypatch):
+    """[CI-SIN-BD · 2026-11-14] `proponer_comidas` lee el catálogo con `get_master_ingredients`, que sin base de datos
+    (el CI no tiene `NEON_DATABASE_URL`) devuelve [] y deja sin propuestas: en local pasaba porque leía Neon. Se fija al
+    snapshot versionado del catálogo para que la prueba mida lo mismo en los dos sitios."""
+    import shopping_calculator as sc
+    filas = json.loads((_BACKEND / "scripts" / "data" / "catalogo_nutricion_2026_09_12.json")
+                       .read_text(encoding="utf-8"))["filas"]
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda *a, **k: [dict(f) for f in filas])
+
+
+def test_proponer_comidas_rota_entre_dias_en_banda_de_empate(monkeypatch):
     import coach_day_context as cdc
+    _catalogo_del_snapshot(monkeypatch)
     fd = {"allergies": ["Huevo"], "dietTypes": ["Vegana"]}
     obj = {"kcal": 650, "protein_g": 35, "carbs_g": 75, "fats_g": 20}
     r0 = cdc.proponer_comidas(fd, "Almuerzo", obj, n=2, rotacion=0)
@@ -307,6 +319,7 @@ def test_mejoras_darian_sandwich_proteina_y_avisos(monkeypatch):
 
     # 3. proponer_comidas puntúa con las macros reales post-inclinación: para meta alta de proteína (780 kcal, 73g P)
     #    prioriza platos que sí alcanzan alta proteína (>=55g) y descarta habichuelas con batata (31g P)
+    _catalogo_del_snapshot(monkeypatch)
     fd_darian = {"country": "DO", "mainGoal": "gain_muscle"}
     obj_darian = {"kcal": 780, "protein_g": 73, "carbs_g": 60, "fats_g": 27}
     propuestas = cdc.proponer_comidas(fd_darian, "cena", obj_darian, n=2, rotacion=0)
