@@ -5196,7 +5196,7 @@ def _purge_old_pipeline_metrics():
             "DELETE FROM pipeline_metrics "
             "WHERE id IN ( "
             "  SELECT id FROM pipeline_metrics "
-            "  WHERE node LIKE '%%_tick' "
+            "  WHERE (node LIKE '%%_tick' OR node IN ('llm_breaker_open_watch', 'auth_jwt_verify_fail')) "
             "    AND created_at < NOW() - make_interval(days => %s) "
             "  LIMIT %s "
             ") "
@@ -6853,7 +6853,11 @@ def _llm_daily_spend_alert_job():
             execute_sql_write("UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL", ())
         try:
             from chat_observability_alerts import evaluar_salud_coach_y_alertar
-            evaluar_salud_coach_y_alertar(execute_sql_query=execute_sql_query, execute_sql_write=execute_sql_write)
+            evaluar_salud_coach_y_alertar(
+                execute_sql_query=execute_sql_query,
+                execute_sql_write=execute_sql_write,
+                include_hourly_and_cost=True,
+            )
         except Exception as _health_err:
             logger.debug(f"[G-18] evaluar_salud_coach_y_alertar omitido: {_health_err!r}")
     except Exception as e:
@@ -36004,6 +36008,19 @@ def _sweep_orphan_chat_checkpoints() -> int:
             f"🧹 [P1-CHAT-ORPHAN-SESSIONS] {len(threads)} hilo(s) de checkpoint sin sesión y "
             f">{min_age_days}d borrados (filas: {res.get('deleted')})."
         )
+    keep_latest = max(1, min(_env_int("MEALFIT_CHECKPOINT_KEEP_LATEST_PER_THREAD", 2), 10))
+    sup_age_h = max(1, min(_env_int("MEALFIT_CHECKPOINT_SUPERSEDED_MIN_AGE_HOURS", 1), 720))
+    sup_batch = max(1, min(_env_int("MEALFIT_CHECKPOINT_SUPERSEDED_BATCH", 500), 5000))
+    try:
+        from db import sweep_superseded_thread_checkpoints
+        sup_res = sweep_superseded_thread_checkpoints(keep_latest, sup_age_h, sup_batch) or {}
+        if any(sup_res.get(k, 0) > 0 for k in ("checkpoints", "checkpoint_writes", "checkpoint_blobs")):
+            logger.info(
+                f"🧹 [G-11/G-30] Checkpoints históricos podados (keep={keep_latest}, "
+                f"age>{sup_age_h}h): {sup_res}."
+            )
+    except Exception as _sup_err:
+        logger.debug(f"[G-11/G-30] Poda de checkpoints superados omitida (best-effort): {_sup_err!r}")
     return len(threads)
 
 

@@ -418,7 +418,13 @@ def should_extract_facts(user_message: str, user_id: Optional[str] = None) -> bo
     _FACT_SIGNALS = (
         "alerg", "intoleran", "medic", "enferm", "diagnos", "nunca", "jamás", "jamas",
         "odio", "no me gusta", "no puedo comer", "no tolero", "peso", "kilos", "libras",
-        "embaraz", "lactan", "cirug", "operac", "diabet", "hipertens", "prefiero", "siempre"
+        "embaraz", "lactan", "cirug", "operac", "diabet", "hipertens", "prefiero", "siempre",
+        # [P1-PLAN-LOTE-1010 · G-14] Señales duraderas de rutina, objetivos, entrenamiento y cocina
+        "rutina", "entreno", "entrenamiento", "gym", "gimnasio", "objetivo", "meta",
+        "déficit", "deficit", "volumen", "bajar de peso", "subir de peso", "masa muscular",
+        "horario", "ayuno", "turno", "trabajo", "cocinar", "cocino", "no tengo", "solo tengo",
+        "presupuesto", "familia", "hijos", "vegano", "vegetariano", "keto", "gluten", "lactosa",
+        "suplemento", "creatina", "airfryer", "microondas"
     )
     if any(clean_msg.startswith(p) for p in _DIARY_LOG_PREFIXES) or (" · " in clean_msg and len(clean_msg) < 80):
         if not any(s in clean_msg for s in _FACT_SIGNALS):
@@ -428,16 +434,18 @@ def should_extract_facts(user_message: str, user_id: Optional[str] = None) -> bo
     prompt = f"""
     Analiza este mensaje y responde True SOLO si el usuario menciona algo sobre:
     - Preferencias alimenticias estables o permanentes (gustos duraderos, alimentos que ama o rechaza siempre)
-    - Alergias o condiciones médicas diagnosticadas (ej: diabetes, celiaquía, hipertensión)
-    - Síntomas temporales o estado de salud
-    - Objetivos duraderos de salud, condición física o peso
+    - Alergias, intolerancias o condiciones médicas diagnosticadas (ej: diabetes, celiaquía, hipertensión, tiroides)
+    - Síntomas persistentes o estado de salud relevante
+    - Objetivos duraderos de salud, peso, recomposición o rendimiento físico (ej: déficit calórico, ganar masa muscular)
+    - Rutinas habituales, horarios de comida/trabajo, ayuno o frecuencia de entrenamiento/gym
+    - Restricciones prácticas duraderas (ej: no sabe cocinar, solo tiene microondas/airfryer, presupuesto ajustado, cocina para familia/hijos, dieta vegana/keto)
     
     IMPORTANTE: Responde False si el usuario simplemente está informando o registrando lo que comió o bebió en una comida puntual
     (ej: 'desayuné 2 huevos con plátano', 'me comí un sándwich', 'almorcé pollo con arroz', 'hoy me tomé una malta').
     Los registros de comidas consumidas pertenecen al diario de comidas, NO son hechos permanentes del perfil.
     Responde False si es conversación general, saludos, agradecimientos o registros de comidas diarias.
     
-    ES VITAL que también asignes un 'confidence_score' del 1 al 10. Si el mensaje es ambiguo, sarcástico, o no estás 100% seguro de si contiene un hecho médico velado, asigna un score bajo (ej. 1 a 6).
+    ES VITAL que también asignes un 'confidence_score' del 1 al 10. Si el mensaje es ambiguo, sarcástico, o no estás 100% seguro de si contiene un hecho duradero velado, asigna un score bajo (ej. 1 a 6).
     
     Mensaje: "{user_message}"
     """

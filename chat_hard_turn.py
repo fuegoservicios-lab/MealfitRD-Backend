@@ -66,6 +66,91 @@ def hard_turn_reasoning_effort() -> str:
     return raw if raw in ("none", "low", "medium", "high") else "low"
 
 
+def chat_user_daily_budget_usd() -> float:
+    """[P1-PLAN-LOTE-1010 · G-19] Presupuesto diario por usuario USD para chat (0 = desactivado)."""
+    return _env_float(
+        "MEALFIT_CHAT_USER_DAILY_BUDGET_USD",
+        0.25,
+        validator=lambda v: 0.0 <= v <= 50.0,
+    )
+
+
+def check_user_daily_chat_budget(
+    user_id: Optional[str],
+    *,
+    execute_sql_query: Any = None,
+) -> dict[str, Any]:
+    """[P1-PLAN-LOTE-1010 · G-19] Evalúa gasto USD 24h del usuario sin coste de IA (fail-open).
+
+    - `< 80%`: `status='ok'`, permite turno y escalado normal.
+    - `>= 80% y < 100%`: `status='soft_80'`, bloquea escalado a `gpt-6.1-terra`.
+    - `>= 100%`: `status='hard_100'`, pausa suavemente el turno sin llamar al LLM.
+    """
+    limit = chat_user_daily_budget_usd()
+    if limit <= 0.0 or not user_id or user_id == "guest":
+        return {
+            "status": "ok",
+            "allow_escalation": True,
+            "block_turn": False,
+            "spent_usd": 0.0,
+            "limit_usd": limit,
+        }
+    try:
+        if execute_sql_query is None:
+            from db_core import execute_sql_query as _ssot_q
+            execute_sql_query = _ssot_q
+        row = execute_sql_query(
+            """
+            SELECT COALESCE(SUM(estimated_cost_micros), 0)::bigint AS spent_micros
+            FROM public.llm_usage_events
+            WHERE user_id = %s
+              AND endpoint LIKE '/api/chat%%'
+              AND created_at >= NOW() - INTERVAL '24 hours'
+            """,
+            (str(user_id),),
+            fetch_one=True,
+        ) or {}
+        if isinstance(row, dict):
+            spent_micros = int(row.get("spent_micros") or 0)
+        elif isinstance(row, (list, tuple)) and row:
+            spent_micros = int(row[0] or 0)
+        else:
+            spent_micros = 0
+        spent_usd = round(spent_micros / 1_000_000.0, 6)
+        if spent_usd >= limit:
+            return {
+                "status": "hard_100",
+                "allow_escalation": False,
+                "block_turn": True,
+                "spent_usd": spent_usd,
+                "limit_usd": limit,
+            }
+        if spent_usd >= (0.80 * limit):
+            return {
+                "status": "soft_80",
+                "allow_escalation": False,
+                "block_turn": False,
+                "spent_usd": spent_usd,
+                "limit_usd": limit,
+            }
+        return {
+            "status": "ok",
+            "allow_escalation": True,
+            "block_turn": False,
+            "spent_usd": spent_usd,
+            "limit_usd": limit,
+        }
+    except Exception as exc:
+        logger.debug("[G-19] check_user_daily_chat_budget fail-open: %r", exc)
+        return {
+            "status": "ok",
+            "allow_escalation": True,
+            "block_turn": False,
+            "spent_usd": 0.0,
+            "limit_usd": limit,
+        }
+
+
 def _latest_human_text(messages: list[Any]) -> str:
     for m in reversed(messages or []):
         mtype = getattr(m, "type", None) or getattr(m, "role", None)
@@ -181,6 +266,8 @@ def evaluar_turno_dificil(
     """
     if not hard_turn_escalation_enabled():
         return primary_model, {"escalated": False, "reason": "disabled"}
+    if isinstance(state, dict) and state.get("chat_budget_soft_degraded"):
+        return primary_model, {"escalated": False, "reason": "user_daily_budget_soft_cap"}
 
     from llm_provider import GPT6_LUNA
 

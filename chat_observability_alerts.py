@@ -60,8 +60,9 @@ def evaluar_salud_coach_y_alertar(
     *,
     execute_sql_query: Any = None,
     execute_sql_write: Any = None,
+    include_hourly_and_cost: bool = False,
 ) -> dict[str, Any]:
-    """Evalúa tasa de fallback/errores (24h) y feedback negativo (7d) en SQL sin costo de IA."""
+    """Evalúa tasa de fallback/errores (24h), feedback negativo (7d) y opcionalmente ráfaga 1h / pico de costo 3x en SQL sin costo de IA."""
     if not _env_bool("MEALFIT_CHAT_HEALTH_ALERT_ENABLED", True):
         return {"enabled": False}
 
@@ -169,5 +170,94 @@ def evaluar_salud_coach_y_alertar(
             summary["feedback"]["alerted"] = False
     except Exception as exc:
         logger.debug("[G-18] feedback check omitido (best-effort): %r", exc)
+
+    if include_hourly_and_cost:
+        try:
+            burst_row = execute_sql_query(
+                """
+                SELECT
+                    COUNT(*)::int AS turns_1h,
+                    COUNT(*) FILTER (
+                        WHERE EXISTS (
+                            SELECT 1 FROM jsonb_array_elements(
+                                CASE WHEN jsonb_typeof(metadata->'llm_calls') = 'array'
+                                     THEN metadata->'llm_calls' ELSE '[]'::jsonb END
+                            ) AS c
+                            WHERE (c->>'fallback_used')::boolean IS TRUE
+                        )
+                    )::int AS fallback_1h
+                FROM public.pipeline_metrics
+                WHERE node = 'chat_turn_phases'
+                  AND created_at >= NOW() - INTERVAL '1 hour'
+                """,
+                (),
+                fetch_one=True,
+            ) or {}
+            turns_1h = _row_val(burst_row, "turns_1h", 0)
+            fb_1h = _row_val(burst_row, "fallback_1h", 1)
+            fb_1h_rate = round(fb_1h / turns_1h, 4) if turns_1h else 0.0
+            summary["fallback_hourly_burst"] = {
+                "turns_1h": turns_1h,
+                "fallback_1h": fb_1h,
+                "fallback_rate_1h": fb_1h_rate,
+            }
+            if fb_1h >= 5 and fb_1h_rate >= 0.30:
+                _upsert_alert(
+                    execute_sql_write,
+                    alert_key="chat_fallback_hourly_burst",
+                    alert_type="reliability_degradation",
+                    severity="critical" if fb_1h_rate >= 0.50 else "warning",
+                    title=f"Ráfaga horaria de respaldo en el coach ({fb_1h}/{turns_1h} últimos 60 min)",
+                    message=f"En la última hora {fb_1h} de {turns_1h} turnos ({fb_1h_rate*100:.1f}%) cayeron al modelo respaldo.",
+                    metadata=summary["fallback_hourly_burst"],
+                )
+                summary["fallback_hourly_burst"]["alerted"] = True
+            else:
+                _resolve_alert(execute_sql_write, "chat_fallback_hourly_burst")
+                summary["fallback_hourly_burst"]["alerted"] = False
+        except Exception as exc:
+            logger.debug("[G-18] fallback hourly burst check omitido (best-effort): %r", exc)
+
+        try:
+            cost_row = execute_sql_query(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour')::int AS calls_1h,
+                    COALESCE(AVG(estimated_cost_micros) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour'), 0)::float / 1000000.0 AS avg_1h_usd,
+                    COUNT(*)::int AS calls_7d,
+                    COALESCE(AVG(estimated_cost_micros), 0)::float / 1000000.0 AS avg_7d_usd
+                FROM public.llm_usage_events
+                WHERE endpoint LIKE '/api/chat%%'
+                  AND created_at >= NOW() - INTERVAL '7 days'
+                """,
+                (),
+                fetch_one=True,
+            ) or {}
+            calls_1h = _row_val(cost_row, "calls_1h", 0)
+            avg_1h = float(cost_row.get("avg_1h_usd") or 0.0) if isinstance(cost_row, dict) else 0.0
+            calls_7d = _row_val(cost_row, "calls_7d", 2)
+            avg_7d = float(cost_row.get("avg_7d_usd") or 0.0) if isinstance(cost_row, dict) else 0.0
+            summary["cost_spike_3x"] = {
+                "calls_1h": calls_1h,
+                "avg_1h_usd": round(avg_1h, 6),
+                "calls_7d": calls_7d,
+                "avg_7d_usd": round(avg_7d, 6),
+            }
+            if calls_1h >= 5 and avg_1h >= 0.015 and avg_7d > 0.0 and avg_1h > (3.0 * avg_7d):
+                _upsert_alert(
+                    execute_sql_write,
+                    alert_key="chat_cost_spike_3x",
+                    alert_type="cost_guardrail",
+                    severity="warning",
+                    title=f"Pico de coste por turno >3x en el coach (${avg_1h:.4f} vs base ${avg_7d:.4f})",
+                    message=f"Promedio última hora: ${avg_1h:.4f}/llamada ({calls_1h} llamadas) > 3x promedio 7d (${avg_7d:.4f}).",
+                    metadata=summary["cost_spike_3x"],
+                )
+                summary["cost_spike_3x"]["alerted"] = True
+            else:
+                _resolve_alert(execute_sql_write, "chat_cost_spike_3x")
+                summary["cost_spike_3x"]["alerted"] = False
+        except Exception as exc:
+            logger.debug("[G-18] cost spike check omitido (best-effort): %r", exc)
 
     return summary

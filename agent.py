@@ -22,7 +22,7 @@ from langgraph.graph.message import MessagesState
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 import random
-from typing import List, Optional, Annotated, TypedDict
+from typing import Any, List, Optional, Annotated, TypedDict
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 
@@ -4342,6 +4342,125 @@ class ChatState(MessagesState):
     modo_voz: bool
     # [P1-PLAN-LOTE-999 · 2026-11-13] Desglose de caracteres por bloque del system_prompt (Fase 0).
     prompt_breakdown: Optional[dict]
+    # [P1-PLAN-LOTE-1010 · G-19 · 2026-11-14] Degradación suave al >=80% del tope diario por usuario.
+    chat_budget_soft_degraded: bool
+
+
+import threading as _threading_chat
+import contextlib as _contextlib_chat
+
+_CHAT_SEM_LOCK = _threading_chat.Lock()
+_CHAT_LLM_SEMAPHORE: Optional[_threading_chat.BoundedSemaphore] = None
+_CHAT_LLM_SEMAPHORE_CAP: int = 0
+
+
+def chat_max_concurrent() -> int:
+    """[P1-PLAN-LOTE-1010 · G-10] Concurrencia máxima dedicada del coach, aislada del plan-gen (`LLM_MAX_CONCURRENT=4`)."""
+    return _env_int("MEALFIT_CHAT_MAX_CONCURRENT", 16, validator=lambda v: 1 <= v <= 128)
+
+
+def _get_chat_llm_semaphore() -> _threading_chat.BoundedSemaphore:
+    global _CHAT_LLM_SEMAPHORE, _CHAT_LLM_SEMAPHORE_CAP
+    cap = chat_max_concurrent()
+    with _CHAT_SEM_LOCK:
+        if _CHAT_LLM_SEMAPHORE is None or _CHAT_LLM_SEMAPHORE_CAP != cap:
+            _CHAT_LLM_SEMAPHORE = _threading_chat.BoundedSemaphore(cap)
+            _CHAT_LLM_SEMAPHORE_CAP = cap
+        return _CHAT_LLM_SEMAPHORE
+
+
+@_contextlib_chat.contextmanager
+def _acquire_chat_llm_slot():
+    sem = _get_chat_llm_semaphore()
+    timeout_s = max(5.0, float(_chat_agent_llm_timeout_s()) + 5.0)
+    acquired = sem.acquire(timeout=timeout_s)
+    if not acquired:
+        raise TimeoutError("chat LLM concurrency semaphore timeout")
+    try:
+        yield
+    finally:
+        try:
+            sem.release()
+        except ValueError:
+            pass
+
+
+_CTX_CACHE_LOCK = _threading_chat.Lock()
+_CHAT_USER_CTX_CACHE: dict[tuple, tuple[float, Any]] = {}
+_CHAT_USER_CTX_CACHE_MAX = 256
+
+
+def chat_ctx_cache_ttl_s() -> int:
+    """[P1-PLAN-LOTE-1010 · G-12] TTL corto (segundos) del caché compartido de contexto de lectura del coach."""
+    return _env_int("MEALFIT_CHAT_CTX_CACHE_TTL_S", 30, validator=lambda v: 0 <= v <= 120)
+
+
+def _effective_ctx_cache_ttl_s() -> int:
+    ttl = chat_ctx_cache_ttl_s()
+    if os.environ.get("PYTEST_CURRENT_TEST") and "MEALFIT_CHAT_CTX_CACHE_TTL_S" not in os.environ:
+        return 0
+    return ttl
+
+
+def invalidate_chat_user_ctx_cache(user_id: Optional[str] = None) -> int:
+    """Invalida entradas del caché de contexto para `user_id` (o todas si `None`)."""
+    with _CTX_CACHE_LOCK:
+        if not user_id:
+            n = len(_CHAT_USER_CTX_CACHE)
+            _CHAT_USER_CTX_CACHE.clear()
+            return n
+        uid_s = str(user_id)
+        doomed = [k for k in _CHAT_USER_CTX_CACHE if k and k[0] == uid_s]
+        for k in doomed:
+            _CHAT_USER_CTX_CACHE.pop(k, None)
+        return len(doomed)
+
+
+def _ctx_cache_get_or_load(user_id: Optional[str], slot: str, key_parts: tuple, loader):
+    ttl = _effective_ctx_cache_ttl_s()
+    if ttl <= 0 or not user_id or user_id == "guest":
+        return loader()
+    ckey = (str(user_id), str(slot), key_parts)
+    now = time.monotonic()
+    with _CTX_CACHE_LOCK:
+        hit = _CHAT_USER_CTX_CACHE.get(ckey)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+    val = loader()
+    with _CTX_CACHE_LOCK:
+        if len(_CHAT_USER_CTX_CACHE) >= _CHAT_USER_CTX_CACHE_MAX:
+            expired = [k for k, v in _CHAT_USER_CTX_CACHE.items() if v[0] <= now]
+            for k in expired[:64]:
+                _CHAT_USER_CTX_CACHE.pop(k, None)
+            if len(_CHAT_USER_CTX_CACHE) >= _CHAT_USER_CTX_CACHE_MAX:
+                _CHAT_USER_CTX_CACHE.clear()
+        _CHAT_USER_CTX_CACHE[ckey] = (time.monotonic() + float(ttl), val)
+    return val
+
+
+def _assemble_rag_context_block(user_facts_text: str, visual_facts_text: str) -> str:
+    if not user_facts_text and not visual_facts_text:
+        return ""
+    out = "\n--- MEMORIA VECTORIAL (RAG) ---\n"
+    if user_facts_text:
+        out += f"{user_facts_text}\n"
+    if visual_facts_text:
+        out += f"Inventario Visual:\n{visual_facts_text}\n"
+    out += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
+    return out
+
+
+def _budget_exceeded_graceful_reply(form_data: Optional[dict]) -> str:
+    locale = str((form_data or {}).get("locale") or "").strip().lower()
+    if locale.startswith("en"):
+        return (
+            "You've reached today's smart assistant usage limit. "
+            "Your logged meals, progress, and plan remain safe and available, and your coach resets tomorrow."
+        )
+    return (
+        "Alcanzaste el límite diario de consultas inteligentes por hoy. "
+        "Tu diario, tus macros y tu plan siguen activos en la app, y tu coach se restablece mañana."
+    )
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -4764,7 +4883,8 @@ def call_model(state: ChatState):
     # Tooltip-anchor: P2-CHAT-TOKEN-TELEMETRY.
     if _primary_exc is None:
         try:
-            response = llm_with_tools.invoke(llm_messages)
+            with _acquire_chat_llm_slot():
+                response = llm_with_tools.invoke(llm_messages)
         except Exception as _invoke_exc:
             # [P1-CHAT-LLM-429 · 2026-05-20] Diferenciar rate-limit del provider
             # de fallos genuinos. 429 NO debe contar como CB-failure: el provider
@@ -4823,7 +4943,8 @@ def call_model(state: ChatState):
                 else list(agent_tools)
             )
             _chat_invoke_start = _time_chat.time()
-            response = chat_llm.bind_tools(_fb_tools).invoke(llm_messages)
+            with _acquire_chat_llm_slot():
+                response = chat_llm.bind_tools(_fb_tools).invoke(llm_messages)
             _cb_model = _fallback_model
         except Exception as _fb_exc:
             logger.error(
@@ -6753,6 +6874,8 @@ def execute_tools(state: ChatState):
                     )
 
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
+            if tool_name not in _READ_ONLY_PARALLEL_TOOLS and _trusted_uid and _trusted_uid != "guest":
+                invalidate_chat_user_ctx_cache(_trusted_uid)
             if _pt_tools is not None and _open_tool_t0 is not None:
                 _pt_tools.record_tool(
                     _open_tool_name,
@@ -9861,11 +9984,6 @@ def _build_pantry_context(user_id: Optional[str], nevera_on: Optional[bool] = No
     para una nevera de 60 items. Kill-switch: MEALFIT_CHAT_PANTRY_SNAPSHOT."""
     if not user_id or user_id == "guest":
         return ""
-    # [P1-NEVERA-OPCIONAL · 2026-09-23] Nevera apagada (modo contador, por el usuario o por el apagado automático): el
-    # coach no ve el inventario y recibe la orden explícita de no mencionarla. Va en ESTE bloque porque es de la cola
-    # volátil que los dos caminos del chat inyectan DESPUÉS de las viñetas estáticas que hablan de «su Nevera» (el
-    # mandato posterior pesa más). Va ANTES del kill switch del snapshot: la orden no depende de él. `nevera_on` llega
-    # resuelto una vez por turno; sin él, aquí. Si algo falla, fallo abierto (la conducta de siempre), pero con log.
     try:
         from nevera_opcional import BLOQUE_PROMPT_NEVERA_APAGADA
         if not (_nevera_activa_para_chat(user_id) if nevera_on is None else nevera_on):
@@ -9887,36 +10005,39 @@ def _build_pantry_context(user_id: Optional[str], nevera_on: Optional[bool] = No
         from knobs import _env_bool as _pc_env_bool
         if not _pc_env_bool("MEALFIT_CHAT_PANTRY_SNAPSHOT", True):
             return ""
-        from db import execute_sql_query
-        rows = execute_sql_query(
-            "SELECT ingredient_name, quantity::float8 AS quantity, unit, brand "
-            "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0 "
-            "ORDER BY ingredient_name LIMIT 120",
-            (user_id,), fetch_all=True,
-        ) or []
-        if not rows:
+        def _load_pantry():
+            from db import execute_sql_query
+            rows = execute_sql_query(
+                "SELECT ingredient_name, quantity::float8 AS quantity, unit, brand "
+                "FROM user_inventory WHERE user_id = %s AND kind = 'food' AND quantity > 0 "
+                "ORDER BY ingredient_name LIMIT 120",
+                (user_id,), fetch_all=True,
+            ) or []
+            if not rows:
+                return (
+                    "\n\n🧊 NEVERA FÍSICA AHORA: vacía (0 items). Si el usuario habla "
+                    "de lo que tiene, invítalo a registrar su compra o escanear su nevera."
+                )
+
+            def _fmt_q(q):
+                qf = float(q or 0)
+                return str(int(qf)) if qf.is_integer() else f"{qf:g}"
+
+            items = "; ".join(
+                f"{r['ingredient_name']} {_fmt_q(r['quantity'])} {r['unit']}"
+                + (f" ({r['brand']})" if r.get("brand") else "")
+                for r in rows
+            )
             return (
-                "\n\n🧊 NEVERA FÍSICA AHORA: vacía (0 items). Si el usuario habla "
-                "de lo que tiene, invítalo a registrar su compra o escanear su nevera."
+                f"\n\n🧊 NEVERA FÍSICA AHORA ({len(rows)} items — cantidades REALES de la "
+                f"base de datos en este instante): {items}. Estos números son la VERDAD y "
+                f"pueden diferir de lo que recuerdes de esta conversación (el usuario también "
+                f"edita su Nevera desde la app). Cita SIEMPRE estas cantidades al hablar de lo "
+                f"que tiene; tras modificar el inventario, el resultado de la herramienta trae "
+                f"los totales nuevos — confirma con esos."
             )
 
-        def _fmt_q(q):
-            qf = float(q or 0)
-            return str(int(qf)) if qf.is_integer() else f"{qf:g}"
-
-        items = "; ".join(
-            f"{r['ingredient_name']} {_fmt_q(r['quantity'])} {r['unit']}"
-            + (f" ({r['brand']})" if r.get("brand") else "")
-            for r in rows
-        )
-        return (
-            f"\n\n🧊 NEVERA FÍSICA AHORA ({len(rows)} items — cantidades REALES de la "
-            f"base de datos en este instante): {items}. Estos números son la VERDAD y "
-            f"pueden diferir de lo que recuerdes de esta conversación (el usuario también "
-            f"edita su Nevera desde la app). Cita SIEMPRE estas cantidades al hablar de lo "
-            f"que tiene; tras modificar el inventario, el resultado de la herramienta trae "
-            f"los totales nuevos — confirma con esos."
-        )
+        return _ctx_cache_get_or_load(user_id, "pantry", (), _load_pantry)
     except Exception as e:
         logger.warning(f"⚠️ [P1-CHAT-PANTRY-AWARE] pantry context error: {e}")
         return ""
@@ -9943,46 +10064,34 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
             from tools import _local_date_str_for_user
             local_date_str = _local_date_str_for_user(user_id)
 
-        glasses = get_water_intake_glasses_today(user_id, local_date_str)
-
-        # [P2-HYDRATION-GOAL-SSOT · 2026-05-31] Reusar la fórmula CANÓNICA
-        # `_compute_water_goal` — la MISMA meta exacta que ve el card del
-        # Dashboard y que reportan las tools check_hydration_today /
-        # log_water_glass. Pre-fix reimplementaba la meta inline y divergía:
-        # 250 ml/vaso (canónico = 240) + mapeo de actividad distinto
-        # (active→+250 en vez de +500; very_active→+500 en vez de +750;
-        # athlete/very_high→+0 en vez de +750; activityLevel ausente/null→+0
-        # en vez del default moderate +250). Resultado observado: el agente
-        # afirmaba una meta 1-2 vasos distinta a la del card para usuarios
-        # reales (3/8 con activityLevel=null). Import lazy igual que
-        # tools.check_hydration_today (cadena de carga routers.plans→agent→
-        # tools; se resuelve en runtime, sin ciclo de import).
-        try:
-            from routers.plans import _compute_water_goal
-            goal = int(_compute_water_goal(user_id).get("goal", 8) or 8)
-        except Exception:
-            goal = 8
-
-        # Mensaje contextual según el estado actual
-        if glasses >= goal:
+        def _load_hydration():
+            glasses = get_water_intake_glasses_today(user_id, local_date_str)
+            try:
+                from routers.plans import _compute_water_goal
+                goal = int(_compute_water_goal(user_id).get("goal", 8) or 8)
+            except Exception:
+                goal = 8
+            if glasses >= goal:
+                return (
+                    f"\n\n💧 HIDRATACIÓN HOY: El usuario ha consumido {glasses} de {goal} vasos "
+                    f"de agua hoy (meta alcanzada ✅). Si surge el tema de hidratación, puedes "
+                    f"reconocerlo. Toma esto en cuenta al hablar de energía o saciedad."
+                )
+            if glasses == 0:
+                return (
+                    f"\n\n💧 HIDRATACIÓN HOY: El usuario aún no ha registrado ningún vaso de agua "
+                    f"hoy (meta diaria: {goal} vasos). Sácalo SOLO si el usuario habla de agua, "
+                    f"sed, calor, mareo o energía — no lo añadas como coletilla a otras respuestas."
+                )
+            pct = round((glasses / goal) * 100)
             return (
-                f"\n\n💧 HIDRATACIÓN HOY: El usuario ha consumido {glasses} de {goal} vasos "
-                f"de agua hoy (meta alcanzada ✅). Si surge el tema de hidratación, puedes "
-                f"reconocerlo. Toma esto en cuenta al hablar de energía o saciedad."
+                f"\n\n💧 HIDRATACIÓN HOY: El usuario lleva {glasses} de {goal} vasos de agua "
+                f"({pct}% de su meta diaria). Toma esto en cuenta al hablar de energía, "
+                f"saciedad o digestión. Si lleva menos de la mitad, ya es tarde y sale el tema, "
+                f"sugiérele acelerar el ritmo con amabilidad — nunca como coletilla."
             )
-        if glasses == 0:
-            return (
-                f"\n\n💧 HIDRATACIÓN HOY: El usuario aún no ha registrado ningún vaso de agua "
-                f"hoy (meta diaria: {goal} vasos). Sácalo SOLO si el usuario habla de agua, "
-                f"sed, calor, mareo o energía — no lo añadas como coletilla a otras respuestas."
-            )
-        pct = round((glasses / goal) * 100)
-        return (
-            f"\n\n💧 HIDRATACIÓN HOY: El usuario lleva {glasses} de {goal} vasos de agua "
-            f"({pct}% de su meta diaria). Toma esto en cuenta al hablar de energía, "
-            f"saciedad o digestión. Si lleva menos de la mitad, ya es tarde y sale el tema, "
-            f"sugiérele acelerar el ritmo con amabilidad — nunca como coletilla."
-        )
+
+        return _ctx_cache_get_or_load(user_id, "hydration", (local_date_str,), _load_hydration)
     except Exception as e:
         logger.warning(f"⚠️ [AGENT-HYDRATION-CONTEXT] error: {e}")
         return ""
@@ -10266,8 +10375,16 @@ def _build_final_content_from_messages(messages: list) -> str:
 
 
 def _safe_suplementos_bloque_para_chat(user_id: str) -> str:
+    if user_id and user_id != "guest":
+        try:
+            from turn_cache import get_cached
+            _hit, _cached = get_cached("prefetch_suppl", user_id)
+            if _hit:
+                return _cached
+        except Exception:
+            pass
     from suplementos import bloque_para_chat
-    return bloque_para_chat(user_id)
+    return _ctx_cache_get_or_load(user_id, "suppl", (), lambda: bloque_para_chat(user_id))
 
 
 def _chat_prefetch_enabled() -> bool:
@@ -10325,8 +10442,15 @@ class _ChatContextPrefetcher:
 
         self._futures["plan_and_past"] = _tc_submit(ex, _load_plan_and_past_days)
         self._futures["consumed_today"] = _tc_submit(
-            ex, get_consumed_meals_today, uid,
-            date_str=self.local_date, tz_offset_mins=self.tz_diario,
+            ex,
+            lambda: _ctx_cache_get_or_load(
+                uid,
+                "consumed_today",
+                (self.local_date, self.tz_diario),
+                lambda: get_consumed_meals_today(
+                    uid, date_str=self.local_date, tz_offset_mins=self.tz_diario,
+                ),
+            ),
         )
         self._futures["suppl"] = _tc_submit(ex, _safe_suplementos_bloque_para_chat, uid)
         self._futures["prev_conv"] = _tc_submit(
@@ -10431,6 +10555,23 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         _pt, _pt_tok = start_turn_tracker(user_id=user_id, session_id=session_id, owned_by_router=False)
     elif _pt.preflight_ms is None:
         _pt.set_phase_ms("preflight_ms", _pt.elapsed_ms())
+
+    from chat_hard_turn import check_user_daily_chat_budget as _check_chat_budget
+    _budget_info = _check_chat_budget(user_id)
+    _budget_soft_degraded = _budget_info.get("status") == "soft_80"
+    if _budget_info.get("block_turn"):
+        _b_reply = _budget_exceeded_graceful_reply(form_data)
+        try:
+            _pt.mark_done(outcome="budget_cap", model=_chat_agent_model_name())
+            if not getattr(_pt, "owned_by_router", False):
+                _pt.emit_once(outcome="budget_cap", model_name=_chat_agent_model_name())
+            if _pt_tok is not None:
+                release_turn_tracker(_pt, _pt_tok)
+        except Exception:
+            pass
+        return _b_reply, {}, None
+
+    _t_ctx_b0 = _time_chat_total.monotonic()
     # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
@@ -10762,8 +10903,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
         if user_id and user_id != "guest":
             try:
-                from suplementos import bloque_para_chat
-                system_prompt += bloque_para_chat(user_id)
+                system_prompt += _pf.pop_or("suppl", lambda: _safe_suplementos_bloque_para_chat(user_id))
             except Exception as _sup_err:
                 logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
 
@@ -10773,18 +10913,15 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # Inyectar contexto del diario del día (paridad con stream)
         if user_id and user_id != "guest":
             try:
-                # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Paridad EXACTA con el
-                # stream (`chat_with_agent_stream`), incluido el clamp y el `None` preservado:
-                # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no nulos para
-                # usar el día local, así que inventar un offset aquí cambiaría la ventana de los
-                # clientes que no mandan ninguno. Sin esto la ventana era la del huso por
-                # defecto: para un usuario en Madrid a las 00:30, la cena de anoche entraba como
-                # "registrado HOY" — el mismo defecto que `P1-DIARY-TZ-DEFAULT-RD` cerró en el
-                # stream y que este path nunca heredó.
                 _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
                 consumed_today = _pf.pop_or(
                     "consumed_today",
-                    lambda: get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario),
+                    lambda: _ctx_cache_get_or_load(
+                        user_id,
+                        "consumed_today",
+                        (local_date, _tz_diario),
+                        lambda: get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario),
+                    ),
                 )
                 _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
                 if consumed_today:
@@ -10960,6 +11097,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         modo_voz=False,
     )
 
+    _pt.set_phase_ms("context_build_ms", int((_time_chat_total.monotonic() - _t_ctx_b0) * 1000))
     _pt.mark_context_ready()   # [P1-PLAN-LOTE-1001] antes de leer el checkpoint: el ancla `existing_state … inputs` la leen los tests del 168 y del core audit
     existing_state = chat_graph_app.get_state(config)
 
@@ -10978,6 +11116,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
         "modo_voz": False,            # [P1-PLAN-LOTE-686] el chat sin stream nunca es modo voz
         "prompt_breakdown": _prompt_breakdown,
+        "chat_budget_soft_degraded": _budget_soft_degraded,
         "ajustes_de_app": None,       # [P1-PLAN-LOTE-900] del turno
         "diary_corrected_meal_ids": [],
         "photo_log_retried": False,
@@ -11176,6 +11315,25 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         _pt, _pt_tok = start_turn_tracker(user_id=user_id, session_id=session_id, owned_by_router=False)
     elif _pt.preflight_ms is None:
         _pt.set_phase_ms("preflight_ms", _pt.elapsed_ms())
+
+    from chat_hard_turn import check_user_daily_chat_budget as _check_chat_budget
+    _budget_info = _check_chat_budget(user_id)
+    _budget_soft_degraded = _budget_info.get("status") == "soft_80"
+    if _budget_info.get("block_turn"):
+        _b_reply = _budget_exceeded_graceful_reply(form_data)
+        try:
+            _pt.mark_first_word("budget_cap")
+            yield f"data: {json.dumps({'type': 'chunk', 'text': _b_reply})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': _b_reply, 'updated_fields': {}, 'new_plan': None, 'coherence_warnings': [], 'pantry_modified_at': None, 'pantry_depleted_items': None, 'ajustes_de_app': None, 'diary_corrected_meal_ids': []})}\n\n"
+            _pt.mark_done("budget_cap", _chat_agent_model_name())
+        finally:
+            if not getattr(_pt, "owned_by_router", False):
+                _pt.emit_once(outcome="budget_cap", model_name=_chat_agent_model_name())
+            if _pt_tok is not None:
+                release_turn_tracker(_pt, _pt_tok)
+        return
+
+    _t_ctx_b0 = time.monotonic()
     # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
@@ -11575,8 +11733,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
         if user_id and user_id != "guest":
             try:
-                from suplementos import bloque_para_chat
-                system_prompt += bloque_para_chat(user_id)
+                system_prompt += _pf.pop_or("suppl", lambda: _safe_suplementos_bloque_para_chat(user_id))
             except Exception as _sup_err:
                 logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
 
@@ -11585,16 +11742,15 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             
         if user_id and user_id != "guest":
             try:
-                # [P1-CHAT-PAST-DAYS · 2026-07-28] Clamp al rango de husos, como los
-                # otros dos consumidores del mismo `tz_offset`. Un valor basura no
-                # revienta: vacía `DIARIO DE HOY` en silencio. `None` se PRESERVA —
-                # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no
-                # nulos para usar el día local; inventar 240 ahí cambiaría la
-                # ventana de los clientes que no mandan offset.
                 _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
                 consumed_today = _pf.pop_or(
                     "consumed_today",
-                    lambda: get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario),
+                    lambda: _ctx_cache_get_or_load(
+                        user_id,
+                        "consumed_today",
+                        (local_date, _tz_diario),
+                        lambda: get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario),
+                    ),
                 )
                 _diario_de_hoy = list(consumed_today or [])   # [P1-PLAN-LOTE-132]
                 if consumed_today:
@@ -11760,6 +11916,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         modo_voz=bool(is_call_mode),
     )
 
+    _pt.set_phase_ms("context_build_ms", int((time.monotonic() - _t_ctx_b0) * 1000))
     _pt.mark_context_ready()   # [P1-PLAN-LOTE-1001] antes de leer el checkpoint: el ancla `existing_state … inputs` la leen los tests del 168 y del core audit
     existing_state = chat_graph_app.get_state(config)
     
@@ -11771,6 +11928,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "current_plan": current_plan or {},
         "sys_prompt": system_prompt,
         "prompt_breakdown": _prompt_breakdown,
+        "chat_budget_soft_degraded": _budget_soft_degraded,
         "updated_fields": {},
         "new_plan": None,
         # [P2-CHAT-STATE-TURN-RESET · 2026-09-14] Estos campos no tienen reducer y

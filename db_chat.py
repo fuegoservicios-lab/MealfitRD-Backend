@@ -494,6 +494,115 @@ def sweep_orphan_chat_checkpoints(min_age_days: int, batch: int) -> Dict[str, An
     return {"threads": ids, "deleted": deleted}
 
 
+SUPERSEDED_CHECKPOINTS_SELECT_SQL = """
+    WITH ranked AS (
+        SELECT
+            ck.thread_id,
+            ck.checkpoint_ns,
+            ck.checkpoint_id,
+            CASE WHEN ck.checkpoint->>'ts' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                 THEN (ck.checkpoint->>'ts')::timestamptz END AS ck_ts,
+            ROW_NUMBER() OVER (
+                PARTITION BY ck.thread_id, ck.checkpoint_ns
+                ORDER BY
+                    COALESCE(
+                        CASE WHEN ck.checkpoint->>'ts' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                             THEN (ck.checkpoint->>'ts')::timestamptz END,
+                        to_timestamp(0)
+                    ) DESC,
+                    ck.checkpoint_id DESC
+            ) AS rn
+        FROM public.checkpoints ck
+    )
+    SELECT thread_id, checkpoint_ns, checkpoint_id
+    FROM ranked
+    WHERE rn > %s::int
+      AND ck_ts IS NOT NULL
+      AND ck_ts < NOW() - make_interval(hours => %s::int)
+    ORDER BY ck_ts ASC
+    LIMIT %s::int
+"""
+
+
+def sweep_superseded_thread_checkpoints(
+    keep_latest_per_thread: int = 2,
+    min_age_hours: int = 1,
+    batch_rows: int = 500,
+) -> Dict[str, int]:
+    """[P1-PLAN-LOTE-1010 · G-11/G-30 · 2026-11-14] Poda checkpoints históricos superados
+    de hilos vivos conservando los últimos `keep_latest_per_thread` por `(thread_id, checkpoint_ns)`,
+    junto a sus `checkpoint_writes` y `checkpoint_blobs` ya no referenciados."""
+    _guard_chat_tx_write("DELETE FROM public.checkpoints")
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    keep = max(1, min(int(keep_latest_per_thread), 10))
+    age_h = max(1, min(int(min_age_hours), 720))
+    batch = max(1, min(int(batch_rows), 5000))
+    from psycopg.rows import dict_row
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(SUPERSEDED_CHECKPOINTS_SELECT_SQL, (keep, age_h, batch))
+                rows = cursor.fetchall() or []
+                if not rows:
+                    return {"checkpoints": 0, "checkpoint_writes": 0, "checkpoint_blobs": 0}
+                tids = [str(r["thread_id"]) for r in rows]
+                nss = [str(r.get("checkpoint_ns") or "") for r in rows]
+                cids = [str(r["checkpoint_id"]) for r in rows]
+
+                cursor.execute(
+                    """
+                    DELETE FROM public.checkpoint_writes cw
+                    USING UNNEST(%s::text[], %s::text[], %s::text[]) AS doomed(thread_id, checkpoint_ns, checkpoint_id)
+                    WHERE cw.thread_id = doomed.thread_id
+                      AND cw.checkpoint_ns = doomed.checkpoint_ns
+                      AND cw.checkpoint_id = doomed.checkpoint_id
+                    """,
+                    (tids, nss, cids),
+                )
+                n_writes = max(0, int(cursor.rowcount or 0))
+
+                cursor.execute(
+                    """
+                    DELETE FROM public.checkpoints ck
+                    USING UNNEST(%s::text[], %s::text[], %s::text[]) AS doomed(thread_id, checkpoint_ns, checkpoint_id)
+                    WHERE ck.thread_id = doomed.thread_id
+                      AND ck.checkpoint_ns = doomed.checkpoint_ns
+                      AND ck.checkpoint_id = doomed.checkpoint_id
+                    """,
+                    (tids, nss, cids),
+                )
+                n_ck = max(0, int(cursor.rowcount or 0))
+
+                pairs = sorted(set(zip(tids, nss)))
+                p_tids = [p[0] for p in pairs]
+                p_nss = [p[1] for p in pairs]
+                cursor.execute(
+                    """
+                    DELETE FROM public.checkpoint_blobs b
+                    USING UNNEST(%s::text[], %s::text[]) AS scope(thread_id, checkpoint_ns)
+                    WHERE b.thread_id = scope.thread_id
+                      AND b.checkpoint_ns = scope.checkpoint_ns
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM public.checkpoints ck
+                          WHERE ck.thread_id = b.thread_id
+                            AND ck.checkpoint_ns = b.checkpoint_ns
+                            AND (ck.checkpoint->'channel_versions'->>b.channel) = b.version
+                      )
+                    """,
+                    (p_tids, p_nss),
+                )
+                n_blobs = max(0, int(cursor.rowcount or 0))
+
+    return {
+        "checkpoints": n_ck,
+        "checkpoint_writes": n_writes,
+        "checkpoint_blobs": n_blobs,
+    }
+
+
 # [P1-PLAN-LOTE-716 · 2026-09-28] Red para `summary_archive`: filas cuya sesión ya no existe. Las vías de borrado de
 # sesión ya arrastran su archivo (`delete_agent_sessions_with_checkpoints`, `delete_account_data`); esto barre lo que
 # se escape: la carrera de `summarize_and_prune`, que archiva en segundo plano y puede escribir DESPUÉS de que el

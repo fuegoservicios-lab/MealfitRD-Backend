@@ -97,6 +97,7 @@ class ChatTurnPhaseTracker:
         self.preflight_ms: Optional[int] = None
         self.sentiment_rag_router_ms: Optional[int] = None
         self.rag_ms: Optional[int] = None
+        self.context_build_ms: Optional[int] = None
         self.context_ready_ms: Optional[int] = None
         self.first_word_ms: Optional[int] = None
         self.first_word_source: Optional[str] = None
@@ -210,6 +211,7 @@ class ChatTurnPhaseTracker:
                 "preflight_ms": self.preflight_ms,
                 "sentiment_rag_router_ms": self.sentiment_rag_router_ms,
                 "rag_ms": self.rag_ms,
+                "context_build_ms": self.context_build_ms,
                 "context_ready_ms": self.context_ready_ms,
                 "first_word_ms": self.first_word_ms,
                 "first_word_source": self.first_word_source,
@@ -407,6 +409,8 @@ def query_chat_phase_percentiles(hours: int = 168) -> dict[str, Any]:
             ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'sentiment_rag_router_ms', '')::numeric))::numeric)::int AS sentiment_rag_router_p90_ms,
             ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'rag_ms', '')::numeric))::numeric)::int AS rag_p50_ms,
             ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'rag_ms', '')::numeric))::numeric)::int AS rag_p90_ms,
+            ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'context_build_ms', '')::numeric))::numeric)::int AS context_build_p50_ms,
+            ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'context_build_ms', '')::numeric))::numeric)::int AS context_build_p90_ms,
             ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_word_ms', '')::numeric))::numeric)::int AS server_first_word_p50_ms,
             ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_word_ms', '')::numeric))::numeric)::int AS server_first_word_p90_ms,
             ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'llm_total_ms', '')::numeric))::numeric)::int AS llm_total_p50_ms,
