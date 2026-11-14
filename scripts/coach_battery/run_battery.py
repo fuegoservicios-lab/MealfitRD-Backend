@@ -26,6 +26,9 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BACKEND))
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import evaluador as _evaluador  # noqa: E402
 
 # El .env del árbol principal (un worktree no lo tiene) y la cuenta cuyos datos se LEEN:
 #   MEALFIT_BATTERY_ENV=<ruta al .env>  MEALFIT_BATTERY_USER_ID=<uuid>
@@ -137,20 +140,26 @@ SHARED_SAVER = MemorySaver()
 agent.PostgresSaver = lambda *_a, **_k: SHARED_SAVER
 
 # Coste: el mismo cálculo que `llm_usage_events`, sin escribirlo.
-COST = {"micros": 0, "calls": 0, "sin_precio": 0, "por_modelo": {}}
+COST = {"micros": 0, "calls": 0, "sin_precio": 0, "in": 0, "out": 0, "cached": 0, "por_modelo": {}}
 
 
 def _usage_recorder(**kw):
     micros = db_profiles.compute_llm_cost_micros(
         kw.get("model"), kw.get("input_tokens"), kw.get("output_tokens"), kw.get("cached_tokens") or 0,
     )
+    in_tok = int(kw.get("input_tokens") or 0)
+    out_tok = int(kw.get("output_tokens") or 0)
+    cached_tok = int(kw.get("cached_tokens") or 0)
     COST["calls"] += 1
+    COST["in"] += in_tok
+    COST["out"] += out_tok
+    COST["cached"] += cached_tok
     m = kw.get("model") or "?"
     slot = COST["por_modelo"].setdefault(m, {"calls": 0, "micros": 0, "in": 0, "out": 0, "cached": 0})
     slot["calls"] += 1
-    slot["in"] += int(kw.get("input_tokens") or 0)
-    slot["out"] += int(kw.get("output_tokens") or 0)
-    slot["cached"] += int(kw.get("cached_tokens") or 0)
+    slot["in"] += in_tok
+    slot["out"] += out_tok
+    slot["cached"] += cached_tok
     if micros is None:
         COST["sin_precio"] += 1
     else:
@@ -585,6 +594,7 @@ def load_persona(name: str) -> dict:
 def run_turn(sid: str, persona: dict, prompt: str, vision) -> dict:
     TOOL_LOG.clear()
     b0, c0 = len(BLOCKED), COST["micros"]
+    in0, out0, cached0, calls0 = COST["in"], COST["out"], COST["cached"], COST["calls"]
     events, t0 = [], time.monotonic()
     err = None
     try:
@@ -616,32 +626,65 @@ def run_turn(sid: str, persona: dict, prompt: str, vision) -> dict:
         "updated_fields": done.get("updated_fields") or {},
         "blocked_writes": blocked,
         "cost_usd": round((COST["micros"] - c0) / 1e6, 5),
+        "tokens": {
+            "in": COST["in"] - in0,
+            "out": COST["out"] - out0,
+            "cached": COST["cached"] - cached0,
+            "calls": COST["calls"] - calls0,
+        },
         "secs": round(time.monotonic() - t0, 1),
         "sys_prompt_chars": len(LAST_SYS["prompt"]),
     }
+
+
+def _select_cases(all_cases: list[dict], *, preset: str, only_raw: str) -> list[dict]:
+    only = {x.strip() for x in (only_raw or "").split(",") if x.strip()}
+    if preset == "short":
+        by_id = {c["id"]: c for c in all_cases}
+        base = [by_id[cid] for cid in _evaluador.SHORT_PRESET_IDS if cid in by_id]
+    else:
+        base = list(all_cases)
+    if only:
+        return [c for c in base if c["id"] in only]
+    return base
+
+
+def _current_git_sha() -> str | None:
+    try:
+        import subprocess
+        out = subprocess.check_output(["git", "-C", str(BACKEND), "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL)
+        return out.strip() or None
+    except Exception:
+        return None
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", required=True)
     ap.add_argument("--only", default="")
+    ap.add_argument("--preset", choices=("all", "short"), default="all")
     ap.add_argument("--budget-usd", type=float, default=2.0)
+    ap.add_argument("--record-ledger", action="store_true")
+    ap.add_argument("--ledger-path", default="")
+    ap.add_argument("--fail-on-regression", action="store_true")
     args = ap.parse_args()
     if not OWNER:
         _out("Falta MEALFIT_BATTERY_USER_ID (la cuenta cuyos plan/Nevera/diario se leen).")
         return 2
 
     battery = json.loads((HERE / "battery.json").read_text(encoding="utf-8"))
-    only = {x.strip() for x in args.only.split(",") if x.strip()}
-    cases = [c for c in battery["casos"] if not only or c["id"] in only]
+    cases = _select_cases(battery["casos"], preset=args.preset, only_raw=args.only)
     out_dir = HERE / "out" / args.label
     out_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = Path(args.ledger_path) if args.ledger_path else _evaluador.DEFAULT_LEDGER_PATH
 
     personas: dict[str, dict] = {}
     results, sys_saved = [], set()
+    budget_cut = False
     for case in cases:
         if COST["micros"] / 1e6 > args.budget_usd:
             _out(f"⛔ presupuesto US${args.budget_usd} superado — corte antes de {case['id']}")
+            budget_cut = True
             break
         pname = case["persona"]
         if pname not in personas:
@@ -652,6 +695,9 @@ def main() -> int:
         FAKE_DIARY.clear()
         set_hora(case.get("hora", "12:40"))
         DIARIO_SIM["rows"] = case.get("diario")   # [P1-PLAN-LOTE-132] None = el diario real de producción
+        for _row in (DIARIO_SIM["rows"] or []):
+            if isinstance(_row, dict) and _row.get("id"):
+                FAKE_DIARY[str(_row["id"])] = dict(_row, days_ago=0)
         HIST["rows"], HIST["desde"] = case.get("historial"), case.get("sesion_desde")   # [P1-PLAN-LOTE-168]
         sid = str(uuid.uuid4())  # la columna es uuid; la sesión no existe en la base (lectura vacía)
         turns = []
@@ -664,20 +710,67 @@ def main() -> int:
         last = turns[-1]
         called = [t["tool"] for tr in turns for t in tr["tools"]]
         metrics = auto_metrics(case, last["final"], called)
+        verdict = _evaluador.evaluar_caso(case, turns, last["final"])
         results.append({"id": case["id"], "cat": case["cat"], "persona": pname, "hora": case.get("hora"),
-                        "expect": case.get("expect"), "turns": turns, "auto": metrics})
-        _out(f"{case['id']:>3} {sum(t['secs'] for t in turns):5.1f}s ${sum(t['cost_usd'] for t in turns):.4f} "
+                        "expect": case.get("expect"), "turns": turns, "auto": metrics, "eval": verdict})
+        _status = "PASS" if verdict["passed"] else f"FAIL({verdict['failures']})"
+        _out(f"{case['id']:>3} [{_status}] {sum(t['secs'] for t in turns):5.1f}s ${sum(t['cost_usd'] for t in turns):.4f} "
              f"tools={called} flags={metrics['flags']} contaminado={sum(len(t['contaminated']) for t in turns)}")
 
-    summary = {"label": args.label, "casos": len(results), "coste_usd": round(COST["micros"] / 1e6, 4),
+    total_evaluated = len(results)
+    failed_ids = [r["id"] for r in results if not r["eval"]["passed"]]
+    passed_count = total_evaluated - len(failed_ids)
+    lat_cache = _evaluador.summarize_latency_cache(results, COST["por_modelo"])
+    prev_entries = _evaluador.load_ledger(ledger_path)
+    prev_entry = _evaluador.latest_baseline_entry(prev_entries, preset=args.preset, exclude_label=args.label)
+    comparison_line = _evaluador.format_comparison_line(passed_count, total_evaluated, prev_entry)
+    regresion = bool(budget_cut) or _evaluador.regression_detected(
+        passed_count, total_evaluated, prev_entry, current_failed_ids=failed_ids
+    )
+    coach_m = os.environ.get("MEALFIT_CHAT_AGENT_MODEL", "") or "?"
+    fallback_m = os.environ.get("MEALFIT_CHAT_FALLBACK_MODEL", "") or "?"
+    vision_m = os.environ.get("MEALFIT_VISION_MODEL", "") or "?"
+
+    summary = {"label": args.label, "preset": args.preset, "casos": total_evaluated,
+               "coste_usd": round(COST["micros"] / 1e6, 4),
                "llamadas_llm": COST["calls"], "sin_precio": COST["sin_precio"], "por_modelo": COST["por_modelo"],
+               "evaluador": {"passed": passed_count, "total": total_evaluated, "failed_ids": failed_ids},
+               "comparacion": comparison_line, "regresion": regresion,
+               "latencia": {"p50_secs": lat_cache["p50_secs"], "p90_secs": lat_cache["p90_secs"]},
+               "cache": {"input_tokens": lat_cache["input_tokens"], "cached_tokens": lat_cache["cached_tokens"],
+                         "hit_pct": lat_cache["hit_pct"]},
+               "models": {"coach": coach_m, "fallback": fallback_m, "vision": vision_m},
                "escrituras_bloqueadas": len(BLOCKED), "bloqueadas_detalle": BLOCKED[:40], "sim": "2026-09-15 (martes), RD UTC-4"}
+
+    if args.record_ledger and total_evaluated > 0:
+        entry = _evaluador.build_ledger_entry(
+            label=args.label,
+            preset=args.preset,
+            model=coach_m,
+            fallback_model=fallback_m,
+            vision_model=vision_m,
+            passed=passed_count,
+            total=total_evaluated,
+            cost_usd=summary["coste_usd"],
+            calls=COST["calls"],
+            cache_hit_pct=lat_cache["hit_pct"],
+            p50_secs=lat_cache["p50_secs"],
+            p90_secs=lat_cache["p90_secs"],
+            failed_ids=failed_ids,
+            git_sha=_current_git_sha(),
+        )
+        _evaluador.append_ledger_entry(entry, ledger_path)
+
     (out_dir / "results.json").write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1),
                                           encoding="utf-8")
-    md = [f"# Transcripción — {args.label}", "", "```", json.dumps(summary, ensure_ascii=False, indent=1), "```", ""]
+    md = [f"# Transcripción — {args.label}", f"**Resultado:** {comparison_line}", "", "```",
+          json.dumps(summary, ensure_ascii=False, indent=1), "```", ""]
     for r in results:
-        md.append(f"## {r['id']} · {r['cat']} · {r['persona']} · {r['hora']}")
+        _tag = "PASS" if r["eval"]["passed"] else "FAIL"
+        md.append(f"## {r['id']} [{_tag}] · {r['cat']} · {r['persona']} · {r['hora']}")
         md.append(f"_Esperado:_ {json.dumps(r['expect'], ensure_ascii=False)}")
+        if r["eval"]["failures"]:
+            md.append(f"_Fallos evaluador:_ {r['eval']['failures']}")
         for t in r["turns"]:
             md.append(f"\n**Usuario:** {t['prompt']}" + (f"  _(foto: {t['vision']['kind']})_" if t.get("vision") else ""))
             for tc in t["tools"]:
@@ -692,7 +785,10 @@ def main() -> int:
                 md.append(f"\n_(lo que vio en streaming difiere del final)_:\n\n> " + t["shown"].replace("\n", "\n> "))
         md.append(f"\n_Auto:_ {json.dumps(r['auto'], ensure_ascii=False)}\n")
     (out_dir / "transcript.md").write_text("\n".join(md), encoding="utf-8")
+    _out(comparison_line)
     _out(json.dumps(summary, ensure_ascii=False))
+    if args.fail_on_regression and (failed_ids or regresion):
+        return 1
     return 0
 
 
