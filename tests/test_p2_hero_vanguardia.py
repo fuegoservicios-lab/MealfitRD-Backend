@@ -46,8 +46,11 @@ _LOCALES_DIR = _SRC / "i18n" / "locales"
 _LOCALES = ("en-US", "pt-BR", "fr-FR", "it-IT")
 
 # Calibración de `P1-MOBILE-FIT`, medida con emulación real de dispositivo:
-# 11 px, letter-spacing 0,08em, padding 0,875rem a cada lado.
-_PX_PER_CHAR = 6.95
+# 11 px, letter-spacing 0,08em, padding 0,875rem a cada lado → 6,95 px por carácter.
+# [CI-E2E-HERO · 2026-11-14] `P1-PLAN-LOTE-710` subió la fila a 12 px y esta constante se quedó en 11: el test
+# seguía verde con una pareja que ya no cabía. Recalibrada con la medida del e2e del CI (Linux, 430 px):
+# celda 1 = 216 px para 23 caracteres, celda 2 = 226 px para 24 → (216−28)/23 = 8,17 y (226−28)/24 = 8,25.
+_PX_PER_CHAR = 8.25
 _CELL_PADDING_PX = 28.0
 
 # El cushion que el bloque móvil de Hero.module.css declara por escrito. No es

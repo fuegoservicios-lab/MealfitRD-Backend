@@ -85,6 +85,12 @@ def _strip_js_comments(src: str) -> str:
     return re.sub(r"//[^\n]*", "", _strip_comments(src))
 
 
+# [CI-E2E-HERO · 2026-11-14] Con la fila a 12 px (`P1-PLAN-LOTE-710`) la pareja mide ~442 px (e2e del CI a 430 px),
+# así que el corte real sube de 383 a 442 y el apilado vive por encima de 420. La ventana donde se busca el bloque
+# es la banda en la que la pareja existe (bajo 600 px la celda del medio ya se oculta).
+_CORTE_REAL_PX = 442
+_BANDA_DE_LA_PAREJA = 599
+
 def _media_blocks(css: str) -> list[tuple[int | None, str]]:
     """[(max-width, cuerpo)] emparejando llaves de verdad — un `@media` con
     reglas anidadas rompe cualquier regex perezosa."""
@@ -118,7 +124,7 @@ def test_cartridge_stacks_before_it_runs_out_of_room():
     css = _strip_comments(_HERO_CSS.read_text(encoding="utf-8"))
     stacked = [
         (mw, body) for mw, body in _media_blocks(css)
-        if mw is not None and _CONTRACT_WIDTH <= mw <= 420
+        if mw is not None and _CONTRACT_WIDTH <= mw <= _BANDA_DE_LA_PAREJA
         and any(
             re.search(r"grid-template-columns:\s*1fr\s*;", b)
             for b in _rule_body(body, ".cartridge")
@@ -130,9 +136,9 @@ def test_cartridge_stacks_before_it_runs_out_of_room():
         "~382,6px y a 320px se cortan ~62,6px SIN scroll que lo revele "
         "(html/body llevan overflow-x: clip)."
     )
-    assert any(mw >= 383 for mw, _ in stacked), (
-        "P1-MOBILE-FIT: el apilado arranca por debajo de 383px, justo donde el "
-        "corte YA ocurre. Tiene que cubrir 383px hacia abajo."
+    assert any(mw >= _CORTE_REAL_PX for mw, _ in stacked), (
+        f"P1-MOBILE-FIT: el apilado arranca por debajo de {_CORTE_REAL_PX}px, justo donde el "
+        f"corte YA ocurre. Tiene que cubrir {_CORTE_REAL_PX}px hacia abajo."
     )
 
 
@@ -143,7 +149,7 @@ def test_stacked_cartridge_turns_its_hairline_and_drops_the_right_align():
     css = _strip_comments(_HERO_CSS.read_text(encoding="utf-8"))
     bodies = [
         body for mw, body in _media_blocks(css)
-        if mw is not None and _CONTRACT_WIDTH <= mw <= 420
+        if mw is not None and _CONTRACT_WIDTH <= mw <= _BANDA_DE_LA_PAREJA
         and any(
             re.search(r"grid-template-columns:\s*1fr\s*;", b)
             for b in _rule_body(body, ".cartridge")
