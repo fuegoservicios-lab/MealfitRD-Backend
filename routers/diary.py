@@ -643,27 +643,27 @@ async def api_diary_upload(
             # de la visión (tope 0,4 s) y, si es casi seguro que no lo es, la visión no se gasta; en `shadow` corre en
             # paralelo y solo se registra. Con `aclaracion` (re-análisis de la MISMA foto) no se consulta. Fail-open.
             import decision_triage as _dt
-            _dt_modo_local = _dt.modo() if not aclaracion else "off"
+            _dt_modo = _dt.modo() if not aclaracion else "off"
             _dt_media = {"data": file_bytes, "mime_type": sniffed_ct}
-            _dt_res_local = None
+            _dt_res = None
             _t_vis = time.perf_counter()
-            if _dt_modo_local == "guard":
+            if _dt_modo == "guard":
                 _t_tr = time.perf_counter()
-                _dt_res_local = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
+                _dt_res = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
                 _fases_ms["triage_ms"] = round((time.perf_counter() - _t_tr) * 1000.0, 2)
-                if _dt.foto_rechazada(_dt_res_local):
+                if _dt.foto_rechazada(_dt_res):
                     _vr = _dt.payload_no_comida()
                 else:
                     _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
-            elif _dt_modo_local == "shadow":
-                _dt_res_local, _vr = await asyncio.gather(
+            elif _dt_modo == "shadow":
+                _dt_res, _vr = await asyncio.gather(
                     _dt.run_triage_async(media=_dt_media, user_id=actual_user_id),
                     process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais),
                 )
             else:
                 _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
             _fases_ms["vision_ms"] = round((time.perf_counter() - _t_vis) * 1000.0, 2)
-            return _dt_modo_local, _dt_res_local, _vr
+            return _dt_modo, _dt_res, _vr
 
         with vision_usage_scope():
             if (

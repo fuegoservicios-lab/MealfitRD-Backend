@@ -378,7 +378,7 @@ def test_admin_chat_perf_exposes_efficiency_and_call_model_escalates_cleanly(mon
             return AIMessage(content="Precaución clínica aplicada.")
 
     monkeypatch.setattr(
-        agent,
+        llm_provider,
         "build_chat_llm",
         lambda model, **kw: built.update(model=model, kw=kw) or _FakeLLM(),
     )

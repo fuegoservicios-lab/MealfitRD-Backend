@@ -240,3 +240,34 @@ def evaluar_turno_dificil(
         "est_usd": total_est_usd,
         "cap_usd": max_cost_usd,
     }
+
+
+def construir_llm_turno_dificil(
+    model: str,
+    hard_info: dict[str, Any],
+    *,
+    timeout_s: float,
+    retry_kwargs: Optional[dict[str, Any]] = None,
+    voice_kwargs: Optional[dict[str, Any]] = None,
+):
+    """Construye el cliente LLM acotado para un turno escalado sin duplicar callsites en `agent.py`."""
+    import llm_provider
+
+    rkw = dict(retry_kwargs or {})
+    if llm_provider.is_openai_model(model):
+        return llm_provider.build_chat_llm(
+            model,
+            timeout=timeout_s,
+            reasoning_effort=hard_info.get("reasoning_effort", "low"),
+            max_tokens=hard_info.get("max_tokens", hard_turn_max_output_tokens()),
+            **rkw,
+        )
+    vkw = dict(voice_kwargs or {})
+    return llm_provider.ChatGLM(
+        model=model,
+        temperature=0.7,
+        timeout=timeout_s,
+        max_tokens=hard_info.get("max_tokens", hard_turn_max_output_tokens()),
+        **rkw,
+        **vkw,
+    )

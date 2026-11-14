@@ -4682,39 +4682,29 @@ def call_model(state: ChatState):
     )
     from chat_phase_metrics import get_active_turn_tracker as _get_pre_tracker
     _pt_pre = _get_pre_tracker(state.get("session_id"))
-    from chat_hard_turn import evaluar_turno_dificil
+    from chat_hard_turn import construir_llm_turno_dificil, evaluar_turno_dificil
     _eff_model, _hard_info = evaluar_turno_dificil(
         state, llm_messages, _cb_model, active_tools, tracker=_pt_pre
     )
     if _hard_info.get("escalated"):
         _cb_model = _eff_model
-    # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, el principal reintenta UNA vez (el default del
-    # cliente son 2: con timeouts de 30 s el turno moría antes de llegar a ningún respaldo).
-    _fallback_model = _chat_agent_fallback_model(_cb_model)
-    _primary_retry_kwargs = {"max_retries": 1} if _fallback_model else {}
-    if _hard_info.get("escalated"):
         active_tools = (
             _select_tools_for_turn(agent_tools, state)
             if _tool_gating_enabled_for_model(_cb_model)
             else list(agent_tools)
         )
-        if is_openai_model(_cb_model):
-            chat_llm = build_chat_llm(
-                _cb_model,
-                timeout=_chat_agent_llm_timeout_s(),
-                reasoning_effort=_hard_info["reasoning_effort"],
-                max_tokens=_hard_info["max_tokens"],
-                **_primary_retry_kwargs,
-            )
-        else:
-            chat_llm = ChatGLM(
-                model=_cb_model,
-                temperature=0.7,
-                timeout=_chat_agent_llm_timeout_s(),
-                max_tokens=_hard_info["max_tokens"],
-                **_primary_retry_kwargs,
-                **_kwargs_de_razonamiento_modo_voz(state),
-            )
+    # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, el principal reintenta UNA vez (el default del
+    # cliente son 2: con timeouts de 30 s el turno moría antes de llegar a ningún respaldo).
+    _fallback_model = _chat_agent_fallback_model(_cb_model)
+    _primary_retry_kwargs = {"max_retries": 1} if _fallback_model else {}
+    if _hard_info.get("escalated"):
+        chat_llm = construir_llm_turno_dificil(
+            _cb_model,
+            _hard_info,
+            timeout_s=_chat_agent_llm_timeout_s(),
+            retry_kwargs=_primary_retry_kwargs,
+            voice_kwargs=_kwargs_de_razonamiento_modo_voz(state),
+        )
     else:
         chat_llm = ChatGLM(
             model=_chat_agent_model_name(_model_uid),
@@ -5740,7 +5730,9 @@ def execute_tools(state: ChatState):
         _parallel_on = _parallel_read_tools_enabled()
         _tools_by_name = {getattr(t, "name", ""): t for t in agent_tools} if _parallel_on else {}
         _skip_before_idx = -1
-        for _tc_pos, tool_call in enumerate(_tcs):
+        _tc_pos = -1
+        for tool_call in last_message.tool_calls:
+            _tc_pos += 1
             if _tc_pos < _skip_before_idx:
                 continue
             _tc_name_peek = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
@@ -8165,8 +8157,11 @@ def _record_nudge_metric(state: ChatState, nudge_name: str) -> None:
         tracker = get_active_turn_tracker((state or {}).get("session_id"))
         if tracker is not None:
             tracker.record_nudge(nudge_name)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] record_nudge_metric: %s: %s",
+            type(_exc).__name__, str(_exc)[:160],
+        )
 
 
 def nudge_diary_tool(state: ChatState):
