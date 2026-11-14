@@ -308,3 +308,65 @@ def abrir_pantalla(pantalla: str, seccion: Optional[str] = None) -> str:
         if sec:
             cambio["seccion"] = sec
     return _con_marcador(f"Hecho: la app muestra {canon}.", cambio)
+
+
+# ── confirmación sin segunda llamada al modelo ──────────────────────────────────────────────────────────────────
+# [REVISION-LOTES-1001-1011] La confirmación rápida del lote 1009 (G-07) enseñaba al usuario el texto de arriba, que
+# está escrito para el modelo. Aquí la frase se escribe PARA EL USUARIO desde el cambio aplicado. Solo resultados
+# «Hecho:» con un único cambio conocido; cualquier otra cosa devuelve None y la redacta el modelo como siempre.
+
+_NOMBRE_PANTALLA = {"inicio": "el inicio", "progreso": "tu progreso", "agente": "el chat del coach",
+                    "nevera": "tu Nevera", "recetas": "las recetas", "historial": "tu historial",
+                    "configuracion": "la configuración"}
+_NOMBRE_SECCION = {"profile": "General", "health": "Alergias y dieta", "preferences": "Capacidades",
+                   "privacy": "Privacidad", "superpers": "Súper personalización", "clinical": "Perfil clínico",
+                   "plan": "Plan y objetivo", "subscription": "Suscripción"}
+
+
+def frase_de_confirmacion_para_el_usuario(resultado: str) -> Optional[str]:
+    texto = str(resultado or "").strip()
+    if not texto.startswith("Hecho"):
+        return None
+    m = _RE_MARCADOR.search(texto)
+    if not m:
+        return None
+    try:
+        cambio = json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(cambio, dict):
+        return None
+    claves = set(cambio) - {"seccion"}
+    if len(claves) != 1:
+        return None
+    clave = next(iter(claves))
+    valor = cambio[clave]
+    if clave == "pantalla":
+        nombre = _NOMBRE_PANTALLA.get(valor)
+        if not nombre:
+            return None
+        sec = _NOMBRE_SECCION.get(cambio.get("seccion"))
+        return f"Listo, te abro {nombre}" + (f", en la sección {sec}." if sec else ".")
+    if "seccion" in cambio:
+        return None
+    if clave == "tema":
+        nombre = {"light": "claro", "dark": "oscuro", "system": "el del sistema"}.get(valor)
+        return f"Listo, la app ya está en tema {nombre}." if nombre else None
+    if not isinstance(valor, bool):
+        return None
+    if clave == "hidratacion":
+        return ("Listo, la tarjeta de Hidratación ya se ve en tu panel." if valor
+                else "Listo, oculté la tarjeta de Hidratación; tu historial de vasos se conserva.")
+    if clave == "nevera":
+        return ("Listo, tu Nevera está activa y ya ves su pestaña." if valor
+                else "Listo, oculté la Nevera; tu inventario se conserva.")
+    if clave == "memoria":
+        return ("Listo, activé la memoria a largo plazo: recordaré lo importante de nuestras conversaciones." if valor
+                else "Listo, pausé la memoria a largo plazo; lo que ya guardé se conserva.")
+    if clave in ("avisos_comida", "avisos_agua"):
+        que = "de comida" if clave == "avisos_comida" else "de agua"
+        if valor:
+            return (f"Listo, encendí los recordatorios {que}. Te llegan si tienes permitidas las notificaciones de la "
+                    "app en el teléfono.")
+        return f"Listo, apagué los recordatorios {que}."
+    return None

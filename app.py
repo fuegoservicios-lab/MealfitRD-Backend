@@ -3378,6 +3378,9 @@ _ACCOUNT_EXPORT_LIMITER = RateLimiter(max_calls=3, period_seconds=300)
 # Tooltip-anchor: P2-CORS-NARROW.
 from ios_free import FreeIOSMiddleware
 app.add_middleware(FreeIOSMiddleware)
+# [REVISION-LOTES-1001-1011] Lo que el usuario escribe desde la app vacía la caché de contexto del coach (lote 1010).
+from contexto_del_coach_fresco import ContextoDelCoachFrescoMiddleware
+app.add_middleware(ContextoDelCoachFrescoMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

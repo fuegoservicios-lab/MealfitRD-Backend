@@ -5734,8 +5734,16 @@ def _parallel_read_tools_enabled() -> bool:
 
 _SOURCE_INTENT_PROFILE_RE = re.compile(
     r"\b(mi perfil|guarda(?:lo|r)?(?:\s+en|\s+eso)?|actualiza\s+mi|cambia(?:r)?\s+(?:mi|el|la|los|las)|"
-    r"ponme|an[oó]tame\s+en|soy\s+al[eé]rgic[oa]|tengo\s+alergia|diagnost|soy\s+diab[eé]tic|"
-    r"hipertens|cel[ií]ac|vegetari|vegan|no\s+como\s+|no\s+me\s+gusta|"
+    r"ponme|an[oó]tame\s+en|soy\s+al[eé]rgic[oa]|tengo\s+alergia|"
+    # [REVISION-LOTES-1001-1011] Las raíces llevan `\w*`: el `\b` final del patrón exigía que la palabra terminara justo
+    # en la raíz, así que «diagnost», «diab[eé]tic», «hipertens», «cel[ií]ac», «vegetari» y «vegan» NUNCA coincidían
+    # con «diagnosticaron», «diabético», «hipertensión», «celíaco», «vegetariana» ni «vegano». Con una foto en el turno,
+    # de 9 frases clínicas solo «soy alérgico» guardaba el dato. Se suman las formas que faltaban («intolerante»,
+    # «tengo diabetes», «celiaquía», …): una alergia o condición que el usuario afirma no puede depender de la foto.
+    r"diagnost\w*|diab[eé]t\w*|hipertens\w*|cel[ií]ac\w*|celiaqu\w*|vegetari\w*|vegan\w*|"
+    r"intoleran\w*|al[eé]rgi\w*|embaraz\w*|lactan\w*|no\s+tolero|me\s+cae\s+mal|me\s+hace\s+da[ñn]o|"
+    r"renal|ri[ñn][oó]n\w*|colesterol|tiroid\w*|hipotiroid\w*|gota|"
+    r"no\s+como\s+|no\s+me\s+gusta|"
     r"mi\s+(?:peso|estatura|altura|edad|meta|objetivo|dieta|alergia|condici[oó]n)|"
     r"(?:activa|desactiva|enciende|apaga|prende|oculta|muestra|quita)\s+(?:la|el|las|los)?\s*"
     r"(?:hidrataci[oó]n|agua|nevera|despensa|memoria|generador|recordatorio|notificaci[oó]n|tema|modo)|"
@@ -5847,12 +5855,23 @@ def _maybe_append_fast_tool_confirmation(
     if tname not in _FAST_CONFIRM_TOOL_NAMES:
         return None
 
+    # [REVISION-LOTES-1001-1011] La respuesta rápida está escrita en español. Los marcadores que se buscaban
+    # («INSTRUCCIÓN DE IDIOMA», «LANGUAGE DIRECTIVE») no existen en ningún prompt: un usuario con la app en inglés que
+    # pedía un vaso de agua recibía la confirmación en español. Todas las directivas de idioma del coach empiezan por
+    # «🌐» (prompts/chat_agent.py::build_language_directive y build_message_language_directive), y el idioma del
+    # MENSAJE manda aunque la app esté en español (regla F): cualquiera de los dos ⇒ que responda el modelo.
     sys_prompt = str(state.get("sys_prompt") or "")
-    if "INSTRUCCIÓN DE IDIOMA" in sys_prompt or "LANGUAGE DIRECTIVE" in sys_prompt:
+    if "🌐" in sys_prompt:
         return None
 
     user_txt = _extraer_ultimo_texto_usuario(messages)
     if _RE_COMPOUND_QUERY_ES.search(user_txt or ""):
+        return None
+    try:
+        from prompts.chat_agent import detect_message_locale as _det_loc
+        if _det_loc(user_txt or ""):
+            return None
+    except Exception:
         return None
 
     res_text = str(getattr(tool_messages[0], "content", "") or "").strip()
@@ -5869,16 +5888,21 @@ def _maybe_append_fast_tool_confirmation(
             return None
         verb, qty, total, goal, extra = m.group(1).lower(), m.group(2), m.group(3), m.group(4), (m.group(5) or "").strip()
         accion = "Sumé" if verb == "sumaron" else "Resté"
-        plural = "s" if qty != "1" else ""
+        cuanto = "medio vaso" if qty in ("0.5", ".5") else (f"{qty} vaso" + ("" if qty == "1" else "s"))
         reached = " ¡Meta del día alcanzada!" if ("cumplio su meta" in extra.lower() or "cumplió su meta" in extra.lower()) else ""
-        fast_reply = f"¡Listo! {accion} {qty} vaso{plural} de agua; llevas **{total} de {goal} vasos** hoy.{reached}"
+        fast_reply = f"¡Listo! {accion} {cuanto} de agua; llevas **{total} de {goal} vasos** hoy.{reached}"
         if "hidratación" in extra.lower() or "hidratacion" in extra.lower() or "tarjeta" in extra.lower():
             fast_reply += " Activé tu tarjeta de Hidratación para que lo veas."
     elif tname in ("cambiar_ajuste_de_la_app", "abrir_pantalla_de_la_app"):
-        clean = re.sub(r"<<AJUSTE_APP_JSON:.*?>>", "", res_text, flags=re.DOTALL).strip()
-        if not clean or len(clean) > 280:
+        # [REVISION-LOTES-1001-1011] El texto de estas tools está escrito PARA EL MODELO («Díselo así.», «aprenderás de
+        # sus conversaciones», «desde el siguiente mensaje le hablas en ese idioma»): enseñarlo tal cual le llegaba al
+        # usuario. La frase se construye desde el cambio aplicado (el JSON del marcador) y solo para los cambios cuyo
+        # resultado es inequívoco; idioma, generador de planes y cualquier otro caso los redacta el modelo.
+        try:
+            from ajustes_de_la_app import frase_de_confirmacion_para_el_usuario
+            fast_reply = frase_de_confirmacion_para_el_usuario(res_text) or ""
+        except Exception:
             return None
-        fast_reply = clean
 
     if not fast_reply:
         return None

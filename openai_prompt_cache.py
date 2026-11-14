@@ -29,6 +29,7 @@ Tooltip-anchor: P1-PLAN-LOTE-1003-PROMPT-CACHE.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -197,6 +198,28 @@ def inyectar_openai_prompt_cache(payload: dict, *, model_name: Optional[str] = N
     retention = openai_prompt_cache_retention_value()
     if retention and not skip_ret and "prompt_cache_retention" not in payload:
         payload["prompt_cache_retention"] = retention
+
+    _registrar_huella_del_prefijo(payload, full_sys_text)
+
+
+def _registrar_huella_del_prefijo(payload: dict, full_sys_text: str) -> None:
+    """[REVISION-LOTES-1001-1011] Huella del prefijo cacheable, para aislar por qué la PRIMERA llamada de cada turno
+    sigue con `cached_tokens = 0` en producción (medido el 14-nov: 0 de 12 turnos, incluidos 3 seguidos del mismo
+    usuario en 1 minuto con las mismas 8 tools y el mismo largo de prefijo). OpenAI cachea tools + mensajes por
+    prefijo: comparar estas huellas entre dos turnos dice qué parte cambia, sin gastar IA. Solo log."""
+    try:
+        tools_json = json.dumps(payload.get("tools") or [], sort_keys=True, ensure_ascii=False)
+        estatico = extract_static_sys_prefix(full_sys_text) or ""
+        logger.info(
+            "[G-02 HUELLA] key=%s tools=%s/%d sys_head=%s/%d sys_2k=%s msgs=%d",
+            payload.get("prompt_cache_key"),
+            hashlib.sha256(tools_json.encode("utf-8", "replace")).hexdigest()[:10], len(tools_json),
+            hashlib.sha256(estatico.encode("utf-8", "replace")).hexdigest()[:10], len(estatico),
+            hashlib.sha256(full_sys_text[:2000].encode("utf-8", "replace")).hexdigest()[:10],
+            len(payload.get("messages") or ()),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def registrar_error_param_cache(exc: Exception, model_name: Optional[str]) -> bool:

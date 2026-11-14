@@ -101,10 +101,10 @@ def check_user_daily_chat_budget(
             execute_sql_query = _ssot_q
         row = execute_sql_query(
             """
-            SELECT COALESCE(SUM(estimated_cost_micros), 0)::bigint AS spent_micros
+            SELECT COALESCE(SUM(cost_usd_micros), 0)::bigint AS spent_micros
             FROM public.llm_usage_events
             WHERE user_id = %s
-              AND endpoint LIKE '/api/chat%%'
+              AND node LIKE 'chat%%'
               AND created_at >= NOW() - INTERVAL '24 hours'
             """,
             (str(user_id),),

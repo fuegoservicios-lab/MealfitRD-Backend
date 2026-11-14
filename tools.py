@@ -524,7 +524,10 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
     # [P1-PLAN-LOTE-1007 · G-20] Freno determinista contra prompt-injection o marcadores internos.
     from input_sanitization import contiene_inyeccion_texto as _check_inj
     _inj_f = _check_inj(field, max_len=64)
-    _inj_v = _check_inj(new_value, max_len=240)
+    # [REVISION-LOTES-1001-1011] Alergias y condiciones llegan como la lista ENTERA separada por comas (el modelo
+    # repite las previas + la nueva): con 240 caracteres un perfil clínico largo dejaba de guardar la alergia nueva.
+    # Para esas listas el tope es amplio; los marcadores y las órdenes de inyección se siguen rechazando igual.
+    _inj_v = _check_inj(new_value, max_len=1200 if field in ("allergies", "medicalConditions") else 240)
     if _inj_f or _inj_v:
         logger.warning(
             "🛡️ [G-20 PROMPT-INJ] update_form_field rechazado field_reason=%r val_reason=%r",

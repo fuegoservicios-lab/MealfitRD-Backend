@@ -223,11 +223,11 @@ def evaluar_salud_coach_y_alertar(
                 """
                 SELECT
                     COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour')::int AS calls_1h,
-                    COALESCE(AVG(estimated_cost_micros) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour'), 0)::float / 1000000.0 AS avg_1h_usd,
+                    COALESCE(AVG(cost_usd_micros) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour'), 0)::float / 1000000.0 AS avg_1h_usd,
                     COUNT(*)::int AS calls_7d,
-                    COALESCE(AVG(estimated_cost_micros), 0)::float / 1000000.0 AS avg_7d_usd
+                    COALESCE(AVG(cost_usd_micros), 0)::float / 1000000.0 AS avg_7d_usd
                 FROM public.llm_usage_events
-                WHERE endpoint LIKE '/api/chat%%'
+                WHERE node LIKE 'chat%%'
                   AND created_at >= NOW() - INTERVAL '7 days'
                 """,
                 (),
