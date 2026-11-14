@@ -4894,6 +4894,18 @@ def call_model(state: ChatState):
                 node='chat_call_model',
                 extra_metadata=_call_extra_meta,
             )
+            from chat_phase_metrics import extract_usage_counts, get_active_turn_tracker
+            _pt_call = get_active_turn_tracker(state.get("session_id"))
+            if _pt_call is not None:
+                _in_t, _ca_t, _out_t = extract_usage_counts(response)
+                _pt_call.record_llm_call(
+                    model=_cb_model,
+                    duration_ms=int((_time_chat.time() - _chat_invoke_start) * 1000),
+                    fallback_used=(_primary_exc is not None),
+                    input_tokens=_in_t,
+                    cached_tokens=_ca_t,
+                    output_tokens=_out_t,
+                )
         finally:
             if _cost_tok is not None:
                 _cost_uid_var.reset(_cost_tok)
@@ -5576,6 +5588,10 @@ def execute_tools(state: ChatState):
     )
 
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        from chat_phase_metrics import get_active_turn_tracker as _get_tool_tracker
+        _pt_tools = _get_tool_tracker(_trusted_session_id)
+        _open_tool_name = ""
+        _open_tool_t0 = None
         _assigned_attachment_ids = set()
         _meal_calls_count = sum(
             1 for tc in last_message.tool_calls
@@ -5585,6 +5601,15 @@ def execute_tools(state: ChatState):
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             tool_id = tool_call["id"]
+            if _pt_tools is not None:
+                if _open_tool_t0 is not None:
+                    _pt_tools.record_tool(
+                        _open_tool_name,
+                        int((time.monotonic() - _open_tool_t0) * 1000),
+                        guard_blocked=True,
+                    )
+                _open_tool_name = tool_name
+                _open_tool_t0 = time.monotonic()
 
             # [P0-AGENT-1 · 2026-05-11] Force-override `user_id` en tool_args
             # ANTES de cualquier branch. Si la LLM pasó un `user_id` distinto
@@ -6357,6 +6382,21 @@ def execute_tools(state: ChatState):
                     )
 
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
+            if _pt_tools is not None and _open_tool_t0 is not None:
+                _pt_tools.record_tool(
+                    _open_tool_name,
+                    int((time.monotonic() - _open_tool_t0) * 1000),
+                    guard_blocked=False,
+                )
+                _open_tool_t0 = None
+
+        if _pt_tools is not None and _open_tool_t0 is not None:
+            _pt_tools.record_tool(
+                _open_tool_name,
+                int((time.monotonic() - _open_tool_t0) * 1000),
+                guard_blocked=True,
+            )
+            _open_tool_t0 = None
             
     return {
         "messages": tool_messages,
@@ -9948,6 +9988,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     _chat_total_outcome = "ok"
 
     _pf = None
+    from chat_phase_metrics import get_active_turn_tracker, release_turn_tracker, start_turn_tracker
+    _pt = get_active_turn_tracker(session_id)
+    _pt_tok = None
+    if _pt is None:
+        _pt, _pt_tok = start_turn_tracker(user_id=user_id, session_id=session_id, owned_by_router=False)
+    elif _pt.preflight_ms is None:
+        _pt.set_phase_ms("preflight_ms", _pt.elapsed_ms())
     # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
@@ -10471,6 +10518,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     )
 
     existing_state = chat_graph_app.get_state(config)
+    _pt.mark_context_ready()
 
     inputs = {
         "user_id": user_id or "guest",
@@ -10553,6 +10601,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 user_id, session_id, _chat_agent_model_name(),
                 _total_dur_ms, _chat_total_outcome,
             )
+            if _pt is not None:
+                if not getattr(_pt, "owned_by_router", False):
+                    _pt.mark_done(outcome=_chat_total_outcome, model=_chat_agent_model_name())
+                    _pt.emit_once(outcome=_chat_total_outcome, model_name=_chat_agent_model_name())
+                if _pt_tok is not None:
+                    release_turn_tracker(_pt, _pt_tok)
         except Exception:
             pass
         raise
@@ -10573,6 +10627,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             user_id, session_id, _chat_agent_model_name(),
             _total_dur_ms, _chat_total_outcome,
         )
+        if _pt is not None:
+            if not getattr(_pt, "owned_by_router", False):
+                _pt.mark_done(outcome=_chat_total_outcome, model=_chat_agent_model_name())
+                _pt.emit_once(outcome=_chat_total_outcome, model_name=_chat_agent_model_name())
+            if _pt_tok is not None:
+                release_turn_tracker(_pt, _pt_tok)
     except Exception:
         pass
 
@@ -10666,6 +10726,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
     _pf = None
+    from chat_phase_metrics import get_active_turn_tracker, release_turn_tracker, start_turn_tracker
+    _pt = get_active_turn_tracker(session_id)
+    _pt_tok = None
+    if _pt is None:
+        _pt, _pt_tok = start_turn_tracker(user_id=user_id, session_id=session_id, owned_by_router=False)
+    elif _pt.preflight_ms is None:
+        _pt.set_phase_ms("preflight_ms", _pt.elapsed_ms())
     # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
@@ -10757,6 +10824,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 _do_sentiment = False
                 logger.info("⏭️ [SENTIMENT FASTPATH] Turno objetivo sin señales afectivas → skip sentiment.")
         if _do_sentiment or _do_rag_router:
+            _t_sr0 = time.monotonic()
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
                 _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
                 _f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag_router else None
@@ -10776,9 +10844,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     except Exception as _re2:
                         logger.warning(f"⚠️ [CHAT RAG ROUTER] fallo: {_re2}")
                         rag_decision = None
+            _pt.set_phase_ms("sentiment_rag_router_ms", int((time.monotonic() - _t_sr0) * 1000))
 
         # RAG INJECTION (con Query Routing inteligente) — FASE 2
         if _do_rag and rag_decision and not rag_decision.get("skip"):
+            _t_rag0 = time.monotonic()
             optimized_query = rag_decision.get("query", prompt)
 
             # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos embeddings (texto vs
@@ -10817,6 +10887,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     visual_facts_text = _f_visual.result() or ""
             except Exception as e:
                 logger.error(f"⚠️ [CHAT RAG] Error concurrente (stream): {e}")
+            _pt.set_phase_ms("rag_ms", int((time.monotonic() - _t_rag0) * 1000))
 
         _pf.resolve_all()
         memory = _pf.resolve_memory()
@@ -11240,6 +11311,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     )
 
     existing_state = chat_graph_app.get_state(config)
+    _pt.mark_context_ready()
     
     inputs = {
         "user_id": user_id or "guest",
@@ -11455,6 +11527,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                 _buf_step = _step
                                 _pretool_buf.append(chunk_content)
                             else:
+                                _pt.mark_first_word("stream_chunk")
                                 yield f"data: {json.dumps({'type': 'chunk', 'text': chunk_content})}\n\n"
                                 # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20]
                                 _chunks_yielded += 1
@@ -11478,6 +11551,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                 # la pasada siguiente y el usuario la leía dos veces.
                                 _retenido = _strip_tool_announcement(_retenido)
                                 if _retenido.strip():
+                                    _pt.mark_first_word("pretool_narration")
                                     yield f"data: {json.dumps({'type': 'chunk', 'text': _retenido})}\n\n"
                                     _chunks_yielded += 1
                         # [P1-CHAT-STREAM-TOOLCALL-CHUNKS · 2026-09-14] Una tool_call llega
@@ -11542,6 +11616,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             _resto = "".join(_pretool_buf)
             _pretool_buf.clear()
             if _resto:
+                _pt.mark_first_word("pretool_flush")
                 yield f"data: {json.dumps({'type': 'chunk', 'text': _resto})}\n\n"
                 _chunks_yielded += 1
 
@@ -11646,6 +11721,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 user_id, session_id, _chat_agent_model_name(),
                 _total_dur_ms, _stream_outcome,
             )
+            _pt.set_outcome(_stream_outcome, _chat_agent_model_name())
+            if not _pt.owned_by_router and _stream_outcome != "ok":
+                _pt.emit_once(outcome=_stream_outcome, model_name=_chat_agent_model_name())
+                release_turn_tracker(_pt, _pt_tok)
         except Exception:
             pass
 
@@ -11698,4 +11777,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
-    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"
+    _pt.mark_done(_stream_outcome, _chat_agent_model_name())
+    try:
+        yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"
+    finally:
+        if not _pt.owned_by_router:
+            _pt.emit_once(outcome=_stream_outcome, model_name=_chat_agent_model_name())
+            release_turn_tracker(_pt, _pt_tok)

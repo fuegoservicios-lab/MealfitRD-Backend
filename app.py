@@ -1079,7 +1079,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-987 · 2026-11-12] «Dos paquetes de las de ayer»: la porcion es la del registro, sin preguntar.
 # [P1-PLAN-LOTE-991 · 2026-11-12] «me tomé la creatina» sin cantidad = su toma (etiqueta o historial), no 1 cápsula.
 # [P1-PLAN-LOTE-1000 · 2026-11-13] Orden cache-first del prompt, fast-path de sentimiento en registros objetivos, dieta de contexto por turno, telemetría LLM auxiliar y alerta de gasto diario.
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1000 · 2026-11-13"
+# [P1-PLAN-LOTE-1001 · 2026-11-14] (G-06 + G-01) Visibilidad de modelos efectivos en /health/version con alerta de desvío entre arranques (`system_alerts.model_effective_changed`) y telemetría por fase del turno ligada por `corr` en `pipeline_metrics` (`chat_turn_phases` + `chat_client_perf`).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1001 · 2026-11-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2463,6 +2464,12 @@ async def lifespan(app: FastAPI):
             _emit_critical_config_alerts()
         except Exception as _cfg_alert_e:
             logger.warning(f"[P2-CRITICAL-CONFIG-ALERT] startup check no-op: {_cfg_alert_e}")
+        # [P1-PLAN-LOTE-1001 · G-06] Detecta cambios inesperados en modelos efectivos entre arranques.
+        try:
+            from model_visibility import detect_and_record_model_drift_on_startup as _check_model_drift
+            _check_model_drift()
+        except Exception as _drift_e:
+            logger.warning(f"[G-06 MODEL_DRIFT] startup check no-op: {_drift_e}")
         # [P2-NEW-F · 2026-05-08] Registrar listener ANTES de start() para no
         # perder los primeros eventos. Mask combinado MISSED|ERROR. Si la
         # telemetría está desactivada por knob, el listener corto-circuita
@@ -3118,6 +3125,18 @@ def health_version():
     except Exception:
         pass
 
+    effective_models: dict = {
+        "coach_model": None,
+        "coach_fallback_model": None,
+        "vision_model": None,
+        "model_drift_detected": False,
+    }
+    try:
+        from model_visibility import get_health_version_model_fields
+        effective_models = get_health_version_model_fields()
+    except Exception:
+        pass
+
     git_sha = os.environ.get("GIT_SHA") or "unknown"
     return {
         "git_sha": git_sha,
@@ -3147,6 +3166,8 @@ def health_version():
         "embedding_cache_size": embedding_cache_size,
         "pantry_embeddings_cache_size": pantry_embeddings_cache_size,
         "embedding_cache_maxsize": embedding_cache_maxsize,
+        # [P1-PLAN-LOTE-1001 · G-06] Modelos efectivos y estado de desvío entre arranques.
+        **effective_models,
     }
 
 

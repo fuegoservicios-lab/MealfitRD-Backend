@@ -1657,6 +1657,24 @@ def admin_cost_by_node(request: Request, hours: int = 24):
     }
 
 
+@router.get("/admin/chat-perf")
+def admin_chat_perf(request: Request, hours: int = 168):
+    """[P1-PLAN-LOTE-1001 · G-01] Percentiles p50/p90 por fase del turno (servidor + cliente)
+    y por herramienta desde `pipeline_metrics` (`chat_turn_phases`, `chat_client_perf`)."""
+    _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)
+
+    window_h = max(1, min(720, int(hours) if hours else 168))
+    try:
+        from chat_phase_metrics import query_chat_phase_percentiles
+
+        summary = query_chat_phase_percentiles(window_h)
+        return {"success": True, **summary}
+    except Exception as e:
+        logger.warning(f"[G-01 CHAT-PERF] query falló: {e}")
+        raise HTTPException(status_code=503, detail="DB query falló (best-effort).")
+
+
 @router.get("/admin/plan-quality")
 def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
     """[P1-PLAN-QUALITY-INDEX · 2026-07-31] El medidor: índice de variedad y

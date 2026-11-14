@@ -447,3 +447,19 @@ cacheados (~$0,052, 2,9 s) y la 2.ª del mismo turno cachea el 93 % (~$0,005, 2,
    y eso solo se hace con una batería de replay de las 54 reglas etiquetadas (no con un recorte a ciegas: ver el compacto).
 3. **Palancas de prefijo (ancla / split / catálogo fijo): decididas OFF.** Reevaluar con `scripts/medir_cache_coach.py`
    cuando haya >50 llamadas/día de Hydrogen (hoy ~13, casi todas del dueño); una palanca por vez, 24 h cada una.
+
+## Configuración esperada del coach y visión en producción (P1-PLAN-LOTE-1001 · G-06 · 2026-11-14)
+
+La selección de modelos del coach y visión depende de variables en `.env` del VPS que **no viven fijadas en código** para el coach principal (si falta `MEALFIT_CHAT_AGENT_MODEL`, el código cae a `gemini-4-hydrogen`, ~15× más caro por turno). Valores esperados en producción desde el 14-nov:
+
+| Superficie | Knob `.env` esperado | Valor esperado | Si falta o cambia |
+|---|---|---|---|
+| Coach principal (`/api/chat/stream`) | `MEALFIT_CHAT_AGENT_MODEL` | `gpt-6-luna` | Cae al código (`gemini-4-hydrogen` / router por tier) |
+| Respaldo del coach | `MEALFIT_CHAT_AGENT_FALLBACK_MODEL` | `gemini-4-hydrogen` | Fallback a `gpt-6-luna` (sin diversidad si principal también es Luna) |
+| Escáner de fotos (visión) | `MEALFIT_VISION_MODEL` + `MEALFIT_VISION_PROVIDER` | `gemini-4-hydrogen` + `openai_compatible` | Queda apagado (`disabled`) |
+
+### Observabilidad y alerta automática de desvío
+
+- `GET /health/version` expone `coach_model`, `coach_fallback_model`, `vision_model` y `model_drift_detected` (`backend/model_visibility.py`).
+- En cada arranque (`lifespan`), `detect_and_record_model_drift_on_startup()` compara estos tres valores contra `app_kv_store["effective_models_snapshot"]`. Si difieren respecto al arranque previo y `MEALFIT_MODEL_DRIFT_ALERT_ENABLED` está activo (`True` por defecto), emite warning y registra `system_alerts` (`alert_key='model_effective_changed'`, `alert_type='model_drift'`).
+

@@ -832,14 +832,49 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
         raise HTTPException(status_code=500, detail="Error saving feedback")
 
 
+@router.post("/client-metrics", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
+async def api_chat_client_metrics(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-PLAN-LOTE-1001 · G-01] Registra la latencia real percibida en el cliente
+    (envío -> primer chunk y primer texto pintado) correlacionada por `corr`."""
+    session_id = data.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session_id")
+
+    assert_valid_uuid(str(session_id))
+    session_owner = await asyncio.to_thread(get_session_owner, session_id)
+    if session_owner and session_owner != "guest":
+        if not verified_user_id or verified_user_id != session_owner:
+            raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
+
+    from chat_phase_metrics import record_client_chat_perf
+
+    result = await asyncio.to_thread(
+        record_client_chat_perf,
+        user_id=verified_user_id,
+        session_id=str(session_id),
+        payload=data if isinstance(data, dict) else {},
+    )
+    return {"success": True, **result}
+
+
 @router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
 def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota),
                     _ia: None = Depends(requiere_consentimiento_ia)):
+    _phase_tracker = None
+    _phase_tok = None
+    _stream_started = False
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
         # [P0-CHAT-IDENTITY-FROM-TOKEN · 2026-09-14] Identidad solo del token (ver helper).
         user_id = _resolve_chat_identity(data.get("user_id"), session_id, verified_user_id)
+        from chat_phase_metrics import start_turn_tracker, release_turn_tracker
+        _phase_tracker, _phase_tok = start_turn_tracker(
+            user_id=user_id, session_id=session_id, owned_by_router=True,
+        )
         current_plan = data.get("current_plan", None)
         form_data = data.get("form_data", None)
         local_date = data.get("local_date", None)
@@ -1013,6 +1048,9 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             # [P2-CHAT-SINGLE-ERROR-EVENT · 2026-09-14] Si el agente ya emitió su evento
             # `error`, el router no emite un segundo.
             _error_seen = False
+            _gen_outcome = "ok"
+            from chat_phase_metrics import _ACTIVE_TRACKER_VAR, release_turn_tracker
+            _gen_tok = _ACTIVE_TRACKER_VAR.set(_phase_tracker)
             try:
                 for chunk in chat_with_agent_stream(
                     session_id=session_id,
@@ -1044,6 +1082,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                 _error_seen = True
 
                             if _chunk_type == "done":
+                                import time as _time_persist
+                                _persist_t0 = _time_persist.monotonic()
                                 response_text = data_obj.get("response", "")
                                 if response_text:
                                     # [P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20]
@@ -1092,6 +1132,11 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                     # consumo de tokens incluso si por alguna razón
                                     # los chunks intermedios no se observaron.
                                     _chunk_observed = True
+                                if _phase_tracker is not None:
+                                    _phase_tracker.set_phase_ms(
+                                        "persist_ms",
+                                        int((_time_persist.monotonic() - _persist_t0) * 1000),
+                                    )
 
                                 # Lógica Background (resumir, embeddings).
                                 # [P2-AUDIT-NEW-2] log_api_usage SE MOVIÓ al finally
@@ -1151,6 +1196,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 # ambas señales de aborto se loguean como `info`, no
                 # `exception`. NO re-emite chunks (conexión ya muerta);
                 # finally SÍ cobra si chunk_observed.
+                _gen_outcome = "cancelled"
                 _cancel_kind = type(_cancel_exc).__name__
                 clog.info(
                     f"[P2-AUDIT-NEW-2] SSE abortado por cliente "
@@ -1158,6 +1204,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 )
                 raise
             except Exception as e:
+                _gen_outcome = "error"
                 # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
                 clog.exception(f"[CHAT STREAM] Error mid-stream: {e}")
                 # `chunk_observed` puede ser True (excepción tras emitir chunks)
@@ -1167,6 +1214,11 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 if not _error_seen:
                     yield f"data: {json.dumps({'type': 'error', 'code': 'internal', 'message': 'El asistente tuvo un problema. Intenta de nuevo.'})}\n\n"
             finally:
+                try:
+                    if _phase_tracker is not None:
+                        _phase_tracker.emit_once(outcome=_gen_outcome)
+                finally:
+                    release_turn_tracker(_phase_tracker, _gen_tok)
                 # [P2-AUDIT-NEW-2] Billing idempotente. Cubre TODOS los exits:
                 # done OK, GeneratorExit (abort), exception mid-stream.
                 # Solo factura si:
@@ -1202,6 +1254,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # se guarda y avisa por push igual. «Detener» ya no es cortar la conexión: es `POST /api/chat/stop`.
         from turno_desacoplado import activo as _turno_desacoplado, desacoplar
         _flujo = desacoplar(event_generator(), session_id) if _turno_desacoplado() else event_generator()
+        _stream_started = True
         return StreamingResponse(_flujo, media_type="text/event-stream")
 
     except HTTPException:
@@ -1210,6 +1263,16 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
         logger.exception(f"[CHAT STREAM] Error en api_chat_stream: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+    finally:
+        if _phase_tok is not None:
+            try:
+                from chat_phase_metrics import _ACTIVE_TRACKER_VAR, release_turn_tracker
+                if not _stream_started:
+                    release_turn_tracker(_phase_tracker, _phase_tok)
+                else:
+                    _ACTIVE_TRACKER_VAR.reset(_phase_tok)
+            except Exception:
+                pass
 
 
 
