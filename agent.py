@@ -669,10 +669,10 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
     override = _env_str("MEALFIT_CHAT_AGENT_MODEL", "")
     if override:
         return override
-    # [P1-PLAN-LOTE-995 · 2026-11-13] El coach va con Gemini 4 Hydrogen (decisión del dueño), con la key de Gemini;
-    # sin ella, el router por tier de siempre. El respaldo (GPT-6 Luna) cubre una caída de Google.
-    from gemini_hydrogen import GEMINI_HYDROGEN, hay_key_gemini
-    if hay_key_gemini():
+    # [P1-PLAN-LOTE-995 · 2026-11-13] El coach va con Gemini 4 Hydrogen (decisión del dueño), con la key de Gemini
+    # y según `MEALFIT_CHAT_HYDROGEN_TIERS` (LOTE-999, default `todos`); fuera de esos tiers va por el router.
+    from gemini_hydrogen import GEMINI_HYDROGEN, hay_key_gemini, usa_hydrogen_para_usuario
+    if hay_key_gemini() and usa_hydrogen_para_usuario(user_id):
         return GEMINI_HYDROGEN
     return resolve_model_for_user(user_id)
 
@@ -4339,6 +4339,8 @@ class ChatState(MessagesState):
     # razonaba ~1.000 tokens invisibles antes de anotar: 7,8 s en la prueba del dueño). Del TURNO: los dos `inputs` lo
     # fijan siempre (sin reducer, un valor viejo del checkpoint se heredaría en el turno siguiente).
     modo_voz: bool
+    # [P1-PLAN-LOTE-999 · 2026-11-13] Desglose de caracteres por bloque del system_prompt (Fase 0).
+    prompt_breakdown: Optional[dict]
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -4878,11 +4880,18 @@ def call_model(state: ChatState):
             # que el helper consulta por default. Sin esto, todas las filas del
             # chat en `llm_usage_events` quedan con `node=NULL` y SRE no puede
             # filtrar costos chat vs plan-gen.
+            from prompt_desglose import metadata_para_evento as _bd_meta_evento
+            _call_extra_meta = _bd_meta_evento(
+                state=state,
+                llm_messages=llm_messages,
+                active_tools=active_tools,
+            )
             _emit_llm_usage_event_best_effort(
                 llm=chat_llm,
                 result=response,
                 duration_s=_time_chat.time() - _chat_invoke_start,
                 node='chat_call_model',
+                extra_metadata=_call_extra_meta,
             )
         finally:
             if _cost_tok is not None:
@@ -10032,6 +10041,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # Determinar si es un usuario autenticado o invitado
         is_authenticated = user_id and user_id != session_id and user_id != "guest"
 
+        _bd_manual_chars = 0
+        _bd_pais_chars = 0
+        _bd_tools_chars = 0
+        _bd_lean_ahorro = 0
+        _bd_prefijo_chars = 0
+
         # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
         # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
         # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
@@ -10048,13 +10063,16 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     stream=False,
                     **_est_kw,
                 )
+                _bd_manual_chars = len(system_prompt)
                 if _split_volatile:
                     system_prompt += _VOLATILE_SYS_SPLIT_MARKER
                 system_prompt += f"El user_id del usuario actual es: {user_id}"
             else:
                 system_prompt = CHAT_AGENT_INLINE_PROMPT
+                _bd_manual_chars = len(system_prompt)
                 system_prompt += coach_country_context(_coach_country)
                 system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+                _bd_pais_chars = len(system_prompt) - _bd_manual_chars
                 _use_static_tools = _split_volatile and (build_tools_instructions is _ORIG_BUILD_TOOLS_INSTR)
                 _tools_block = (
                     build_tools_instructions_estaticas(**_est_kw)
@@ -10066,11 +10084,15 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     )
                 )
                 system_prompt += _tools_block
+                _bd_tools_chars = len(_tools_block)
                 if _split_volatile and _tools_block:
                     system_prompt += _VOLATILE_SYS_SPLIT_MARKER
                     if _use_static_tools:
                         system_prompt += f"El user_id del usuario actual es: {user_id}"
+            _bd_antes_lean = len(system_prompt)
             system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id)
+            _bd_lean_ahorro = max(0, _bd_antes_lean - len(system_prompt))
+            _bd_prefijo_chars = len(system_prompt)
             # --- bloques dinámicos (volátiles) al final ---
             system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
             system_prompt += build_circadian_context(schedule_type)
@@ -10406,6 +10428,20 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 
     existing_state = chat_graph_app.get_state(config)
 
+    from prompt_desglose import desglosar_prompt as _desglosar_prompt
+    _prompt_breakdown = _desglosar_prompt(
+        system_prompt,
+        manual_chars=_bd_manual_chars,
+        pais_chars=_bd_pais_chars,
+        tools_instr_chars=_bd_tools_chars,
+        prefijo_estatico_chars=_bd_prefijo_chars,
+        lean_ahorro_chars=_bd_lean_ahorro,
+        rag_chars=len(rag_context) if rag_context else 0,
+        memoria_hist_chars=len(memory.get("summary_context") or "") if isinstance(memory, dict) else 0,
+        stream=False,
+        modo_voz=False,
+    )
+
     inputs = {
         "user_id": user_id or "guest",
         "session_id": session_id,
@@ -10420,6 +10456,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "turn_plate_photos": [],
         "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
         "modo_voz": False,            # [P1-PLAN-LOTE-686] el chat sin stream nunca es modo voz
+        "prompt_breakdown": _prompt_breakdown,
         "ajustes_de_app": None,       # [P1-PLAN-LOTE-900] del turno
         "diary_corrected_meal_ids": [],
         "photo_log_retried": False,
@@ -10764,6 +10801,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             vision = marcar_rotulo(vision, prompt, recent_messages=memory["recent_messages"])
         vision = preparar_vision(vision)
 
+        _bd_manual_chars = 0
+        _bd_pais_chars = 0
+        _bd_tools_chars = 0
+        _bd_lean_ahorro = 0
+        _bd_prefijo_chars = 0
         # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
         # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
         # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
@@ -10781,13 +10823,16 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     stream=True,
                     **_est_kw,
                 )
+                _bd_manual_chars = len(system_prompt)
                 if _split_volatile:
                     system_prompt += _VOLATILE_SYS_SPLIT_MARKER
                 system_prompt += f"El user_id actual es: {user_id}"
             else:
                 system_prompt = _base_inline
+                _bd_manual_chars = len(system_prompt)
                 system_prompt += coach_country_context(_coach_country)
                 system_prompt += f"\n{culinary_knowledge_base_for_country(_coach_country)}"
+                _bd_pais_chars = len(system_prompt) - _bd_manual_chars
                 _use_static_tools = _split_volatile and (build_tools_instructions_stream is _ORIG_BUILD_TOOLS_INSTR_STREAM)
                 _tools_block = (
                     build_tools_instructions_stream_estaticas(**_est_kw)
@@ -10798,13 +10843,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         contador_sin_plan=_contador_sin_plan,
                     )
                 )
+                _bd_tools_chars = len(_tools_block)
                 system_prompt += _tools_block
                 if _split_volatile and _tools_block:
                     system_prompt += _VOLATILE_SYS_SPLIT_MARKER
                     if _use_static_tools:
                         system_prompt += f"El user_id actual es: {user_id}"
+            _bd_antes_lean = len(system_prompt)
             system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id, con_foto=bool(vision),
                                                     modo_voz=bool(is_call_mode))
+            _bd_lean_ahorro = max(0, _bd_antes_lean - len(system_prompt))
+            _bd_prefijo_chars = len(system_prompt)
             # --- bloques dinámicos (volátiles) al final ---
             system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
             system_prompt += build_circadian_context(schedule_type)
@@ -11128,7 +11177,21 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         chat_graph_app = chat_builder.compile(checkpointer=MemorySaver())
         
     existing_state = chat_graph_app.get_state(config)
-    
+
+    from prompt_desglose import desglosar_prompt as _desglosar_prompt
+    _prompt_breakdown = _desglosar_prompt(
+        system_prompt,
+        manual_chars=_bd_manual_chars,
+        pais_chars=_bd_pais_chars,
+        tools_instr_chars=_bd_tools_chars,
+        prefijo_estatico_chars=_bd_prefijo_chars,
+        lean_ahorro_chars=_bd_lean_ahorro,
+        rag_chars=len(rag_context or ""),
+        memoria_hist_chars=len((memory or {}).get("summary_context") or ""),
+        stream=True,
+        modo_voz=bool(is_call_mode),
+    )
+
     inputs = {
         "user_id": user_id or "guest",
         "session_id": session_id,
@@ -11136,6 +11199,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "tz_offset": tz_offset,
         "current_plan": current_plan or {},
         "sys_prompt": system_prompt,
+        "prompt_breakdown": _prompt_breakdown,
         "updated_fields": {},
         "new_plan": None,
         # [P2-CHAT-STATE-TURN-RESET · 2026-09-14] Estos campos no tienen reducer y

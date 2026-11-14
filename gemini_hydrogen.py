@@ -86,6 +86,47 @@ def hay_key_gemini() -> bool:
     return bool(clave_gemini())
 
 
+_CHAT_HYDROGEN_TIERS_DEFAULT = "todos"
+_HYDROGEN_TIERS_ALL = frozenset({"*", "all", "todos", "todo"})
+_HYDROGEN_TIERS_NONE = frozenset({"none", "off", "0", "false", "ninguno"})
+_HYDROGEN_TIER_ALIASES = {"free": "gratis", "gratuito": "gratis", "gratuita": "gratis"}
+
+
+def chat_hydrogen_tiers() -> str:
+    """Knob `MEALFIT_CHAT_HYDROGEN_TIERS` (default `todos`): tiers que enrutan el coach a Gemini 4 Hydrogen."""
+    from knobs import _env_str
+    return _env_str("MEALFIT_CHAT_HYDROGEN_TIERS", _CHAT_HYDROGEN_TIERS_DEFAULT)
+
+
+def _parse_hydrogen_tiers(raw: str) -> Optional[frozenset[str]]:
+    tokens = [t.strip().lower() for t in str(raw or "").split(",") if t.strip()]
+    if not tokens or any(t in _HYDROGEN_TIERS_ALL for t in tokens):
+        return None
+    if all(t in _HYDROGEN_TIERS_NONE for t in tokens):
+        return frozenset()
+    return frozenset(_HYDROGEN_TIER_ALIASES.get(t, t) for t in tokens if t not in _HYDROGEN_TIERS_NONE)
+
+
+def usa_hydrogen_para_usuario(user_id: Optional[str] = None) -> bool:
+    """[P1-PLAN-LOTE-999] True si el plan efectivo del usuario entra en `MEALFIT_CHAT_HYDROGEN_TIERS`.
+
+    Default (`todos`): todos usan Hydrogen (comportamiento desde LOTE-995). Al restringirlo (p. ej.
+    `basic,plus,ultra,admin`), `gratis` e invitados caen a `resolve_model_for_user` (`gpt-6-luna`).
+    """
+    allowed = _parse_hydrogen_tiers(chat_hydrogen_tiers())
+    if allowed is None:
+        return True
+    if not allowed:
+        return False
+    try:
+        from llm_provider import get_user_tier
+        tier = str(get_user_tier(user_id) or "gratis").strip().lower()
+        tier = _HYDROGEN_TIER_ALIASES.get(tier, tier)
+    except Exception:  # noqa: BLE001 — fail-cheap: si falla el lookup cae a `gratis`
+        tier = "gratis"
+    return tier in allowed
+
+
 # ───────────────────────────────────────────────────────── firmas de razonamiento (tool calls)
 def _firmas_de_tool_calls(tool_calls: Iterable[dict], usar_index: bool) -> dict:
     firmas = {}
