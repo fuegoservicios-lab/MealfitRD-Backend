@@ -6794,56 +6794,14 @@ def _llm_breaker_open_alert_job():
 
 
 def _llm_daily_spend_alert_job():
-    """[P1-PLAN-LOTE-1000 · 2026-11-13] Guardarraíl diario de gasto LLM por modelo.
+    """[P1-PLAN-LOTE-1000 · 2026-11-13] Guardarraíl diario de gasto LLM por modelo (evalúa en chat_prompt_opt)."""
+    from chat_prompt_opt import evaluar_gasto_diario_llm
 
-    Suma `cost_usd_micros` por modelo en la ventana móvil (default 24 h) desde `llm_usage_events`.
-    Si algún modelo supera `MEALFIT_LLM_DAILY_SPEND_ALERT_USD` (default $5.0), emite o reabre
-    `llm_daily_spend_high:<modelo>` en `system_alerts` (warning; critical si >= 3x).
-    Auto-resuelve explícitamente cuando el gasto acumulado en la ventana vuelve bajo el umbral.
-    Tooltip-anchor: P1-PLAN-LOTE-1000.
-    """
-    enabled = _env_bool("MEALFIT_LLM_DAILY_SPEND_ALERT_ENABLED", True)
-    umbral_usd = _env_float(
-        "MEALFIT_LLM_DAILY_SPEND_ALERT_USD", 5.0,
-        validator=lambda v: 0.25 <= v <= 1000.0,
-    )
-    ventana_h = max(1, min(_env_int("MEALFIT_LLM_DAILY_SPEND_WINDOW_HOURS", 24), 168))
-    threshold_micros = int(round(umbral_usd * 1_000_000))
-    excedidos: list = []
-    fallo = False
+    enabled, umbral_usd, ventana_h, excedidos_modelos, fallo = True, 5.0, 24, [], False
     try:
-        if not enabled:
-            execute_sql_write(
-                """
-                UPDATE system_alerts SET resolved_at = NOW()
-                WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL
-                """,
-                (),
-            )
-            return
-
-        filas = execute_sql_query(
-            """
-            SELECT COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model,
-                   COALESCE(SUM(cost_usd_micros), 0)::bigint AS spend_micros,
-                   COUNT(*)::int AS calls
-            FROM llm_usage_events
-            WHERE created_at >= NOW() - (%s::float * INTERVAL '1 hour')
-            GROUP BY 1
-            """,
-            (ventana_h,),
-            fetch_all=True,
-        ) or []
-
-        for fila in filas:
-            modelo = fila["model"] if isinstance(fila, dict) else fila[0]
-            spend_micros = int((fila["spend_micros"] if isinstance(fila, dict) else fila[1]) or 0)
-            calls = int((fila["calls"] if isinstance(fila, dict) else fila[2]) or 0)
-            if spend_micros < threshold_micros:
-                continue
-            excedidos.append(modelo)
-            spend_usd = round(spend_micros / 1_000_000.0, 4)
-            severity = "critical" if spend_micros >= (3 * threshold_micros) else "warning"
+        enabled, umbral_usd, ventana_h, rows = evaluar_gasto_diario_llm(execute_sql_query=execute_sql_query)
+        excedidos_modelos = [m for m, *_ in rows]
+        for modelo, severity, spend_usd, spend_micros, calls in rows:
             execute_sql_write(
                 """
                 INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
@@ -6857,62 +6815,26 @@ def _llm_daily_spend_alert_job():
                     f"llm_daily_spend_high:{modelo}",
                     severity,
                     f"Gasto LLM alto en {modelo}: ${spend_usd:.2f} USD ({ventana_h}h)",
-                    f"El modelo {modelo} acumuló ${spend_usd:.2f} USD en {calls} llamadas durante "
-                    f"las últimas {ventana_h} h (umbral configurado: ${umbral_usd:.2f} USD). "
-                    f"Revisa si hay bucles de reintento, tráfico anómalo o routing fuera de plan.",
-                    json.dumps({
-                        "modelo": modelo,
-                        "spend_usd": spend_usd,
-                        "spend_micros": spend_micros,
-                        "calls": calls,
-                        "threshold_usd": umbral_usd,
-                        "ventana_h": ventana_h,
-                    }, ensure_ascii=False),
+                    f"El modelo {modelo} acumuló ${spend_usd:.2f} USD en {calls} llamadas / {ventana_h} h (umbral ${umbral_usd:.2f}).",
+                    json.dumps({"modelo": modelo, "spend_usd": spend_usd, "spend_micros": spend_micros, "calls": calls, "threshold_usd": umbral_usd, "ventana_h": ventana_h}, ensure_ascii=False),
                 ),
             )
-            logger.warning(
-                f"💸 [P1-PLAN-LOTE-1000] gasto alto modelo={modelo} "
-                f"spend=${spend_usd:.2f} USD ({calls} calls / {ventana_h}h) >= ${umbral_usd:.2f} → alert emitido."
-            )
-
-        if excedidos:
+            logger.warning(f"💸 [P1-PLAN-LOTE-1000] gasto alto {modelo}=${spend_usd:.2f} USD ({calls}/{ventana_h}h) >= ${umbral_usd:.2f}.")
+        if enabled and excedidos_modelos:
             execute_sql_write(
-                """
-                UPDATE system_alerts SET resolved_at = NOW()
-                WHERE alert_key LIKE 'llm_daily_spend_high:%%'
-                  AND resolved_at IS NULL
-                  AND alert_key <> ALL(%s)
-                """,
-                ([f"llm_daily_spend_high:{m}" for m in excedidos],),
+                "UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL AND alert_key <> ALL(%s)",
+                ([f"llm_daily_spend_high:{m}" for m in excedidos_modelos],),
             )
         else:
-            execute_sql_write(
-                """
-                UPDATE system_alerts SET resolved_at = NOW()
-                WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL
-                """,
-                (),
-            )
+            execute_sql_write("UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL", ())
     except Exception as e:
         fallo = True
-        logger.error(
-            f"❌ [P1-PLAN-LOTE-1000] el vigilante de gasto diario LLM falló: {type(e).__name__}: {e}"
-        )
+        logger.error(f"❌ [P1-PLAN-LOTE-1000] el vigilante de gasto diario LLM falló: {type(e).__name__}: {e}")
     finally:
         try:
             execute_sql_write(
-                "INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata) "
-                "VALUES ('llm_daily_spend_watch', 0, 0, 0, %s, %s::jsonb)",
-                (
-                    float(len(excedidos)),
-                    json.dumps({
-                        "excedidos": excedidos,
-                        "threshold_usd": umbral_usd,
-                        "ventana_h": ventana_h,
-                        "enabled": enabled,
-                        "job_failed": fallo,
-                    }, ensure_ascii=False),
-                ),
+                "INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata) VALUES ('llm_daily_spend_watch', 0, 0, 0, %s, %s::jsonb)",
+                (float(len(excedidos_modelos)), json.dumps({"excedidos": excedidos_modelos, "threshold_usd": umbral_usd, "ventana_h": ventana_h, "enabled": enabled, "job_failed": fallo}, ensure_ascii=False)),
             )
         except Exception:
             pass

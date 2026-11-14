@@ -26,7 +26,7 @@ import re
 from typing import Any, Optional
 
 from constants import strip_accents
-from llm_provider import _env_bool
+from knobs import _env_bool, _env_float, _env_int
 
 logger = logging.getLogger("graph_orchestrator")
 
@@ -311,3 +311,50 @@ def registrar_uso_llm_auxiliar(
         )
     except Exception as exc:
         logger.debug("[P1-PLAN-LOTE-1000] telemetria auxiliar (%s): %s", node, exc)
+
+
+def evaluar_gasto_diario_llm(
+    *,
+    execute_sql_query: Any = None,
+) -> tuple[bool, float, int, list[tuple[str, str, float, int, int]]]:
+    """[P1-PLAN-LOTE-1000 · 2026-11-13] Evalúa knobs y modelos por encima del umbral diario de gasto LLM."""
+    if execute_sql_query is None:
+        from db_core import execute_sql_query as _ssot_q
+
+        execute_sql_query = _ssot_q
+
+    enabled = _env_bool("MEALFIT_LLM_DAILY_SPEND_ALERT_ENABLED", True)
+    umbral_usd = _env_float(
+        "MEALFIT_LLM_DAILY_SPEND_ALERT_USD",
+        5.0,
+        validator=lambda v: 0.25 <= v <= 1000.0,
+    )
+    ventana_h = max(1, min(_env_int("MEALFIT_LLM_DAILY_SPEND_WINDOW_HOURS", 24), 168))
+    if not enabled:
+        return False, umbral_usd, ventana_h, []
+
+    threshold_micros = int(round(umbral_usd * 1_000_000))
+    filas = execute_sql_query(
+        """
+        SELECT COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model,
+               COALESCE(SUM(cost_usd_micros), 0)::bigint AS spend_micros,
+               COUNT(*)::int AS calls
+        FROM llm_usage_events
+        WHERE created_at >= NOW() - (%s::float * INTERVAL '1 hour')
+        GROUP BY 1
+        """,
+        (ventana_h,),
+        fetch_all=True,
+    ) or []
+
+    excedidos: list[tuple[str, str, float, int, int]] = []
+    for fila in filas:
+        modelo = fila["model"] if isinstance(fila, dict) else fila[0]
+        spend_micros = int((fila["spend_micros"] if isinstance(fila, dict) else fila[1]) or 0)
+        calls = int((fila["calls"] if isinstance(fila, dict) else fila[2]) or 0)
+        if spend_micros < threshold_micros:
+            continue
+        spend_usd = round(spend_micros / 1_000_000.0, 4)
+        severity = "critical" if spend_micros >= (3 * threshold_micros) else "warning"
+        excedidos.append((modelo, severity, spend_usd, spend_micros, calls))
+    return True, umbral_usd, ventana_h, excedidos
