@@ -362,6 +362,18 @@ _MEAL_VISION_PROMPT = (
     "VIVERES HERVIDOS / PLATANO: si hay viveres hervidos en ruedas o trozos (amarillos o verdosos), en las opciones de duda "
     "sobre el tipo de base o vianda incluye siempre 'Platano maduro' junto a 'Platano verde' y 'Guineito verde' (el platano maduro "
     "es amarillo/dorado, mas dulce y con mas carbohidratos). Si se ve claramente amarillo o traslucido al hervir, es probable que sea platano maduro. "
+    # [ESCANER-GRASA-COCCION · 2026-11-13] El dueño: «debería preguntar por cosas más puntuales, como el aceite que se
+    # usa: el plátano maduro pudo hacerse con manteca de cerdo». La foto enseña QUÉ es, no CON QUÉ se cocinó.
+    "CON QUE GRASA SE COCINO: en frituras y majados caseros (platano maduro frito, tostones, yuca o batata frita, "
+    "huevo frito, salami o queso frito, carne o pollo frito, mangu, pure) la foto deja ver el alimento pero NO con que "
+    "grasa se hizo, y eso cambia la cuenta. Si el alimento se ve claro y te queda sitio entre las 2 dudas, pregunta "
+    "por la grasa con opciones concretas en vez de un generico 'frito o a la plancha': para frituras 'Aceite vegetal', "
+    "'Manteca de cerdo', 'Mantequilla', 'Freidora de aire / sin grasa'; para mangu o pure 'Mantequilla', 'Aceite', "
+    "'Manteca de cerdo', 'Sin grasa'. Marca supuesta la mas comun (aceite vegetal en frituras, mantequilla en mangu) y "
+    "pon el ajuste real: sin grasa resta lo que el alimento absorbio (unas -45 a -120 kcal y -5 a -13 g de grasa segun "
+    "la porcion); manteca de cerdo o mantequilla en vez de aceite casi no mueven las calorias (ajuste cerca de 0), pero "
+    "la opcion va igual porque es grasa saturada y el usuario la quiere anotada. Una duda de CANTIDAD o de IDENTIDAD "
+    "que mueva mas calorias va primero; la de la grasa no la desplaza. "
     "PLATOS COMPUESTOS CRIOLLOS (LOCRIOS, MOROS, ARROZ GUISADO/CHOFAN): en la cocina dominicana, el arroz cocinado "
     "con sazon, sofrito y aceite (locrio, moro, chofan) aporta tipicamente ~220-260 kcal por taza solo el arroz. "
     "Si es un locrio (arroz cocido junto con carne como cerdo, pollo, longaniza o arenque), suma las calorias del arroz "
