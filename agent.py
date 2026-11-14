@@ -10426,8 +10426,6 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         checkpointer = MemorySaver()
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
 
-    existing_state = chat_graph_app.get_state(config)
-
     from prompt_desglose import desglosar_prompt as _desglosar_prompt
     _prompt_breakdown = _desglosar_prompt(
         system_prompt,
@@ -10441,6 +10439,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         stream=False,
         modo_voz=False,
     )
+
+    existing_state = chat_graph_app.get_state(config)
 
     inputs = {
         "user_id": user_id or "guest",
@@ -11176,8 +11176,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         chat_graph_app = chat_builder.compile(checkpointer=MemorySaver())
         
-    existing_state = chat_graph_app.get_state(config)
-
     from prompt_desglose import desglosar_prompt as _desglosar_prompt
     _prompt_breakdown = _desglosar_prompt(
         system_prompt,
@@ -11192,6 +11190,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         modo_voz=bool(is_call_mode),
     )
 
+    existing_state = chat_graph_app.get_state(config)
+    
     inputs = {
         "user_id": user_id or "guest",
         "session_id": session_id,

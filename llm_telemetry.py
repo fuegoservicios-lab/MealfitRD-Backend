@@ -153,14 +153,7 @@ def _mark_usage_emitted(result) -> None:
         pass
 
 
-def _emit_llm_usage_event_best_effort(
-    *,
-    llm,
-    result,
-    duration_s: float,
-    node: str = None,
-    extra_metadata: Optional[dict] = None,
-) -> None:
+def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: str = None, extra_metadata: Optional[dict] = None) -> None:
     """[P1-COST-INSTRUMENTATION · 2026-05-15] Extrae model + usage_metadata
     de un response exitoso de LangChain ChatGoogleGenerativeAI y persiste
     a `llm_usage_events` via `db_profiles.log_llm_usage_event`.
