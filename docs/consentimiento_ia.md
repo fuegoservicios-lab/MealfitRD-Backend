@@ -227,7 +227,9 @@ Segundo plano, por usuario dentro del bucle (`por_usuario`) o por trabajo:
 | Worker de `plan_jobs` (la proyección de compras normaliza nombres) | `embeddings_de_usuario(job.user_id)` alrededor de cada consumidor |
 
 Sin marca, a propósito: `restock_cycle.py` (`purchase_item_name`) solo lo llama la tool del coach
-`mark_shopping_list_purchased`, dentro del turno del chat (428; un test vigila que no nazca otro llamador); lo que el
+`mark_shopping_list_purchased`, dentro del turno del chat (428; un test vigila que no nazca otro llamador);
+`chat_hard_turn.py` (`construir_llm_turno_dificil`) solo construye el cliente de escalado clínico dentro de
+`agent.call_model` bajo los endpoints de `/api/chat/*` ya protegidos con el 428; lo que el
 chunk worker normaliza (reservas, deriva de la Nevera, días degradados) va detrás de la recogida con SQL; y los caminos
 de `get_nutrition_targets` resuelven nombres FIJOS del catálogo («1 huevo») que los intentos 1-5 encuentran.
 

@@ -138,6 +138,7 @@ _CERCO = {
     "ai_helpers.py": "/recipe/expand (428); título (services._titulo_del_plan); retrospectiva (permite_ia)",
     "ajustar_plato.py": "/api/diary/scan/ajustar-plato y /api/diary/scan/agregar-ingrediente (428)",
     "ajuste_de_duda.py": "/api/diary/scan/ajuste-duda (428)",
+    "chat_hard_turn.py": "escalado de turnos difíciles (gpt-6.1-terra <= $0.03): dentro del turno del chat (/api/chat/*, 428)",
     "coach_live.py": "/api/chat/live/sesion (428) + permite_ia en cada delegación; solo operador (lote 905)",
     "coach_voz.py": "/api/chat/voz (428)",
     "constants.py": "get_embedding (el helper cacheado): lo llaman sitios ya protegidos; su uso propio, "
