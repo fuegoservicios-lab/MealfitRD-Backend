@@ -89,7 +89,7 @@ def test_vision_usage_scope_propagates_across_asyncio_gather(monkeypatch):
                 return self
 
             async def ainvoke(self, messages):
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.035)
                 msg = SimpleNamespace(usage_metadata={"input_tokens": 1450, "output_tokens": 77})
                 for cb in self._cbs:
                     cb.on_llm_end(SimpleNamespace(generations=[[SimpleNamespace(message=msg)]], llm_output=None))

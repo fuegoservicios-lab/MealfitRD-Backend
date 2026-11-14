@@ -5188,6 +5188,30 @@ def _purge_old_pipeline_metrics():
             f"[P1-PIPELINE-METRICS-RETENTION] no hay filas > {retention_days}d. Skip."
         )
 
+    # [P1-PLAN-LOTE-1007 · G-16] Depuración más agresiva para heartbeats ruidosos `*_tick`:
+    # los watchdogs solo miran el último tick (1h-7d), 3 días conserva decenas de ciclos sin inflar la tabla.
+    tick_days = max(1, min(_env_int("MEALFIT_PIPELINE_METRICS_TICK_RETENTION_DAYS", 3), retention_days))
+    try:
+        res_ticks = execute_sql_write(
+            "DELETE FROM pipeline_metrics "
+            "WHERE id IN ( "
+            "  SELECT id FROM pipeline_metrics "
+            "  WHERE node LIKE '%%_tick' "
+            "    AND created_at < NOW() - make_interval(days => %s) "
+            "  LIMIT %s "
+            ") "
+            "RETURNING id",
+            (tick_days, max_rows),
+            returning=True,
+        )
+        n_ticks = len(res_ticks or [])
+        if n_ticks > 0:
+            logger.info(
+                f"🧹 [P1-PLAN-LOTE-1007 · G-16] purgadas {n_ticks} filas *_tick > {tick_days}d de pipeline_metrics."
+            )
+    except Exception as e:
+        logger.warning(f"[G-16 TICK-RETENTION] DELETE *_tick falló (best-effort): {e}")
+
 
 def _purge_old_plan_chunk_metrics():
     """[P2-CHUNK-METRICS-RETENTION · 2026-05-28] Retención age-based de
@@ -6827,6 +6851,11 @@ def _llm_daily_spend_alert_job():
             )
         else:
             execute_sql_write("UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL", ())
+        try:
+            from chat_observability_alerts import evaluar_salud_coach_y_alertar
+            evaluar_salud_coach_y_alertar(execute_sql_query=execute_sql_query, execute_sql_write=execute_sql_write)
+        except Exception as _health_err:
+            logger.debug(f"[G-18] evaluar_salud_coach_y_alertar omitido: {_health_err!r}")
     except Exception as e:
         fallo = True
         logger.error(f"❌ [P1-PLAN-LOTE-1000] el vigilante de gasto diario LLM falló: {type(e).__name__}: {e}")
@@ -35962,7 +35991,7 @@ def _sweep_orphan_chat_checkpoints() -> int:
     if not _env_bool("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_ENABLED", True):
         return 0
     min_age_days = max(1, min(_env_int("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_DAYS", 7), 90))
-    batch = max(1, min(_env_int("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_BATCH", 100), 1000))
+    batch = max(1, min(_env_int("MEALFIT_CHECKPOINT_ORPHAN_SWEEP_BATCH", 250), 1000))
     try:
         from db import sweep_orphan_chat_checkpoints
         res = sweep_orphan_chat_checkpoints(min_age_days, batch) or {}

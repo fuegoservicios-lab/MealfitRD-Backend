@@ -4582,7 +4582,7 @@ def _build_chat_fallback_llm(model: str):
     kwargs = {"max_retries": 1}
     m = (model or "").lower()
     if is_openai_model(model):
-        if "luna" in m or m.startswith(("o1", "o3", "o4")):
+        if "luna" in m or "terra" in m or m.startswith(("o1", "o3", "o4")):
             kwargs["reasoning_effort"] = _env_str("MEALFIT_CHAT_AGENT_FALLBACK_EFFORT", "low") or "low"
     else:
         kwargs["temperature"] = 0.7
@@ -4673,17 +4673,6 @@ def call_model(state: ChatState):
     # (session_id) resuelven a flash via fail-cheap del router.
     _model_uid = state.get("user_id") or state.get("session_id")
     _cb_model = _chat_agent_model_name(_model_uid)
-    # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, el principal reintenta UNA vez (el default del
-    # cliente son 2: con timeouts de 30 s el turno moría antes de llegar a ningún respaldo).
-    _fallback_model = _chat_agent_fallback_model(_cb_model)
-    _primary_retry_kwargs = {"max_retries": 1} if _fallback_model else {}
-    chat_llm = ChatGLM(
-        model=_chat_agent_model_name(_model_uid),
-        temperature=0.7,
-        timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
-        **_primary_retry_kwargs,
-        **_kwargs_de_razonamiento_modo_voz(state),
-    )
     # [AI-41: Tool Gating Dinamico] / [P1-PLAN-LOTE-997] En Gemini mantenemos
     # el catálogo canónico fijo para preservar el implicit prompt caching global.
     active_tools = (
@@ -4691,6 +4680,49 @@ def call_model(state: ChatState):
         if _tool_gating_enabled_for_model(_cb_model)
         else list(agent_tools)
     )
+    from chat_phase_metrics import get_active_turn_tracker as _get_pre_tracker
+    _pt_pre = _get_pre_tracker(state.get("session_id"))
+    from chat_hard_turn import evaluar_turno_dificil
+    _eff_model, _hard_info = evaluar_turno_dificil(
+        state, llm_messages, _cb_model, active_tools, tracker=_pt_pre
+    )
+    if _hard_info.get("escalated"):
+        _cb_model = _eff_model
+    # [P1-CHAT-PROVIDER-FALLBACK] Con respaldo, el principal reintenta UNA vez (el default del
+    # cliente son 2: con timeouts de 30 s el turno moría antes de llegar a ningún respaldo).
+    _fallback_model = _chat_agent_fallback_model(_cb_model)
+    _primary_retry_kwargs = {"max_retries": 1} if _fallback_model else {}
+    if _hard_info.get("escalated"):
+        active_tools = (
+            _select_tools_for_turn(agent_tools, state)
+            if _tool_gating_enabled_for_model(_cb_model)
+            else list(agent_tools)
+        )
+        if is_openai_model(_cb_model):
+            chat_llm = build_chat_llm(
+                _cb_model,
+                timeout=_chat_agent_llm_timeout_s(),
+                reasoning_effort=_hard_info["reasoning_effort"],
+                max_tokens=_hard_info["max_tokens"],
+                **_primary_retry_kwargs,
+            )
+        else:
+            chat_llm = ChatGLM(
+                model=_cb_model,
+                temperature=0.7,
+                timeout=_chat_agent_llm_timeout_s(),
+                max_tokens=_hard_info["max_tokens"],
+                **_primary_retry_kwargs,
+                **_kwargs_de_razonamiento_modo_voz(state),
+            )
+    else:
+        chat_llm = ChatGLM(
+            model=_chat_agent_model_name(_model_uid),
+            temperature=0.7,
+            timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+            **_primary_retry_kwargs,
+            **_kwargs_de_razonamiento_modo_voz(state),
+        )
     llm_with_tools = chat_llm.bind_tools(active_tools)
 
     # [P1-CHAT-CB · 2026-05-19] Gate per-modelo. Si el breaker está abierto
@@ -5571,6 +5603,83 @@ def _corregir_almuerzo_prematuro(tool_args: dict, user_id: str, local_hour: Opti
     return tool_args
 
 
+_READ_ONLY_PARALLEL_TOOLS = frozenset({
+    "search_deep_memory",
+    "check_shopping_list",
+    "check_current_pantry",
+    "check_hydration_today",
+    "suggest_foods_for_nutrient",
+    "check_clinical_profile",
+    "consultar_dia_del_plan",
+})
+
+
+def _parallel_read_tools_enabled() -> bool:
+    from knobs import _env_bool
+    return _env_bool("MEALFIT_CHAT_PARALLEL_READ_TOOLS", True)
+
+
+def _exec_read_only_tool_call(
+    tool_call: dict,
+    trusted_uid: Optional[str],
+    messages: list,
+    tools_by_name: dict,
+) -> tuple[str, str, str, int]:
+    """[P1-PLAN-LOTE-1007 · G-09] Ejecuta una herramienta de solo lectura de forma aislada."""
+    t0 = time.monotonic()
+    tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", "")
+    raw_args = tool_call.get("args") if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
+    tool_id = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", "")
+    tool_args = dict(raw_args) if isinstance(raw_args, dict) else raw_args
+
+    if isinstance(tool_args, dict):
+        llm_uid = tool_args.get("user_id")
+        if llm_uid and trusted_uid and llm_uid != trusted_uid:
+            logger.warning(
+                f"🛡️ [P0-AGENT-1] tool={tool_name} llm_user_id={llm_uid!r} "
+                f"!= trusted={trusted_uid!r}. Override aplicado."
+            )
+        tool_args["user_id"] = trusted_uid
+
+    try:
+        _PydanticValidationError = __import__("pydantic", fromlist=["ValidationError"]).ValidationError
+    except Exception:
+        _PydanticValidationError = ValueError
+
+    tool_result = ""
+    try:
+        t = tools_by_name.get(tool_name)
+        if t is not None:
+            from packaged_food_portions import guard as guard_packaged_portion
+            tool_result = guard_packaged_portion(tool_name, tool_args, messages) or t.invoke(tool_args)
+    except _PydanticValidationError as _val_err:
+        _val_summary = str(_val_err)[:300]
+        logger.warning(
+            f"⚠️ [P1-CHAT-TOOL-VALIDATE] ValidationError tool={tool_name} "
+            f"args_keys={list(tool_args.keys()) if isinstance(tool_args, dict) else '?'} "
+            f"summary={_val_summary!r}"
+        )
+        tool_result = (
+            f"[VALIDATION_ERROR] No pude ejecutar '{tool_name}' porque los "
+            f"argumentos enviados no cumplen el schema esperado. Detalle: "
+            f"{_val_summary}. Reintenta con los tipos correctos o pide "
+            f"aclaración al usuario antes de re-invocar la tool."
+        )
+    except Exception as _tool_exc:
+        logger.exception(
+            f"❌ [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE] tool={tool_name} lanzó "
+            f"{type(_tool_exc).__name__}; se responde con [TOOL_ERROR]."
+        )
+        tool_result = (
+            f"[TOOL_ERROR] La herramienta '{tool_name}' falló por un problema interno "
+            "y NO completó la acción. No afirmes que se hizo: dile al usuario que no se "
+            "pudo completar ahora y que lo intente de nuevo en un momento."
+        )
+
+    dur_ms = max(0, int((time.monotonic() - t0) * 1000))
+    return str(tool_id), str(tool_name), str(tool_result), dur_ms
+
+
 def execute_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -5627,7 +5736,52 @@ def execute_tools(state: ChatState):
             1 for tc in last_message.tool_calls
             if (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)) == "log_consumed_meal"
         )
-        for tool_call in last_message.tool_calls:
+        _tcs = list(last_message.tool_calls)
+        _parallel_on = _parallel_read_tools_enabled()
+        _tools_by_name = {getattr(t, "name", ""): t for t in agent_tools} if _parallel_on else {}
+        _skip_before_idx = -1
+        for _tc_pos, tool_call in enumerate(_tcs):
+            if _tc_pos < _skip_before_idx:
+                continue
+            _tc_name_peek = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
+            if _parallel_on and _tc_name_peek in _READ_ONLY_PARALLEL_TOOLS:
+                _batch_end = _tc_pos + 1
+                while _batch_end < len(_tcs):
+                    _nxt = _tcs[_batch_end]
+                    _nxt_name = _nxt.get("name") if isinstance(_nxt, dict) else getattr(_nxt, "name", None)
+                    if _nxt_name not in _READ_ONLY_PARALLEL_TOOLS:
+                        break
+                    _batch_end += 1
+                if (_batch_end - _tc_pos) >= 2:
+                    if _pt_tools is not None and _open_tool_t0 is not None:
+                        _pt_tools.record_tool(
+                            _open_tool_name,
+                            int((time.monotonic() - _open_tool_t0) * 1000),
+                            guard_blocked=True,
+                        )
+                        _open_tool_t0 = None
+                    import concurrent.futures as _cf
+                    import contextvars as _cv
+                    _batch_slice = _tcs[_tc_pos:_batch_end]
+                    with _cf.ThreadPoolExecutor(max_workers=min(4, len(_batch_slice))) as _pool:
+                        _futs = [
+                            _pool.submit(
+                                _cv.copy_context().run,
+                                _exec_read_only_tool_call,
+                                _bt,
+                                _trusted_uid,
+                                messages,
+                                _tools_by_name,
+                            )
+                            for _bt in _batch_slice
+                        ]
+                        _batch_results = [_f.result() for _f in _futs]
+                    for _b_id, _b_name, _b_res, _b_ms in _batch_results:
+                        tool_messages.append(ToolMessage(content=_b_res, tool_call_id=_b_id))
+                        if _pt_tools is not None:
+                            _pt_tools.record_tool(_b_name, _b_ms, guard_blocked=False)
+                    _skip_before_idx = _batch_end
+                    continue
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             tool_id = tool_call["id"]
@@ -8004,8 +8158,20 @@ def _tool_called_this_turn(messages: list, nombres) -> bool:
     return False
 
 
+def _record_nudge_metric(state: ChatState, nudge_name: str) -> None:
+    """[P1-PLAN-LOTE-1007 · G-08] Contabiliza disparos de nudges internos en ChatTurnPhaseTracker."""
+    try:
+        from chat_phase_metrics import get_active_turn_tracker
+        tracker = get_active_turn_tracker((state or {}).get("session_id"))
+        if tracker is not None:
+            tracker.record_nudge(nudge_name)
+    except Exception:
+        pass
+
+
 def nudge_diary_tool(state: ChatState):
     """Reinyecta la exigencia y devuelve el turno a `call_model`."""
+    _record_nudge_metric(state, "nudge_diary_tool")
     logger.warning(
         "🍽️ [P1-DIARY-CLAIM-VERIFY] El modelo afirmó haber registrado sin llamar "
         f"la tool (user={str(state.get('user_id'))[:8]}). Forzando reintento."
@@ -8237,6 +8403,7 @@ def _plate_photos_unlogged(state) -> list:
 
 def nudge_plate_photo(state: ChatState):
     """Reinyecta la foto que quedó fuera y devuelve el turno a `call_model` (UNA vez)."""
+    _record_nudge_metric(state, "nudge_plate_photo")
     fotos = _plate_photos_unlogged(state)
     logger.warning(
         f"🍽️ [P1-PLAN-LOTE-168] {len(fotos)} foto(s) de plato sin registrar tras registrar otra comida "
@@ -8312,6 +8479,7 @@ def nudge_plate_photo(state: ChatState):
 
 def nudge_photo_to_log(state: ChatState):
     """[P1-PLAN-LOTE-694] Devuelve el turno a `call_model` (UNA vez) cuando el usuario anotaba la foto y no se registró."""
+    _record_nudge_metric(state, "nudge_photo_to_log")
     from respuestas_de_la_foto import NOTA_REINTENTO
     logger.warning(f"🍽️ [P1-PLAN-LOTE-694] foto para anotar sin registro (user={str(state.get('user_id'))[:8]}). Reintento.")
     return {"messages": [SystemMessage(content=NOTA_REINTENTO)], "photo_log_retried": True}

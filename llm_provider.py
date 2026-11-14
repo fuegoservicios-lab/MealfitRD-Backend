@@ -291,8 +291,9 @@ GPT56_SOL = "gpt-5.6-sol"
 # reviewer clínico free, day-gen y swaps— a la MITAD de precio ($0,10 in / $0,01 cacheado / $0,50 out por 1M,
 # ficha oficial developers.openai.com/api/docs/models/gpt-6-luna). Chat Completions + JSON estructurado +
 # `reasoning_effort` none|low|medium|high|xhigh|max: lo mismo que ya usamos. `GPT56_LUNA` se queda para los
-# precios y para quien lo fije por knob. Terra no tiene versión 6; Sol sí (`gpt-6-sol`), sin adoptar aún.
+# precios y para quien lo fije por knob. [P1-PLAN-LOTE-1007] GPT-6.1 Terra ($1.00/$5.00/1M, $0.05/M caché) para turnos difíciles.
 GPT6_LUNA = "gpt-6-luna"
+GPT61_TERRA = "gpt-6.1-terra"
 
 # [P0-GLM-MIGRATION · 2026-09-02] GLM-5.3 razona SIEMPRE (no existe "thinking off":
 # el API responde 400/1210). Lo que sí se gobierna es el ESFUERZO, y el esfuerzo es

@@ -1666,9 +1666,13 @@ def admin_chat_perf(request: Request, hours: int = 168):
 
     window_h = max(1, min(720, int(hours) if hours else 168))
     try:
-        from chat_phase_metrics import query_chat_phase_percentiles
+        from chat_phase_metrics import query_chat_efficiency_breakdown, query_chat_phase_percentiles
 
         summary = query_chat_phase_percentiles(window_h)
+        try:
+            summary["efficiency"] = query_chat_efficiency_breakdown(window_h)
+        except Exception:
+            pass
         return {"success": True, **summary}
     except Exception as e:
         logger.warning(f"[G-01 CHAT-PERF] query falló: {e}")

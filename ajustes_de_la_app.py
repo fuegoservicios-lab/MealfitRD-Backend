@@ -122,6 +122,11 @@ def _es_invitado(user_id) -> bool:
 # ── cambiar un ajuste ───────────────────────────────────────────────────────────────────────────────────────────
 
 def cambiar_ajuste(user_id: str, ajuste: str, valor) -> str:
+    # [P1-PLAN-LOTE-1007 · G-20] Rechazar inyección de instrucciones/marcadores antes de normalizar.
+    from input_sanitization import contiene_inyeccion_texto as _check_inj
+    if _check_inj(ajuste, max_len=80) or _check_inj(valor, max_len=120):
+        logger.warning("🛡️ [G-20 PROMPT-INJ] cambiar_ajuste rechazado ajuste=%r", str(ajuste)[:40])
+        return "No pude aplicar ese ajuste: el parámetro o valor recibido no es válido. Pide al usuario confirmar el ajuste simple."
     canon = _SINONIMO.get(_norm(ajuste))
     if not canon:
         return ("No reconozco ese ajuste. Los que puedo cambiar: hidratación, Nevera, memoria, generador de planes, "

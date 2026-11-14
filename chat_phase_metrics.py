@@ -107,6 +107,7 @@ class ChatTurnPhaseTracker:
         self.model: Optional[str] = None
         self.llm_calls: list[dict[str, Any]] = []
         self.tools: list[dict[str, Any]] = []
+        self.nudges: list[str] = []
 
     def elapsed_ms(self) -> int:
         return max(0, int((time.monotonic() - self.t0_mono) * 1000))
@@ -174,6 +175,12 @@ class ChatTurnPhaseTracker:
                 entry["guard_blocked"] = True
             self.tools.append(entry)
 
+    def record_nudge(self, nudge_name: str) -> None:
+        """Registra disparos de nudges internos (G-08) para observabilidad sin costo de IA."""
+        with self._lock:
+            if len(self.nudges) < 16:
+                self.nudges.append(str(nudge_name or "unknown")[:48])
+
     def mark_done(self, outcome: Optional[str] = None, model: Optional[str] = None) -> None:
         ms = self.elapsed_ms()
         with self._lock:
@@ -214,6 +221,8 @@ class ChatTurnPhaseTracker:
                 "tools_count": len(self.tools),
                 "tools_total_ms": tools_total,
                 "tools": list(self.tools),
+                "nudges_count": len(self.nudges),
+                "nudges": list(self.nudges),
                 "chunks_yielded": self.chunks_yielded,
             }
 
@@ -459,4 +468,72 @@ def query_chat_phase_percentiles(hours: int = 168) -> dict[str, Any]:
         "server": srv_row,
         "client": cli_row,
         "by_tool": tool_rows,
+    }
+
+
+def query_chat_efficiency_breakdown(hours: int = 168) -> dict[str, Any]:
+    """[P1-PLAN-LOTE-1007 · G-07/G-08] Desglose de eficiencia LLM y conteo de nudges."""
+    window_h = max(1, min(720, int(hours) if hours else 168))
+    from db_core import execute_sql_query
+
+    summary_row = execute_sql_query(
+        """
+        SELECT
+            COUNT(*)::int AS turns,
+            ROUND(AVG(NULLIF(metadata->>'llm_calls_count', '')::numeric)::numeric, 2)::float AS avg_llm_calls,
+            ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'llm_calls_count', '')::numeric))::numeric, 1)::float AS p90_llm_calls,
+            COUNT(*) FILTER (WHERE NULLIF(metadata->>'llm_calls_count', '')::int = 1)::int AS single_call_turns,
+            COUNT(*) FILTER (WHERE NULLIF(metadata->>'llm_calls_count', '')::int >= 3)::int AS three_plus_call_turns,
+            COUNT(*) FILTER (
+                WHERE jsonb_typeof(metadata->'llm_calls') = 'array'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements(metadata->'llm_calls') AS c
+                      WHERE COALESCE((c->>'fallback_used')::boolean, FALSE)
+                  )
+            )::int AS fallback_turns,
+            COUNT(*) FILTER (WHERE COALESCE(NULLIF(metadata->>'nudges_count', '')::int, 0) > 0)::int AS nudge_turns,
+            COUNT(*) FILTER (
+                WHERE COALESCE(metadata->>'outcome', '') <> ''
+                  AND metadata->>'outcome' <> 'ok'
+            )::int AS outcome_error_turns
+        FROM public.pipeline_metrics
+        WHERE node = %s
+          AND created_at > NOW() - make_interval(hours => %s)
+        """,
+        (_NODE_TURN_PHASES, window_h),
+        fetch_one=True,
+    )
+
+    nudge_rows = execute_sql_query(
+        """
+        SELECT
+            n AS nudge_name,
+            COUNT(*)::int AS triggers
+        FROM public.pipeline_metrics,
+             LATERAL jsonb_array_elements_text(metadata->'nudges') AS n
+        WHERE node = %s
+          AND created_at > NOW() - make_interval(hours => %s)
+          AND jsonb_typeof(metadata->'nudges') = 'array'
+        GROUP BY 1
+        ORDER BY triggers DESC, nudge_name ASC
+        LIMIT 20
+        """,
+        (_NODE_TURN_PHASES, window_h),
+        fetch_all=True,
+    )
+
+    return {
+        "window_hours": window_h,
+        "llm_summary": summary_row or {
+            "turns": 0,
+            "avg_llm_calls": None,
+            "p90_llm_calls": None,
+            "single_call_turns": 0,
+            "three_plus_call_turns": 0,
+            "fallback_turns": 0,
+            "nudge_turns": 0,
+            "outcome_error_turns": 0,
+        },
+        "by_nudge": nudge_rows or [],
     }

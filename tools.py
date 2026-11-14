@@ -520,6 +520,20 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
     # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
 
     logger.debug(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
+
+    # [P1-PLAN-LOTE-1007 · G-20] Freno determinista contra prompt-injection o marcadores internos.
+    from input_sanitization import contiene_inyeccion_texto as _check_inj
+    _inj_f = _check_inj(field, max_len=64)
+    _inj_v = _check_inj(new_value, max_len=240)
+    if _inj_f or _inj_v:
+        logger.warning(
+            "🛡️ [G-20 PROMPT-INJ] update_form_field rechazado field_reason=%r val_reason=%r",
+            _inj_f, _inj_v,
+        )
+        return (
+            f"No pude actualizar '{field}': el valor contiene texto no válido como dato del perfil. "
+            f"Pídele al usuario el dato simple y directo."
+        )
     
     # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] La puerta: sin whitelist, la LLM elegía el NOMBRE de
     # la clave del perfil que se escribía. Rechazar aquí —y decir por qué— es mejor que escribir
