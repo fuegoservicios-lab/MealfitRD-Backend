@@ -10517,8 +10517,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         modo_voz=False,
     )
 
+    _pt.mark_context_ready()   # [P1-PLAN-LOTE-1001] antes de leer el checkpoint: el ancla `existing_state … inputs` la leen los tests del 168 y del core audit
     existing_state = chat_graph_app.get_state(config)
-    _pt.mark_context_ready()
 
     inputs = {
         "user_id": user_id or "guest",
@@ -11310,8 +11310,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         modo_voz=bool(is_call_mode),
     )
 
+    _pt.mark_context_ready()   # [P1-PLAN-LOTE-1001] antes de leer el checkpoint: el ancla `existing_state … inputs` la leen los tests del 168 y del core audit
     existing_state = chat_graph_app.get_state(config)
-    _pt.mark_context_ready()
     
     inputs = {
         "user_id": user_id or "guest",
@@ -11777,9 +11777,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
-    _pt.mark_done(_stream_outcome, _chat_agent_model_name())
     try:
         yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"
+        _pt.mark_done(_stream_outcome, _chat_agent_model_name())   # [P1-PLAN-LOTE-1001] tras emitir el `done`
     finally:
         if not _pt.owned_by_router:
             _pt.emit_once(outcome=_stream_outcome, model_name=_chat_agent_model_name())
