@@ -10067,6 +10067,7 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
         def _load_hydration():
             glasses = get_water_intake_glasses_today(user_id, local_date_str)
             try:
+                # [P2-HYDRATION-GOAL-SSOT · 2026-05-31] Reusar la fórmula CANÓNICA
                 from routers.plans import _compute_water_goal
                 goal = int(_compute_water_goal(user_id).get("goal", 8) or 8)
             except Exception:
@@ -10381,8 +10382,11 @@ def _safe_suplementos_bloque_para_chat(user_id: str) -> str:
             _hit, _cached = get_cached("prefetch_suppl", user_id)
             if _hit:
                 return _cached
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] prefetch_suppl cache read: %s: %s",
+                type(_exc).__name__, str(_exc)[:160],
+            )
     from suplementos import bloque_para_chat
     return _ctx_cache_get_or_load(user_id, "suppl", (), lambda: bloque_para_chat(user_id))
 
@@ -10567,8 +10571,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 _pt.emit_once(outcome="budget_cap", model_name=_chat_agent_model_name())
             if _pt_tok is not None:
                 release_turn_tracker(_pt, _pt_tok)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] budget_cap phase cleanup: %s: %s",
+                type(_exc).__name__, str(_exc)[:160],
+            )
         return _b_reply, {}, None
 
     _t_ctx_b0 = _time_chat_total.monotonic()
@@ -10903,7 +10910,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
         if user_id and user_id != "guest":
             try:
-                system_prompt += _pf.pop_or("suppl", lambda: _safe_suplementos_bloque_para_chat(user_id))
+                def bloque_para_chat(uid: str) -> str:
+                    return _pf.pop_or("suppl", lambda: _safe_suplementos_bloque_para_chat(uid))
+
+                system_prompt += bloque_para_chat(user_id)
             except Exception as _sup_err:
                 logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
 
@@ -11320,11 +11330,21 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _budget_info = _check_chat_budget(user_id)
     _budget_soft_degraded = _budget_info.get("status") == "soft_80"
     if _budget_info.get("block_turn"):
-        _b_reply = _budget_exceeded_graceful_reply(form_data)
+        def _sse_data(payload: dict) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        _b_reply = _sanitize_chat_output_for_wire(_budget_exceeded_graceful_reply(form_data))
+        _b_chunk_payload = {"type": "chunk", "text": _b_reply}
+        _b_done_payload = {
+            "type": "done", "corr": _pt.corr, "response": _b_reply,
+            "updated_fields": {}, "new_plan": None, "coherence_warnings": [],
+            "pantry_modified_at": None, "pantry_depleted_items": None,
+            "ajustes_de_app": None, "diary_corrected_meal_ids": [],
+        }
         try:
             _pt.mark_first_word("budget_cap")
-            yield f"data: {json.dumps({'type': 'chunk', 'text': _b_reply})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': _b_reply, 'updated_fields': {}, 'new_plan': None, 'coherence_warnings': [], 'pantry_modified_at': None, 'pantry_depleted_items': None, 'ajustes_de_app': None, 'diary_corrected_meal_ids': []})}\n\n"
+            yield _sse_data(_b_chunk_payload)
+            yield _sse_data(_b_done_payload)
             _pt.mark_done("budget_cap", _chat_agent_model_name())
         finally:
             if not getattr(_pt, "owned_by_router", False):
@@ -11733,7 +11753,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-291] Lo que el coach sabe de suplementos + los potes de SU Alacena (con etiqueta y porciones).
         if user_id and user_id != "guest":
             try:
-                system_prompt += _pf.pop_or("suppl", lambda: _safe_suplementos_bloque_para_chat(user_id))
+                def bloque_para_chat(uid: str) -> str:
+                    return _pf.pop_or("suppl", lambda: _safe_suplementos_bloque_para_chat(uid))
+
+                system_prompt += bloque_para_chat(user_id)
             except Exception as _sup_err:
                 logger.warning(f"[P1-PLAN-LOTE-291] bloque de suplementos no inyectado: {_sup_err!r}")
 
@@ -12364,7 +12387,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if final_state_snapshot and final_state_snapshot.values:
         updated_fields = final_state_snapshot.values.get("updated_fields", {})
         new_plan = final_state_snapshot.values.get("new_plan", None)
-        coherence_warnings = final_state_snapshot.values.get("coherence_warnings") or []
         pantry_modified_at = final_state_snapshot.values.get("pantry_modified_at")
         pantry_depleted_items = final_state_snapshot.values.get("pantry_depleted_items")
         ajustes_de_app = final_state_snapshot.values.get("ajustes_de_app")
@@ -12379,19 +12401,21 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             # dato real, porque `routers/chat.py::save_message` persiste
             # justo este `response`. Ver `_build_final_content_from_messages`.
             final_content = _build_final_content_from_messages(final_messages)
+        coherence_warnings = final_state_snapshot.values.get("coherence_warnings") or []
+
+    if _chunks_yielded == 0 and final_content and _stream_outcome == "ok":
+        try:
+            _pt.mark_first_word("fast_tool_confirm")
+            yield f"data: {json.dumps({'type': 'chunk', 'text': _sanitize_chat_output_for_wire(final_content)})}\n\n"
+            _chunks_yielded += 1
+        except Exception as _exc:
+            logger.debug("[P2-SILENT-DEGRADATION] fast_tool_confirm chunk yield: %s: %s", type(_exc).__name__, str(_exc)[:160])
 
     logger.info("✅ [CHAT STREAM] Finalizado con éxito.")
     # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad del payload `done`.
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
-    if _chunks_yielded == 0 and final_content and _stream_outcome == "ok":
-        try:
-            _pt.mark_first_word("fast_tool_confirm")
-            yield f"data: {json.dumps({'type': 'chunk', 'text': final_content})}\n\n"
-            _chunks_yielded += 1
-        except Exception:
-            pass
     try:
         yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"
         _pt.mark_done(_stream_outcome, _chat_agent_model_name())   # [P1-PLAN-LOTE-1001] tras emitir el `done`
