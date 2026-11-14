@@ -8805,18 +8805,28 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
 
 def _rag_es_casual(prompt: str) -> bool:
     """Los filtros del router que no necesitan un LLM: True = no hay nada que buscar en la memoria."""
-    # Paso 1: Filtro rápido — mensajes cortos y claramente casuales
+    # Paso 1: Filtro rápido — mensajes cortos, ruido, comandos /... y claramente casuales
     casual_patterns = [
         'ok', 'okay', 'vale', 'sí', 'si', 'no', 'gracias', 'thanks',
         'hola', 'hello', 'hey', 'buenos días', 'buenas tardes', 'buenas noches',
         'perfecto', 'genial', 'entendido', 'claro', 'listo', 'dale',
-        'jaja', 'jeje', 'lol', 'xd', 'bien', 'cool', 'nice',
-        'de acuerdo', 'ya', 'ajá', 'aja', 'okey', 'bueno'
+        'jaja', 'jajaja', 'jajajaja', 'jeje', 'jejeje', 'lol', 'xd', 'bien', 'cool', 'nice',
+        'de acuerdo', 'ya', 'ajá', 'aja', 'okey', 'bueno',
+        'magnífico', 'magnifico', 'excelente', 'brutal', 'súper', 'super',
+        'nítido', 'nitido', 'chévere', 'chevere', 'bárbaro', 'barbaro',
+        'espectacular', 'increíble', 'increible', 'tremendo', 'fenomenal',
+        'fantástico', 'fantastico', 'awesome', 'great', 'amazing', 'perf', 'va',
+        'ya comí', 'ya comi', 'pss ya comi', 'pss ya comí', 'pues ya comi', 'pues ya comí',
+        'todo lo que registré hoy fue lo que comí', 'todo lo que registre hoy fue lo que comi',
+        'nada más', 'nada mas', 'eso es todo', 'todo bien',
     ]
 
-    clean = prompt.strip().lower().rstrip('!?.,')
-    # Si es un mensaje muy corto O coincide con un patrón casual
-    if len(clean) < 4 or clean in casual_patterns:
+    clean = (prompt or '').strip().lower().rstrip('!?.,:; ')
+    letters_only = re.sub(r'[^a-záéíóúüñ]', '', clean)
+    is_slash_cmd = clean.startswith('/') and len(clean.split()) <= 3
+    is_char_noise = len(letters_only) >= 2 and len(set(letters_only)) == 1
+    # Si es un mensaje muy corto, ruido de caracteres repetidos, comando /... o patrón casual
+    if len(clean) < 4 or clean in casual_patterns or is_slash_cmd or is_char_noise:
         logger.info(f"⏭️ [RAG ROUTER] Mensaje casual detectado: '{prompt[:30]}' → Saltando RAG.")
         return True
 

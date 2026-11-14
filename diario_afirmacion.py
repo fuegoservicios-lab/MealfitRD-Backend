@@ -41,7 +41,19 @@ _RE_ESTADO_TENER = re.compile(
 _RE_ESTADO_REFERENCIA = re.compile(
     r"\b(?:(?:por|seg[uú]n|en|de|como)\s+(?:lo\s+)?(?:que\s+)?(?:ya\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron|figura|aparece)|"
     r"lo\s+que\s+(?:ya\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron|figura|aparece)|"
-    r"que\s+(?:[^,;:.!?]{1,30}\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron)\s*(?:como)?)\s*$",
+    r"que\s+(?:[^,;:.!?]{1,30}\s+)?(?:qued[oó]|est[aá]|estaba|estaban|quedaron)\s*(?:como)?|"
+    r"(?:sigue|siguen|segu[ií]a|permanece|permanecen|contin[uú]a|contin[uú]an)(?:\s+igual)?)\s*$",
+    re.IGNORECASE,
+)
+
+# Confirmaciones explícitas de cierre/integridad del diario (sin comida nueva que registrar).
+_RE_CIERRE_SIN_NUEVA_COMIDA = re.compile(
+    r"^\s*(?:"
+    r"(?:pss?\s+|pues\s+)?ya\s+com[ií]|"
+    r"(?:todo|eso)\s+(?:lo\s+que\s+(?:ya\s+)?(?:registr[eé]|anot[eé]|puse|sub[ií])\s+(?:hoy\s+)?(?:es|fue)\s+(?:todo\s+)?lo\s+que\s+com[ií])|"
+    r"(?:ya\s+)?(?:no\s+com[ií]\s+nada\s+m[aá]s|nada\s+m[aá]s\s+(?:por\s+hoy|que\s+(?:anotar|registrar)))|"
+    r"(?:ya\s+est[aá]\s+todo\s+(?:anotado|registrado)|eso\s+(?:es|fue)\s+todo\s+(?:por\s+hoy|lo\s+de\s+hoy|lo\s+que\s+com[ií]))"
+    r")\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
 
@@ -79,12 +91,21 @@ def participio_describe_estado(antes: str) -> bool:
 
 
 def mensaje_sin_nada_que_registrar(texto: str) -> bool:
-    """Charla corta, ruido o preguntas informativas: con eso no hay comida que el coach pudiera haber tenido que anotar."""
+    """Charla corta, ruido, comandos /..., cierres de diario o preguntas informativas: no hay comida nueva que anotar."""
     from coach_voz import _normalizar, es_charla_corta
+    raw = (texto or "").strip()
+    if raw.startswith("/") and len(raw.split()) <= 4 and not _RE_VERBOS_CONSUMO_O_REGISTRO.search(raw):
+        return True
+    if _RE_CIERRE_SIN_NUEVA_COMIDA.match(raw):
+        return True
     t = _normalizar(texto)
     if not t:
         return True
-    if all(p in _RUIDO for p in t.split()):
+    tokens = t.split()
+    if all(
+        p in _RUIDO or (len(p) >= 2 and len(set(p)) == 1 and not p.isdigit())
+        for p in tokens
+    ):
         return True
     if _RE_PREGUNTA_CONSULTA.search(texto) and not _RE_VERBOS_CONSUMO_O_REGISTRO.search(texto):
         return True

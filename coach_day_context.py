@@ -262,7 +262,7 @@ def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=N
             partes.append(f"{f} — sin anotar, " + ("es la que toca ahora" if f == ahora else "más tarde"))
     out = "\n🍽️ COMIDAS DE HOY (según su diario y la hora): " + "; ".join(partes) + "."
     out += (" CÓMO CIERRAS: " + (f"si tu cierre nombra una comida, que sea la que toca AHORA ({ahora})" if ahora else
-                                  "a esta hora no le toca ninguna comida: no cierres invitándole a comer")
+                                  "a esta hora no le toca ninguna comida: no le pidas «¿qué quieres anotar hoy?» ni invites a comer; si solo charla o cierra el día, responde breve sin repetir sus totales")
             + " — nunca «cuando almuerces» si el almuerzo ya pasó, y NUNCA copies el cierre de tu respuesta anterior: "
             "mira la hora de ESTE mensaje.")
     if ahora == "cena" and h >= 22.5:

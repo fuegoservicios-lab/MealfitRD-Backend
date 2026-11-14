@@ -1086,7 +1086,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1005 · 2026-11-14] (G-03 + G-31) Resumen de días pasados (>= anteayer) + `consultar_dia_del_plan(fuente=...)`, deduplicación y poda de instrucciones no ligadas en `coach_lean.py` y compactación de `ToolMessage`s previos (<= 24k toks, 54/54 reglas).
 # [P1-PLAN-LOTE-1006 · 2026-11-14] (G-05 + G-17) Tracking de tokens de `vision_scan` fuera de `if is_food:`, `vision_usage_scope()` seguro bajo `asyncio.gather`, desglose de sub-fases (`resize_ms`, `llm_ms`, `sanitize_ms`, `attachment_ms`, `locale_ms`, `total_ms`) en `vision_scan_resultado` y subida paralela de adjunto en chat (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
 # [P1-PLAN-LOTE-1007 · 2026-11-14] (G-07/08/09/10/13/16/18/20/21) Conteo de nudges y desglose de llamadas LLM, ejecución paralela de tools de solo lectura, escalado clínico a `gpt-6.1-terra` con tope US$ 0,03/turno, purga 3d de `*_tick` + barrido huérfanos 250, alertas de salud/feedback negativo y filtro anti-inyección compartido (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1007 · 2026-11-14"
+# [P1-PLAN-LOTE-1008 · 2026-11-14] Fluidez conversacional e identidad Bioboros del coach: reglas R3/R4/Q5 en los 5 prompts (anti-OpenAI, anti-eco/respuestas vacías/spam de macros, cierre natural de «ya comí»), cierre en horario sin franja activa, fast-path casual/ruido/`/comando` en `_rag_es_casual`, y filtro de `/comandos`, ruido de caracteres repetidos, cierres de diario y «sigue/permanece/continúa anotada» en `diario_afirmacion.py` sin falsos nudges (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1008 · 2026-11-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
