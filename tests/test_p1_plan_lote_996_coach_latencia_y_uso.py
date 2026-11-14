@@ -12,6 +12,7 @@ tooltip-anchor: P1-PLAN-LOTE-996
 from __future__ import annotations
 
 import io
+import re
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -105,7 +106,9 @@ def test_el_cliente_aplica_el_ajuste_solo_a_gemini():
 
 
 def test_marker():
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-99' in io.open(_BACKEND / "app.py", encoding="utf-8").read()   # 996 o posterior
+    src = io.open(_BACKEND / "app.py", encoding="utf-8").read()
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+)\b', src)
+    assert m is not None and int(m.group(1)) >= 996
 
 
 # ── foto + etiqueta corta: sin sentimiento ni memoria antes del primer token ─────────────────────────

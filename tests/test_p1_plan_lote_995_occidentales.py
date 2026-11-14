@@ -16,6 +16,7 @@ tooltip-anchor: P1-PLAN-LOTE-995
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -186,4 +187,6 @@ def test_el_permiso_nuevo_no_nombra_a_china():
 
 
 def test_marker():
-    assert '_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-99' in io.open(_BACKEND / "app.py", encoding="utf-8").read()   # 995 o posterior
+    src = io.open(_BACKEND / "app.py", encoding="utf-8").read()
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+)\b', src)
+    assert m is not None and int(m.group(1)) >= 995

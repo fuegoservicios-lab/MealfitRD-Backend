@@ -91,7 +91,8 @@ def test_el_handoff_del_router_siembra_el_alcance_del_turno():
 
 def test_marker_del_998_y_el_996_acepta_series_posteriores():
     src = io.open(_BACKEND / "app.py", encoding="utf-8").read()
-    assert re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-99[89] · 2026-11-13"', src)
+    m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', src)
+    assert m is not None and int(m.group(1)) >= 998
 
 
 def test_update_form_field_nunca_se_recorta_por_el_gating():

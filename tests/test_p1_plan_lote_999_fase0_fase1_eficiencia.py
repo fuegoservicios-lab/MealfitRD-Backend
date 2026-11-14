@@ -457,7 +457,8 @@ def test_fase1_conversacion_mixta_luna_hydrogen_luna():
 
 def test_lote_999_marker_y_wiring_en_agent():
     app_src = (_BACKEND_DIR / "app.py").read_text(encoding="utf-8")
-    assert re.search(r'^_LAST_KNOWN_PFIX\s*=\s*"P1-PLAN-LOTE-999\b', app_src, re.MULTILINE)
+    m = re.search(r'^_LAST_KNOWN_PFIX\s*=\s*"P1-PLAN-LOTE-(\d+)\b', app_src, re.MULTILINE)
+    assert m is not None and int(m.group(1)) >= 999
 
     agent_src = (_BACKEND_DIR / "agent.py").read_text(encoding="utf-8")
     assert agent_src.count('"prompt_breakdown": _prompt_breakdown') == 2

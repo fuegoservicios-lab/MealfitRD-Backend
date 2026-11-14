@@ -1078,8 +1078,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-986 · 2026-11-11] Una comida de otra franja principal no se fusiona en esta (bagels del desayuno dentro del almuerzo).
 # [P1-PLAN-LOTE-987 · 2026-11-12] «Dos paquetes de las de ayer»: la porcion es la del registro, sin preguntar.
 # [P1-PLAN-LOTE-991 · 2026-11-12] «me tomé la creatina» sin cantidad = su toma (etiqueta o historial), no 1 cápsula.
-# [P1-PLAN-LOTE-999 · 2026-11-13] Fase 0 desglose/coste/medición + Fase 1 enrutado Hydrogen por tier (todos por defecto).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-999 · 2026-11-13"
+# [P1-PLAN-LOTE-1000 · 2026-11-13] Orden cache-first del prompt, fast-path de sentimiento en registros objetivos, dieta de contexto por turno, telemetría LLM auxiliar y alerta de gasto diario.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1000 · 2026-11-13"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

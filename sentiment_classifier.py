@@ -77,6 +77,16 @@ def classify_sentiment(user_message: str) -> dict:
         model = _get_classifier_model()
         
         response = model.invoke(SENTIMENT_PROMPT.format(message=user_message[:300]))
+        try:
+            from chat_prompt_opt import registrar_uso_llm_auxiliar
+            registrar_uso_llm_auxiliar(
+                llm=model,
+                result=response,
+                duration_s=time.time() - start,
+                node="chat_sentiment",
+            )
+        except Exception:
+            pass
         
         # Manejar respuestas tipo lista (Gemini a veces devuelve content como list)
         content = response.content

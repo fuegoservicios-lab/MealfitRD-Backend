@@ -674,7 +674,8 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
     from gemini_hydrogen import GEMINI_HYDROGEN, hay_key_gemini, usa_hydrogen_para_usuario
     if hay_key_gemini() and usa_hydrogen_para_usuario(user_id):
         return GEMINI_HYDROGEN
-    return resolve_model_for_user(user_id)
+    from llm_provider import _model_for_provider
+    return _model_for_provider(resolve_model_for_user(user_id))
 
 # [P1-SWAP-LUNA · 2026-08-05] El swap (y por herencia `regenerate-day`, que es un bucle
 # de swaps) pasa de `glm-5.3-flash` a `gpt-5.6-luna` — el mismo modelo con el que ya
@@ -8428,9 +8429,17 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str) + _title_lang_directive
         logger.debug(f"[chat_title bg] session={session_id} - Calling LLM API")
         try:
+            _t0_title = time.time()
             response = title_llm.invoke(prompt)
             # [P1-CHAT-CB-EXTEND · 2026-05-20] Marcar success post-invoke.
             _title_cb.record_success()
+            from chat_prompt_opt import registrar_uso_llm_auxiliar
+            registrar_uso_llm_auxiliar(
+                llm=title_llm,
+                result=response,
+                duration_s=time.time() - _t0_title,
+                node="chat_title",
+            )
         except Exception as _title_invoke_exc:
             # [P1-CHAT-CB-EXTEND · 2026-05-20] Discriminar rate-limit del
             # provider (NO cuenta como CB failure) vs failure genuino.
@@ -8579,7 +8588,9 @@ _PRESENT_LOG_DISALLOW_RE = re.compile(
     r"mismo|misma|repetir|parecid\w*|otra vez|como el|como la|etiqueta\w*|tabla)\b"
 )
 _PRESENT_LOG_ALLOW_RE = re.compile(
-    r"(?:^|\b)(?:me\s+)?(?:desayune|almorce|cene|merende|pique|comi|tome|bebi|anota|registra|anote)\b"
+    r"(?:^|\b)(?:me\s+)?(?:desayune|almorce|cene|merende|pique|comi|tome|bebi|"
+    r"anota|anotame|apunta|apuntame|registra|anote)\b"
+    r"|(?:^|\b)(?:me\s+)?acabo\s+de\s+(?:desayunar|almorzar|cenar|merendar|picar|comer|tomar|beber)\b"
     r"|(?:^|\b)\d+(?:[.,]\d+)?\s*(?:vasos?|botellas?|litros?|ml|oz|onzas?|tazas?)\s+de\s+agua\b"
 )
 _TODAY_BUDGET_QUESTION_RE = re.compile(
@@ -8652,9 +8663,17 @@ def rag_query_router(prompt: str) -> dict:
 
         rewrite_prompt = RAG_ROUTER_PROMPT.format(prompt=prompt)
 
+        _t0_router = time.time()
         response = router_llm.invoke(rewrite_prompt)
         # [P1-CHAT-CB-EXTEND · 2026-05-20] Marcar success post-invoke.
         _router_cb.record_success()
+        from chat_prompt_opt import registrar_uso_llm_auxiliar
+        registrar_uso_llm_auxiliar(
+            llm=router_llm,
+            result=response,
+            duration_s=time.time() - _t0_router,
+            node="chat_rag_router",
+        )
         content = response.content
         if isinstance(content, list):
             content = "".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
@@ -10379,6 +10398,17 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 plan_id=(plan_record or {}).get("id"),
             )
 
+        try:
+            from chat_prompt_opt import optimizar_prompt_dinamico as _opt_dyn
+            system_prompt = _opt_dyn(
+                system_prompt, prompt,
+                prefijo_estatico_chars=_bd_prefijo_chars,
+                form_data=form_data,
+                con_foto=False,
+            )
+        except Exception as _opt_exc:
+            logger.debug("[P1-PLAN-LOTE-1000] optimizar_prompt_dinamico (no-stream) fail-open: %s", _opt_exc)
+
         # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] REFUERZO de la directiva de idioma como
         # ÚLTIMO bloque del system prompt. La directiva de T3 (arriba, junto a la identidad)
         # quedaba enterrada bajo ~40 bloques españoles (plan JSON, culinary KB, tools, RAG...)
@@ -10714,9 +10744,18 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             rag_decision = _rag_sin_router(prompt) if _do_rag else None
         elif not vision and _chat_fastpath_present_logs() and _rag_es_presente_sin_rag(prompt):
             # [P1-PLAN-LOTE-997] Log del presente o consulta estricta de presupuesto calórico/hídrico de hoy:
-            # preserva sentimiento (empatía) pero evita LLM router + Cohere RAG (~3,5 s).
+            # evita LLM router + Cohere RAG (~3,5 s).
+            # [P1-PLAN-LOTE-1000] En turnos objetivos sin señales emocionales, salta también `classify_sentiment`
+            # (~1,0-1,5 s adicionales de TTFT y 1 llamada LLM menos). La empatía sigue viva si hay señales afectivas.
             _do_rag_router = False
             rag_decision = {"skip": True}
+            from chat_prompt_opt import (
+                es_turno_objetivo_sin_sentimiento,
+                skip_sentiment_present_logs_activo,
+            )
+            if skip_sentiment_present_logs_activo() and es_turno_objetivo_sin_sentimiento(prompt):
+                _do_sentiment = False
+                logger.info("⏭️ [SENTIMENT FASTPATH] Turno objetivo sin señales afectivas → skip sentiment.")
         if _do_sentiment or _do_rag_router:
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
                 _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
@@ -11142,6 +11181,16 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
         if is_call_mode:
             system_prompt += CHAT_VOICE_MODE_RECORDATORIO
+        try:
+            from chat_prompt_opt import optimizar_prompt_dinamico as _opt_dyn
+            system_prompt = _opt_dyn(
+                system_prompt, prompt,
+                prefijo_estatico_chars=_bd_prefijo_chars,
+                form_data=form_data,
+                con_foto=bool(vision),
+            )
+        except Exception as _opt_exc:
+            logger.debug("[P1-PLAN-LOTE-1000] optimizar_prompt_dinamico (stream) fail-open: %s", _opt_exc)
         try:
             # [P1-PLAN-LOTE-81] la directiva del MENSAJE va antes: el refuerzo del locale sigue siendo lo último que lee (P1-COACH-LANGUAGE-RECENCY)
             system_prompt += build_message_language_directive(prompt, _coach_locale)   # [P1-PLAN-LOTE-81] el idioma del mensaje manda

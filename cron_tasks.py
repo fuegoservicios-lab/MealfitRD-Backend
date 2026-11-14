@@ -6793,6 +6793,131 @@ def _llm_breaker_open_alert_job():
             pass
 
 
+def _llm_daily_spend_alert_job():
+    """[P1-PLAN-LOTE-1000 · 2026-11-13] Guardarraíl diario de gasto LLM por modelo.
+
+    Suma `cost_usd_micros` por modelo en la ventana móvil (default 24 h) desde `llm_usage_events`.
+    Si algún modelo supera `MEALFIT_LLM_DAILY_SPEND_ALERT_USD` (default $5.0), emite o reabre
+    `llm_daily_spend_high:<modelo>` en `system_alerts` (warning; critical si >= 3x).
+    Auto-resuelve explícitamente cuando el gasto acumulado en la ventana vuelve bajo el umbral.
+    Tooltip-anchor: P1-PLAN-LOTE-1000.
+    """
+    enabled = _env_bool("MEALFIT_LLM_DAILY_SPEND_ALERT_ENABLED", True)
+    umbral_usd = _env_float(
+        "MEALFIT_LLM_DAILY_SPEND_ALERT_USD", 5.0,
+        validator=lambda v: 0.25 <= v <= 1000.0,
+    )
+    ventana_h = max(1, min(_env_int("MEALFIT_LLM_DAILY_SPEND_WINDOW_HOURS", 24), 168))
+    threshold_micros = int(round(umbral_usd * 1_000_000))
+    excedidos: list = []
+    fallo = False
+    try:
+        if not enabled:
+            execute_sql_write(
+                """
+                UPDATE system_alerts SET resolved_at = NOW()
+                WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL
+                """,
+                (),
+            )
+            return
+
+        filas = execute_sql_query(
+            """
+            SELECT COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS model,
+                   COALESCE(SUM(cost_usd_micros), 0)::bigint AS spend_micros,
+                   COUNT(*)::int AS calls
+            FROM llm_usage_events
+            WHERE created_at >= NOW() - (%s::float * INTERVAL '1 hour')
+            GROUP BY 1
+            """,
+            (ventana_h,),
+            fetch_all=True,
+        ) or []
+
+        for fila in filas:
+            modelo = fila["model"] if isinstance(fila, dict) else fila[0]
+            spend_micros = int((fila["spend_micros"] if isinstance(fila, dict) else fila[1]) or 0)
+            calls = int((fila["calls"] if isinstance(fila, dict) else fila[2]) or 0)
+            if spend_micros < threshold_micros:
+                continue
+            excedidos.append(modelo)
+            spend_usd = round(spend_micros / 1_000_000.0, 4)
+            severity = "critical" if spend_micros >= (3 * threshold_micros) else "warning"
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
+                VALUES (%s, 'cost_guardrail', %s, %s, %s, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(), severity = EXCLUDED.severity,
+                    message = EXCLUDED.message, metadata = EXCLUDED.metadata,
+                    resolved_at = NULL
+                """,
+                (
+                    f"llm_daily_spend_high:{modelo}",
+                    severity,
+                    f"Gasto LLM alto en {modelo}: ${spend_usd:.2f} USD ({ventana_h}h)",
+                    f"El modelo {modelo} acumuló ${spend_usd:.2f} USD en {calls} llamadas durante "
+                    f"las últimas {ventana_h} h (umbral configurado: ${umbral_usd:.2f} USD). "
+                    f"Revisa si hay bucles de reintento, tráfico anómalo o routing fuera de plan.",
+                    json.dumps({
+                        "modelo": modelo,
+                        "spend_usd": spend_usd,
+                        "spend_micros": spend_micros,
+                        "calls": calls,
+                        "threshold_usd": umbral_usd,
+                        "ventana_h": ventana_h,
+                    }, ensure_ascii=False),
+                ),
+            )
+            logger.warning(
+                f"💸 [P1-PLAN-LOTE-1000] gasto alto modelo={modelo} "
+                f"spend=${spend_usd:.2f} USD ({calls} calls / {ventana_h}h) >= ${umbral_usd:.2f} → alert emitido."
+            )
+
+        if excedidos:
+            execute_sql_write(
+                """
+                UPDATE system_alerts SET resolved_at = NOW()
+                WHERE alert_key LIKE 'llm_daily_spend_high:%%'
+                  AND resolved_at IS NULL
+                  AND alert_key <> ALL(%s)
+                """,
+                ([f"llm_daily_spend_high:{m}" for m in excedidos],),
+            )
+        else:
+            execute_sql_write(
+                """
+                UPDATE system_alerts SET resolved_at = NOW()
+                WHERE alert_key LIKE 'llm_daily_spend_high:%%' AND resolved_at IS NULL
+                """,
+                (),
+            )
+    except Exception as e:
+        fallo = True
+        logger.error(
+            f"❌ [P1-PLAN-LOTE-1000] el vigilante de gasto diario LLM falló: {type(e).__name__}: {e}"
+        )
+    finally:
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES ('llm_daily_spend_watch', 0, 0, 0, %s, %s::jsonb)",
+                (
+                    float(len(excedidos)),
+                    json.dumps({
+                        "excedidos": excedidos,
+                        "threshold_usd": umbral_usd,
+                        "ventana_h": ventana_h,
+                        "enabled": enabled,
+                        "job_failed": fallo,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception:
+            pass
+
+
 def _chunk_overdue_alert_job():
     """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Detección horaria de chunks atrasados.
 
@@ -7791,6 +7916,20 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             replace_existing=True,
         )
         logger.info(f"⏰ [P1-PLAN-LOTE-156] Cron _llm_breaker_open_alert_job registrado cada {_CB_INT} min.")
+
+    # [P1-PLAN-LOTE-1000 · 2026-11-13] Guardarraíl de gasto diario por modelo sobre `llm_usage_events`.
+    if not scheduler.get_job("llm_daily_spend_alert_job"):
+        _SD_INT = max(15, min(_env_int("MEALFIT_LLM_DAILY_SPEND_ALERT_INTERVAL_MIN", 60), 720))
+        _add_job_jittered(scheduler,
+            _llm_daily_spend_alert_job,
+            "interval",
+            minutes=_SD_INT,
+            id="llm_daily_spend_alert_job",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(f"⏰ [P1-PLAN-LOTE-1000] Cron _llm_daily_spend_alert_job registrado cada {_SD_INT} min.")
 
     # [P2-6 · 2026-05-08] Alerta proactiva sobre fallback no-atómico del pool.
     # Cubre el hueco "fallback_count > 0 invisible hasta polling manual del
