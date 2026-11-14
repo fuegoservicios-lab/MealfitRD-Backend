@@ -601,15 +601,17 @@ def _assemble(header: str, lines: list, footer: str, max_chars: int, label: str)
 def build_past_plan_days_block(plan_data: Any, today: date,
                                days_back: Optional[int] = None,
                                max_chars: Optional[int] = None,
-                               tz_offset_mins: int = 240) -> str:
+                               tz_offset_mins: int = 240,
+                               summarize_older_days: bool = False) -> str:
     """Pieza 2 del spec: índice compacto de lo que el plan MANDABA en los días
-    que ya pasaron. Solo nombre + slot + kcal — las cantidades y las recetas
-    las sirve la tool `consultar_dia_del_plan` bajo demanda."""
+    que ya pasaron. Con `summarize_older_days=True` (G-03), ayer se conserva
+    completo por plato y de anteayer hacia atrás va en 1 línea de resumen."""
     days_back = chat_history_days() if days_back is None else days_back
     max_chars = chat_history_max_chars() if max_chars is None else max_chars
     if days_back <= 0:
         return ""
     floor = today - timedelta(days=days_back)
+    yesterday = today - timedelta(days=1)
     past = [r for r in resolve_day_dates(plan_data, today, tz_offset_mins)
             if floor <= r["date"] < today]
     if not past:
@@ -618,6 +620,7 @@ def build_past_plan_days_block(plan_data: Any, today: date,
     lines = []
     for r in sorted(past, key=lambda x: x["date"], reverse=True):
         parts = []
+        total_cals = 0.0
         for m in (r["day"].get("meals") or []):
             if not isinstance(m, dict):
                 continue
@@ -628,9 +631,15 @@ def build_past_plan_days_block(plan_data: Any, today: date,
             cals = m.get("cals") if m.get("cals") is not None else m.get("calories")
             seg = f'{slot} "{name}"'
             if isinstance(cals, (int, float)) and cals:
+                total_cals += float(cals)
                 seg += f" {int(cals)} kcal"
             parts.append(seg)
-        if parts:
+        if not parts:
+            continue
+        if summarize_older_days and r["date"] < yesterday:
+            kcal_txt = f" ~{int(round(total_cals))} kcal" if total_cals > 0 else ""
+            lines.append(f"- {_fmt_date_es(r['date'], r['inferred'])}:{kcal_txt} ({len(parts)} comidas)")
+        else:
             lines.append(f"- {_fmt_date_es(r['date'], r['inferred'])}: " + " · ".join(parts))
     if not lines:
         return ""
@@ -759,15 +768,18 @@ def build_past_diary_block(consumed_rows: Any, today: date,
                            days_back: Optional[int] = None,
                            max_chars: Optional[int] = None,
                            tz_offset_mins: int = 240,
-                           plan_data: Any = None) -> str:
+                           plan_data: Any = None,
+                           summarize_older_days: bool = False) -> str:
     """Pieza 3 del spec: lo que el usuario REGISTRÓ haber comido en los días
-    anteriores a hoy. Declara explícitamente los días sin registro — esa es la
-    guarda que impide que el modelo rellene el hueco con el plan."""
+    anteriores a hoy. Con `summarize_older_days=True` (G-03), ayer se queda
+    entero (incluyendo ingredientes, bases e ids) y de anteayer hacia atrás
+    va resumido en 1 línea por día (consultable vía `consultar_dia_del_plan`)."""
     days_back = chat_history_days() if days_back is None else days_back
     max_chars = chat_history_max_chars() if max_chars is None else max_chars
     if days_back <= 0:
         return ""
     floor = today - timedelta(days=days_back)
+    yesterday = today - timedelta(days=1)
 
     try:
         from db_facts import _diary_rollover_hour
@@ -785,68 +797,76 @@ def build_past_diary_block(consumed_rows: Any, today: date,
         by_date.setdefault(d, []).append(row)
 
     lines = []
-    cursor = today - timedelta(days=1)
+    cursor = yesterday
     while cursor >= floor:
         rows = by_date.get(cursor)
         if rows:
-            parts = []
-            for r in rows:
-                slot = str(r.get("meal_type") or "").strip()
-                cal = r.get("calories")
-                prot = r.get("protein")
-
-                # [BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
-                # Desglosar plato base y extras circunstanciales fusionados para evitar contaminación al clonar
-                nut = r.get("nutrition")
-                if isinstance(nut, str):
-                    try:
-                        import json
-                        nut = json.loads(nut)
-                    except Exception:
-                        nut = {}
-                if not isinstance(nut, dict):
-                    nut = {}
-
-                base_info = nut.get("base_meal")
-                addons = nut.get("addons") or []
-                if isinstance(base_info, dict) and base_info.get("meal_name"):
-                    base_nm = str(base_info.get("meal_name")).strip()
-                    b_cal = base_info.get("calories")
-                    b_prot = base_info.get("protein")
-                    seg = f"{slot}: {base_nm}" if slot else base_nm
-                    if isinstance(b_cal, (int, float)) and b_cal:
-                        if isinstance(b_prot, (int, float)) and b_prot:
-                            seg += f" ({int(b_cal)} kcal base, {int(b_prot)}g prot)"
-                        else:
-                            seg += f" ({int(b_cal)} kcal base)"
-                    if addons:
-                        addon_names = ", ".join(
-                            str(a.get("meal_name") or "").strip() for a in addons if a.get("meal_name")
-                        )
-                        extra_cal = sum(int(a.get("calories") or 0) for a in addons)
-                        seg += f" [+ extra fusionado: {addon_names} (+{extra_cal} kcal)]"
-                else:
-                    nm = str(r.get("meal_name") or "").strip() or "(sin nombre)"
-                    seg = f"{slot}: {nm}" if slot else nm
-                    if isinstance(cal, (int, float)) and cal:
-                        if isinstance(prot, (int, float)) and prot:
-                            seg += f" ({int(cal)} kcal, {int(prot)}g prot)"
-                        else:
-                            seg += f" ({int(cal)} kcal)"
-                if r.get("id"):
-                    seg += f" [id: {r.get('id')}]"
-                ings = r.get("ingredients")
-                if isinstance(ings, list) and ings:
-                    clean_ings = [str(x).strip() for x in ings if str(x).strip()]
-                    if clean_ings:
-                        seg += f" (ingredientes: {', '.join(clean_ings[:6])})"
-                parts.append(seg)
-            # [P1-PLAN-LOTE-76] lo que falta de ese día, por su nombre
             _pd = find_plan_day_for_date(plan_data, cursor, today, tz_offset_mins) if isinstance(plan_data, dict) else None
             _faltan = comidas_sin_registrar(rows, _pd)
-            if _faltan:
-                parts.append("sin registrar: " + ", ".join(_faltan))
-            lines.append(f"- {_fmt_date_es(cursor)}: " + " · ".join(parts))
+            if summarize_older_days and cursor < yesterday:
+                tot_cal = sum(int(round(float(r.get("calories") or 0))) for r in rows)
+                tot_prot = sum(int(round(float(r.get("protein") or 0))) for r in rows)
+                summary = f"- {_fmt_date_es(cursor)}: {len(rows)} reg (~{tot_cal} kcal, {tot_prot}g prot)"
+                if _faltan:
+                    summary += " · sin registrar: " + ", ".join(_faltan)
+                lines.append(summary)
+            else:
+                parts = []
+                for r in rows:
+                    slot = str(r.get("meal_type") or "").strip()
+                    cal = r.get("calories")
+                    prot = r.get("protein")
+
+                    # [BB-022 / P1-CLONE-HABITUAL-DECONTAMINATE · 2026-11-03]
+                    # Desglosar plato base y extras circunstanciales fusionados para evitar contaminación al clonar
+                    nut = r.get("nutrition")
+                    if isinstance(nut, str):
+                        try:
+                            import json
+                            nut = json.loads(nut)
+                        except Exception:
+                            nut = {}
+                    if not isinstance(nut, dict):
+                        nut = {}
+
+                    base_info = nut.get("base_meal")
+                    addons = nut.get("addons") or []
+                    if isinstance(base_info, dict) and base_info.get("meal_name"):
+                        base_nm = str(base_info.get("meal_name")).strip()
+                        b_cal = base_info.get("calories")
+                        b_prot = base_info.get("protein")
+                        seg = f"{slot}: {base_nm}" if slot else base_nm
+                        if isinstance(b_cal, (int, float)) and b_cal:
+                            if isinstance(b_prot, (int, float)) and b_prot:
+                                seg += f" ({int(b_cal)} kcal base, {int(b_prot)}g prot)"
+                            else:
+                                seg += f" ({int(b_cal)} kcal base)"
+                        if addons:
+                            addon_names = ", ".join(
+                                str(a.get("meal_name") or "").strip() for a in addons if a.get("meal_name")
+                            )
+                            extra_cal = sum(int(a.get("calories") or 0) for a in addons)
+                            seg += f" [+ extra fusionado: {addon_names} (+{extra_cal} kcal)]"
+                    else:
+                        nm = str(r.get("meal_name") or "").strip() or "(sin nombre)"
+                        seg = f"{slot}: {nm}" if slot else nm
+                        if isinstance(cal, (int, float)) and cal:
+                            if isinstance(prot, (int, float)) and prot:
+                                seg += f" ({int(cal)} kcal, {int(prot)}g prot)"
+                            else:
+                                seg += f" ({int(cal)} kcal)"
+                    if r.get("id"):
+                        seg += f" [id: {r.get('id')}]"
+                    ings = r.get("ingredients")
+                    if isinstance(ings, list) and ings:
+                        clean_ings = [str(x).strip() for x in ings if str(x).strip()]
+                        if clean_ings:
+                            seg += f" (ingredientes: {', '.join(clean_ings[:6])})"
+                    parts.append(seg)
+                # [P1-PLAN-LOTE-76] lo que falta de ese día, por su nombre
+                if _faltan:
+                    parts.append("sin registrar: " + ", ".join(_faltan))
+                lines.append(f"- {_fmt_date_es(cursor)}: " + " · ".join(parts))
         else:
             lines.append(f"- {_fmt_date_es(cursor)}: SIN REGISTRO")
         cursor -= timedelta(days=1)
@@ -879,4 +899,12 @@ def build_past_diary_block(consumed_rows: Any, today: date,
               "de días anteriores («lo mismo de ayer», «lo que siempre como»), clona ÚNICAMENTE el plato base "
               "(kcal y proteínas base). NUNCA arrastres extras circunstanciales ni bebidas marcadas con "
               "«[+ extra fusionado: ...]» a menos que el usuario los pida expresamente.")
+    if summarize_older_days:
+        try:
+            from knobs import _env_bool
+            if _env_bool("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", True):
+                footer += (" Para ver platos, ingredientes o ids de anteayer o días anteriores en el diario, "
+                           "usa `consultar_dia_del_plan(..., fuente='diario')`.")
+        except Exception:
+            pass
     return _assemble(header, lines, footer, max_chars, "diary")

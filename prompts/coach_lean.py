@@ -57,8 +57,100 @@ def podar_herramientas_no_ligadas(texto: str, ligadas: Optional[Iterable[str]]) 
     return texto
 
 
+_PATRON_BLOQUE_SUPLEMENTOS = re.compile(
+    r"[ \t]*Para vitaminas/minerales \(magnesio, multivitaminas, B12, etc\.\), llama analizar_suplemento"
+    r".*?datos no confiables\.\n?",
+    re.DOTALL,
+)
+
+# [P1-PLAN-LOTE-1005 · G-03] Copias 2x/3x o repeticiones literales del docstring de herramientas
+# SIEMPRE ligadas. La copia principal / autoritativa permanece íntegra en `texto` o en el schema.
+_PATRONES_DUPLICADOS_UNIVERSALES = (
+    # BB-034 copia 2 en A. (copia completa permanece en Regla 8)
+    re.compile(r"PLANTILLAS COMPARATIVAS DE AYER EN HOY:.*?no suma a las macros de hoy»\.\s*", re.DOTALL),
+    # BB-028 copia 2 en A. (copia completa permanece en `correct_consumed_meal`)
+    re.compile(r"Al corregir un ingrediente o cantidad de un plato registrado.*?macros coherentes\.\s*", re.DOTALL),
+    # BB-066 copia 1 en R2. (protocolo 3 puntos permanece en `_REGLA_UNA_LLAMADA_POR_COMIDA`)
+    re.compile(r"(?m)^R2\.\s*CERO DESPEDIDAS NOCTURNAS REPETIDAS:[^\n]*\n?"),
+    # Suplementos copia 1 en `_REGLA_UNA_LLAMADA_POR_COMIDA` (permanece en `correct_consumed_meal`)
+    re.compile(r"EXCEPCIÓN CRÍTICA CON SUPLEMENTOS:.*?para meter una comida\.\s*", re.DOTALL),
+    # BB-067 copia 2 (permanece en Q4)
+    re.compile(r"RESPUESTA DIRECTA ANTE NOMBRE DE FRANJA AISLADO:.*?te lo anoto\.'\)\.\s*", re.DOTALL),
+    # BB-058 copia 2 (permanece en Q2 y `proponer_comida`)
+    re.compile(r"DESAMBIGUACIÓN DE ALIMENTO AISLADO SIN VERBO:.*?diario\.'\)\.\s*", re.DOTALL),
+    # BB-059 copia 2 (permanece en Q3)
+    re.compile(r"FIDELIDAD ESTRICTA DEL INGREDIENTE EN PROPUESTAS:.*?al ingrediente del usuario\.\s*", re.DOTALL),
+    # BB-058/BB-059 cola repetida en el bullet de `proponer_comida` (ya en Q2/Q3)
+    re.compile(r"PROHIBIDO usarla ante alimentos o productos aislados.*?si tiene atún\)\.", re.DOTALL),
+)
+
+_PATRONES_POR_HERRAMIENTA = (
+    (
+        "log_water_glass",
+        re.compile(
+            r"2\. EQUIVALENCIAS CLÍNICAS Y COTIDIANAS \(1 vaso = 250 ml / 8 oz\):.*?count_delta=0\.5\)\.\s*",
+            re.DOTALL,
+        ),
+    ),
+    (
+        "log_consumed_meal",
+        re.compile(r"Pasa SIEMPRE `meal_type`.*?pregunta ANTES de llamar la herramienta\.\s*", re.DOTALL),
+    ),
+    (
+        "correct_consumed_meal",
+        re.compile(r"Pásale el `meal_id` EXACTO del ID_REGISTRO_DIARIO.*?no llamaste la herramienta en ese turno\.\s*", re.DOTALL),
+    ),
+    (
+        "proponer_comida",
+        re.compile(r"devuelve hasta 3 platos del catálogo.*?cuánto tiempo tiene\.\s*", re.DOTALL),
+    ),
+)
+
+
+def dedup_activo() -> bool:
+    try:
+        from knobs import _env_bool
+        return _env_bool("MEALFIT_CHAT_PROMPT_DEDUP_MANUAL", True)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def podar_extras_no_ligados(texto: str, ligadas: Optional[Iterable[str]]) -> str:
+    """[P1-PLAN-LOTE-1005 · G-03] Poda bullets e instrucciones extensas de herramientas
+    no ligadas en el turno (suplementos, ajustes/pantallas de la app, plan-day, propuestas)."""
+    if ligadas is None or not texto:
+        return texto
+    ligadas_set = set(ligadas)
+    if "cambiar_ajuste_de_la_app" not in ligadas_set and "abrir_pantalla_de_la_app" not in ligadas_set:
+        texto = _linea_de_bullet("cambiar_ajuste_de_la_app").sub("", texto, count=1)
+    if "consultar_dia_del_plan" not in ligadas_set:
+        texto = _linea_de_bullet("consultar_dia_del_plan").sub("", texto, count=1)
+    if "proponer_comida" not in ligadas_set:
+        texto = _linea_de_bullet("proponer_comida").sub("", texto, count=1)
+    if not (ligadas_set & {"analizar_suplemento", "guardar_suplemento", "buscar_etiqueta_en_internet"}):
+        texto = _PATRON_BLOQUE_SUPLEMENTOS.sub("", texto, count=1)
+    return texto
+
+
+def deduplicar_manual(texto: str, ligadas: Optional[Iterable[str]]) -> str:
+    """[P1-PLAN-LOTE-1005 · G-03] Elimina copias duplicadas 2x/3x cuyo texto autoritativo
+    permanece una vez en `texto` o en el esquema de una herramienta ligada."""
+    if ligadas is None or not texto or not dedup_activo():
+        return texto
+    ligadas_set = set(ligadas)
+    for pat in _PATRONES_DUPLICADOS_UNIVERSALES:
+        texto = pat.sub("", texto, count=1)
+    for tool_name, pat in _PATRONES_POR_HERRAMIENTA:
+        if tool_name in ligadas_set:
+            texto = pat.sub("", texto, count=1)
+    return texto
+
+
 def adelgazar(texto: str, ligadas: Optional[Iterable[str]] = None) -> str:
-    """Aplica los dos recortes si el knob está activo."""
+    """Aplica los recortes sin pérdida si el knob está activo."""
     if not lean_activo() or not texto:
         return texto
-    return podar_herramientas_no_ligadas(quitar_etiquetas(texto), ligadas)
+    out = podar_herramientas_no_ligadas(quitar_etiquetas(texto), ligadas)
+    if ligadas is not None:
+        out = deduplicar_manual(podar_extras_no_ligados(out, ligadas), ligadas)
+    return out

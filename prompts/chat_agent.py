@@ -427,11 +427,10 @@ def _plan_day_tool_enabled() -> bool:
 
 
 _PLAN_DAY_TOOL_BULLET_ENABLED = (
-    "- Usa `consultar_dia_del_plan` cuando el usuario pida el DETALLE de un día que ya pasó: "
-    "cantidades, gramos o pasos de receta ('¿cuánto pollo tenía el almuerzo del domingo?', "
-    "'¿cómo era la receta de la cena de ayer?'). El bloque 'DÍAS QUE YA PASARON' de tu contexto "
-    "ya te da los NOMBRES y las kcal de esos días — no llames la herramienta si con eso basta. "
-    "Pasa la fecha en ISO 'YYYY-MM-DD' (tienes HOY en tu contexto: calcula tú 'ayer' o 'el domingo')."
+    "- Usa `consultar_dia_del_plan` cuando el usuario pida el DETALLE de un día que ya pasó "
+    "(cantidades, gramos, receta del plan o platos/ingredientes reales del diario de anteayer hacia atrás): "
+    "el bloque 'DÍAS QUE YA PASARON' / diario resumido no trae ese detalle — no la llames si ya basta. "
+    "Pasa `fecha` en ISO 'YYYY-MM-DD' y `fuente` ('plan' | 'diario' | 'ambos')."
 )
 
 _PLAN_DAY_TOOL_BULLET_DISABLED = (

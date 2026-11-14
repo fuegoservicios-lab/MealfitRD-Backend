@@ -6340,31 +6340,33 @@ def _chat_plan_day_tool_enabled() -> bool:
 
 
 @tool
-def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
-    """Consulta el menú COMPLETO que el plan del usuario prescribió para una
-    fecha concreta, con las cantidades exactas de cada ingrediente y los pasos
-    de la receta.
+def consultar_dia_del_plan(user_id: str, fecha: str, fuente: str = "plan") -> str:
+    """Consulta el detalle COMPLETO de una fecha concreta en el plan prescrito,
+    en el diario real de consumo o en ambos.
 
     Úsala cuando el usuario pregunte por el DETALLE de un día que ya pasó:
     '¿cuánto pollo tenía el almuerzo del domingo?', '¿cómo era la receta de la
-    cena de ayer?', '¿qué llevaba el batido del martes?'. El bloque 'DÍAS QUE YA
-    PASARON' de tu contexto solo trae los nombres y las kcal — esta herramienta
-    trae los gramos y los pasos. NO la llames si el bloque 'DÍAS QUE YA PASARON'
-    de tu contexto ya responde la pregunta (ahí tienes los nombres de los platos
-    y sus kcal): esta herramienta es solo para el detalle que ese bloque NO trae.
+    cena de ayer?', '¿qué comí el martes en el diario?'. El bloque 'DÍAS QUE YA
+    PASARON' / resumen del diario para anteayer o antes solo trae totales — esta
+    herramienta trae ingredientes, gramos, macros, IDs y pasos de receta. NO la
+    llames si el bloque de tu contexto ya responde la pregunta.
 
-    `fecha` en formato ISO 'YYYY-MM-DD'. Tienes la fecha de HOY en tu contexto:
-    resuelve tú 'ayer' o 'el domingo' y pasa la fecha ya calculada.
+    - `fecha`: formato ISO 'YYYY-MM-DD' (resuelve 'ayer' o 'el domingo' usando HOY).
+    - `fuente`: 'plan' (menú prescrito con gramos/receta, default) | 'diario'
+      (comidas registradas realmente ese día con macros e ingredientes) | 'ambos'.
 
-    OJO: esto es lo que el plan MANDABA ese día, NO prueba de que el usuario se
-    lo comiera. Para lo que realmente comió, mira el bloque 'DIARIO'.
+    OJO: el plan es lo que el plan MANDABA ese día, NO prueba de que el usuario se
+    lo comiera. Para lo que realmente comió, consulta con fuente='diario' o mira 'DIARIO'.
     """
     # tooltip-anchor: P1-CHAT-PAST-DAYS
     # LIVE-TOOL CONTRACT: `user_id` viene force-overrideado por P0-AGENT-1.
-    logger.info(f"📖 [TOOL EXECUTION] consultar_dia_del_plan user={user_id} fecha={fecha}")
+    _f = (fuente or "plan").strip().lower()
+    if _f not in ("plan", "diario", "ambos"):
+        _f = "plan"
+    logger.info(f"📖 [TOOL EXECUTION] consultar_dia_del_plan user={user_id} fecha={fecha} fuente={_f}")
     try:
-        from chat_history_context import find_plan_day_for_date, rd_today
-        from datetime import datetime as _dt
+        from chat_history_context import find_plan_day_for_date, _to_local_date
+        from datetime import datetime as _dt, timedelta as _td
 
         try:
             target = _dt.strptime(str(fecha)[:10], "%Y-%m-%d").date()
@@ -6372,51 +6374,89 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
             return (f"No pude interpretar la fecha '{fecha}'. Necesito el formato "
                     f"ISO 'YYYY-MM-DD' (ejemplo: 2026-07-26).")
 
-        plan = get_latest_usable_meal_plan(user_id)
-        if not isinstance(plan, dict) or not plan:
-            return "El usuario no tiene ningún plan activo del que pueda sacar ese día."
+        tz_off = _tz_offset_para_usuario(user_id)
+        out = []
 
-        # [P3-CONSULTAR-DIA-USER-TODAY · 2026-08-22] «Hoy» es el del USUARIO, no el de RD. Esto
-        # pasaba `rd_today()` —`now(utc) − 4h`— teniendo `user_id` delante, que el override de
-        # P0-AGENT-1 garantiza en el tope de `execute_tools`. A las 22:30 en Ciudad de México ya
-        # son las 00:30 del día siguiente en RD, así que el coach describía el menú de MAÑANA a
-        # quien preguntaba a la hora de cenar; en Madrid, el de AYER. Mismo mecanismo que
-        # P2-LOCAL-DATE-STR-UTC4 cerró para el diario, en la superficie que aquella pasada dejó.
-        _hoy_usuario = _dt.strptime(_local_date_str_for_user(user_id), "%Y-%m-%d").date()
-        # [P1-CHAT-TOOLS-AUDIT · 2026-09-14] Y el MISMO huso con el que se calculó ese «hoy»:
-        # `find_plan_day_for_date` fecha los días del plan con él (antes asumía RD, 240).
-        row = find_plan_day_for_date(plan, target, _hoy_usuario, _tz_offset_para_usuario(user_id))
-        if not row:
-            return (f"No tengo el día {target.isoformat()} en el plan de este usuario. "
-                    f"Puede que sea anterior al plan actual, o que ese día ya se haya "
-                    f"perdido del historial del plan. Dile la verdad: que no lo tienes.")
+        if _f in ("plan", "ambos"):
+            plan = get_latest_usable_meal_plan(user_id)
+            if not isinstance(plan, dict) or not plan:
+                if _f == "plan":
+                    return "El usuario no tiene ningún plan activo del que pueda sacar ese día."
+                out.append("PLAN: el usuario no tiene ningún plan activo del que sacar ese día.")
+            else:
+                # [P3-CONSULTAR-DIA-USER-TODAY · 2026-08-22] «Hoy» sigue al usuario.
+                _hoy_usuario = _dt.strptime(_local_date_str_for_user(user_id), "%Y-%m-%d").date()
+                row = find_plan_day_for_date(plan, target, _hoy_usuario, tz_off)
+                if not row:
+                    if _f == "plan":
+                        return (f"No tengo el día {target.isoformat()} en el plan de este usuario. "
+                                f"Puede que sea anterior al plan actual, o que ese día ya se haya "
+                                f"perdido del historial del plan. Dile la verdad: que no lo tienes.")
+                    out.append(f"PLAN: no tengo el día {target.isoformat()} en el plan actual.")
+                else:
+                    day = row["day"]
+                    aviso_fecha = " (fecha estimada, no exacta)" if row.get("inferred") else ""
+                    out.append(f"Menú que el PLAN prescribió para {target.isoformat()} "
+                               f"({day.get('day_name') or 'día'}){aviso_fecha}:")
+                    for m in (day.get("meals") or []):
+                        if not isinstance(m, dict):
+                            continue
+                        slot = str(m.get("meal") or "Comida").strip()
+                        out.append(f"\n▸ {slot} — {m.get('name') or '(sin nombre)'}"
+                                   f" · {m.get('cals') or '?'} kcal"
+                                   f" · P:{m.get('protein') or '?'}g C:{m.get('carbs') or '?'}g"
+                                   f" G:{m.get('fats') or '?'}g")
+                        ings = [str(x) for x in (m.get("ingredients") or []) if x]
+                        if ings:
+                            out.append("  Ingredientes: " + "; ".join(ings))
+                        steps = [str(x) for x in (m.get("recipe") or []) if x]
+                        if steps:
+                            out.append("  Preparación: " + " ".join(
+                                f"({i + 1}) {s}" for i, s in enumerate(steps)))
+                    if _f == "plan":
+                        out.append("\n⚠️ Esto es lo que el plan MANDABA ese día; no es prueba de que el "
+                                   "usuario se lo comiera. Si te pregunta qué comió de verdad, usa "
+                                   "`consultar_dia_del_plan` con fuente='diario' o mira el bloque DIARIO.")
 
-        day = row["day"]
-        aviso_fecha = " (fecha estimada, no exacta)" if row.get("inferred") else ""
-        out = [f"Menú que el PLAN prescribió para {target.isoformat()} "
-               f"({day.get('day_name') or 'día'}){aviso_fecha}:"]
-        for m in (day.get("meals") or []):
-            if not isinstance(m, dict):
-                continue
-            slot = str(m.get("meal") or "Comida").strip()
-            out.append(f"\n▸ {slot} — {m.get('name') or '(sin nombre)'}"
-                       f" · {m.get('cals') or '?'} kcal"
-                       f" · P:{m.get('protein') or '?'}g C:{m.get('carbs') or '?'}g"
-                       f" G:{m.get('fats') or '?'}g")
-            ings = [str(x) for x in (m.get("ingredients") or []) if x]
-            if ings:
-                out.append("  Ingredientes: " + "; ".join(ings))
-            steps = [str(x) for x in (m.get("recipe") or []) if x]
-            if steps:
-                out.append("  Preparación: " + " ".join(
-                    f"({i + 1}) {s}" for i, s in enumerate(steps)))
-        out.append("\n⚠️ Esto es lo que el plan MANDABA ese día; no es prueba de que el "
-                   "usuario se lo comiera. Si te pregunta qué comió de verdad, usa el "
-                   "bloque DIARIO de tu contexto.")
+        if _f in ("diario", "ambos"):
+            from db_facts import get_consumed_meals_since, _diary_rollover_hour
+            try:
+                _roll_min = _diary_rollover_hour() * 60
+            except Exception:
+                _roll_min = 240
+            since = (target - _td(days=1)).isoformat()
+            rows = get_consumed_meals_since(user_id, since, include_ingredients=True) or []
+            day_rows = [
+                r for r in rows
+                if isinstance(r, dict)
+                and _to_local_date(r.get("consumed_at"), tz_off + _roll_min) == target
+            ]
+            if out:
+                out.append("")
+            if not day_rows:
+                out.append(f"DIARIO REAL para {target.isoformat()}: SIN REGISTRO (no hay comidas registradas ese día).")
+            else:
+                tot_cal = sum(int(round(float(r.get("calories") or 0))) for r in day_rows)
+                tot_prot = sum(int(round(float(r.get("protein") or 0))) for r in day_rows)
+                out.append(f"DIARIO REAL para {target.isoformat()} (Total: ~{tot_cal} kcal, {tot_prot}g prot):")
+                for r in day_rows:
+                    slot = str(r.get("meal_type") or "comida").strip()
+                    nm = str(r.get("meal_name") or "(sin nombre)").strip()
+                    cal = int(round(float(r.get("calories") or 0)))
+                    prot = int(round(float(r.get("protein") or 0)))
+                    carbs = int(round(float(r.get("carbs") or 0)))
+                    fats = int(round(float(r.get("healthy_fats") or 0)))
+                    rid = f" [id: {r.get('id')}]" if r.get("id") else ""
+                    out.append(f"\n▸ {slot}: {nm} · {cal} kcal · P:{prot}g C:{carbs}g G:{fats}g{rid}")
+                    ings = r.get("ingredients")
+                    if isinstance(ings, list) and ings:
+                        clean_ings = [str(x).strip() for x in ings if str(x).strip()]
+                        if clean_ings:
+                            out.append("  Ingredientes: " + ", ".join(clean_ings))
         return "\n".join(out)
     except Exception as e:
         logger.error(f"❌ [TOOL] consultar_dia_del_plan falló: {e}")
-        return "No pude consultar ese día del plan ahora mismo."
+        return "No pude consultar ese día ahora mismo."
 
 
 def _chat_meal_proposal_tool_enabled() -> bool:

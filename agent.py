@@ -4453,6 +4453,29 @@ def _merge_volatile_into_human_message(msg: HumanMessage, volatile_ctx: str) -> 
     )
 
 
+def _compact_prior_tool_message(msg: ToolMessage) -> ToolMessage:
+    """[P1-PLAN-LOTE-1005 · G-31] Compacta resultados largos de ToolMessage de turnos
+    anteriores conservando `[ID_REGISTRO_DIARIO: ...]`, `TOTAL REAL DE HOY` y prefijo."""
+    import re as _re
+    raw = str(getattr(msg, "content", "") or "")
+    if len(raw) <= 320:
+        return msg
+    ids = _re.findall(r"\[ID_REGISTRO_DIARIO:\s*[^\]]+\]", raw)
+    total_lines = [ln.strip() for ln in raw.splitlines() if "TOTAL REAL DE HOY" in ln]
+    head = raw[:200].rstrip()
+    parts = [f"{head}... [resumido de turno anterior]"]
+    if ids:
+        parts.append(" ".join(dict.fromkeys(ids)))
+    if total_lines:
+        parts.append(total_lines[-1][:140])
+    return ToolMessage(
+        content="\n".join(parts),
+        tool_call_id=msg.tool_call_id,
+        name=getattr(msg, "name", None),
+        id=getattr(msg, "id", None),
+    )
+
+
 def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
     """Payload del modelo: system prompt fresco + historial saneado.
 
@@ -4479,12 +4502,15 @@ def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
     for idx, m in enumerate(messages):
         if isinstance(m, HumanMessage):
             ultimo_humano = idx
+    _compact_prior = _env_bool("MEALFIT_CHAT_COMPACT_PRIOR_TOOL_MSGS", True)
     historial = []
     for idx, m in enumerate(messages):
         if isinstance(m, SystemMessage):
             if idx > ultimo_humano and ultimo_humano >= 0:
                 historial.append(HumanMessage(content=f"[Instrucción del sistema] {m.content}"))
             continue
+        if _compact_prior and isinstance(m, ToolMessage) and (ultimo_humano < 0 or idx < ultimo_humano):
+            m = _compact_prior_tool_message(m)
         if idx == ultimo_humano and volatile_sys and isinstance(m, HumanMessage):
             historial.append(_merge_volatile_into_human_message(m, volatile_sys))
             continue
@@ -9092,7 +9118,8 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             out = ""
         else:
             out = build_past_plan_days_block(current_plan, today, days_back=days_back,
-                                             tz_offset_mins=tz_offset_mins)
+                                             tz_offset_mins=tz_offset_mins,
+                                             summarize_older_days=_env_bool("MEALFIT_CHAT_SUMMARIZE_OLDER_DAYS", True))
         _pf_past = _tc_prefetched_past_days(user_id, plan_id, local_date_str, tz_offset, current_plan)
         if _pf_past is not None:
             return _pf_past
@@ -9108,6 +9135,7 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
             rows = []
         out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins,
+                                      summarize_older_days=_env_bool("MEALFIT_CHAT_SUMMARIZE_OLDER_DAYS", True),
                                       # [P1-PLAN-LOTE-76] para «sin registrar: …» — [137] de un plan que MANDA, no del pausado
                                       plan_data=None if _plan_en_pausa else current_plan)
         # [P1-DIARY-FREETEXT-ESTIMATE · 2026-09-04] tercera vía: lo que el usuario NEGÓ haber comido
