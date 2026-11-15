@@ -430,8 +430,22 @@ def instruccion(vision) -> str:
     # [P1-PLAN-LOTE-697] Solo con las opciones tocadas la «Estimación» ya trae las respuestas. Con una respuesta ESCRITA
     # («4 huevos con 3 yemas») no hay ajuste: decirle al modelo que ya estaba incluida le hizo registrar las 550 kcal de
     # la foto con 4 huevos en el nombre (batería en seco del 694, caso P5).
+    platos_en_items = (
+        sum(
+            1 for it in (vision.get("items") or [])
+            if isinstance(it, dict) and str(it.get("kind") or "plato") == "plato" and it.get("description")
+        )
+        if isinstance(vision.get("items"), list) else 0
+    )
     if vision.get("_ajuste_aplicado"):
-        cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
+        if platos_en_items >= 2:
+            cifras = (
+                "la «Estimación» de CADA foto YA incluye sus respuestas: si combinas varias fotos en una sola comida, "
+                "SUMA todas esas Estimaciones (calorías, proteína, carbohidratos y grasas saludables) — "
+                "JAMÁS registres el conjunto con las calorías de una sola foto"
+            )
+        else:
+            cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
     else:
         cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: recalcula y ajusta sobre la «Estimación» del PLATO COMPLETO "
                   "incorporando el alimento, proteína, grasa o porción indicado (NO copies esas calorías y macros idénticas si cambió proteína, porción o aceite/aderezo; "

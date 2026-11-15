@@ -305,3 +305,96 @@ def test_nudge_plate_photo_multiphoto_preserves_summed_calories():
     note = out["messages"][0].content
     assert "290 kcal" in note
     assert "pan de agua" in note.lower()
+
+
+def test_multiphoto_breakfast_208_vs_908_context_and_guard():
+    from agent import execute_tools, _plate_photos_from_vision
+
+    vision = {
+        "kind": "multi",
+        "has_text": True,
+        "respuestas": "Con miel · 2 huevos · Manteca de cerdo",
+        "por_foto": [
+            {"index": 0, "respuestas": "Con miel", "ajuste": {"calories": 60, "carbs": 17, "protein": 0, "healthy_fats": 0}},
+            {"index": 1, "respuestas": "2 huevos · Manteca de cerdo", "ajuste": {"calories": 0, "carbs": 0, "protein": 0, "healthy_fats": 0}},
+        ],
+        "items": [
+            {
+                "kind": "plato",
+                "attachment_id": "ad329a31-0000-0000-0000-000000000001",
+                "description": (
+                    "Bowl de frutas picadas con cubos de lechosa, trozos de piña y uvas rojas. "
+                    "DUDAS (pregúntale solo esto): ¿Le echaste algo encima a la fruta? "
+                    "(opciones: Solo fruta (supuesto) · Con miel) "
+                    "(Estimación: Calorías: 148, Proteína: 2g, Carbohidratos: 37g, Grasas Saludables: 0g)"
+                ),
+            },
+            {
+                "kind": "plato",
+                "attachment_id": "7a965620-0000-0000-0000-000000000002",
+                "description": (
+                    "Plato de desayuno con mangú de plátano verde, dos lascas de queso blanco frito y dos huevos fritos. "
+                    "DUDAS (pregúntale solo esto): ¿Cuántos huevos fritos son? (opciones: 2 huevos (supuesto) · 3 huevos) "
+                    "¿Con qué grasa se preparó el mangú? (opciones: Mantequilla (supuesto) · Manteca de cerdo) "
+                    "(Estimación: Calorías: 700, Proteína: 26g, Carbohidratos: 68g, Grasas Saludables: 35g)"
+                ),
+            },
+        ],
+    }
+    ctx = build_vision_context(vision)
+    assert "908 kcal" in ctx
+    assert "28g proteína" in ctx
+    assert "SUMA todas esas Estimaciones" in ctx
+
+    plate_photos = _plate_photos_from_vision(vision)
+    assert len(plate_photos) == 2
+    assert plate_photos[0]["kcal"] == 208.0
+    assert plate_photos[1]["kcal"] == 700.0
+
+    human = HumanMessage(content="Me desayuné esto\nCon miel · 2 huevos · Manteca de cerdo")
+    underestimated = {
+        "user_id": _UID,
+        "meal_name": "Bowl de frutas con miel y mangú con queso blanco frito y 2 huevos",
+        "calories": 208,
+        "protein": 7,
+        "carbs": 22,
+        "healthy_fats": 10,
+        "meal_type": "desayuno",
+        "ingredients": [
+            "1 taza de lechosa picada",
+            "1/2 taza de piña",
+            "10 uvas rojas",
+            "1 cucharada de miel",
+            "1 taza de mangú de plátano verde",
+            "2 lascas de queso blanco frito",
+            "2 huevos fritos",
+        ],
+        "nutrition": {"attachment_ids": ["ad329a31-0000-0000-0000-000000000001", "7a965620-0000-0000-0000-000000000002"]},
+    }
+    ai_bad = AIMessage(content="", tool_calls=[{"id": "tc-bad", "name": "log_consumed_meal", "args": underestimated}])
+    state = {
+        "user_id": _UID,
+        "messages": [human, ai_bad],
+        "turn_plate_photos": plate_photos,
+        "turn_photo_to_log": True,
+    }
+    with patch("tools.db_log_consumed_meal", return_value="new-meal-id") as mock_db_log:
+        res = execute_tools(state)
+
+    assert not mock_db_log.called, "No debe registrar 208 kcal cuando las 2 fotos combinadas suman 908 kcal"
+    assert mc.MARKER_BLOQUEO_MULTIFOTO in res["messages"][0].content
+    assert "908 kcal" in res["messages"][0].content
+
+    corrected = dict(underestimated, calories=908, protein=28, carbs=105, healthy_fats=35)
+    ai_ok = AIMessage(content="", tool_calls=[{"id": "tc-ok", "name": "log_consumed_meal", "args": corrected}])
+    state_retry = {
+        "user_id": _UID,
+        "messages": [human, ai_bad, res["messages"][0], ai_ok],
+        "turn_plate_photos": plate_photos,
+        "turn_photo_to_log": True,
+    }
+    with patch("tools.db_log_consumed_meal", return_value="new-meal-id") as mock_db_log_ok, \
+         patch("tools._buscar_cena_principal_hoy", return_value=None):
+        res_ok = execute_tools(state_retry)
+    assert mock_db_log_ok.called
+    assert "[ID_REGISTRO_DIARIO:" in res_ok["messages"][0].content

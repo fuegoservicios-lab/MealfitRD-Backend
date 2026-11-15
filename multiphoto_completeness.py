@@ -99,18 +99,39 @@ def _foto_descartada_en_texto(user_text: str, idx: int, p_tokens: set[str]) -> b
     return False
 
 
-def construir_recordatorio_multifoto(plate_descriptions: list[str]) -> str:
+def construir_recordatorio_multifoto(
+    plate_descriptions: list[str],
+    plate_estimates: Optional[list[Optional[dict[str, float]]]] = None,
+) -> str:
     """Directiva compacta para `build_vision_context` cuando hay >= 2 fotos de comida/plato."""
     if len(plate_descriptions) < 2:
         return ""
-    resumen = ", ".join(
-        f"Foto {i}: «{str(desc or '').strip()[:70]}»"
-        for i, desc in enumerate(plate_descriptions, start=1)
-    )
+    partes_resumen: list[str] = []
+    tot = {"calories": 0.0, "protein": 0.0, "carbs": 0.0, "healthy_fats": 0.0}
+    con_cal = 0
+    for i, desc in enumerate(plate_descriptions, start=1):
+        est = plate_estimates[i - 1] if (plate_estimates and i - 1 < len(plate_estimates)) else None
+        kcal = float(est.get("calories") or 0) if isinstance(est, dict) else 0.0
+        if kcal > 0:
+            con_cal += 1
+            for k in tot:
+                tot[k] += float(est.get(k) or 0)
+            partes_resumen.append(f"Foto {i}: «{str(desc or '').strip()[:70]}» (~{int(round(kcal))} kcal)")
+        else:
+            partes_resumen.append(f"Foto {i}: «{str(desc or '').strip()[:70]}»")
+    resumen = ", ".join(partes_resumen)
     n = len(plate_descriptions)
+    suma_txt = ""
+    if con_cal >= 2 and tot["calories"] > 0:
+        suma_txt = (
+            f" SUMA TOTAL DE LAS {n} FOTOS JUNTAS (si se registran en una sola comida): "
+            f"≈ {int(round(tot['calories']))} kcal, {int(round(tot['protein']))}g proteína, "
+            f"{int(round(tot['carbs']))}g carbohidratos, {int(round(tot['healthy_fats']))}g grasas saludables. "
+            "Si las combinas en un solo `log_consumed_meal`, usa ESA SUMA (no copies solo la Foto 1)."
+        )
     return (
         f" ⚠️ MULTI-FOTO OBLIGATORIO ({n} fotos de comida: {resumen}): "
-        f"TODAS LAS {n} FOTOS deben quedar registradas o sumadas en este turno. "
+        f"TODAS LAS {n} FOTOS deben quedar registradas o sumadas en este turno.{suma_txt} "
         "Aunque el usuario solo responda dudas de una de las fotos (ej. «Lechoza · Con azúcar») "
         "o diga «esto también fue parte de…», está PROHIBIDO omitir las otras fotos: incluye cada foto "
         "(su alimento, ingredientes y calorías/macros) al crear registros nuevos o al actualizar con `correct_consumed_meal`, "
@@ -276,6 +297,106 @@ def detectar_bloqueo_multifoto_fusion(
         + f" incluyendo TODOS los alimentos, ingredientes, calorías y macros de la comida original más TODAS las fotos activas.{sugerencia_total} "
         "(Nota interna invisible al usuario: corrige la llamada sin disculparte ni mencionar errores internos.)"
     )
+
+
+def detectar_bloqueo_multifoto_registro(
+    plate_photos: list[dict[str, Any]],
+    tool_args: dict[str, Any],
+    diary_calls_in_msg: list[dict[str, Any]],
+    messages: list[Any],
+    *,
+    user_text: str = "",
+) -> Optional[str]:
+    """En turnos con >= 2 fotos de plato y `log_consumed_meal`, bloquea UNA vez si:
+    1) combina alimentos/adjuntos de varias fotos pero las calorías quedan muy por debajo de su suma
+       (ej. copió solo la Foto 1 de 208 kcal dejando fuera los 700 kcal de la Foto 2), o
+    2) dejó fuera alguna foto activa sin dividir en múltiples llamadas ni franjas distintas."""
+    if not plate_photos or len(plate_photos) < 2:
+        return None
+    if _ya_bloqueado_en_este_turno(messages):
+        return None
+
+    activas: list[tuple[int, dict[str, Any], set[str]]] = []
+    for idx, p in enumerate(plate_photos, start=1):
+        if not isinstance(p, dict):
+            continue
+        p_toks = _tokens_primarios_foto(p.get("desc"))
+        if _foto_descartada_en_texto(user_text, idx, p_toks):
+            continue
+        activas.append((idx, p, p_toks))
+
+    if len(activas) < 2:
+        return None
+
+    call_tokens = _tokens_en_tool_args(tool_args or {})
+    nut = (tool_args or {}).get("nutrition")
+    call_att_ids = {
+        str(a) for a in (nut.get("attachment_ids") if isinstance(nut, dict) else [] or []) if a
+    }
+    matched: list[tuple[int, dict[str, Any]]] = []
+    for idx, p, p_toks in activas:
+        att_id = str(p.get("attachment_id") or "").strip()
+        if (att_id and att_id in call_att_ids) or (p_toks and bool(p_toks & call_tokens)):
+            matched.append((idx, p))
+
+    if len(matched) >= 2:
+        expected_cal = sum(
+            float(p.get("kcal") or 0) for _, p in matched if float(p.get("kcal") or 0) > 0
+        )
+        try:
+            submitted_cal = float((tool_args or {}).get("calories") or 0)
+        except (TypeError, ValueError):
+            submitted_cal = 0.0
+        norm_txt = _plano(user_text)
+        factor = (
+            0.40
+            if re.search(r"\b(?:mitad|medio|media|half|tercio|un tercio|poquito|casi nada)\b", norm_txt)
+            else 0.65
+        )
+        if expected_cal >= 150 and 0 < submitted_cal < factor * expected_cal and (expected_cal - submitted_cal) >= 120:
+            desglose = " + ".join(
+                f"Foto {i} (~{int(round(float(p['kcal'])))} kcal)"
+                if float(p.get("kcal") or 0) > 0 else f"Foto {i}"
+                for i, p in matched
+            )
+            return (
+                f"{MARKER_BLOQUEO_MULTIFOTO} ESTIMACIÓN MULTI-FOTO INCOMPLETA (NO REGISTRADO TODAVÍA): "
+                f"Incluiste alimentos de {len(matched)} fotos ({desglose} = ≈{int(round(expected_cal))} kcal en total), "
+                f"pero llamaste a `log_consumed_meal` con solo {int(round(submitted_cal))} kcal. "
+                f"No uses solo las calorías de una foto cuando registras varias juntas: SUMA las calorías, proteína, "
+                f"carbohidratos y grasas saludables de TODAS las fotos incluidas (≈{int(round(expected_cal))} kcal en total) "
+                "y vuelve a llamar a `log_consumed_meal`. "
+                "(Nota interna invisible al usuario: corrige los números sin disculparte ni mencionar errores internos.)"
+            )
+
+    calls = diary_calls_in_msg or [tool_args]
+    if len(calls) < len(activas) and "[ID_REGISTRO_DIARIO:" not in " ".join(_turn_tool_messages(messages)):
+        try:
+            from meal_registration_time import _RE_EXPLICIT_MEAL_SLOT, count_meal_indicators_in_text
+            multi_slot_text = max(
+                len(_RE_EXPLICIT_MEAL_SLOT.findall(str(user_text or ""))),
+                count_meal_indicators_in_text(str(user_text or "")),
+            ) >= 2
+        except Exception:
+            multi_slot_text = False
+        if not multi_slot_text:
+            omitidas = fotos_no_cubiertas_en_llamadas(plate_photos, calls, user_text=user_text)
+            if omitidas:
+                faltan_txt = "; ".join(
+                    f"Foto {f['idx']}: «{f.get('desc')}»" + (f" (~{int(f['kcal'])} kcal)" if f.get("kcal") else "")
+                    for f in omitidas
+                )
+                fotos_cal = sum(
+                    int(round(float(p.get("kcal") or 0))) for _, p, _ in activas if float(p.get("kcal") or 0) > 0
+                )
+                suma_hint = f" (total combinado ≈{fotos_cal} kcal)" if fotos_cal > 0 else ""
+                return (
+                    f"{MARKER_BLOQUEO_MULTIFOTO} FALTAN FOTOS DEL TURNO EN `log_consumed_meal` (NO REGISTRADO TODAVÍA): "
+                    f"El usuario subió {len(activas)} fotos activas, pero tu llamada dejó fuera: {faltan_txt}. "
+                    f"Incluye TODAS las fotos activas y suma sus calorías y macros{suma_hint} al llamar a `log_consumed_meal`. "
+                    "(Nota interna invisible al usuario: corrige la llamada sin disculparte ni mencionar errores internos.)"
+                )
+    return None
 
 
 def _turn_tool_messages(messages: list[Any]) -> list[str]:

@@ -1316,6 +1316,8 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         has_label = False
         has_plate = False   # [P1-PLAN-LOTE-168]
         plate_descs: list[str] = []   # [P1-PLAN-LOTE-1002]
+        plate_estimates: list[Optional[dict[str, float]]] = []
+        from respuestas_de_la_foto import _ESTIMACION as _RE_ESTIMACION_FOTO
         unavailable = 0
         for index, item in enumerate(items, start=1):
             item_kind = str(item.get("kind") or "unavailable")
@@ -1341,6 +1343,11 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
                 if description:
                     has_plate = True
                     plate_descs.append(description.split("DUDAS")[0].split("(Estimación:")[0].strip())
+                    m_est = _RE_ESTIMACION_FOTO.search(description)
+                    plate_estimates.append(
+                        {k: float(m_est.group(k)) for k in ("calories", "protein", "carbs", "healthy_fats")}
+                        if m_est else None
+                    )
             lines.append(f"{index}. {label}: {description or 'sin descripción fiable'}")
         instruction = (
             "Interpreta las fotos como un conjunto ordenado y no mezcles ingredientes entre imágenes. "
@@ -1361,7 +1368,7 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
             instruction += " " + _PLATO_INSTRUCCION
             if len(plate_descs) >= 2:   # [P1-PLAN-LOTE-1002] recordar todas las fotos cuando hay >= 2 platos/alimentos
                 from multiphoto_completeness import construir_recordatorio_multifoto
-                instruction += construir_recordatorio_multifoto(plate_descs)
+                instruction += construir_recordatorio_multifoto(plate_descs, plate_estimates=plate_estimates)
             instruction += _con_dudas(" ".join(lines))   # [P1-PLAN-LOTE-305]
             instruction += _respuestas   # [P1-PLAN-LOTE-690]
         if unavailable == len(items):

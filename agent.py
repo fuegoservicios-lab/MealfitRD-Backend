@@ -6866,6 +6866,29 @@ def execute_tools(state: ChatState):
                     tool_args = _sanitizar_ingredientes_contra_alucinacion_foto(
                         tool_args, state.get("turn_plate_photos") or [], state.get("messages") or []
                     )
+                    if len(state.get("turn_plate_photos") or []) >= 2:
+                        from multiphoto_completeness import detectar_bloqueo_multifoto_registro
+                        _plate_photos_reg = state.get("turn_plate_photos") or []
+                        _diary_calls_reg = [dict(tool_args)]
+                        for _tc_s in (getattr(last_message, "tool_calls", None) or []):
+                            _tc_s_name = _tc_s.get("name") if isinstance(_tc_s, dict) else getattr(_tc_s, "name", None)
+                            _tc_s_id = _tc_s.get("id") if isinstance(_tc_s, dict) else getattr(_tc_s, "id", None)
+                            if _tc_s_name in ("log_consumed_meal", "correct_consumed_meal") and _tc_s_id != tool_id:
+                                _diary_calls_reg.append((_tc_s.get("args") if isinstance(_tc_s, dict) else getattr(_tc_s, "args", None)) or {})
+                        _bloqueo_reg = detectar_bloqueo_multifoto_registro(
+                            _plate_photos_reg,
+                            tool_args,
+                            _diary_calls_reg,
+                            messages,
+                            user_text=_extraer_ultimo_texto_usuario(messages),
+                        )
+                        if _bloqueo_reg:
+                            logger.warning(
+                                f"🥖 [P1-PLAN-LOTE-1002] Bloqueado log_consumed_meal multi-foto por suma incompleta/foto omitida "
+                                f"(user={str(state.get('user_id'))[:8]})."
+                            )
+                            tool_messages.append(ToolMessage(content=_bloqueo_reg, tool_call_id=tool_id))
+                            continue
                     # [P1-PLAN-LOTE-990 · 2026-11-12] Desde UNA foto de plato, el registro es lo que muestra la foto: ni
                     # «omelet de 4 huevos» de sus hábitos ni arepitas inventadas, ni la fruta olvidada (rechazo único).
                     if _meal_calls_count <= 1 and state.get("turn_plate_photos"):
@@ -8900,16 +8923,25 @@ def _plate_photos_from_vision(vision) -> list:
     Solo `kind == "plato"` con descripción: compra, etiqueta, «sin comida» o sin análisis no son un plato comido."""
     if not isinstance(vision, dict):
         return []
+    try:
+        from respuestas_de_la_foto import preparar_vision
+        vision_aj = preparar_vision(vision)
+    except Exception:
+        vision_aj = vision
     if vision.get("kind") == "multi":
         items = [i for i in (vision.get("items") or [])[:4] if isinstance(i, dict)]
+        items_aj = [i for i in ((vision_aj or {}).get("items") or [])[:4] if isinstance(i, dict)]
     else:
         items = [vision]
+        items_aj = [vision_aj] if isinstance(vision_aj, dict) else [vision]
     out = []
-    for item in items:
+    for idx, item in enumerate(items):
         desc = str(item.get("description") or "").strip()
         if str(item.get("kind") or "") != "plato" or not desc:
             continue
-        m = _RE_KCAL_FOTO.search(desc)
+        item_aj = items_aj[idx] if idx < len(items_aj) else item
+        desc_aj = str(item_aj.get("description") or desc).strip()
+        m = _RE_KCAL_FOTO.search(desc_aj) or _RE_KCAL_FOTO.search(desc)
         kcal = float(m.group(1) or m.group(2)) if m else None
         corte = _RE_CORTE_ESTIMACION.search(desc)
         att_id = item.get("attachment_id") or item.get("id")
