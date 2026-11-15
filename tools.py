@@ -6575,16 +6575,16 @@ _RE_PIDE_PROPUESTA_NUEVA = re.compile(
     r"(?:\b(?:dame\s+algo\s+tu|propon(?:me)?\s+algo\s+tu|que\s+me\s+(?:recomiendas|sugieres)\s+tu|"
     r"otra\s+(?:opcion|idea|comida|receta|alternativa)|otro\s+(?:desayuno|almuerzo|cena|merienda|plato)|"
     r"(?:dame|tienes|hay|ponme|sugiereme|recomiendame)\s+otra\b|una\s+alternativa|"
-    r"algo\s+(?:diferente|distinto|nuevo|mas)|que\s+mas\s+(?:tienes|hay|me\s+recomiendas|sugieres)|"
+    r"algo\s+(?:diferente|distinto|nuevo|mas)|(?:q|que)\s+mas\s+(?:tienes|hay|me\s+(?:recomiendas|sugieres|das)|propones)|"
     r"no\s+quiero\s+eso|no\s+me\s+(?:convence|provoca|apetece|llama\s+la\s+atencion)|paso\s+de\s+es[eo]|"
-    r"cambialo|cambiame\s+eso|sorprendeme)\b|^(?:otra|otro|mas\s+opciones|siguiente)[.!?\s]*$)",
+    r"cambialo|cambiame\s+eso|sorprendeme)\b|^(?:(?:y\s+)?(?:q|que|algo)\s+mas|otra|otro|mas\s+opciones|siguiente)[.!?\s]*$)",
     re.IGNORECASE,
 )
 
 
 _RE_PIDE_PASOS_PLATO = re.compile(
     r"(?:\b(?:como\s+(?:lo|la|se)\s+(?:hago|preparo|cocino|hace|prepara|cocina)|"
-    r"dame\s+(?:la\s+receta|los\s+pasos|las\s+instrucciones)|"
+    r"dame\s+(?:la\s+receta|los\s+pasos|las\s+instrucciones)|(?:y\s+)?(?:los\s+pasos|la\s+receta)|"
     r"cual\s+es\s+la\s+receta|pasos\s+para\s+(?:hacer|preparar)|"
     r"como\s+se\s+(?:hace|prepara|cocina)\b|(?:pasos|instrucciones)\s+de\s+eso|"
     r"como\s+(?:hago|preparo)\s+eso)\b|^(?:que\s+hago|como\s+lo\s+hago|como\s+hago|pasos|receta)[?!.\s]*$)",

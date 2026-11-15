@@ -872,6 +872,14 @@ def _linea_casera(g: float, nombre: str) -> str:
         return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
     for claves, g_u, sing, plur, con_nombre in _UNIDAD_POR_ALIMENTO:
         if any(k in nom_l for k in claves):
+            if claves[0] == "yuca":
+                if g < 110.0:
+                    return f"1 trozo pequeño de {nombre}"
+                if g <= 175.0:
+                    return f"1 trozo mediano de {nombre}"
+                if g <= 235.0:
+                    return f"1 trozo grande de {nombre}"
+                return _a_unidad_simple(g, g_u, sing, plur, nombre)
             return _a_unidad_simple(g, g_u, sing, plur, nombre if con_nombre else "")
     if any(k in nom_l for k in ("pollo", "pechuga", "res", "cerdo", "pescado", "salmon", "tilapia", "chivo", "lomo", "bistec")):
         if g < 95.0:
@@ -1016,15 +1024,15 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         )
     else:
         cuerpo = (
-            "Describe el plato recomendado conservando la medida casera de cada ingrediente (incluidos vegetales u hojas, "
-            "ej. «1 puñado de espinaca») y 1 alternativa breve con sus ~kcal y ~g de proteína "
-            "(los gramos en crudo y los PASOS solo si pidió receta, cómo se hace o pesos exactos). "
-            "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?»: da la propuesta práctica completa de una vez. "
-            "No cambies cifras ni macros. "
+            "Presenta el plato conservando la medida casera EXACTA de CADA ingrediente (carbohidrato/vívere base, "
+            "proteína, grasa y vegetales — PROHIBIDO omitir cantidades diciendo solo «la yuca», «el arroz» o «un poco de cebolla» "
+            "si arriba aparece su «Porción casera aprox.»). Los gramos en crudo y los PASOS solo van si pidió receta o cómo se hace. "
+            "Si aporta valor, menciona 1 alternativa breve con sus ~kcal y ~g de proteína. "
+            "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?». No cambies cifras ni macros. "
             + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
             + "NO la registres: todavía no se la ha comido "
             "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
-            "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
+            "ingredientes). Si pide otra opción («q más», «otra»), vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
             "propuestos.)"
         )
     lineas.append(apertura + cierre_dia + cuerpo)

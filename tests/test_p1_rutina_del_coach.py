@@ -563,3 +563,52 @@ def test_que_hago_recupera_receta_y_pasos_sin_fugas_internas(monkeypatch):
     assert "1) Revoltillo de claras con espinaca y casabe" in compacto.content
     assert "Porción casera aprox.:" in compacto.content
     assert "Pasos: 1." in compacto.content
+
+
+def test_q_mas_excluye_previo_y_yuca_conserva_trozo_casero():
+    from langchain_core.messages import AIMessage, HumanMessage
+    import coach_day_context as cdc
+    import tools
+
+    ai_prev = (
+        "Para ese desayuno, prepara un **revoltillo de claras con espinaca y casabe** "
+        "(~410 kcal y 31 g de proteína)."
+    )
+    for msg in ("Q mas?", "Que mas?", "Y qué más?", "Algo más?"):
+        excl, pidio_nueva = tools._extraer_contexto_turno_propuesta(
+            [AIMessage(content=ai_prev), HumanMessage(content=msg)]
+        )
+        assert pidio_nueva is True, f"No detectó nueva propuesta para {msg!r}"
+        assert any("revoltillo" in e.lower() for e in excl)
+
+    assert tools._usuario_pide_pasos_previo(
+        [AIMessage(content=ai_prev), HumanMessage(content="y los pasos?")]
+    ) is True
+
+    assert cdc._linea_casera(95, "Yuca") == "1 trozo pequeño de Yuca"
+    assert cdc._linea_casera(150, "Yuca") == "1 trozo mediano de Yuca"
+    assert cdc._linea_casera(210, "Yuca") == "1 trozo grande de Yuca"
+    assert "trozo" in cdc._linea_casera(300, "Yuca")
+
+    txt = cdc.formatear_propuestas(
+        [{
+            "name": "Yuca con atún y huevo",
+            "calories": 410,
+            "protein": "27g",
+            "carbs": "45g",
+            "fats": "12g",
+            "_lineas": [(150.0, "Yuca"), (55.0, "Huevo"), (60.0, "Atún en agua"), (30.0, "Cebolla")],
+            "_tiene": [],
+            "_falta": [],
+        }],
+        "desayuno",
+        {"kcal": 2050, "protein_g": 134},
+        con_nevera=False,
+        nevera_activa=False,
+        es_para_manana=True,
+        usar_medidas_caseras=True,
+        pidio_propuesta_nueva=True,
+    )
+    assert "1 trozo mediano de Yuca" in txt
+    assert "PROHIBIDO omitir cantidades" in txt
+    assert "nevera" not in txt.lower()
