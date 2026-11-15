@@ -74,6 +74,7 @@ _CACHE_BLOCK_ORDER: dict[str, int] = {
     "hidratacion": 25,
     "nevera": 26,
     "nevera_proteina": 27,
+    "rutina_gustos": 27,
     "ref_registro": 28,
     "plan_hoy": 29,
     "dias_pasados_plan": 30,

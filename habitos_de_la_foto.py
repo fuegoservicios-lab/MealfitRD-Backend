@@ -380,6 +380,11 @@ def invalidate_habitos_cache(user_id: Optional[str] = None) -> None:
             _HABITOS_CACHE.pop(user_id, None)
         else:
             _HABITOS_CACHE.clear()
+    try:
+        from rutina_del_coach import invalidate_rutina_cache
+        invalidate_rutina_cache(user_id)
+    except Exception:
+        pass
 
 
 def obtener_habitos_foto(user_id: Optional[str]) -> Dict[str, Any]:

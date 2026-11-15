@@ -2301,6 +2301,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 "Se omitió el reintento y no se descontó la Nevera otra vez. Dile que ya estaba anotada; "
                 "solo usa force=true si confirma que comió otra porción idéntica.")
     if result is not None:
+        _invalidar_caches_aprendizaje_usuario(user_id)
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
         # [P1-PLAN-LOTE-168 · 2026-09-23] la suma REAL de ese día, ya con este registro (helper; la batería lo comparte)
@@ -2448,6 +2449,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 # genérico de `execute_tools` (agent.py) la cubre automáticamente, igual que
 # a `log_consumed_meal`. Ver entry #13 en
 # `backend/docs/agent_tools_user_id_table.md`.
+def _invalidar_caches_aprendizaje_usuario(user_id: Optional[str]) -> None:
+    """Invalida los cachés en memoria de hábitos de foto y rutina continua tras escribir en `consumed_meals`."""
+    try:
+        from habitos_de_la_foto import invalidate_habitos_cache
+        invalidate_habitos_cache(user_id)
+    except Exception:
+        pass
+
+
 def _ejecutar_borrado_diario(user_id: str, _mid: str, _fila: Optional[dict]) -> str:
     _orig_name = str((_fila or {}).get("meal_name") or "").strip()
     _dias_fila = _dias_atras_de_fila(user_id, (_fila or {}).get("consumed_at"))
@@ -2458,6 +2468,7 @@ def _ejecutar_borrado_diario(user_id: str, _mid: str, _fila: Optional[dict]) -> 
     except Exception:
         logger.exception("[correct_consumed_meal] revert_consumption_events falló al eliminar meal_id=%s", _mid)
     if db_delete_consumed_meal(user_id, _mid):
+        _invalidar_caches_aprendizaje_usuario(user_id)
         _nota_nevera_del = ""
         if nevera_activa(user_id) and isinstance(_rev, dict) and (_rev.get("reverted") or []):
             _nota_nevera_del = f" Nevera ajustada: se devolvió lo descontado ({len(_rev.get('reverted') or [])} ítem(s))."
@@ -2844,6 +2855,7 @@ def correct_consumed_meal(
             except Exception:
                 pass
             db_delete_consumed_meal(user_id, _mid)
+            _invalidar_caches_aprendizaje_usuario(user_id)
 
             logger.info(
                 f"☕ [BB-027] Complemento {_mid} promovido y fusionado en {main_type} ({main_id}) "
@@ -2897,6 +2909,7 @@ def correct_consumed_meal(
     )
 
     if updated_id:
+        _invalidar_caches_aprendizaje_usuario(user_id)
         if _ajustar_nevera:   # solo con la Nevera encendida (arriba): apagada, ni se devuelve ni se descuenta
             try:
                 import db_inventory

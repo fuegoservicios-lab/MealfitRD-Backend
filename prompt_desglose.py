@@ -50,6 +50,7 @@ _VOLATILE_BLOCK_SPECS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("hidratacion", re.compile(r"\n\n💧 HIDRATACIÓN ")),
     ("nevera", re.compile(r"\n\n🧊 NEVERA")),
     ("nevera_proteina", re.compile(r"\n\n🥩 PROTEÍNA ")),
+    ("rutina_gustos", re.compile(r"\n\n🔄 RUTINA Y GUSTOS APRENDIDOS DEL USUARIO")),
     ("ref_registro", re.compile(r"\n\n🔁 SE REFIERE A UN REGISTRO SUYO")),
     ("plan_hoy", re.compile(r"\n\n📅 HOY es ")),
     ("dias_pasados_plan", re.compile(r"\n\n📖 DÍAS QUE YA PASARON")),

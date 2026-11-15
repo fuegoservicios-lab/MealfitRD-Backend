@@ -325,7 +325,9 @@ def _plan_context_for_chat(user_id, current_plan):
             "eligió usar la app solo como contador de macros y diario (modo "
             "seguimiento). El plan se conserva para cuando quiera reanudarlo:\n"
             f"{plan_json}\n\n"
-            "NO presentes las comidas de este plan como lo que le toca comer hoy, "
+            "NO presentes las comidas de este plan como lo que le toca comer hoy ni mañana, "
+            "ni uses sus platos para responder «¿qué desayuno/como mañana?» salvo que el "
+            "usuario pregunte expresamente por su plan pausado, "
             "ni lo recites al saludar, ni sugieras cambios sobre él como si "
             "estuviera vigente: hoy el usuario decide libremente qué come y tu "
             "papel es ayudarle a registrarlo y a cuadrar sus macros. Si ÉL "
@@ -11136,6 +11138,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
             system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
                                                                        tz_offset=tz_offset)
+            # [P1-COACH-RUTINA-GUSTOS] Aprendizaje continuo de rutinas y gustos reales del usuario por franja.
+            system_prompt += __import__("rutina_del_coach").para_chat(user_id, form_data, plan_vigente, _diario_de_hoy)
             # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
             system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
             # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
@@ -11972,6 +11976,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             # [P1-PLAN-LOTE-960] La proteína de su Nevera con lo que aporta, cruzada con lo que le falta hoy, e iniciativa.
             system_prompt += __import__("nevera_del_coach").para_chat(user_id, _nevera_on, form_data, plan_vigente, _diario_de_hoy,
                                                                        tz_offset=tz_offset)
+            # [P1-COACH-RUTINA-GUSTOS] Aprendizaje continuo de rutinas y gustos reales del usuario por franja.
+            system_prompt += __import__("rutina_del_coach").para_chat(user_id, form_data, plan_vigente, _diario_de_hoy)
             # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
             system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
             # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
