@@ -6472,6 +6472,27 @@ def execute_tools(state: ChatState):
                 # [P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una
                 # comida ya registrada hoy (ej. 'fue parte del almuerzo', 'agrégalo al almuerzo'), fusionar en
                 # la fila existente sumando calorías, macros, ingredientes y adjuntos de foto.
+                # [P1-PLAN-LOTE-1024 · J5] «este fue el desayuno y me comí 3 tacos»: la 2.ª comida va a la franja que
+                # falta, ANTES de la fusión por franja (que la metía en el desayuno y los tacos acababan perdidos).
+                if tool_name == "log_consumed_meal":
+                    try:
+                        from guarda_dos_comidas_un_mensaje import franja_de_la_foto, nueva_franja
+                        _txt_dc = _extraer_ultimo_texto_usuario(messages)
+                        if franja_de_la_foto(_txt_dc):
+                            from tools import _leer_fila_diario as _lfd_dc
+                            from db_facts import get_consumed_meals_today as _gcmt_dc
+                            _ids_dc = _meals_created_this_turn(list(messages) + list(tool_messages))
+                            _franjas_turno = [(_lfd_dc(_trusted_uid, i) or {}).get("meal_type") for i in _ids_dc]
+                            _franjas_hoy = [r.get("meal_type") for r in (_gcmt_dc(_trusted_uid) or []) if isinstance(r, dict)]
+                            _nf_dc = nueva_franja(_txt_dc, tool_args.get("meal_type"), _franjas_turno, _franjas_hoy)
+                            if _nf_dc:
+                                logger.info(f"🍽️ [LOTE-1024 DOS-COMIDAS] 2.ª comida del mensaje: "
+                                            f"{tool_args.get('meal_type')} → {_nf_dc}")
+                                tool_args = dict(tool_args)
+                                tool_args["meal_type"] = _nf_dc
+                    except Exception as _dc_err:   # noqa: BLE001
+                        logger.debug(f"[LOTE-1024] dos comidas no evaluado: {_dc_err!r}")
+
                 _fusion_misma_franja = False   # [P1-PLAN-LOTE-982] la fusión por franja+TTL no la frena el guard de foto
                 if tool_name == "log_consumed_meal":
                     _fused_part_args = _intentar_fusionar_alimento_en_comida_existente(

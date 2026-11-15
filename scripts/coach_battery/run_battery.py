@@ -204,9 +204,20 @@ import db_facts as _db_facts  # noqa: E402
 _orig_consumed_today = _db_facts.get_consumed_meals_today
 
 
+def _filas_en_seco_de_hoy() -> list:
+    """[P1-PLAN-LOTE-1024] Lo que el coach registró EN ESTA PRUEBA (dry-run), con la forma de una fila de la base. Sin
+    esto la fusión («esto también fue parte de la cena», lote 982) buscaba la cena del turno anterior en la base, no la
+    veía y M1 fallaba por el arnés, no por el coach."""
+    return [{"id": rid, **{k: v.get(k) for k in ("meal_type", "meal_name", "calories", "protein", "carbs", "healthy_fats",
+                                                "ingredients", "created_at", "consumed_at")}}
+            for rid, v in FAKE_DIARY.items() if v.get("days_ago") == 0]
+
+
 def _consumed_today_sim(user_id, date_str=None, tz_offset_mins=None, *a, **kw):
-    if DIARIO_SIM["rows"] is not None and (date_str is None or str(date_str)[:10] == "2026-09-15"):
-        return copy.deepcopy(DIARIO_SIM["rows"])
+    if date_str is None or str(date_str)[:10] == "2026-09-15":
+        base = (copy.deepcopy(DIARIO_SIM["rows"]) if DIARIO_SIM["rows"] is not None
+                else list(_orig_consumed_today(user_id, date_str=date_str, tz_offset_mins=tz_offset_mins, *a, **kw) or []))
+        return base + _filas_en_seco_de_hoy()
     return _orig_consumed_today(user_id, date_str=date_str, tz_offset_mins=tz_offset_mins, *a, **kw)
 
 
@@ -287,7 +298,8 @@ def _stub_log_consumed_meal(**kw):
                     f"Díselo amablemente y pregúntale si de verdad comió dos {meal_type}s ese día "
                     f"(si lo confirma, repite esta herramienta con force=true) o si prefiere no duplicar.")
     rid = _fake_id()
-    FAKE_DIARY[rid] = dict(kw, meal_type=meal_type, days_ago=days_ago)
+    _ahora_iso = datetime.now(timezone.utc).isoformat()
+    FAKE_DIARY[rid] = dict(kw, meal_type=meal_type, days_ago=days_ago, created_at=_ahora_iso, consumed_at=_ahora_iso)
     cuando = "" if days_ago == 0 else (
         " (con fecha de AYER — no cuenta en las macros de hoy)" if days_ago == 1
         else f" (con fecha de hace {days_ago} días — no cuenta en las macros de hoy)")
@@ -296,14 +308,15 @@ def _stub_log_consumed_meal(**kw):
            f"{kw.get('healthy_fats') or 0}g grasas saludables) como {meal_type}{cuando} en tu diario.")
     # [P1-PLAN-LOTE-168] la misma suma real del día que la tool, contando los registros en seco de ese día
     try:
+        # [P1-PLAN-LOTE-1024] hoy ya los devuelve el diario simulado: pasarlos otra vez los contaba dos veces
         _filas = [{k: v.get(k) for k in ("meal_type", "calories", "protein", "carbs", "healthy_fats")}
-                  for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago]
+                  for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago] if days_ago else None
         msg += tools._nota_total_del_dia(kw.get("user_id") or CTX.get("uid"), days_ago, rows_extra=_filas)
     except Exception:
         pass
     # [P1-PLAN-LOTE-76] la misma nota que la tool real («sigue sin registrar…»), contando los registros en seco de ese día
     try:
-        _extra = [{"meal_type": v.get("meal_type")} for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago]
+        _extra = [{"meal_type": v.get("meal_type")} for v in FAKE_DIARY.values() if v.get("days_ago") == days_ago] if days_ago else None
         msg += tools._nota_comidas_sin_registrar(kw.get("user_id") or CTX.get("uid"), days_ago, rows_extra=_extra)
     except Exception:
         pass
@@ -317,6 +330,21 @@ def _stub_log_consumed_meal(**kw):
     return msg
 
 
+_orig_leer_fila_diario = tools._leer_fila_diario
+
+
+def _leer_fila_sim(user_id, meal_id):
+    """[P1-PLAN-LOTE-1024] La fila registrada en seco, para las guardas que releen la fila antes de corregir."""
+    if meal_id in FAKE_DIARY:
+        return {"id": meal_id, **{k: FAKE_DIARY[meal_id].get(k) for k in (
+            "meal_type", "meal_name", "calories", "protein", "carbs", "healthy_fats", "ingredients", "created_at",
+            "consumed_at")}}
+    return _orig_leer_fila_diario(user_id, meal_id)
+
+
+tools._leer_fila_diario = _leer_fila_sim
+
+
 def _stub_correct_consumed_meal(**kw):
     rid = kw.get("meal_id")
     if rid not in FAKE_DIARY:
@@ -324,7 +352,7 @@ def _stub_correct_consumed_meal(**kw):
                 "de este usuario, o no hayas pasado ningún campo a cambiar). NO digas que quedó corregido "
                 "— dile la verdad al usuario y pregúntale a cuál comida se refiere.")
     bits = []
-    for k in ("meal_name", "meal_type", "days_ago", "calories", "ingredients"):
+    for k in ("meal_name", "meal_type", "days_ago", "calories", "protein", "carbs", "healthy_fats", "ingredients"):
         if kw.get(k) is not None:
             bits.append("ingredientes" if k == "ingredients" else f"{k} → {kw.get(k)}")
             FAKE_DIARY[rid][k] = kw.get(k)
