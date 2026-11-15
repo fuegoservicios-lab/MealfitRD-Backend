@@ -11721,11 +11721,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # non-stream chat — el cooldown 1h dedupea bajo carga concurrente.
     if chat_checkpoint_pool is None and connection_pool is not None:
         _emit_checkpoint_pool_split_missing_alert_best_effort()
+    # [P1-PLAN-LOTE-1026 · A-13] compilado una vez; cada turno, una copia con SU saver (el saver lleva un lock propio)
+    from coach_grafo_compilado import para_turno as _grafo_para_turno
     if _checkpoint_pool:
         checkpointer = PostgresSaver(_checkpoint_pool)
-        chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
+        chat_graph_app = _grafo_para_turno(chat_builder, checkpointer)
     else:
-        chat_graph_app = chat_builder.compile(checkpointer=MemorySaver())
+        chat_graph_app = _grafo_para_turno(chat_builder, MemorySaver())
         
     if _cache_v2:
         # [P1-PLAN-LOTE-1015 · A-01] identidad, bloque clínico, meta diaria e idioma pasan DENTRO del bloque de sistema (estable por

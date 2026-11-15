@@ -64,8 +64,44 @@ def test_apagado_o_fuera_del_grafo_se_lee_el_estado(monkeypatch):
     assert ccl.prompt_del_turno({}) == "" and ccl.prompt_del_turno(None) == ""
 
 
+def test_el_grafo_se_compila_una_vez_y_cada_turno_lleva_su_saver(monkeypatch):
+    import agent
+    import coach_grafo_compilado as cgc
+    from langgraph.checkpoint.memory import MemorySaver
+    monkeypatch.delenv("MEALFIT_CHAT_GRAFO_COMPILADO_UNA_VEZ", raising=False)
+    monkeypatch.setattr(cgc, "_cache", {"builder": None, "base": None})
+    compilaciones = []
+    real = agent.chat_builder.compile
+    monkeypatch.setattr(agent.chat_builder, "compile", lambda **kw: compilaciones.append(1) or real(**kw))
+    s1, s2 = MemorySaver(), MemorySaver()
+    g1, g2 = cgc.para_turno(agent.chat_builder, s1), cgc.para_turno(agent.chat_builder, s2)
+    assert len(compilaciones) == 1
+    assert g1.checkpointer is s1 and g2.checkpointer is s2 and g1 is not g2   # el lock del saver no se comparte
+    assert set(g1.nodes) == set(agent.chat_builder.compile(checkpointer=s1).nodes)
+
+
+def test_builder_falso_o_apagado_compila_como_siempre(monkeypatch):
+    import coach_grafo_compilado as cgc
+    monkeypatch.setattr(cgc, "_cache", {"builder": None, "base": None})
+
+    class Falso:
+        n = 0
+
+        def compile(self, **kw):
+            Falso.n += 1
+            return object()          # sin copy()
+
+    b = Falso()
+    cgc.para_turno(b, "s"), cgc.para_turno(b, "s")
+    assert Falso.n == 2 and cgc._cache["base"] is None
+    monkeypatch.setenv("MEALFIT_CHAT_GRAFO_COMPILADO_UNA_VEZ", "0")
+    cgc.para_turno(b, "s")
+    assert Falso.n == 3
+
+
 def test_cableado():
     s = (Path(__file__).resolve().parent.parent / "agent.py").read_text(encoding="utf-8")
     assert s.count('"sys_prompt": __import__("coach_checkpoint_ligero").preparar(config, system_prompt),') == 1
     assert s.count('__import__("coach_checkpoint_ligero").prompt_del_turno(state)') == 2
     assert 'state.get("sys_prompt"' not in s
+    assert s.count("_grafo_para_turno(chat_builder, ") == 2 and "chat_builder.compile(" not in s
