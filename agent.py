@@ -5702,6 +5702,115 @@ def _rechazar_autolog_disponibilidad(messages: list, plate_photos: list) -> Opti
     )
 
 
+_RE_HAMBRE_O_SIN_CONSUMO = re.compile(
+    r"\b(?:tengo\s+(?:mucha\s+|algo\s+de\s+|bastante\s+|un\s+poco\s+de\s+|demasiada\s+)?hambre|"
+    r"me\s+(?:da|dio)\s+hambre|qu[eé]\s+hambre|estoy\s+(?:muy\s+)?hambrient[oa]|"
+    r"me\s+muero\s+de\s+hambre|no\s+he\s+comido(?:\s+nada)?|sin\s+comer|"
+    r"quiero\s+comer(?:\s+algo)?|necesito\s+comer(?:\s+algo)?|"
+    r"qu[eé]\s+(?:puedo\s+comer|hay\s+de\s+comer|me\s+recomiendas|me\s+sugieres))\b",
+    re.IGNORECASE,
+)
+
+_RE_CHARLA_NO_CONSUMO = re.compile(
+    r"^(?:hola|buen[oa]s|gracias|jaja+|jeje+|ok|okay|vale|dale|bien|mal|no|s[ií]|bueno|"
+    r"nada|no\s+s[eé]|soy\s+tont[oa]|tengo\s+sueñ[oa]|estoy\s+cansad[oa]|"
+    r"qu[eé]\s+hago|otra|otro|q\s+m[aá]s|qu[eé]\s+m[aá]s|pa(?:ra)?\s+cu[aá]ndo)[.!?\s]*$",
+    re.IGNORECASE,
+)
+
+_RE_PREGUNTA_CONFIRMAR_REGISTRO = re.compile(
+    r"te\s+(?:lo\s+|la\s+)?comiste|ya\s+(?:lo|la)\s+comiste|"
+    r"en\s+qu[eé]\s+comida|en\s+cu[aá]l\s+comida|"
+    r"qu[eé]\s+(?:comiste|desayunaste|almorzaste|cenaste|merendaste)|"
+    r"lo\s+anoto|quieres\s+que\s+(?:lo|la)\s+anote|para\s+anot[aá]rtel[oa]",
+    re.IGNORECASE,
+)
+
+_RE_REFERENCIA_REPETICION_O_SLOT = re.compile(
+    r"\b(?:mism[oa]|igual|repet[ií]|otra\s+vez|de\s+nuevo|ayer|anoche|antier|siempre|habitual|"
+    r"desayuno|almuerzo|cena|merienda|snack|suplemento)\b",
+    re.IGNORECASE,
+)
+
+
+def _rechazar_autolog_sin_evidencia(
+    messages: list,
+    plate_photos: list,
+    photo_to_log: Any = None,
+    tool_args: Optional[dict] = None,
+    consumed_today: Optional[list] = None,
+) -> Optional[str]:
+    """Evita registros alucinados de `log_consumed_meal` cuando el usuario no envió foto
+    ni reportó consumo (ej. «Tengo hambre», «Soy tonto» o clonación fantasma del diario)."""
+    if plate_photos or photo_to_log or not messages:
+        return None
+    ultimo_txt = _extraer_ultimo_texto_usuario(messages)
+    if not ultimo_txt:
+        return None
+    ultimo_norm = unicodedata.normalize("NFKD", ultimo_txt.lower())
+    ultimo_norm = "".join(c for c in ultimo_norm if not unicodedata.combining(c)).strip()
+    if not ultimo_norm or _RE_VERBO_CONSUMO_O_REGISTRO.search(ultimo_norm):
+        return None
+
+    if _RE_HAMBRE_O_SIN_CONSUMO.search(ultimo_norm):
+        return (
+            f"BLOQUEADO: El usuario escribió '{ultimo_txt}' (expresó hambre o pidió ideas, NO ha comido ni pidió "
+            "anotar ninguna comida). Está TERMINANTEMENTE PROHIBIDO llamar a `log_consumed_meal` o clonar platos del "
+            "diario (NO digas «Anoté tu...»). Respóndele con cercanía según la hora y su margen actual, proponiéndole "
+            "algo ligero y práctico (o preguntándole si prefiere comer algo sencillo ahora o esperar su próxima comida)."
+        )
+
+    # Buscar el último mensaje del asistente previo al turno actual del usuario
+    ultimo_ai = ""
+    vio_humano = False
+    for msg in reversed(messages):
+        es_ai = (
+            (isinstance(msg, dict) and str(msg.get("role") or msg.get("sender") or "").lower() in ("assistant", "ai", "model"))
+            or (msg.__class__.__name__ == "AIMessage" or str(getattr(msg, "type", "")).lower() == "ai")
+        )
+        es_humano = (
+            (isinstance(msg, dict) and str(msg.get("role") or msg.get("sender") or "").lower() in ("user", "human"))
+            or (msg.__class__.__name__ == "HumanMessage" or str(getattr(msg, "type", "")).lower() == "human")
+        )
+        if not vio_humano:
+            if es_humano:
+                vio_humano = True
+            continue
+        if es_ai:
+            ultimo_ai = _extraer_texto_msg_reciente(msg)
+            if ultimo_ai:
+                break
+
+    pide_confirmacion_o_comida = bool(ultimo_ai and _RE_PREGUNTA_CONFIRMAR_REGISTRO.search(ultimo_ai))
+    if _RE_CHARLA_NO_CONSUMO.search(ultimo_norm) and not pide_confirmacion_o_comida:
+        return (
+            f"BLOQUEADO: El mensaje '{ultimo_txt}' NO reporta ninguna comida consumida ni confirma registro. "
+            "Está PROHIBIDO llamar a `log_consumed_meal` o decir «Anoté tu...». Responde de forma natural y útil "
+            "sin inventar registros en el diario."
+        )
+
+    # Bloquear clonación fantasma de un plato ya anotado en el diario cuando el usuario no lo nombró ni pidió repetir
+    if isinstance(tool_args, dict) and consumed_today and not pide_confirmacion_o_comida:
+        meal_name = str(tool_args.get("meal_name") or "").strip()
+        m_norm = unicodedata.normalize("NFKD", meal_name.lower())
+        m_norm = "".join(c for c in m_norm if not unicodedata.combining(c))
+        diario_norms = []
+        for row in consumed_today:
+            if isinstance(row, dict) and row.get("meal_name"):
+                rn = unicodedata.normalize("NFKD", str(row["meal_name"]).lower())
+                diario_norms.append("".join(c for c in rn if not unicodedata.combining(c)).strip())
+        if m_norm and any(m_norm == dn or (len(dn) >= 8 and (dn in m_norm or m_norm in dn)) for dn in diario_norms):
+            stops = {"para", "como", "con", "una", "uno", "unos", "unas", "los", "las", "del", "que", "eso", "esta", "este", "hoy", "tengo", "estoy", "quiero", "soy", "mas"}
+            u_toks = {t for t in re.findall(r"[a-z]{3,}", ultimo_norm) if t not in stops}
+            m_toks = {t for t in re.findall(r"[a-z]{3,}", m_norm) if t not in stops}
+            if not (u_toks & m_toks) and not _RE_REFERENCIA_REPETICION_O_SLOT.search(ultimo_norm):
+                return (
+                    f"BLOQUEADO: Intentaste volver a anotar '{meal_name}', que ya estaba en su diario, aunque el usuario "
+                    f"solo dijo '{ultimo_txt}'. Está PROHIBIDO duplicar o clonar comidas previas sin petición explícita."
+                )
+    return None
+
+
 def _promover_slot_plato_fuerte_tarde(tool_args: dict, user_id: str, local_hour: Optional[float], messages: list) -> dict:
     """[BB-043] Si se registra un plato fuerte (≥ 450 kcal) por la tarde (12:00 PM a 6:30 PM),
     y el usuario NO nombró explícitamente 'merienda' o 'snack', y el almuerzo está vacío hoy:
@@ -6616,6 +6725,29 @@ def execute_tools(state: ChatState):
                     _r_disp = _rechazar_autolog_disponibilidad(messages, state.get("turn_plate_photos") or [])
                     if _r_disp:
                         tool_messages.append(ToolMessage(content=_r_disp, tool_call_id=tool_id))
+                        continue
+                    _diario_guard = []
+                    try:
+                        from db_facts import get_consumed_meals_today as _gcmt_g
+                        from tools import _diary_date_str_for_user as _ddsfu_g
+                        _tz_g = _clamp_tz_offset_mins(state.get("tz_offset")) if state.get("tz_offset") is not None else None
+                        _ld_g = state.get("local_date")
+                        _diario_guard = list(_gcmt_g(_trusted_uid, date_str=_ld_g, tz_offset_mins=_tz_g) or [])
+                        _bio_g = _ddsfu_g(_trusted_uid)
+                        if _bio_g and _bio_g != _ld_g:
+                            _diario_guard.extend(_gcmt_g(_trusted_uid, date_str=_bio_g, tz_offset_mins=_tz_g) or [])
+                    except Exception:
+                        _diario_guard = []
+                    _r_ev = _rechazar_autolog_sin_evidencia(
+                        messages,
+                        state.get("turn_plate_photos") or [],
+                        photo_to_log=state.get("turn_photo_to_log"),
+                        tool_args=tool_args,
+                        consumed_today=_diario_guard,
+                    )
+                    if _r_ev:
+                        logger.warning(f"🛡️ [P0-PHANTOM-LOG-GUARD] Bloqueado log_consumed_meal sin evidencia de consumo (user={str(_trusted_uid)[:8]})")
+                        tool_messages.append(ToolMessage(content=_r_ev, tool_call_id=tool_id))
                         continue
                     # [BB-040] Sanitizar alucinaciones de foto (aguacate, espárragos, etc.) y rescatar proteínas detectadas
                     tool_args = _sanitizar_ingredientes_contra_alucinacion_foto(

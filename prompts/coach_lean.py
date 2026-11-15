@@ -71,7 +71,7 @@ _PATRONES_DUPLICADOS_UNIVERSALES = (
     # BB-028 copia 2 en A. (copia completa permanece en `correct_consumed_meal`)
     re.compile(r"Al corregir un ingrediente o cantidad de un plato registrado.*?macros coherentes\.\s*", re.DOTALL),
     # BB-066 copia 1 en R2. (protocolo 3 puntos permanece en `_REGLA_UNA_LLAMADA_POR_COMIDA`)
-    re.compile(r"(?m)^R2\.\s*CERO DESPEDIDAS NOCTURNAS REPETIDAS:[^\n]*\n?"),
+    re.compile(r"(?m)^R2\.\s*(?:\[[^\]]+\]\s*)?CERO DESPEDIDAS NOCTURNAS REPETIDAS:[^\n]*\n?"),
     # Suplementos copia 1 en `_REGLA_UNA_LLAMADA_POR_COMIDA` (permanece en `correct_consumed_meal`)
     re.compile(r"EXCEPCIÓN CRÍTICA CON SUPLEMENTOS:.*?para meter una comida\.\s*", re.DOTALL),
     # BB-067 copia 2 (permanece en Q4)

@@ -821,7 +821,8 @@ _TAZA_POR_ALIMENTO = (
     (("harina", "maicena", "fecula", "almidon", "pan rallado"), 120.0),
     (("cebolla", "pimiento", "aji", "zanahoria", "pepino", "calabacin", "hongos", "champinon"), 120.0),
     (("lechoza", "papaya", "sandia", "pina", "fresa", "arandano", "blueberry", "frambuesa", "uva",
-      "mango", "melon", "brocoli", "vegetal", "ensalada", "habichuela", "lenteja", "garbanzo", "maiz"), 150.0),
+      "mango", "melon", "brocoli", "vegetal", "ensalada", "habichuela", "lenteja", "garbanzo", "maiz",
+      "guandul", "gandul", "frijol", "alubia", "arveja"), 150.0),
 )
 
 _UNIDAD_POR_ALIMENTO = (

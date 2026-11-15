@@ -148,3 +148,57 @@ def test_night_cookies_380_kcal_with_prior_cena_classified_as_merienda_nocturna(
         assert mock_db_log.call_args[1]["meal_type"] == "merienda"
         assert "merienda nocturna / extra de la noche" in res
 
+
+def test_rechazar_autolog_sin_evidencia_blocks_tengo_hambre_and_phantom_clone():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    # Caso real 03:45 AM: usuario dice "Tengo hambre" y el LLM intenta clonar su almuerzo previo
+    msgs_hambre = [
+        AIMessage(content="no te convence ninguna opción 😊"),
+        HumanMessage(content="Tengo hambre"),
+    ]
+    res_hambre = agent._rechazar_autolog_sin_evidencia(
+        msgs_hambre,
+        plate_photos=[],
+        tool_args={"meal_name": "Arroz blanco con cerdo guisado y vegetales", "calories": 630},
+        consumed_today=[{"meal_name": "Arroz blanco con cerdo guisado y vegetales"}],
+    )
+    assert res_hambre is not None and "BLOQUEADO" in res_hambre
+
+    # Charlita sin consumo ni comida ("Soy tonto") tampoco puede disparar log_consumed_meal
+    msgs_chat = [
+        AIMessage(content="¿Qué tipo de almuerzo te apetece más: arroz, pasta o algo sin arroz?"),
+        HumanMessage(content="Soy tonto"),
+    ]
+    assert agent._rechazar_autolog_sin_evidencia(msgs_chat, plate_photos=[]) is not None
+
+    # Clonación fantasma del diario sin pedir repetición ni nombrar ese plato
+    msgs_vague = [
+        AIMessage(content="Otra opción para el almuerzo de hoy es moro de guandules."),
+        HumanMessage(content="Mmm no sé"),
+    ]
+    assert agent._rechazar_autolog_sin_evidencia(
+        msgs_vague,
+        plate_photos=[],
+        tool_args={"meal_name": "Arroz blanco con cerdo guisado y vegetales"},
+        consumed_today=[{"meal_name": "Arroz blanco con cerdo guisado y vegetales"}],
+    ) is not None
+
+    # Consumo explícito SÍ pasa ("Tenía hambre y me comí 2 huevos", "Lo mismo de ayer")
+    assert agent._rechazar_autolog_sin_evidencia(
+        [HumanMessage(content="Tenía hambre y me comí 2 huevos")],
+        plate_photos=[],
+        tool_args={"meal_name": "2 huevos", "calories": 150},
+    ) is None
+    assert agent._rechazar_autolog_sin_evidencia(
+        [HumanMessage(content="Me comí lo mismo de ayer")],
+        plate_photos=[],
+        tool_args={"meal_name": "Arroz blanco con cerdo guisado y vegetales"},
+        consumed_today=[{"meal_name": "Arroz blanco con cerdo guisado y vegetales"}],
+    ) is None
+    # Confirmar pregunta directa de registro también pasa ("Sí" tras "¿Te comiste la lata de atún?")
+    assert agent._rechazar_autolog_sin_evidencia(
+        [AIMessage(content="¿Te comiste la lata de atún? Cuéntame en qué comida fue para anotártela."), HumanMessage(content="Sí, en el almuerzo")],
+        plate_photos=[],
+    ) is None
+
