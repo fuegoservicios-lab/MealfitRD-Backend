@@ -6572,9 +6572,12 @@ def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
 _CURRENT_CHAT_MESSAGES: ContextVar[list] = ContextVar("_CURRENT_CHAT_MESSAGES", default=[])
 
 _RE_PIDE_PROPUESTA_NUEVA = re.compile(
-    r"\b(?:dame\s+algo\s+tu|propon(?:me)?\s+algo\s+tu|que\s+me\s+(?:recomiendas|sugieres)\s+tu|"
-    r"otra\s+opcion|dame\s+otra|una\s+alternativa|algo\s+(?:diferente|distinto|nuevo)|"
-    r"no\s+quiero\s+eso|cambialo|cambiame\s+eso|sorprendeme)\b",
+    r"(?:\b(?:dame\s+algo\s+tu|propon(?:me)?\s+algo\s+tu|que\s+me\s+(?:recomiendas|sugieres)\s+tu|"
+    r"otra\s+(?:opcion|idea|comida|receta|alternativa)|otro\s+(?:desayuno|almuerzo|cena|merienda|plato)|"
+    r"(?:dame|tienes|hay|ponme|sugiereme|recomiendame)\s+otra\b|una\s+alternativa|"
+    r"algo\s+(?:diferente|distinto|nuevo|mas)|que\s+mas\s+(?:tienes|hay|me\s+recomiendas|sugieres)|"
+    r"no\s+quiero\s+eso|no\s+me\s+(?:convence|provoca|apetece|llama\s+la\s+atencion)|paso\s+de\s+es[eo]|"
+    r"cambialo|cambiame\s+eso|sorprendeme)\b|^(?:otra|otro|mas\s+opciones|siguiente)[.!?\s]*$)",
     re.IGNORECASE,
 )
 
@@ -6614,7 +6617,7 @@ def _extraer_contexto_turno_propuesta(messages: Optional[list] = None) -> tuple[
             txt = _msg_text(msgs[idx])
             if txt:
                 textos_ai_previos.append(txt)
-                if len(textos_ai_previos) >= 2:
+                if len(textos_ai_previos) >= 6:
                     break
 
     return textos_ai_previos, pidio_nueva

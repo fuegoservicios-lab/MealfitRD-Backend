@@ -728,23 +728,29 @@ def _a_tazas(g: float, g_por_taza: float, nombre: str) -> str:
     return f"{txt} tazas de {nombre}"
 
 
+_HOJAS_VERDES = ("espinaca", "lechuga", "rucula", "repollo", "berro", "acelga", "kale")
+
 _TAZA_POR_ALIMENTO = (
-    (("cottage", "yogur", "yogurt", "requeson"), 225.0),
+    (("cottage", "yogur", "yogurt", "requeson", "ricotta", "skyr", "kefir"), 225.0),
     (("leche", "batida", "jugo"), 240.0),
     (("avena",), 80.0),
     (("arroz", "quinoa", "granola", "cereal"), 150.0),
-    (("espinaca", "lechuga", "rucula"), 35.0),
-    (("lechoza", "papaya", "sandia", "pina", "fresa", "melon", "brocoli", "vegetal",
-      "ensalada", "habichuela", "lenteja", "garbanzo", "maiz"), 150.0),
+    (("cebolla", "pimiento", "aji", "zanahoria", "pepino", "calabacin", "hongos", "champinon"), 120.0),
+    (("lechoza", "papaya", "sandia", "pina", "fresa", "arandano", "blueberry", "frambuesa", "uva",
+      "mango", "melon", "brocoli", "vegetal", "ensalada", "habichuela", "lenteja", "garbanzo", "maiz"), 150.0),
 )
 
 _UNIDAD_POR_ALIMENTO = (
+    (("galleta de arroz", "tortita de arroz"), 10.0, "unidad", "unidades", True),
     (("casabe",), 35.0, "pieza", "piezas", True),
+    (("pan pita",), 45.0, "unidad", "unidades", True),
     (("pan", "tostada"), 30.0, "rebanada", "rebanadas", True),
     (("tortilla", "arepa"), 40.0, "unidad", "unidades", True),
     (("queso", "jamon", "pavo"), 28.0, "lonja", "lonjas", True),
     (("aguacate",), 140.0, "aguacate mediano", "aguacates medianos", False),
     (("platano",), 180.0, "plátano mediano", "plátanos medianos", False),
+    (("yuca", "batata", "auyama"), 150.0, "trozo mediano", "trozos medianos", True),
+    (("papa", "yautia"), 150.0, "unidad mediana", "unidades medianas", True),
     (("guineo", "banano", "manzana", "pera", "naranja", "tomate"), 120.0, "unidad mediana", "unidades medianas", True),
     (("atun",), 115.0, "lata", "latas", True),
 )
@@ -762,6 +768,19 @@ def _linea_casera(g: float, nombre: str) -> str:
     if "huevo" in nom_l:
         n = max(1, int(round(g / 55.0)))
         return f"{n} {'huevo' if n == 1 else 'huevos'}"
+    if any(k in nom_l for k in ("whey", "proteina en polvo", "caseina")):
+        return _a_unidad_simple(g, 30.0, "scoop", "scoops", nombre)
+    if any(k in nom_l for k in ("galleta de arroz", "tortita de arroz")):
+        return _a_unidad_simple(g, 10.0, "galleta", "galletas", nombre)
+    if any(k in nom_l for k in ("pasta", "espagueti", "fideo")):
+        return _a_tazas(g, 65.0, nombre).replace("taza de", "taza cocida de").replace("tazas de", "tazas cocidas de")
+    if any(k in nom_l for k in _HOJAS_VERDES):
+        if g < 25.0:
+            return f"1 puñado de {nombre}"
+        return _a_tazas(g, 45.0, nombre)
+    if any(k in nom_l for k in ("queso crema", "tahini", "hummus", "pesto", "cacao", "coco rallado")):
+        cdas = max(1, int(round(g / 16.0)))
+        return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
     for claves, g_taza in _TAZA_POR_ALIMENTO:
         if any(k in nom_l for k in claves):
             return _a_tazas(g, g_taza, nombre)
@@ -910,7 +929,8 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         )
 
     cuerpo = (
-        "Describe el plato recomendado y 1 alternativa breve usando las medidas caseras y sus ~kcal y ~g de proteína "
+        "Describe el plato recomendado conservando la medida casera de cada ingrediente (incluidos vegetales u hojas, "
+        "ej. «1 puñado de espinaca») y 1 alternativa breve con sus ~kcal y ~g de proteína "
         "(los gramos en crudo y los PASOS solo si pidió receta, cómo se hace o pesos exactos). "
         "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?»: da la propuesta práctica completa de una vez. "
         "No cambies cifras ni macros. "

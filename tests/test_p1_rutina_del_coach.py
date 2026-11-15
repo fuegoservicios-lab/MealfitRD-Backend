@@ -444,3 +444,57 @@ def test_dame_algo_tu_propaga_contextvar_y_bloquea_plato_repetido():
     except RuntimeError:
         pass
     assert tools._CURRENT_CHAT_MESSAGES.get([]) == []
+
+
+def test_multiturno_y_nuevos_ingredientes_caseros():
+    from langchain_core.messages import AIMessage, HumanMessage
+    import coach_day_context as cdc
+    import tools
+
+    # Hojas verdes, lácteos cremosos, víveres, pasta y suplementos en medidas naturales
+    assert "puñado" in cdc._linea_casera(15, "Espinaca").lower()
+    assert "1 taza" in cdc._linea_casera(45, "Espinaca").lower()
+    assert "cucharada" in cdc._linea_casera(30, "Queso crema").lower()
+    assert "lonja" not in cdc._linea_casera(30, "Queso crema").lower()
+    assert "scoop" in cdc._linea_casera(30, "Proteína en polvo whey").lower()
+    assert "galleta" in cdc._linea_casera(30, "Galletas de arroz").lower()
+    assert "trozo mediano" in cdc._linea_casera(150, "Yuca").lower()
+    assert "taza cocida" in cdc._linea_casera(65, "Pasta integral").lower()
+
+    for g, nom in [
+        (15, "Espinaca"),
+        (45, "Espinaca"),
+        (30, "Queso crema"),
+        (30, "Proteína en polvo whey"),
+        (30, "Galletas de arroz"),
+        (150, "Yuca"),
+        (65, "Pasta integral"),
+    ]:
+        assert "nevera" not in cdc._linea_casera(g, nom).lower()
+
+    # Ventana multi-turno (>2 sugerencias previas) y frases naturales vs reportes de consumo
+    msgs_multi = [
+        HumanMessage(content="Hola"),
+        AIMessage(content="Propuesta 1: plátano maduro con huevos y queso"),
+        HumanMessage(content="Dame algo tu"),
+        AIMessage(content="Propuesta 2: revoltillo de claras con espinaca y casabe"),
+        HumanMessage(content="otra"),
+        AIMessage(content="Propuesta 3: avena con claras y maní"),
+        HumanMessage(content="¿Qué más tienes?"),
+        AIMessage(content="Propuesta 4: queso cottage con casabe"),
+        HumanMessage(content="algo más"),
+    ]
+    excluir_ctx, pidio_nueva = tools._extraer_contexto_turno_propuesta(msgs_multi)
+    assert pidio_nueva is True
+    assert len(excluir_ctx) == 4
+    assert any("plátano" in x.lower() for x in excluir_ctx)
+    assert any("revoltillo" in x.lower() for x in excluir_ctx)
+
+    for frase in ("otra", "Tienes otra", "no me provoca", "otro desayuno"):
+        _, flag = tools._extraer_contexto_turno_propuesta([HumanMessage(content=frase)])
+        assert flag is True, f"Debió detectar pedido nuevo en: {frase}"
+
+    _, flag_consumo = tools._extraer_contexto_turno_propuesta(
+        [HumanMessage(content="Me comí otra manzana verde")]
+    )
+    assert flag_consumo is False
