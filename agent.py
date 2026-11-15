@@ -9842,13 +9842,25 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
                     m for i, m in enumerate(day_meals)
                     if i not in eaten_indices and isinstance(m, dict) and m.get("meal")
                 ]
+                principales_ok = {"desayuno", "almuerzo", "cena"}.issubset(eaten_keys)
+                meta_cal_cubierta = target_cal_int > 0 and total_consumed >= 0.85 * target_cal_int
+                solo_merienda_restante = (
+                    bool(remaining_meals)
+                    and all(_canon_slot(m.get("meal")) == "merienda" for m in remaining_meals)
+                )
                 if remaining_meals:
-                    names = ", ".join(str(m.get("meal")) for m in remaining_meals)
-                    kcal_left = round(remaining) if remaining > 0 else 0
-                    out += (
-                        f"\n📋 Hoy te quedan {len(remaining_meals)} comida(s) del plan "
-                        f"({names}) y ~{kcal_left} kcal estimadas."
-                    )
+                    if principales_ok and meta_cal_cubierta and solo_merienda_restante:
+                        out += (
+                            "\n📋 Ya registró sus comidas principales de hoy y alcanzó su meta calórica "
+                            "(una merienda sin anotar es opcional; NO preguntes qué falta por anotar)."
+                        )
+                    else:
+                        names = ", ".join(str(m.get("meal")) for m in remaining_meals)
+                        kcal_left = round(remaining) if remaining > 0 else 0
+                        out += (
+                            f"\n📋 Hoy te quedan {len(remaining_meals)} comida(s) del plan "
+                            f"({names}) y ~{kcal_left} kcal estimadas."
+                        )
                 elif eaten_indices:
                     out += "\n📋 Hoy ya no te quedan más comidas del plan por registrar."
         except Exception as e:

@@ -248,14 +248,16 @@ def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=N
     if h < 4.5:
         return ""   # madrugada: el día que cuenta es el de antes; mejor no afirmar nada
     anotadas = franjas_anotadas(consumed_today)
+    principales_cubiertas = {"desayuno", "almuerzo", "cena"}.issubset(anotadas)
     ahora = franja_por_hora(h)
-    ahora = None if ahora in anotadas else ahora   # la de esta hora ya está: ninguna comida «toca»
+    ahora = None if (ahora in anotadas or (ahora == "merienda" and principales_cubiertas)) else ahora   # la de esta hora ya está (o merienda opcional con día cubierto)
     partes, pasadas = [], []
     for f in FRANJAS:
         if f in anotadas:
             partes.append(f"{f} — anotado")
         elif f in FIN_DE_FRANJA and h >= FIN_DE_FRANJA[f]:
-            partes.append(f"{f} — SIN anotar y su hora ya pasó")
+            extra = " (opcional; ya registró las 3 comidas principales, NO preguntes por ella)" if (f == "merienda" and principales_cubiertas) else ""
+            partes.append(f"{f} — SIN anotar y su hora ya pasó{extra}")
             if f != "merienda":
                 pasadas.append(f)
         else:
@@ -327,8 +329,23 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
             out += f" Son las {_fmt_hora(hora_local)}."
         out += estado_de_las_comidas(consumed_today, hora_local, schedule_type)   # [P1-PLAN-LOTE-950]
 
+        _anotadas = franjas_anotadas(consumed_today)
+        _principales_ok = {"desayuno", "almuerzo", "cena"}.issubset(_anotadas)
+        _kcal_cubierta = metas["kcal"] > 0 and cons["kcal"] >= 0.85 * metas["kcal"]
+        if _principales_ok or _kcal_cubierta:
+            out += (
+                " ✅ DÍA PRINCIPAL YA REGISTRADO: ya anotó sus comidas principales y/o cubrió su meta calórica de hoy; "
+                "PROHIBIDO preguntarle «¿qué comiste hoy?» ni qué le falta por anotar (una merienda opcional o un pequeño margen restante NO son comidas faltantes)."
+            )
+        if momento == "madrugada" and cons["registros"] > 0:
+            out += (
+                " 🌙 MADRUGADA (jornada biológica en curso): los registros anteriores pertenecen a esta misma jornada "
+                "todavía abierta hasta las 04:00 AM; a esta hora NO toca ninguna comida ni debes pedirle registrar nada si solo saluda o conversa."
+            )
+
         corto = (fk is not None and metas["kcal"] > 0
                  and cons["kcal"] < FRACCION_DIARIO_CORTO * metas["kcal"]
+                 and not _principales_ok
                  and momento in ("tarde", "noche", "madrugada"))
         if corto:
             out += (" OJO: a esta hora un diario tan corto casi siempre significa que le falta REGISTRAR, no que no "
