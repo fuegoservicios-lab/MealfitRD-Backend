@@ -141,7 +141,8 @@ def check_user_daily_chat_budget(
             "limit_usd": limit,
         }
     except Exception as exc:
-        logger.debug("[G-19] check_user_daily_chat_budget fail-open: %r", exc)
+        from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04] el tope que falla en silencio no protege nada
+        fail_open("chat_budget_check", exc, critico=True)
         return {
             "status": "ok",
             "allow_escalation": True,

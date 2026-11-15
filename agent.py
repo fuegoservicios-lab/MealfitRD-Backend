@@ -5091,8 +5091,9 @@ def call_model(state: ChatState):
             _set_ttft_sink(None)
             if _cost_tok is not None:
                 _cost_uid_var.reset(_cost_tok)
-    except Exception:
-        pass
+    except Exception as _usage_exc:
+        from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04] sin este registro no hay coste por usuario ni tope diario
+        fail_open("chat_usage_event", _usage_exc, critico=True)
 
     return {"messages": [response]}
 

@@ -31,7 +31,8 @@ def _vaciar_cache_de_contexto() -> None:
     try:
         agente.invalidate_chat_user_ctx_cache(None)
     except Exception as exc:  # noqa: BLE001 — nunca romper una respuesta por la caché
-        logger.debug("[REVISION-LOTES-1001-1011] no se pudo vaciar la caché de contexto del coach: %r", exc)
+        from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04] una caché que no se vacía sirve datos viejos
+        fail_open("ctx_cache_invalidate", exc, critico=True)
 
 
 def escribe_fuera_del_chat(scope) -> bool:

@@ -304,7 +304,8 @@ class ChatTurnPhaseTracker:
             )
             return True
         except Exception as exc:
-            logger.debug("[G-01] emit chat_turn_phases falló (best-effort): %r", exc)
+            from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04]
+            fail_open("chat_phase_emit", exc)
             return False
 
 
@@ -421,7 +422,8 @@ def record_client_chat_perf(
         )
         return {"recorded": True, "corr": corr}
     except Exception as exc:
-        logger.debug("[G-01] emit chat_client_perf falló (best-effort): %r", exc)
+        from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04]
+        fail_open("chat_client_perf_emit", exc)
         return {"recorded": False, "corr": corr}
 
 

@@ -3147,6 +3147,15 @@ def health_version():
     except Exception:
         pass
 
+    # [P1-PLAN-LOTE-1014 · A-04] Solo CIFRAS en el endpoint público (el detalle por sitio vive en /admin/chat-insights):
+    # cuántas veces una protección del coach falló y el turno siguió sin ella, desde el arranque de este proceso.
+    fail_open_total = fail_open_critical = 0
+    try:
+        from fail_open import total as _fo_total
+        fail_open_total, fail_open_critical = _fo_total(), _fo_total(solo_criticos=True)
+    except Exception:
+        pass
+
     git_sha = os.environ.get("GIT_SHA") or "unknown"
     return {
         "git_sha": git_sha,
@@ -3178,6 +3187,8 @@ def health_version():
         "embedding_cache_maxsize": embedding_cache_maxsize,
         # [P1-PLAN-LOTE-1001 · G-06] Modelos efectivos y estado de desvío entre arranques.
         **effective_models,
+        "fail_open_total": fail_open_total,
+        "fail_open_critical": fail_open_critical,
     }
 
 

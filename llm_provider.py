@@ -159,8 +159,9 @@ class ChatOpenAI(_LangChainChatOpenAI):
             ):
                 try:
                     _opc.inyectar_openai_prompt_cache(payload, model_name=_model)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as _cache_exc:  # noqa: BLE001
+                    from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04]
+                    fail_open("prompt_cache_inject", _cache_exc)
         return payload
 
     def _intentar_reintento_cache(self, exc: Exception) -> bool:

@@ -56,6 +56,9 @@ def _row_val(row: Any, key: str, idx: int, default: int = 0) -> int:
     return default
 
 
+from fail_open import fail_open as _fail_open   # [P1-PLAN-LOTE-1014 · A-04]
+
+
 def evaluar_salud_coach_y_alertar(
     *,
     execute_sql_query: Any = None,
@@ -134,7 +137,7 @@ def evaluar_salud_coach_y_alertar(
             _resolve_alert(execute_sql_write, "chat_reliability_degraded")
             summary["reliability"]["alerted"] = False
     except Exception as exc:
-        logger.debug("[G-18] reliability check omitido (best-effort): %r", exc)
+        _fail_open("chat_health_reliability", exc, critico=True)
 
     try:
         fb_row = execute_sql_query(
@@ -169,7 +172,7 @@ def evaluar_salud_coach_y_alertar(
             _resolve_alert(execute_sql_write, "chat_negative_feedback_high")
             summary["feedback"]["alerted"] = False
     except Exception as exc:
-        logger.debug("[G-18] feedback check omitido (best-effort): %r", exc)
+        _fail_open("chat_health_feedback", exc, critico=True)
 
     if include_hourly_and_cost:
         try:
@@ -216,7 +219,7 @@ def evaluar_salud_coach_y_alertar(
                 _resolve_alert(execute_sql_write, "chat_fallback_hourly_burst")
                 summary["fallback_hourly_burst"]["alerted"] = False
         except Exception as exc:
-            logger.debug("[G-18] fallback hourly burst check omitido (best-effort): %r", exc)
+            _fail_open("chat_health_burst", exc, critico=True)
 
         try:
             cost_row = execute_sql_query(
@@ -258,6 +261,6 @@ def evaluar_salud_coach_y_alertar(
                 _resolve_alert(execute_sql_write, "chat_cost_spike_3x")
                 summary["cost_spike_3x"]["alerted"] = False
         except Exception as exc:
-            logger.debug("[G-18] cost spike check omitido (best-effort): %r", exc)
+            _fail_open("chat_health_cost_spike", exc, critico=True)
 
     return summary
