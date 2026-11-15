@@ -105,7 +105,8 @@ def classify_sentiment(user_message: str) -> dict:
         elapsed = time.time() - start
         profile = PERSONALITY_PROFILES[detected]
         
-        logger.info(f"🎭 [SENTIMENT] '{user_message[:50]}...' → {profile['emoji']} {profile['name']} ({elapsed:.2f}s)")
+        from log_sin_datos_de_salud import huella as _log_huella   # [P1-PLAN-LOTE-1021 · A-24] sin el texto del usuario
+        logger.info(f"🎭 [SENTIMENT] {_log_huella(user_message)} → {profile['emoji']} {profile['name']} ({elapsed:.2f}s)")
         
         return {
             "sentiment": detected,

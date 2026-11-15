@@ -1613,7 +1613,8 @@ def _cached_multimodal_embedding(text: str, model_id: str, purpose: str):
         emb = get_text_embedding(text, purpose=purpose)
         if not emb:
             return None
-        logger.info(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding ({model_id}/{purpose}) para: '{text[:50]}...'")
+        from log_sin_datos_de_salud import huella as _log_huella   # [P1-PLAN-LOTE-1021 · A-24]
+        logger.info(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding ({model_id}/{purpose}) para {_log_huella(text)}")
         return list(emb)
     except Exception as e:
         # [P3-VISION-FAIL-ERROR-LOG · 2026-05-30] error-level para Sentry (ver

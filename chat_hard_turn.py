@@ -75,6 +75,23 @@ def chat_user_daily_budget_usd() -> float:
     )
 
 
+def user_exempt_from_chat_budget(user_id: Optional[str]) -> bool:
+    """[P1-PLAN-LOTE-1016 · A-05] Las cuentas de administración (`MEALFIT_ADMIN_USER_IDS`) y `MEALFIT_CHAT_BUDGET_EXEMPT_USER_IDS` no
+    se bloquean por el tope diario: el dueño probando el coach llegaría al límite el mismo día (13-nov: 3 cuentas pasaron de US$ 0,25)."""
+    if not user_id:
+        return False
+    uid = str(user_id).strip().lower()
+    try:
+        from admin_acceso import admin_ids
+        if uid in admin_ids():
+            return True
+    except Exception as exc:  # noqa: BLE001
+        from fail_open import fail_open
+        fail_open("budget_exempt_admin_ids", exc)
+    extra = _env_str("MEALFIT_CHAT_BUDGET_EXEMPT_USER_IDS", "")
+    return uid in {x.strip().lower() for x in extra.split(",") if x.strip()}
+
+
 def check_user_daily_chat_budget(
     user_id: Optional[str],
     *,
@@ -87,7 +104,7 @@ def check_user_daily_chat_budget(
     - `>= 100%`: `status='hard_100'`, pausa suavemente el turno sin llamar al LLM.
     """
     limit = chat_user_daily_budget_usd()
-    if limit <= 0.0 or not user_id or user_id == "guest":
+    if limit <= 0.0 or not user_id or user_id == "guest" or user_exempt_from_chat_budget(user_id):
         return {
             "status": "ok",
             "allow_escalation": True,
@@ -141,7 +158,8 @@ def check_user_daily_chat_budget(
             "limit_usd": limit,
         }
     except Exception as exc:
-        logger.debug("[G-19] check_user_daily_chat_budget fail-open: %r", exc)
+        from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04] el tope que falla en silencio no protege nada
+        fail_open("chat_budget_check", exc, critico=True)
         return {
             "status": "ok",
             "allow_escalation": True,
@@ -268,6 +286,11 @@ def evaluar_turno_dificil(
         return primary_model, {"escalated": False, "reason": "disabled"}
     if isinstance(state, dict) and state.get("chat_budget_soft_degraded"):
         return primary_model, {"escalated": False, "reason": "user_daily_budget_soft_cap"}
+    # [P1-PLAN-LOTE-1016 · A-07] terra nunca había atendido un turno real: por canario (por defecto solo `MEALFIT_CHAT_CANARY_USER_IDS`)
+    # hasta que un turno suyo quede registrado con su coste. `MEALFIT_CHAT_CANARY_TERRA=on` lo abre a todos; `off` lo cierra.
+    from coach_canario import registrar_brazo as _registrar_brazo
+    if not _registrar_brazo(tracker, (state or {}).get("user_id") if isinstance(state, dict) else None, "terra"):
+        return primary_model, {"escalated": False, "reason": "canary_off"}
 
     from llm_provider import GPT6_LUNA
 

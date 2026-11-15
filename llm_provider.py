@@ -96,6 +96,26 @@ import gemini_hydrogen as _gh  # [P1-PLAN-LOTE-995]
 import openai_prompt_cache as _opc  # [P1-PLAN-LOTE-1003]
 
 
+# [P1-PLAN-LOTE-1012 · A-06] Primer token por llamada. `call_model` pone un dict aquí antes de invocar; el `_stream` de
+# `ChatOpenAI` anota ahí cuánto tardó en llegar el primer trozo. Es un ContextVar (no un atributo del modelo ni un
+# callback): pasar `callbacks=` a `invoke` REEMPLAZA los del grafo y rompería el `stream_mode="messages"`.
+import contextvars as _ctxv
+import time as _time_ttft
+
+_TTFT_SINK = _ctxv.ContextVar("chat_ttft_sink", default=None)
+
+
+def set_ttft_sink(sink):
+    """Activa (dict) o apaga (None) el sumidero del primer token en el contexto actual."""
+    return _TTFT_SINK.set(sink)
+
+
+def _anotar_ttft(t0: float) -> None:
+    sink = _TTFT_SINK.get()
+    if sink is not None and "ttft_ms" not in sink:
+        sink["ttft_ms"] = int((_time_ttft.monotonic() - t0) * 1000)
+
+
 class ChatOpenAI(_LangChainChatOpenAI):
     """`ChatOpenAI` de LangChain + el filtro de temperatura que su versión aún no aplica a la familia gpt-6.
 
@@ -139,8 +159,9 @@ class ChatOpenAI(_LangChainChatOpenAI):
             ):
                 try:
                     _opc.inyectar_openai_prompt_cache(payload, model_name=_model)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as _cache_exc:  # noqa: BLE001
+                    from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04]
+                    fail_open("prompt_cache_inject", _cache_exc)
         return payload
 
     def _intentar_reintento_cache(self, exc: Exception) -> bool:
@@ -199,14 +220,19 @@ class ChatOpenAI(_LangChainChatOpenAI):
 
     def _stream(self, *args, **kwargs):
         yielded = False
+        _t0 = _time_ttft.monotonic()
         try:
             for trozo in super()._stream(*args, **kwargs):
+                if not yielded:
+                    _anotar_ttft(_t0)
                 yielded = True
                 yield trozo
         except Exception as exc:
             if not yielded and self._intentar_reintento_cache(exc):
                 try:
-                    yield from super()._stream(*args, **kwargs)
+                    for trozo in super()._stream(*args, **kwargs):
+                        _anotar_ttft(_t0)
+                        yield trozo
                     return
                 except Exception as retry_exc:
                     self._avisar_saldo(retry_exc)

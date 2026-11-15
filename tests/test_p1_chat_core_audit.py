@@ -94,7 +94,8 @@ def test_respuesta_parcial_completa_solo_lo_que_falta():
 def test_call_model_usa_el_payload_saneado():
     i = _AGENT_SRC.index("def call_model(")
     body = _AGENT_SRC[i:_AGENT_SRC.index("def _form_field_updates_after_write(")]
-    assert "_llm_messages_from_state(messages, sys_prompt)" in body
+    # [P1-PLAN-LOTE-1015] la llamada lleva ahora `forzar_split=` (caché v2); lo que importa es que use el payload saneado
+    assert "_llm_messages_from_state(messages, sys_prompt" in body
 
 
 class _ToolQueRevienta:

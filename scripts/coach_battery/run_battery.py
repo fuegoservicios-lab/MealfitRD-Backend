@@ -417,6 +417,25 @@ def _stub_log_water_glass(**kw):
     return f"Listo: se {verb} {abs(float(delta)):g} vaso(s). El usuario ahora lleva {new:g} de 8 vasos hoy.{reached}"
 
 
+def _stub_cambiar_ajuste(**kw):
+    """[P1-PLAN-LOTE-1013] La tool REAL sin escribir: tema e idioma usan las funciones puras de `ajustes_de_la_app` (el
+    texto de éxito con el marcador es el verdadero); lo que escribiría en la base se anula."""
+    import ajustes_de_la_app as aj
+    canon = aj._SINONIMO.get(aj._norm(kw.get("ajuste")))
+    valor = kw.get("valor")
+    if canon == "tema":
+        return aj._cambiar_tema(valor)
+    if canon == "idioma":
+        return aj._cambiar_idioma(valor)
+    bool_val = aj._a_bool(valor) if hasattr(aj, "_a_bool") else None
+    if canon in ("hidratacion", "nevera", "memoria") and bool_val is not None:
+        txt = {"hidratacion": "Hecho: la tarjeta de Hidratación ya se ve en su panel (no anotaste ningún vaso).",
+               "nevera": "Hecho: la Nevera está activa; aparece su pestaña.",
+               "memoria": "Hecho: la memoria a largo plazo está activa; aprenderás de sus conversaciones."}[canon]
+        return aj._con_marcador(txt, {canon: bool_val})
+    return "ERROR: (batería) este ajuste no se simula en dry-run."
+
+
 def _stub_update_form_field(**kw):
     field, new_value = kw.get("field"), kw.get("new_value", "")
     ok, val = tools._valor_de_campo_para_perfil(field, new_value)
@@ -487,6 +506,7 @@ _STUBS = {
     "mark_shopping_list_purchased": _stub_mark_shopping_list_purchased,
     "log_water_glass": _stub_log_water_glass,
     "update_form_field": _stub_update_form_field,
+    "cambiar_ajuste_de_la_app": _stub_cambiar_ajuste,   # [P1-PLAN-LOTE-1013]
 }
 
 
@@ -523,9 +543,11 @@ LAST_SYS = {"prompt": ""}
 _orig_llm_msgs = agent._llm_messages_from_state
 
 
-def _capture_sys(messages, sys_prompt):
+def _capture_sys(messages, sys_prompt, *args, **kwargs):
+    # [P1-PLAN-LOTE-1015] transparente a firmas: `_llm_messages_from_state` ganó `forzar_split` y la envoltura de firma fija
+    # rompía TODOS los casos con `TypeError` (lo cazó la primera corrida con la caché v2 encendida).
     LAST_SYS["prompt"] = sys_prompt
-    return _orig_llm_msgs(messages, sys_prompt)
+    return _orig_llm_msgs(messages, sys_prompt, *args, **kwargs)
 
 
 agent._llm_messages_from_state = _capture_sys
@@ -671,6 +693,14 @@ def main() -> int:
     if not OWNER:
         _out("Falta MEALFIT_BATTERY_USER_ID (la cuenta cuyos plan/Nevera/diario se leen).")
         return 2
+    # [P1-PLAN-LOTE-1013 · A-02] Falla ANTES de gastar o de crear nada si el modelo del coach es de OpenAI y no hay clave real
+    # (la `.env` local trae el marcador `MISSING_OPENAI_API_KEY`; la de producción está en el VPS).
+    _k = os.environ.get("OPENAI_API_KEY", "")
+    _m = os.environ.get("MEALFIT_CHAT_AGENT_MODEL", "")
+    if _m.lower().startswith(("gpt", "o1", "o3", "o4")) and (not _k or _k.startswith("MISSING") or "MISSING" in _k):
+        _out(f"⛔ MEALFIT_CHAT_AGENT_MODEL={_m!r} pide OpenAI pero OPENAI_API_KEY falta o es un marcador. "
+             "Corre la batería en el VPS (claves reales) o exporta la clave.")
+        return 2
 
     battery = json.loads((HERE / "battery.json").read_text(encoding="utf-8"))
     cases = _select_cases(battery["casos"], preset=args.preset, only_raw=args.only)
@@ -742,6 +772,12 @@ def main() -> int:
                "models": {"coach": coach_m, "fallback": fallback_m, "vision": vision_m},
                "escrituras_bloqueadas": len(BLOCKED), "bloqueadas_detalle": BLOCKED[:40], "sim": "2026-09-15 (martes), RD UTC-4"}
 
+    # [P1-PLAN-LOTE-1013 · A-02] Nunca se anota en el ledger una corrida que no llamó al modelo: sin clave o sin red los 19
+    # casos fallan con 0 llamadas y esa fila «0/19, 0 US$» pasaría a ser la línea base contra la que se compara todo.
+    if args.record_ledger and total_evaluated > 0 and COST["calls"] <= 0:
+        _out("⛔ 0 llamadas al modelo: la corrida NO se anota en el ledger (¿falta OPENAI_API_KEY o no hay red?).")
+        args.record_ledger = False
+        regresion = True
     if args.record_ledger and total_evaluated > 0:
         entry = _evaluador.build_ledger_entry(
             label=args.label,
@@ -761,7 +797,9 @@ def main() -> int:
         )
         _evaluador.append_ledger_entry(entry, ledger_path)
 
-    (out_dir / "results.json").write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1),
+    # [P1-PLAN-LOTE-1013] `default=str`: los casos con foto llevan objetos `FoodLabel` que no son JSON y la corrida moría AQUÍ,
+    # después de gastar y de anotar el ledger, sin dejar `results.json` ni transcripción (14-nov).
+    (out_dir / "results.json").write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1, default=str),
                                           encoding="utf-8")
     md = [f"# Transcripción — {args.label}", f"**Resultado:** {comparison_line}", "", "```",
           json.dumps(summary, ensure_ascii=False, indent=1), "```", ""]
