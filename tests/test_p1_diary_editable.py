@@ -358,7 +358,7 @@ class TestDeleteEndpointFunctional:
         diary_mod = _import_diary_module()
         from fastapi import HTTPException
 
-        monkeypatch.setattr(diary_mod, "delete_consumed_meal", lambda user_id, meal_id: False)
+        monkeypatch.setattr(diary_mod, "delete_consumed_meal", lambda user_id, meal_id, **_k: False)
         with pytest.raises(HTTPException) as exc_info:
             diary_mod.api_delete_consumed_meal(
                 meal_id=self._VALID_MEAL_ID, verified_user_id=self._VALID_USER_ID
@@ -374,7 +374,7 @@ class TestDeleteEndpointFunctional:
         diary_mod = _import_diary_module()
         captured = {}
 
-        def fake_delete(user_id, meal_id):
+        def fake_delete(user_id, meal_id, **_k):   # [P1-PLAN-LOTE-1027] via="diario"
             captured["user_id"] = user_id
             captured["meal_id"] = meal_id
             return True

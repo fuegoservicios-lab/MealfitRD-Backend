@@ -2301,7 +2301,7 @@ def api_delete_consumed_meal(
         import db_inventory
         _revert = db_inventory.revert_consumption_events(verified_user_id, meal_id)
 
-        deleted = delete_consumed_meal(verified_user_id, meal_id)
+        deleted = delete_consumed_meal(verified_user_id, meal_id, via="diario")   # [P1-PLAN-LOTE-1027 · A-16]
         if not deleted:
             raise HTTPException(
                 status_code=404,

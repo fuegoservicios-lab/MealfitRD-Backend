@@ -11,7 +11,7 @@ REMOVALS_PREFIX = 'diary_removed:'
 DELETE_WITH_REMOVAL_SQL = """
 WITH removed AS (
     DELETE FROM consumed_meals WHERE id = %s AND user_id = %s
-    RETURNING id, meal_name, meal_type, consumed_at
+    RETURNING id, meal_name, meal_type, consumed_at, source, created_at   -- [P1-PLAN-LOTE-1027 · A-16]
 ), remembered AS (
     INSERT INTO app_kv_store (key, value, updated_at)
     SELECT %s, jsonb_build_array(jsonb_build_object(
@@ -25,7 +25,7 @@ WITH removed AS (
         updated_at = NOW()
     RETURNING key
 )
-SELECT id, meal_name, meal_type, consumed_at FROM removed
+SELECT id, meal_name, meal_type, consumed_at, source, created_at FROM removed
 """
 
 def recent_removals(user_id):

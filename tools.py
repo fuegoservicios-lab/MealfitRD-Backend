@@ -2487,6 +2487,7 @@ def _ejecutar_borrado_diario(user_id: str, _mid: str, _fila: Optional[dict]) -> 
         logger.exception("[correct_consumed_meal] revert_consumption_events falló al eliminar meal_id=%s", _mid)
     if db_delete_consumed_meal(user_id, _mid):
         _invalidar_caches_aprendizaje_usuario(user_id)
+        __import__("coach_senales_calidad").registrar(user_id, "coach_corrigio", fila=_fila)   # [P1-PLAN-LOTE-1027 · A-16]
         _nota_nevera_del = ""
         if nevera_activa(user_id) and isinstance(_rev, dict) and (_rev.get("reverted") or []):
             _nota_nevera_del = f" Nevera ajustada: se devolvió lo descontado ({len(_rev.get('reverted') or [])} ítem(s))."
@@ -2928,6 +2929,7 @@ def correct_consumed_meal(
 
     if updated_id:
         _invalidar_caches_aprendizaje_usuario(user_id)
+        __import__("coach_senales_calidad").registrar(user_id, "coach_corrigio", fila=_fila)   # [P1-PLAN-LOTE-1027 · A-16]
         if _ajustar_nevera:   # solo con la Nevera encendida (arriba): apagada, ni se devuelve ni se descuenta
             try:
                 import db_inventory

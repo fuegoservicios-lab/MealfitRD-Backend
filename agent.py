@@ -11223,6 +11223,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if _early_progress:
         _pt.mark_first_progress()
         yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
+    # [P1-PLAN-LOTE-1027 · A-16] «te equivocaste…» al empezar el mensaje: señal implícita de calidad (tras la señal temprana)
+    _senales = __import__("coach_senales_calidad")
+    if _senales.es_queja(prompt):
+        _senales.registrar(user_id if user_id != session_id else None, "usuario_dice_error", session_id=session_id)
     # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
