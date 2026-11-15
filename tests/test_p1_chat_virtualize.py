@@ -241,7 +241,8 @@ def test_messages_map_path_preserved(agent_page_src: str):
     """El path simple `messages.map(...)` con `MemoizedMessageBubble` debe
     seguir presente — ES el fallback para sesiones cortas (99% del uso)."""
     pattern = re.compile(
-        r"messages\.map\([\s\S]{0,400}?<MemoizedMessageBubble"
+        # [08425743] el path simple recorre `visibleMessages` (la conversación sin la burbuja de corte oculta)
+        r"(?:visibleM|m)essages\.map\([\s\S]{0,400}?<MemoizedMessageBubble"
     )
     assert pattern.search(agent_page_src), (
         "P1-CHAT-VIRTUALIZE regresión: el path simple "

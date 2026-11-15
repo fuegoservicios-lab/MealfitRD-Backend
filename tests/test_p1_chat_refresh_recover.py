@@ -49,7 +49,9 @@ def test_orphan_detection_and_indicator():
         "huérfano = lo decide el predicado (mensaje del usuario sin nada en vuelo, + corte de red)"
     assert "ocupado: isLoading" in blk and "cargandoHistorial: isLoadingHistory" in blk, \
         "…y sigue sin arrancar con un turno en vuelo o el historial cargando"
-    assert "(isLoading || recoveringTurn) && (" in _AP, \
+    # [08425743] el indicador se decide en `showCoachPensando`, que incluye la recuperación (y la burbuja de corte oculta)
+    assert "const showCoachPensando = isLoading || recoveringTurn || _ocultarCorteEnCurso;" in _AP \
+        and "{showCoachPensando && (" in _AP, \
         "el indicador pensando también se muestra durante la recuperación"
     assert "Recuperando tu respuesta…" in _AP
 

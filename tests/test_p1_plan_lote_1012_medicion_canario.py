@@ -108,6 +108,7 @@ def test_el_prefetcher_cronometra_cada_tarea_y_las_manda_al_tracker():
     from chat_phase_metrics import start_turn_tracker, release_turn_tracker
 
     pf = agent._ChatContextPrefetcher("s-pf", "u-pf", None, "2026-11-14", 240, True, True)
+    pf.resolve_memory = lambda: None   # con base de datos disponible (gate) leería la sesión real: «s-pf» no es un uuid
     trk, tok = start_turn_tracker(user_id="u-pf", session_id="s-pf", corr="pf000001")
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:

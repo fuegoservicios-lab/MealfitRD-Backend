@@ -11771,6 +11771,22 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         return
 
     _t_ctx_b0 = time.monotonic()
+    # [P1-PLAN-LOTE-165 · 2026-09-22] Cada evento `progress` lleva también su FASE (`phase` = la clave de
+    # abajo): la frase es española y el cliente la pintaba tal cual en los cinco idiomas. Con la fase, el
+    # cliente pinta SU frase traducida; `message` se queda por compatibilidad (paquetes OTA viejos).
+    def get_progress_msg(msg_type):
+        opts = {
+            "analizando": ["Procesando tu solicitud detalladamente...", "Evaluando tu perfil y macros...", "Alineando tu genética con el plan...", "Analizando tu objetivo con Inteligencia Nutricional...", "Revisando tus preferencias y contexto..."],
+            "generando_plan": ["Armando la química perfecta de tus comidas...", "Diseñando un plan de alimentación premium...", "Calculando macros y esculpiendo tu dieta...", "Generando distribución óptima de nutrientes..."],
+            "modificando_comida": ["Ajustando la receta a tus exigencias...", "Reemplazando ingredientes inteligentemente...", "Rediseñando esta comida sin perder tus macros...", "Aplicando cambios culinarios a tu plato..."],
+            "actualizando_bd": ["Guardando tus preferencias en el sistema...", "Sincronizando perfil con tu base de datos...", "Actualizando tu historial clínico nutricional..."],
+            "registrando_progreso": ["Inscribiendo tu ingesta en el registro diario...", "Contabilizando calorías y macros consumidos...", "Actualizando tu impacto metabólico del día..."],
+            "calculando_compras": ["Calculando tu lista de compras matemáticamente...", "Sumando ingredientes de todas las opciones...", "Consolidando cantidades exactas para el súper..."],
+            "buscando_memoria": ["Explorando tu historial profundo...", "Recuperando recuerdos de tus experiencias pasadas...", "Buscando en tu archivo de memoria a largo plazo..."]
+        }
+        return random.choice(opts.get(msg_type, ["Procesando..."]))
+    # [P1-PLAN-LOTE-1021] definida ANTES de la señal temprana (que la usa): más abajo daba UnboundLocalError
+
     # [P1-PLAN-LOTE-1017 · A-10] Primera señal al recibir el turno, NO tras armar el contexto (0,4-2,0 s después). El cliente traduce
     # `phase` con su i18n (`frasesDeFase`); el texto solo lo usa en español si la fase no está en su tabla.
     from coach_canario import registrar_brazo as _registrar_brazo
@@ -12419,21 +12435,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         inputs["messages"] = [HumanMessage(content=prompt)]
         
-    # [P1-PLAN-LOTE-165 · 2026-09-22] Cada evento `progress` lleva también su FASE (`phase` = la clave de
-    # abajo): la frase es española y el cliente la pintaba tal cual en los cinco idiomas. Con la fase, el
-    # cliente pinta SU frase traducida; `message` se queda por compatibilidad (paquetes OTA viejos).
-    def get_progress_msg(msg_type):
-        opts = {
-            "analizando": ["Procesando tu solicitud detalladamente...", "Evaluando tu perfil y macros...", "Alineando tu genética con el plan...", "Analizando tu objetivo con Inteligencia Nutricional...", "Revisando tus preferencias y contexto..."],
-            "generando_plan": ["Armando la química perfecta de tus comidas...", "Diseñando un plan de alimentación premium...", "Calculando macros y esculpiendo tu dieta...", "Generando distribución óptima de nutrientes..."],
-            "modificando_comida": ["Ajustando la receta a tus exigencias...", "Reemplazando ingredientes inteligentemente...", "Rediseñando esta comida sin perder tus macros...", "Aplicando cambios culinarios a tu plato..."],
-            "actualizando_bd": ["Guardando tus preferencias en el sistema...", "Sincronizando perfil con tu base de datos...", "Actualizando tu historial clínico nutricional..."],
-            "registrando_progreso": ["Inscribiendo tu ingesta en el registro diario...", "Contabilizando calorías y macros consumidos...", "Actualizando tu impacto metabólico del día..."],
-            "calculando_compras": ["Calculando tu lista de compras matemáticamente...", "Sumando ingredientes de todas las opciones...", "Consolidando cantidades exactas para el súper..."],
-            "buscando_memoria": ["Explorando tu historial profundo...", "Recuperando recuerdos de tus experiencias pasadas...", "Buscando en tu archivo de memoria a largo plazo..."]
-        }
-        return random.choice(opts.get(msg_type, ["Procesando..."]))
-
     _pt.mark_first_progress()   # [P1-PLAN-LOTE-1012 · A-06] lo primero que ve el cliente (no cuenta si ya salió el temprano)
     if not _early_progress:
         yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
