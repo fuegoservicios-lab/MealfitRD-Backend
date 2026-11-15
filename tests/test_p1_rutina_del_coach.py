@@ -259,3 +259,188 @@ def test_proponer_comida_madrugada_con_dia_biologico_planifica_manana_sin_restar
     out_auto = fn("u-madrugada-1")
     assert out_auto.startswith("PROPUESTAS DE DESAYUNO")
     assert "planificación para mañana" in out_auto
+
+
+def test_linea_casera_convierte_ingredientes_a_medidas_cotidianas():
+    import coach_day_context as cdc
+
+    assert "taza" in cdc._linea_casera(240, "Queso cottage").lower()
+    assert "240 g" not in cdc._linea_casera(240, "Queso cottage")
+    assert "taza" in cdc._linea_casera(40, "Avena").lower()
+    assert "1 taza" in cdc._linea_casera(80, "Avena").lower()
+    assert "clara" in cdc._linea_casera(150, "Clara de huevo").lower()
+    assert "1 cucharada" in cdc._linea_casera(15, "Maní").lower()
+    assert "puñado" in cdc._linea_casera(28, "Maní").lower()
+    assert "aguacate" in cdc._linea_casera(40, "Aguacate").lower()
+    assert "aguacate" in cdc._linea_casera(70, "Aguacate").lower()
+    assert "2 huevos" in cdc._linea_casera(110, "Huevo").lower()
+
+    for gramaje, nombre in [
+        (240, "Queso cottage"),
+        (40, "Avena"),
+        (150, "Clara de huevo"),
+        (15, "Maní"),
+        (28, "Maní"),
+        (40, "Aguacate"),
+        (70, "Aguacate"),
+        (110, "Huevo"),
+    ]:
+        assert "nevera" not in cdc._linea_casera(gramaje, nombre).lower()
+
+
+def test_exclusion_semantica_y_gustos_en_rutina_y_catalogo(monkeypatch):
+    import coach_day_context as cdc
+    import rutina_del_coach
+
+    turno_previo = [
+        "¿Qué te parece arrancar mañana con plátano maduro hervido, 2 huevos y queso derretido, uno de tus desayunos habituales?"
+    ]
+    assert rutina_del_coach.plato_coincide_con_exclusion(
+        "Plátano maduro con huevo y queso", turno_previo
+    )
+    assert not rutina_del_coach.plato_coincide_con_exclusion(
+        "Avena con claras y maní", turno_previo
+    )
+
+    rutina_fake = {
+        "por_franja": {
+            "desayuno": [
+                {
+                    "nombre": "Plátano maduro hervido con 2 huevos y queso derretido",
+                    "count": 5,
+                    "kcal": 458,
+                    "proteina_g": 20,
+                    "habitual": True,
+                },
+                {
+                    "nombre": "Avena cocida con claras y mantequilla de maní",
+                    "count": 3,
+                    "kcal": 420,
+                    "proteina_g": 24,
+                    "habitual": True,
+                },
+            ]
+        },
+        "habitos": {"resumen_prompt": "huevos, plátano maduro, avena"},
+        "gustos_facts": [],
+    }
+    monkeypatch.setattr(
+        rutina_del_coach,
+        "obtener_rutina_usuario",
+        lambda uid, consumed_today=None: rutina_fake,
+    )
+
+    obj = {"kcal": 450, "protein_g": 28}
+    bloque = rutina_del_coach.formatear_rutina_para_propuesta(
+        "u-test",
+        "desayuno",
+        objetivo=obj,
+        excluir=turno_previo,
+        pidio_propuesta_nueva=True,
+    )
+    assert (
+        "⛔ YA PROPUESTO EN ESTE CHAT (PROHIBIDO REPETIRLO): "
+        "«Plátano maduro hervido con 2 huevos y queso derretido»"
+    ) in bloque
+    assert "Avena cocida con claras y mantequilla de maní" in bloque
+    assert "nevera" not in bloque.lower()
+
+    # Si su único plato habitual ya se propuso en el turno anterior, manda directo al catálogo
+    rutina_solo_uno = {
+        "por_franja": {"desayuno": [rutina_fake["por_franja"]["desayuno"][0]]},
+        "habitos": {},
+        "gustos_facts": [],
+    }
+    monkeypatch.setattr(
+        rutina_del_coach,
+        "obtener_rutina_usuario",
+        lambda uid, consumed_today=None: rutina_solo_uno,
+    )
+    bloque_solo = rutina_del_coach.formatear_rutina_para_propuesta(
+        "u-test",
+        "desayuno",
+        objetivo=obj,
+        excluir=turno_previo,
+        pidio_propuesta_nueva=True,
+    )
+    assert "⛔ YA PROPUESTO EN ESTE CHAT (PROHIBIDO REPETIRLO)" in bloque_solo
+    assert "opción nº 1 del catálogo de abajo" in bloque_solo
+    assert "nevera" not in bloque_solo.lower()
+
+    propuestas_filtradas = cdc.proponer_comidas(
+        {},
+        "desayuno",
+        obj,
+        excluir=turno_previo,
+        gustos_tokens={"avena", "claras", "mani", "huevos"},
+    )
+    assert propuestas_filtradas
+    for p in propuestas_filtradas:
+        assert not rutina_del_coach.plato_coincide_con_exclusion(p["name"], turno_previo)
+
+    texto_propuestas = cdc.formatear_propuestas(
+        propuestas_filtradas,
+        "desayuno",
+        obj,
+        con_nevera=False,
+        nevera_activa=False,
+        rutina_franja_txt=bloque,
+        es_para_manana=True,
+        usar_medidas_caseras=True,
+        pidio_propuesta_nueva=True,
+    )
+    assert "Porción casera aprox.:" in texto_propuestas
+    assert "⛔ YA PROPUESTO EN ESTE CHAT (PROHIBIDO REPETIRLO)" in texto_propuestas
+    assert "nevera" not in texto_propuestas.lower()
+
+
+def test_dame_algo_tu_propaga_contextvar_y_bloquea_plato_repetido():
+    from langchain_core.messages import AIMessage, HumanMessage
+    import agent
+    import tools
+
+    msgs = [
+        HumanMessage(content="Hola"),
+        AIMessage(
+            content=(
+                "¿Qué te parece arrancar mañana con plátano maduro hervido, "
+                "2 huevos y queso derretido, uno de tus desayunos habituales?"
+            )
+        ),
+        HumanMessage(content="Dame algo tu"),
+    ]
+
+    excluir_ctx, pidio_nueva = tools._extraer_contexto_turno_propuesta(msgs)
+    assert pidio_nueva is True
+    assert excluir_ctx
+    assert any("plátano" in x.lower() for x in excluir_ctx)
+
+    captured = {}
+
+    class _DummyTool:
+        def invoke(self, args):
+            captured["messages"] = list(tools._CURRENT_CHAT_MESSAGES.get([]))
+            captured["args"] = args
+            return "ok"
+
+    res = agent._invoke_tool_with_chat_context(
+        _DummyTool(),
+        "proponer_comida",
+        {"meal_type": "desayuno"},
+        msgs,
+    )
+    assert res == "ok"
+    assert captured["messages"] == msgs
+    assert tools._CURRENT_CHAT_MESSAGES.get([]) == []
+
+    class _FailingTool:
+        def invoke(self, args):
+            assert tools._CURRENT_CHAT_MESSAGES.get([]) == msgs
+            raise RuntimeError("boom")
+
+    try:
+        agent._invoke_tool_with_chat_context(_FailingTool(), "dummy", {}, msgs)
+        assert False, "Debió propagar RuntimeError"
+    except RuntimeError:
+        pass
+    assert tools._CURRENT_CHAT_MESSAGES.get([]) == []

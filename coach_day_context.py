@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
@@ -537,10 +538,10 @@ def cobertura_nevera(lineas, nevera_nombres) -> tuple:
 
 def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombres=None, excluir=None,
                      solo_nevera: bool = False, max_minutos: Optional[int] = None, n: int = 3,
-                     rotacion: int = 0) -> list:
+                     rotacion: int = 0, gustos_tokens: Optional[set] = None) -> list:
     """Hasta `n` comidas del registro de platos, escaladas a `objetivo`, verificadas (escáner culinario + backstop
     clínico) y ordenadas: primero las que pasan el tiempo pedido, después por cobertura de Nevera (si `solo_nevera` o
-    hay Nevera) y por ajuste de macros. Lista vacía si nada sirve — el llamador lo dice, no inventa."""
+    hay Nevera), afinidad con sus gustos aprendidos y ajuste de macros. Lista vacía si nada sirve."""
     import deterministic_day as dd
     import dish_registry as dr
     from constants import cultural_country_for_form_data, country_for_form_data
@@ -564,9 +565,21 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
                                    available_equipment=equipo)
     if not tids:
         return []
-    evitar = {dd._norm(x) for x in (excluir or []) if x}
+    excluir_list = [str(x) for x in (excluir or []) if str(x or "").strip()]
+    evitar = {dd._norm(x) for x in excluir_list}
 
-    # `elegir_plantillas` corta en el empate; aquí se quiere el ranking entero para poder reordenar por Nevera.
+    _match_exc = None
+    _toks_fn = None
+    if gustos_tokens is not None:
+        try:
+            from rutina_del_coach import plato_coincide_con_exclusion, _tokens_plato
+            _match_exc = plato_coincide_con_exclusion
+            _toks_fn = _tokens_plato
+        except Exception:
+            _match_exc = None
+            _toks_fn = None
+
+    # `elegir_plantillas` corta en el empate; aquí se quiere el ranking entero para poder reordenar por Nevera y gustos.
     lo, hi = dd._banda(franja)
     op, oc, of = (max(float(objetivo.get(k) or 0), 1.0) for k in ("protein_g", "carbs_g", "fats_g"))
     ok = float(objetivo.get("kcal") or 0)
@@ -575,6 +588,8 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
     for tid in tids:
         t = por_id.get(tid)
         if not t or dd._norm(t.get("name")) in evitar:
+            continue
+        if _match_exc and excluir_list and _match_exc(t.get("name") or "", excluir_list):
             continue
         base = dd._macros(dd._de_plantilla(t), catalogo)
         if not base or not base.get("kcal"):
@@ -620,16 +635,22 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
         except (TypeError, ValueError):
             minutos = None
         tiene, falta = cobertura_nevera(c["_lineas"], nevera_nombres)
+        n_afines = 0
+        if gustos_tokens and _toks_fn:
+            for _g_, _ing_nom in c.get("_lineas") or []:
+                if _toks_fn(_ing_nom) & gustos_tokens:
+                    n_afines += 1
         c.update({"_score": round(score_real, 4), "_minutos": minutos, "_tiene": tiene, "_falta": falta, "_tid": tid,
-                  "_factor": f})
+                  "_factor": f, "_afinidad": n_afines})
         armadas.append(c)
 
     def _orden(c):
         tarde = bool(max_minutos and c["_minutos"] and c["_minutos"] > int(max_minutos) * 1.25)
         n_falta = len(c["_falta"]) if nevera_nombres else 0
+        bonus = -0.06 * min(int(c.get("_afinidad") or 0), 3) if gustos_tokens else 0.0
         if solo_nevera:                       # lo pidió: la Nevera manda, y dentro de ella el ajuste de macros
-            return (tarde, n_falta, c["_score"])
-        return (tarde, c["_score"] + PENA_POR_INGREDIENTE_QUE_FALTA * n_falta)
+            return (tarde, n_falta, c["_score"] + bonus)
+        return (tarde, c["_score"] + bonus + PENA_POR_INGREDIENTE_QUE_FALTA * n_falta)
 
     armadas.sort(key=_orden)
     if rotacion and len(armadas) > 1:
@@ -668,9 +689,120 @@ def _linea_amigable(g: float, nombre: str) -> str:
     return f"{int(round(g / 5.0) * 5)} g de {nombre}"
 
 
+def _norm_casera(texto: str) -> str:
+    txt = unicodedata.normalize("NFKD", str(texto or "").lower())
+    return "".join(c for c in txt if not unicodedata.combining(c))
+
+
+def _a_unidad_simple(g: float, g_por_unidad: float, sing: str, plur: str, nombre: str = "") -> str:
+    ratio = float(g) / max(float(g_por_unidad), 1.0)
+    if ratio < 0.35:
+        lbl = f"1/4 de {sing}"
+    elif ratio < 0.65:
+        lbl = f"1/2 {sing}"
+    elif ratio < 0.88:
+        lbl = f"3/4 de {sing}"
+    else:
+        n = round(ratio * 2.0) / 2.0
+        n_txt = f"{int(n)}" if n.is_integer() else f"{n:g}"
+        unit = sing if n == 1 else plur
+        lbl = f"{n_txt} {unit}"
+    return f"{lbl} de {nombre}" if nombre else lbl
+
+
+def _a_tazas(g: float, g_por_taza: float, nombre: str) -> str:
+    ratio = float(g) / max(float(g_por_taza), 1.0)
+    if ratio < 0.20:
+        cdas = max(1, int(round(float(g) / (g_por_taza / 16.0))))
+        return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
+    fracs = (
+        (0.25, "1/4 taza"), (0.33, "1/3 taza"), (0.5, "1/2 taza"),
+        (0.67, "2/3 taza"), (0.75, "3/4 taza"), (1.0, "1 taza"),
+        (1.25, "1 1/4 tazas"), (1.5, "1 1/2 tazas"), (2.0, "2 tazas"),
+    )
+    if ratio <= 2.1:
+        etiq = min(fracs, key=lambda x: abs(x[0] - ratio))[1]
+        return f"{etiq} de {nombre}"
+    tazas = round(ratio * 2.0) / 2.0
+    txt = f"{int(tazas)}" if tazas.is_integer() else f"{tazas:g}"
+    return f"{txt} tazas de {nombre}"
+
+
+_TAZA_POR_ALIMENTO = (
+    (("cottage", "yogur", "yogurt", "requeson"), 225.0),
+    (("leche", "batida", "jugo"), 240.0),
+    (("avena",), 80.0),
+    (("arroz", "quinoa", "granola", "cereal"), 150.0),
+    (("espinaca", "lechuga", "rucula"), 35.0),
+    (("lechoza", "papaya", "sandia", "pina", "fresa", "melon", "brocoli", "vegetal",
+      "ensalada", "habichuela", "lenteja", "garbanzo", "maiz"), 150.0),
+)
+
+_UNIDAD_POR_ALIMENTO = (
+    (("casabe",), 35.0, "pieza", "piezas", True),
+    (("pan", "tostada"), 30.0, "rebanada", "rebanadas", True),
+    (("tortilla", "arepa"), 40.0, "unidad", "unidades", True),
+    (("queso", "jamon", "pavo"), 28.0, "lonja", "lonjas", True),
+    (("aguacate",), 140.0, "aguacate mediano", "aguacates medianos", False),
+    (("platano",), 180.0, "plátano mediano", "plátanos medianos", False),
+    (("guineo", "banano", "manzana", "pera", "naranja", "tomate"), 120.0, "unidad mediana", "unidades medianas", True),
+    (("atun",), 115.0, "lata", "latas", True),
+)
+
+
+def _linea_casera(g: float, nombre: str) -> str:
+    """Convierte gramos en crudo a porciones cotidianas comprensibles para un humano."""
+    g = float(g)
+    if g < 1.5:
+        return f"una pizca de {nombre}"
+    nom_l = _norm_casera(nombre)
+    if "clara" in nom_l and "huevo" in nom_l:
+        n = max(1, int(round(g / 33.0)))
+        return f"{n} {'clara' if n == 1 else 'claras'} de huevo"
+    if "huevo" in nom_l:
+        n = max(1, int(round(g / 55.0)))
+        return f"{n} {'huevo' if n == 1 else 'huevos'}"
+    for claves, g_taza in _TAZA_POR_ALIMENTO:
+        if any(k in nom_l for k in claves):
+            return _a_tazas(g, g_taza, nombre)
+    if "aceite" in nom_l:
+        if g < 10.0:
+            cdtas = max(1, int(round(g / 5.0)))
+            return f"{cdtas} {'cucharadita' if cdtas == 1 else 'cucharaditas'} de {nombre}"
+        cdas = max(1, int(round(g / 14.0)))
+        return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
+    if any(k in nom_l for k in ("mantequilla", "crema de mani", "miel", "mermelada", "semilla", "chia", "linaza")):
+        cdas = max(1, int(round(g / 16.0)))
+        return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
+    if any(k in nom_l for k in ("mani", "almendra", "nuez", "nueces", "cacahuate")):
+        if 22.0 <= g <= 38.0:
+            return f"1 puñado de {nombre}"
+        cdas = max(1, int(round(g / 12.0)))
+        return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
+    for claves, g_u, sing, plur, con_nombre in _UNIDAD_POR_ALIMENTO:
+        if any(k in nom_l for k in claves):
+            return _a_unidad_simple(g, g_u, sing, plur, nombre if con_nombre else "")
+    if any(k in nom_l for k in ("pollo", "pechuga", "res", "cerdo", "pescado", "salmon", "tilapia", "chivo", "lomo", "bistec")):
+        if g < 95.0:
+            return f"1 porción pequeña de {nombre}"
+        if g <= 145.0:
+            return f"1 porción mediana de {nombre}"
+        if g <= 210.0:
+            return f"1 porción grande de {nombre}"
+        return f"2 porciones medianas de {nombre}"
+    if g < 8.0:
+        return f"1 cucharadita de {nombre}"
+    if g < 20.0:
+        return f"1 cucharada de {nombre}"
+    if g <= 80.0:
+        return f"1/2 porción de {nombre}"
+    return f"1 porción de {nombre}"
+
+
 def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_nevera: bool, contexto: str = "",
                          solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True,
-                         rutina_franja_txt: str = "", es_para_manana: bool = False) -> str:
+                         rutina_franja_txt: str = "", es_para_manana: bool = False,
+                         usar_medidas_caseras: bool = False, pidio_propuesta_nueva: bool = False) -> str:
     """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo.
 
     [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a mano o sola): ninguna línea
@@ -710,6 +842,8 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         lineas.append(f"{i}) {c['name']} — {c['calories']} kcal · proteína {c['protein']} · carbohidratos {c['carbs']} · "
                       f"grasas {c['fats']}{t}")
         lineas.append("   Ingredientes (en crudo): " + "; ".join(_linea_amigable(g, nom) for g, nom in c["_lineas"]))
+        if usar_medidas_caseras and c.get("_lineas"):
+            lineas.append("   Porción casera aprox.: " + "; ".join(_linea_casera(g, nom) for g, nom in c["_lineas"]))
         if con_nevera:
             if c["_falta"]:
                 lineas.append(f"   Nevera: tiene {len(c['_tiene'])} de {len(c['_tiene']) + len(c['_falta'])}; le falta: "
@@ -726,25 +860,49 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
             lineas.append(f"   Si se la come: {txt}.")
         if i == 1 and c.get("recipe"):
             lineas.append("   Pasos: " + " ".join(f"{j}. {p}" for j, p in enumerate(c["recipe"], start=1)))
-    if rutina_limpia:
+
+    modo_default = not (rutina_limpia or es_para_manana or usar_medidas_caseras or pidio_propuesta_nueva)
+    if modo_default:
+        lineas.append(
+            "(Para el asistente: presenta la nº 1 con sus kcal y proteína y, en una frase, cómo deja su día (la línea «Si se "
+            "la come», tal cual — no hagas la resta tú). Da los ingredientes con sus gramos; los PASOS solo si pidió receta o cómo se hace, "
+            "resumidos sin cambiarles el sentido ni añadir ingredientes. Nombra la nº 2 como alternativa en media frase. "
+            "No cambies cifras ni gramos. "
+            + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
+            + "NO la registres: todavía no se la ha comido "
+            "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
+            "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
+            "propuestos.)"
+        )
+        return "\n".join(lineas)
+
+    sin_activos_rutina = bool(
+        rutina_limpia and "YA PROPUESTO EN ESTE CHAT" in rutina_limpia
+        and "ya fueron propuestos en el turno anterior" in rutina_limpia
+    )
+    if pidio_propuesta_nueva or sin_activos_rutina:
+        apertura = (
+            "(Para el asistente: el usuario pidió una PROPUESTA NUEVA y distinta; PROHIBIDO repetir cualquier plato marcado "
+            "con «⛔ YA PROPUESTO EN ESTE CHAT». Propón directamente la opción nº 1 del catálogo (o un plato de su rutina NO "
+            "descartado arriba) usando su «Porción casera aprox.» y sus kcal y proteína."
+        )
+    elif rutina_limpia:
         apertura = (
             "(Para el asistente: PRIORIZA primero la rutina/plato real del usuario de arriba (en porciones caseras, "
             "con su ajuste o proteína extra si hace falta, y SIN recitar gramos en crudo salvo que él pida receta o "
-            "gramaje), y nombra la nº 1 del catálogo como alternativa práctica para variar."
+            "gramaje), y nombra la nº 1 del catálogo en medidas caseras como alternativa práctica para variar."
         )
     else:
-        apertura = "(Para el asistente: presenta la nº 1 con sus kcal y proteína"
+        apertura = (
+            "(Para el asistente: presenta directamente la nº 1 con su «Porción casera aprox.» y sus kcal y proteína "
+            "(sin recitar gramos en crudo salvo que él pida receta o gramaje)"
+        )
 
     if es_para_manana:
-        pref = "" if rutina_limpia else "."
+        pref = "" if (rutina_limpia or pidio_propuesta_nueva or sin_activos_rutina) else "."
         cierre_dia = (
             f"{pref} OJO: esta propuesta es para MAÑANA / su próxima jornada; indica solo cuánto aporta el plato, y "
             "PROHIBIDO decir «si lo comes te quedarían X kcal hoy» o restarlo de un presupuesto futuro. "
-        )
-    elif not rutina_limpia:
-        cierre_dia = (
-            " y, en una frase, cómo deja su día (la línea «Si se "
-            "la come», tal cual — no hagas la resta tú). "
         )
     else:
         cierre_dia = (
@@ -752,13 +910,11 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         )
 
     cuerpo = (
-        ("Da los ingredientes con sus gramos; los PASOS solo si pidió receta o cómo se hace, "
-         if not rutina_limpia
-         else "Los ingredientes en gramos y los PASOS solo si pidió receta, cómo se hace o pesos exactos, ")
-        + "resumidos sin cambiarles el sentido ni añadir ingredientes. "
-        + ("Nombra la nº 2 como alternativa en media frase. " if not rutina_limpia else "")
-        + "No cambies cifras ni gramos. "
-        + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")   # [P1-NEVERA-OPCIONAL · 2026-09-23]
+        "Describe el plato recomendado y 1 alternativa breve usando las medidas caseras y sus ~kcal y ~g de proteína "
+        "(los gramos en crudo y los PASOS solo si pidió receta, cómo se hace o pesos exactos). "
+        "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?»: da la propuesta práctica completa de una vez. "
+        "No cambies cifras ni macros. "
+        + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
         + "NO la registres: todavía no se la ha comido "
         "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
         "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "

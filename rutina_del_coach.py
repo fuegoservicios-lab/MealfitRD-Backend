@@ -77,6 +77,20 @@ _GUSTO_FACT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_METODOS_Y_CONTEXTO = frozenset({
+    "hervido", "hervida", "hervidos", "hervidas",
+    "frito", "frita", "fritos", "fritas",
+    "sancochado", "sancochada", "guisado", "guisada",
+    "derretido", "derretida", "asado", "asada",
+    "plancha", "horno", "salteado", "salteada",
+    "revuelto", "revueltos", "revuelta", "revueltas",
+    "tostado", "tostada", "picado", "picada",
+    "desayuno", "almuerzo", "cena", "merienda",
+    "habitual", "habituales", "manana", "hoy", "ayer",
+    "opcion", "alternativa", "plato", "idea", "arrancar",
+    "receta", "gusto", "favorito", "favorita",
+})
+
 
 def activo() -> bool:
     """Knob `MEALFIT_COACH_RUTINA_GUSTOS` (default True)."""
@@ -399,6 +413,59 @@ def obtener_rutina_usuario(
         return {}
 
 
+def plato_coincide_con_exclusion(
+    nombre_plato: str,
+    excluir_textos: Optional[List[str]],
+) -> bool:
+    """True si `nombre_plato` coincide por nombre o por ingredientes base (≥65%) con alguna exclusión."""
+    norm_plato = _ascii(nombre_plato)
+    if not norm_plato or not excluir_textos:
+        return False
+    toks_plato = _tokens_plato(nombre_plato)
+    food_plato = toks_plato - _METODOS_Y_CONTEXTO
+    if not food_plato:
+        food_plato = toks_plato
+    if not food_plato:
+        return False
+    min_req = 2 if len(food_plato) >= 2 else 1
+
+    for raw_exc in excluir_textos:
+        norm_exc = _ascii(raw_exc)
+        if not norm_exc:
+            continue
+        if len(norm_plato) >= 4 and norm_plato in norm_exc:
+            return True
+        food_exc = _tokens_plato(raw_exc) - _METODOS_Y_CONTEXTO
+        if not food_exc:
+            food_exc = _tokens_plato(raw_exc)
+        if not food_exc:
+            continue
+        inter = len(food_plato & food_exc)
+        if inter >= min_req and (inter / float(len(food_plato))) >= 0.65:
+            return True
+    return False
+
+
+def extraer_tokens_gustos_usuario(
+    user_id: Optional[str],
+    consumed_today: Any = None,
+) -> set[str]:
+    """Tokens de alimentos reales que el usuario consume o prefiere según su historial."""
+    rutina = obtener_rutina_usuario(user_id, consumed_today=consumed_today)
+    if not rutina:
+        return set()
+    tokens: set[str] = set()
+    for slot in _SLOTS_ORDEN:
+        for p in (rutina.get("por_franja") or {}).get(slot) or []:
+            tokens.update(_tokens_plato(p.get("nombre") or "") - _METODOS_Y_CONTEXTO)
+    resumen_hab = str((rutina.get("habitos") or {}).get("resumen_prompt") or "")
+    if resumen_hab:
+        tokens.update(_tokens_plato(resumen_hab) - _METODOS_Y_CONTEXTO)
+    for fact in rutina.get("gustos_facts") or []:
+        tokens.update(_tokens_plato(fact) - _METODOS_Y_CONTEXTO)
+    return tokens
+
+
 def _sugerencia_plato_para_objetivo(plato: Dict[str, Any], objetivo: Optional[dict]) -> str:
     nombre = str(plato.get("nombre") or "").strip()
     k_media = float(plato.get("kcal") or 0.0)
@@ -442,6 +509,8 @@ def formatear_rutina_para_propuesta(
     franja: str,
     objetivo: Optional[dict] = None,
     consumed_today: Any = None,
+    excluir: Optional[List[str]] = None,
+    pidio_propuesta_nueva: bool = False,
 ) -> str:
     """Bloque compacto de rutina real para `proponer_comida` según la franja y el objetivo.
 
@@ -456,13 +525,24 @@ def formatear_rutina_para_propuesta(
     except Exception:
         slot = str(franja or "").strip().lower()
 
+    excluidos_list = [str(x) for x in (excluir or []) if str(x or "").strip()]
     por_franja = rutina.get("por_franja") or {}
-    platos_franja = list(por_franja.get(slot) or [])[:2]
+    platos_franja = list(por_franja.get(slot) or [])[:3]
+
+    activos: list[Dict[str, Any]] = []
+    descartados: list[Dict[str, Any]] = []
+    for p in platos_franja:
+        if excluidos_list and plato_coincide_con_exclusion(p.get("nombre") or "", excluidos_list):
+            descartados.append(p)
+        else:
+            activos.append(p)
+    activos = activos[:2]
 
     frecuentes_global: list[Dict[str, Any]] = []
     if not platos_franja:
         candidatos = [
-            p for s in _SLOTS_ORDEN for p in (por_franja.get(s) or []) if p.get("habitual")
+            p for s in _SLOTS_ORDEN for p in (por_franja.get(s) or [])
+            if p.get("habitual") and not (excluidos_list and plato_coincide_con_exclusion(p.get("nombre") or "", excluidos_list))
         ]
         candidatos.sort(key=lambda x: (x.get("count") or 0, x.get("kcal") or 0), reverse=True)
         frecuentes_global = candidatos[:2]
@@ -474,13 +554,18 @@ def formatear_rutina_para_propuesta(
         if "nevera" not in _ascii(g)
     ]
 
-    if not platos_franja and not frecuentes_global and not gustos_facts:
+    if not activos and not descartados and not frecuentes_global and not gustos_facts:
         return ""
 
-    lineas = [f"RUTINA REAL DEL USUARIO EN {_SLOT_ETIQUETA.get(slot, slot.upper())}:"]
-    if platos_franja:
-        for p in platos_franja:
+    sufijo_nueva = " (el usuario pide una PROPUESTA NUEVA/DISTINTA del coach)" if pidio_propuesta_nueva else ""
+    lineas = [f"RUTINA REAL DEL USUARIO EN {_SLOT_ETIQUETA.get(slot, slot.upper())}{sufijo_nueva}:"]
+    for d in descartados:
+        lineas.append(f"- ⛔ YA PROPUESTO EN ESTE CHAT (PROHIBIDO REPETIRLO): «{d['nombre']}».")
+    if activos:
+        for p in activos:
             lineas.append(_sugerencia_plato_para_objetivo(p, objetivo))
+    elif descartados:
+        lineas.append("- Sus platos habituales de esta franja ya fueron propuestos en el turno anterior; propón directamente la opción nº 1 del catálogo de abajo.")
     elif frecuentes_global:
         desc = " · ".join(
             f"«{p['nombre']}» ({p['count']}x, ~{p['kcal']} kcal)"

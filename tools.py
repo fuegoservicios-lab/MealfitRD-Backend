@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 import os
 import logging
 import json
@@ -6568,6 +6569,57 @@ def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
     return ctx
 
 
+_CURRENT_CHAT_MESSAGES: ContextVar[list] = ContextVar("_CURRENT_CHAT_MESSAGES", default=[])
+
+_RE_PIDE_PROPUESTA_NUEVA = re.compile(
+    r"\b(?:dame\s+algo\s+tu|propon(?:me)?\s+algo\s+tu|que\s+me\s+(?:recomiendas|sugieres)\s+tu|"
+    r"otra\s+opcion|dame\s+otra|una\s+alternativa|algo\s+(?:diferente|distinto|nuevo)|"
+    r"no\s+quiero\s+eso|cambialo|cambiame\s+eso|sorprendeme)\b",
+    re.IGNORECASE,
+)
+
+
+def _extraer_contexto_turno_propuesta(messages: Optional[list] = None) -> tuple[list[str], bool]:
+    """Lee del historial activo del turno si el usuario pide una propuesta nueva y qué ofreció el coach antes."""
+    msgs = list(messages if messages is not None else (_CURRENT_CHAT_MESSAGES.get() or []))
+    if not msgs:
+        return [], False
+
+    def _msg_role(m) -> str:
+        if isinstance(m, dict):
+            return str(m.get("type") or m.get("role") or "").lower()
+        return str(getattr(m, "type", None) or getattr(m, "role", None) or "").lower()
+
+    def _msg_text(m) -> str:
+        c = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+        if isinstance(c, list):
+            return " ".join(str(p.get("text", "") if isinstance(p, dict) else p) for p in c).strip()
+        return str(c or "").strip()
+
+    last_user_idx = -1
+    last_user_txt = ""
+    for idx in range(len(msgs) - 1, -1, -1):
+        if _msg_role(msgs[idx]) in ("human", "user"):
+            last_user_idx = idx
+            last_user_txt = _msg_text(msgs[idx])
+            break
+
+    norm_user = strip_accents(last_user_txt or "")
+    pidio_nueva = bool(norm_user and _RE_PIDE_PROPUESTA_NUEVA.search(norm_user))
+
+    textos_ai_previos: list[str] = []
+    limite = last_user_idx if last_user_idx >= 0 else len(msgs)
+    for idx in range(limite - 1, -1, -1):
+        if _msg_role(msgs[idx]) in ("ai", "assistant"):
+            txt = _msg_text(msgs[idx])
+            if txt:
+                textos_ai_previos.append(txt)
+                if len(textos_ai_previos) >= 2:
+                    break
+
+    return textos_ai_previos, pidio_nueva
+
+
 @tool
 def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = None, proteina_objetivo: int = None,
                     solo_con_nevera: bool = False, excluir: list[str] = None, max_minutos: int = None) -> str:
@@ -6631,12 +6683,21 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
             return ("No tengo su meta de calorías (su perfil no trae peso, estatura y edad, y no hay plan vigente). "
                     "(Para el asistente: pregúntale cuántas calorías quiere para esa comida y vuelve a llamar esta "
                     "herramienta con `kcal_objetivo`.)")
+        textos_ai_previos, pidio_nueva = _extraer_contexto_turno_propuesta()
+        excluir_total = [str(x) for x in (excluir or []) if str(x or "").strip()] + textos_ai_previos
+        gustos_tokens: set[str] = set()
+        try:
+            from rutina_del_coach import extraer_tokens_gustos_usuario
+            gustos_tokens = set(extraer_tokens_gustos_usuario(user_id, consumed_today=diario_efectivo) or set())
+        except Exception as _gt_err:
+            logger.debug(f"[proponer_comida] gustos_tokens omitidos: {_gt_err!r}")
         _comido = [str(m.get("meal_name")) for m in ctx["diario"] if isinstance(m, dict) and m.get("meal_name")]
         from datetime import date as _date_r
         propuestas = cdc.proponer_comidas(
-            ctx["hp"], franja, objetivo, nevera_nombres=ctx["nevera"], excluir=list(excluir or []) + _comido,
+            ctx["hp"], franja, objetivo, nevera_nombres=ctx["nevera"], excluir=excluir_total + _comido,
             solo_nevera=bool(solo_con_nevera), max_minutos=max_minutos, n=3,
-            rotacion=_date_r.fromisoformat(_local_date_str_for_user(user_id)).toordinal())
+            rotacion=_date_r.fromisoformat(_local_date_str_for_user(user_id)).toordinal(),
+            gustos_tokens=gustos_tokens)
         contexto = ""
         falta_fmt = None if es_para_manana else falta
         if es_para_manana:
@@ -6649,7 +6710,8 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
         try:
             from rutina_del_coach import formatear_rutina_para_propuesta
             rutina_txt = formatear_rutina_para_propuesta(
-                user_id, franja, objetivo, consumed_today=diario_efectivo
+                user_id, franja, objetivo, consumed_today=diario_efectivo,
+                excluir=excluir_total, pidio_propuesta_nueva=pidio_nueva,
             )
         except Exception as _rut_err:
             logger.debug(f"[proponer_comida] rutina_del_coach omitida: {_rut_err!r}")
@@ -6657,6 +6719,7 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
             propuestas, franja, objetivo, con_nevera=bool(ctx["nevera"]), contexto=contexto,
             solo_nevera=bool(solo_con_nevera), falta=falta_fmt, nevera_activa=_nevera_on,
             rutina_franja_txt=rutina_txt, es_para_manana=es_para_manana,
+            usar_medidas_caseras=True, pidio_propuesta_nueva=pidio_nueva,
         )
     except Exception as e:
         logger.error(f"❌ [TOOL] proponer_comida falló: {e}")

@@ -5986,6 +5986,26 @@ def _maybe_append_fast_tool_confirmation(
     return ai_confirm
 
 
+def _invoke_tool_with_chat_context(
+    t,
+    tool_name: str,
+    tool_args: dict,
+    messages: list,
+) -> str:
+    """Invoca un tool propagando los mensajes recientes del chat via ContextVar."""
+    from packaged_food_portions import guard as guard_packaged_portion
+    import tools as _tools
+
+    guard_res = guard_packaged_portion(tool_name, tool_args, messages)
+    if guard_res:
+        return guard_res
+    tok = _tools._CURRENT_CHAT_MESSAGES.set(messages or [])
+    try:
+        return t.invoke(tool_args)
+    finally:
+        _tools._CURRENT_CHAT_MESSAGES.reset(tok)
+
+
 def _exec_read_only_tool_call(
     tool_call: dict,
     trusted_uid: Optional[str],
@@ -6017,8 +6037,7 @@ def _exec_read_only_tool_call(
     try:
         t = tools_by_name.get(tool_name)
         if t is not None:
-            from packaged_food_portions import guard as guard_packaged_portion
-            tool_result = guard_packaged_portion(tool_name, tool_args, messages) or t.invoke(tool_args)
+            tool_result = _invoke_tool_with_chat_context(t, tool_name, tool_args, messages)
     except _PydanticValidationError as _val_err:
         _val_summary = str(_val_err)[:300]
         logger.warning(
@@ -6856,8 +6875,7 @@ def execute_tools(state: ChatState):
                 else:
                     for t in agent_tools:
                         if t.name == tool_name:
-                            from packaged_food_portions import guard as guard_packaged_portion
-                            tool_result = guard_packaged_portion(tool_name, tool_args, messages) or t.invoke(tool_args)
+                            tool_result = _invoke_tool_with_chat_context(t, tool_name, tool_args, messages)
                             # [P1-PLAN-LOTE-900] El cambio para la pantalla sale del resultado: el modelo no ve el JSON.
                             if isinstance(tool_result, str) and "<<AJUSTE_APP_JSON:" in tool_result:
                                 from ajustes_de_la_app import extraer_marcador
