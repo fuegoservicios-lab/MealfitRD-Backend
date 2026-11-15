@@ -1219,6 +1219,47 @@ def save_message(
     _save_message_insert_with_retry(session_id, role, content, user_id)
 
 
+def prune_unanswered_proactive_messages(session_id: str) -> int:
+    """Elimina avisos proactivos previos sin respuesta antes de guardar uno nuevo.
+
+    Si la sesión aún no tiene mensajes del usuario, poda los avisos anteriores (`role = 'model'`)
+    para que el nuevo momento actualice la conversación sin clonar ni apilar saludos viejos.
+    Si ya hubo charla, conserva la respuesta inmediata al último mensaje del usuario y poda
+    únicamente avisos posteriores encadenados sin respuesta. Fail-open ante errores de DB.
+    """
+    if not connection_pool or not session_id:
+        return 0
+    try:
+        rows = execute_sql_query(
+            "SELECT id::text AS id, role FROM public.agent_messages "
+            "WHERE session_id = %s ORDER BY created_at ASC, id ASC",
+            (str(session_id),),
+            fetch_all=True,
+        ) or []
+        if not rows:
+            return 0
+        last_user_idx = -1
+        for idx, row in enumerate(rows):
+            if row.get("role") == "user":
+                last_user_idx = idx
+        if last_user_idx == -1:
+            stale_ids = [str(r["id"]) for r in rows if r.get("role") == "model" and r.get("id")]
+        else:
+            trailing = rows[last_user_idx + 1:]
+            stale_ids = [str(r["id"]) for r in trailing[1:] if r.get("role") == "model" and r.get("id")]
+        if not stale_ids:
+            return 0
+        deleted = execute_sql_write(
+            "DELETE FROM public.agent_messages WHERE session_id = %s AND id::text = ANY(%s) RETURNING id::text AS id",
+            (str(session_id), stale_ids),
+            returning=True,
+        )
+        return len(deleted or [])
+    except Exception as e:
+        logger.warning(f"No se pudieron podar avisos previos sin respuesta en {session_id}: {e}")
+        return 0
+
+
 def should_seed_plan_messages(session_id: str, user_text: str, user_id: Optional[str]) -> bool:
     """[P1-CHAT-ORPHAN-SESSIONS · 2026-09-14] ¿Se siembra el par de mensajes de «plan generado»?
 

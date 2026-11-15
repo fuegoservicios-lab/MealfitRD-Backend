@@ -10,7 +10,7 @@ from db_core import connection_pool, execute_sql_query, execute_sql_write
 import uuid
 # [P1-PLAN-LOTE-159] `get_or_create_session`: el aviso de hoy abre el chat de hoy cuando la
 # última conversación es de un día anterior.
-from db_chat import save_message, get_recent_messages, get_or_create_session
+from db_chat import save_message, get_recent_messages, get_or_create_session, prune_unanswered_proactive_messages
 from db import get_consumed_meals_today, get_user_profile, user_tz_offset_min
 from aviso_del_dia import bloque_del_dia  # [P1-PLAN-LOTE-413]
 from fact_extractor import get_embedding
@@ -1684,6 +1684,8 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # [P1-PLAN-LOTE-161] El chat de HOY se elige aquí, cuando ya hay un aviso que escribir: si no toca
                 # avisar, no se abre ninguna conversación.
                 session_id = _sesion_del_dia_para_aviso(session_id, user_id, _now_utc, _user_tz_off)
+                # Reemplazar avisos previos sin respuesta para que el nuevo momento no clone mensajes
+                prune_unanswered_proactive_messages(session_id)
                 # Enviar a la base de datos con rol de modelo
                 save_message(session_id, "model", content)
                 logger.info(f"✅ [CRON] Mensaje proactivo enviado a {session_id} -> '{content[:40]}...'")
