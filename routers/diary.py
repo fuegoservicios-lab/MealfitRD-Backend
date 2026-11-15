@@ -636,8 +636,12 @@ async def api_diary_upload(
             logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
             # [P1-PLAN-LOTE-628] el país del perfil: la foto se lee con el sentido que tiene allí (en RD, nada cambia)
             from pais_del_estimador import pais_del_usuario
+            from habitos_de_la_foto import obtener_habitos_foto, vision_habitos_scope
             _t_pais = time.perf_counter()
-            _pais = await pais_del_usuario(verified_user_id)
+            _pais, _habitos = await asyncio.gather(
+                pais_del_usuario(verified_user_id),
+                asyncio.to_thread(obtener_habitos_foto, actual_user_id),
+            )
             _fases_ms["pais_ms"] = round((time.perf_counter() - _t_pais) * 1000.0, 2)
             # [P1-DECISION-TRIAGE · 2026-11-11] BB-077: Gemini Decision 1 mira si la foto es comida. En `guard` va ANTES
             # de la visión (tope 0,4 s) y, si es casi seguro que no lo es, la visión no se gasta; en `shadow` corre en
@@ -647,21 +651,22 @@ async def api_diary_upload(
             _dt_media = {"data": file_bytes, "mime_type": sniffed_ct}
             _dt_res = None
             _t_vis = time.perf_counter()
-            if _dt_modo == "guard":
-                _t_tr = time.perf_counter()
-                _dt_res = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
-                _fases_ms["triage_ms"] = round((time.perf_counter() - _t_tr) * 1000.0, 2)
-                if _dt.foto_rechazada(_dt_res):
-                    _vr = _dt.payload_no_comida()
+            with vision_habitos_scope(_habitos):
+                if _dt_modo == "guard":
+                    _t_tr = time.perf_counter()
+                    _dt_res = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
+                    _fases_ms["triage_ms"] = round((time.perf_counter() - _t_tr) * 1000.0, 2)
+                    if _dt.foto_rechazada(_dt_res):
+                        _vr = _dt.payload_no_comida()
+                    else:
+                        _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
+                elif _dt_modo == "shadow":
+                    _dt_res, _vr = await asyncio.gather(
+                        _dt.run_triage_async(media=_dt_media, user_id=actual_user_id),
+                        process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais),
+                    )
                 else:
                     _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
-            elif _dt_modo == "shadow":
-                _dt_res, _vr = await asyncio.gather(
-                    _dt.run_triage_async(media=_dt_media, user_id=actual_user_id),
-                    process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais),
-                )
-            else:
-                _vr = await process_image_with_vision(file_bytes, aclaracion=aclaracion, pais=_pais)
             _fases_ms["vision_ms"] = round((time.perf_counter() - _t_vis) * 1000.0, 2)
             return _dt_modo, _dt_res, _vr
 

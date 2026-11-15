@@ -186,12 +186,37 @@ def aplicar_respuestas_multiples(descripcion: str, respuesta: str) -> tuple[str,
             reemplazos.append((supuesto, r_item))
             continue
 
+        # Intento sin prefijo "solo/con " (ej: "Solo jamón" -> "jamón") ni participios
+        sin_solo = re.sub(r"^(?:solo|sola|con)\s+", "", sin_num, flags=re.IGNORECASE).strip()
+        if sin_solo and sin_solo.lower() != sin_num.lower() and re.search(r"\b" + re.escape(sin_solo) + r"\b", pre, flags=re.IGNORECASE):
+            pre = re.sub(r"\b" + re.escape(sin_solo) + r"\b", r_item.lower(), pre, count=1, flags=re.IGNORECASE)
+            reemplazos.append((supuesto, r_item))
+            continue
+
         # Intento sin adjetivos participios (ej: "bollitos de yuca")
         base = re.sub(r"\b(fritos|fritas|dorados|doradas|asados|asadas|hervidos|hervidas|guisados|guisadas)\b", "", sin_num).strip()
         if base and re.search(re.escape(base), pre, flags=re.IGNORECASE):
             pre = re.sub(re.escape(base), r_item.lower(), pre, flags=re.IGNORECASE)
             reemplazos.append((supuesto, r_item))
             continue
+
+        # Intento específico para huevos cuando `pre` omitió la cantidad (ej. "huevos hervidos" vs "3 huevos enteros")
+        if "huevo" in s_norm and re.search(r"\b(?:\d+\s+)?huevos?(?:\s+(?:enteros?|hervidos?|fritos?|revueltos?|pochados?))?\b", pre, flags=re.IGNORECASE):
+            pre = re.sub(
+                r"\b(?:\d+\s+)?huevos?(?:\s+(?:enteros?|hervidos?|fritos?|revueltos?|pochados?))?\b",
+                r_item.lower(),
+                pre,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            reemplazos.append((supuesto, r_item))
+            continue
+
+        # Fallback seguro: si el supuesto no aparecía literal en `pre`, dejar explícita la aclaración del usuario
+        pre = pre.rstrip()
+        sep = " " if pre.endswith((".", ",", ";")) else ". "
+        pre = f"{pre}{sep}(Aclarado: {r_item.lower()}). "
+        reemplazos.append((supuesto, r_item))
 
     # Ajustes gramaticales comunes de concordancia
     for _, r_item in reemplazos:

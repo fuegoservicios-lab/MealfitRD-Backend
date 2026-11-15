@@ -346,21 +346,30 @@ _MEAL_VISION_PROMPT = (
     "mas grande y grueso, de cascara dura (verde o maduro), y se cocina. Si "
     "es la fruta dulce de comer cruda, llamala 'guineo'. "
     # [P1-PLAN-LOTE-305 · 2026-09-25] El dueño: «lo que es obvio debe apuntarlo de una vez; la duda, preguntarla».
-    "DUDAS (solo 'plato'): en 'dudas' pon como MAXIMO 2 cosas que NO se pueden saber mirando la foto Y que cambian "
-    "mucho las calorias: una cantidad que no se puede contar (ej: huevos revueltos fusionados -> 'Cuantos huevos "
+    "DUDAS (solo 'plato'): en 'dudas' pon como MAXIMO 2 cosas (o hasta 3 si hay 3 componentes distintos ambiguos) que NO se pueden saber mirando la foto Y que cambian "
+    "mucho las calorias: rellenos ocultos dentro de panes/wraps/empanadas, una cantidad que no se puede contar (ej: huevos revueltos fusionados -> 'Cuantos huevos "
     "eran?'; un bowl hondo de arroz -> 'Cuanto arroz, 1 taza o 2?'), un alimento que se confunde con otro (queso "
     "blanco o tofu, pollo o cerdo) o la grasa de coccion que no se ve si es mucha (frito vs. a la plancha). Cada una "
     "con 'sobre' (el 'name' EXACTO del item de 'items' al que se refiere, copiado tal cual) y 'pregunta' (UNA pregunta "
     "corta y concreta, en espanol dominicano). NO pongas dudas "
     "de lo que se ve claro (2 rebanadas de pan, un guineo, 1 huevo frito entero) ni de detalles que no cambian la cuenta "
     "(la sal, el oregano). Aunque haya dudas, estima igual con la opcion MAS probable: el usuario la confirma. "
-    "HUEVOS CORTADOS Y CLARAS: si los huevos hervidos estan cortados, recuerda que 2 mitades equivalen a 1 huevo entero. "
+    "HUEVOS CORTADOS Y CLARAS: si los huevos hervidos estan cortados, cuenta TODAS las mitades y divide entre 2 (ej: "
+    "8 mitades = 4 huevos enteros, 6 mitades = 3 huevos enteros); pon ese numero exacto como supuesta=true y en 'items'. "
     "Fijate si hay piezas sin yema (claras): en dietas saludables es frecuente comer claras solas o combinadas con huevos enteros. "
-    "Si dudas de la cantidad o de si son huevos enteros o claras, formula la duda permitiendo distinguir huevos enteros y claras "
-    "(ej: '2 enteros', '2 enteros y 2 claras', '3 claras', '3 enteros'). "
+    "Si dudas de la cantidad o de si son huevos enteros o claras, formula la duda permitiendo distinguir huevos enteros y claras alrededor del conteo real "
+    "(ej: si ves 8 mitades: '4 huevos enteros', '3 huevos enteros', '5 huevos enteros', 'Solo claras'). "
     "UNTABLES EN PAN/TOSTADAS: si hay pan con un untable blanco o crema, considera siempre 'queso cottage' (especialmente si se ve "
     "grumoso, con cuajada o textura cortada, tipico en fitness), 'queso crema' o 'mantequilla'. En las opciones de untables para tostadas "
     "incluye 'Queso cottage' si la textura no es totalmente lisa. "
+    "ALIMENTOS CERRADOS O CON RELLENO OCULTO (SANDWICHES, EMPAREDADOS, WRAPS, BURRITOS, AREPAS RELLENAS, EMPANADAS, PASTELONES): "
+    "si el alimento esta cerrado y no se ve todo su interior, NUNCA des por cerrado el relleno aunque asome jamon o queso por un borde. "
+    "Es PRIORIDAD #1 preguntar que lleva dentro o ademas de lo que asoma (ej: 'Que llevan los sandwiches por dentro?' o 'Que llevan ademas del jamon?'), "
+    "con opciones reales de rellenos y untables (ej: 'Jamon y queso', 'Cottage y mantequilla de mani', 'Solo jamon', 'Huevo y queso', 'Mantequilla de mani'). "
+    "PROHIBIDO HACER PREGUNTAS TONTAS O VISUALMENTE OBVIAS: NO preguntes 'Con o sin sirope / ketchup / miel / salsa?' cuando los pancakes, "
+    "tostadas o carnes se ven claramente secos en la foto. Si hay pancakes o waffles secos y cabe una duda util, pregunta de que es la masa "
+    "('Harina normal', 'Avena y guineo', 'Con proteina') en lugar de sirope invisible. Orden de prioridad: 1) Rellenos ocultos en alimentos cerrados, "
+    "2) Identidad o mezcla del alimento y conteos reales, 3) Grasa de coccion. "
     "VIVERES HERVIDOS / PLATANO: si hay viveres hervidos en ruedas o trozos (amarillos o verdosos), en las opciones de duda "
     "sobre el tipo de base o vianda incluye siempre 'Platano maduro' junto a 'Platano verde' y 'Guineito verde' (el platano maduro "
     "es amarillo/dorado, mas dulce y con mas carbohidratos). Si se ve claramente amarillo o traslucido al hervir, es probable que sea platano maduro. "
@@ -611,8 +620,12 @@ def _redondeo(v: float, k: str):
     return int(round(v)) if k == "calories" else round(v, 1)
 
 
-def _dudas_del_plato(data) -> list:
-    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 `{sobre, pregunta, opciones}` con pregunta no vacía y recortada."""
+def _dudas_del_plato(data, max_dudas: Optional[int] = None) -> list:
+    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 en platos simples (3 si hay varios componentes) `{sobre, pregunta, opciones}`."""
+    if max_dudas is None:
+        items = data.get("items") if isinstance(data, dict) else None
+        max_dudas = 3 if isinstance(items, list) and len(items) >= 2 else 2
+    max_dudas = max(2, min(3, int(max_dudas)))
     out = []
     for d in (data.get("dudas") if isinstance(data, dict) else None) or []:
         if not isinstance(d, dict):
@@ -622,7 +635,7 @@ def _dudas_del_plato(data) -> list:
             continue
         out.append({"sobre": " ".join(str(d.get("sobre") or "").split())[:60], "pregunta": pregunta,
                     "opciones": _opciones_de_la_duda(d.get("opciones"))})
-        if len(out) == 2:
+        if len(out) == max_dudas:
             break
     return out
 
@@ -743,7 +756,7 @@ def _resolver_dudas_con_aclaracion(dudas: list, aclaracion: Optional[str], resul
     return restantes
 
 
-def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None) -> dict:
+def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None, habitos_usuario: Any = None) -> dict:
     """Normaliza la salida cruda de gemma al contrato de process_image_with_vision.
     Pura (sin IO) para testearla directo: clamps, is_food=False ⇒ macros 0,
     strings capadas, items sanitizados. Fail-open a 0 en macros no numéricas."""
@@ -930,9 +943,14 @@ def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None) -> dict:
     # [P1-PHOTO-DRINK-IDENTITY · 2026-11-03] Bebidas ambiguas (té, café, infusión, jugo): inyectar dudas
     # de identidad y aditivos antes de resolver con la aclaración.
     from bebidas_de_la_foto import inyectar_dudas_bebida
-    _dudas_crudas = _dudas_del_plato(data) if kind == "plato" else []
+    from dudas_del_plato_inteligentes import refinar_dudas_del_plato
+    _max_dudas = 3 if len(plato_items) >= 2 else 2
+    _dudas_crudas = _dudas_del_plato(data, max_dudas=_max_dudas) if kind == "plato" else []
     _dudas_con_bebida = inyectar_dudas_bebida(result, _dudas_crudas, aclaracion) if kind == "plato" else []
-    result["dudas"] = _resolver_dudas_con_aclaracion(_dudas_con_bebida, aclaracion, result) if kind == "plato" else []
+    _dudas_refinadas = refinar_dudas_del_plato(
+        result, _dudas_con_bebida, aclaracion=aclaracion, habitos=habitos_usuario, max_dudas=_max_dudas
+    ) if kind == "plato" else []
+    result["dudas"] = _resolver_dudas_con_aclaracion(_dudas_refinadas, aclaracion, result) if kind == "plato" else []
     if result["dudas"]:
         result["description"] += " DUDAS (pregúntale solo esto): " + " ".join(_duda_para_el_coach(d) for d in result["dudas"])
     _repartidas = _repartir_macros_del_plato(crudas, result)
@@ -1362,16 +1380,37 @@ def _aclaracion_segura(texto) -> str:
     return limpio[:_ACLARACION_MAX]
 
 
-def _prompt_de_escaneo(aclaracion=None, base: str = None, pais=None) -> str:
+def _resumen_habitos_seguro(habitos_usuario: Any) -> str:
+    if not habitos_usuario:
+        return ""
+    if isinstance(habitos_usuario, dict):
+        raw = habitos_usuario.get("resumen_prompt") or ""
+    else:
+        raw = str(habitos_usuario)
+    return _aclaracion_segura(raw)[:280]
+
+
+def _prompt_de_escaneo(aclaracion=None, base: str = None, pais=None, habitos_usuario: Any = None) -> str:
     """[P1-PLAN-LOTE-347 · 2026-09-26] El prompt del escaneo, con la aclaración del usuario si la hay («Otra…»: ninguna
     opción de la duda encajaba y la escribió). Va entre comillas y declarada como dato: no son instrucciones.
-    [P1-PLAN-LOTE-628] y con el país del usuario fuera de RD (`pais_del_estimador.contexto`; en RD, nada)."""
+    [P1-PLAN-LOTE-628] y con el país del usuario fuera de RD (`pais_del_estimador.contexto`; en RD, nada).
+    [ESCANER-HABITOS-Y-RELLENOS] con resumen compacto de hábitos frecuentes del usuario como contexto."""
     base = _MEAL_VISION_PROMPT if base is None else base
     try:
         from pais_del_estimador import contexto as _contexto_de_pais
         base = base + _contexto_de_pais(pais)
     except Exception:
         pass
+    h = _resumen_habitos_seguro(habitos_usuario)
+    if h:
+        base = (
+            base
+            + " HABITOS DEL USUARIO en comidas recientes (solo contexto para rellenos ocultos y opciones probables; "
+            "NO inventes comida que no este en la foto): \""
+            + h
+            + "\". Si hay un sandwich, tostada o alimento cerrado/ambiguo, incluye su relleno habitual entre las opciones "
+            "de la duda y usalo como supuesta=true si es visualmente compatible."
+        )
     a = _aclaracion_segura(aclaracion)
     if not a:
         return base
@@ -1384,7 +1423,7 @@ def _prompt_de_escaneo(aclaracion=None, base: str = None, pais=None) -> str:
     )
 
 
-async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None, pais=None) -> dict:
+async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None, pais=None, habitos_usuario: Any = None) -> dict:
     """[P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → extraído P1-VISION-LUNA ·
     2026-07-28] Intento de análisis vía provider OpenAI-compatible
     (gpt-5.6-luna u otro configurado por knob) — el ÚNICO provider tras
@@ -1446,12 +1485,12 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
         # normalizar.
         response = await _invoke_structured_vision(
             image_bytes,
-            _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais),   # [P1-PLAN-LOTE-347/628] + aclaración y país
+            _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais, habitos_usuario=habitos_usuario),
             _MealVisionResult,
         )
         _t_san = time.perf_counter()
         data = response.model_dump() if response else {}
-        out = _coerce_meal_scan(data, aclaracion=aclaracion)
+        out = _coerce_meal_scan(data, aclaracion=aclaracion, habitos_usuario=habitos_usuario)
         _merge_vision_meta(sanitize_ms=round((time.perf_counter() - _t_san) * 1000.0, 2))
         return out
 
@@ -1484,7 +1523,7 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
         }
 
 
-async def process_image_with_vision(image_bytes: bytes, aclaracion=None, pais=None) -> dict:
+async def process_image_with_vision(image_bytes: bytes, aclaracion=None, pais=None, habitos_usuario: Any = None) -> dict:
     """
     Toma los bytes de una imagen, usa el provider de visión configurado para
     extraer una descripción y determina si contiene alimentos usando
@@ -1521,11 +1560,19 @@ async def process_image_with_vision(image_bytes: bytes, aclaracion=None, pais=No
 
     # [P1-PLAN-LOTE-347] la aclaración solo viaja si la hay: la llamada de siempre no cambia de forma
     # [P1-PLAN-LOTE-628] …y el país, solo fuera de RD
+    if habitos_usuario is None:
+        try:
+            from habitos_de_la_foto import get_current_habitos_foto
+            habitos_usuario = get_current_habitos_foto()
+        except Exception:
+            habitos_usuario = None
     extra = {}
     if aclaracion:
         extra["aclaracion"] = aclaracion
     if pais and str(pais).strip().upper() != "DO":
         extra["pais"] = pais
+    if habitos_usuario:
+        extra["habitos_usuario"] = habitos_usuario
     return await _dispatch_openai_compatible_vision(image_bytes, **extra)
 
 # [P0-LLM-PROVIDER-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
