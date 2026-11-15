@@ -10,10 +10,31 @@ import re
 from typing import Any, Dict, List, Optional
 import unicodedata
 
-from habitos_de_la_foto import RELLENOS_CATALOGO_POR_ID
+from habitos_de_la_foto import (
+    ADEREZOS_ENSALADA_POR_ID,
+    EXTRAS_FRUTA_CATALOGO_POR_ID,
+    RELLENOS_CATALOGO_POR_ID,
+)
 
 _PATRON_CERRADO = re.compile(
     r"\b(sandwich(?:es)?|emparedados?|wraps?|burritos?|arepas?(?:\s+rellenas?)?|empanadas?|croissants?)\b",
+    re.IGNORECASE,
+)
+
+_PATRON_FRUTAS_MULTI = re.compile(
+    r"\b(frutas?|macedonia|ensalada\s+de\s+frutas?|fruta\s+picada)\b",
+    re.IGNORECASE,
+)
+_FRUTAS_DULCES_BOWL = (
+    "lechosa", "papaya", "sandia", "melon", "pina", "fresa", "fresas",
+    "mango", "kiwi", "arandano", "arandanos", "uva", "uvas", "melocoton", "guineo", "manzana",
+)
+_PATRON_FRUTA_UNITARIA = re.compile(
+    r"\b(lechosa|papaya|sandia|melon|pina|fresas?|mango|kiwi|arandanos?|uvas?|melocoton)\b",
+    re.IGNORECASE,
+)
+_PATRON_ENSALADA_VEGETALES = re.compile(
+    r"\b(ensalada(?!\s+de\s+frutas?)|lechuga|tomate|pepino|remolacha|repollo|rucula)\b",
     re.IGNORECASE,
 )
 
@@ -32,6 +53,11 @@ _PATRON_BEBIDA_DUDA = re.compile(
     re.IGNORECASE,
 )
 
+_PATRON_HUMEDO_DUDA = re.compile(
+    r"\b(fruta|frutas|lechosa|papaya|sandia|melon|pina|fresa|mango|kiwi|uva|arandano|manzana|macedonia|bowl|tazon|yogur|yogurt|avena|ensalada|vegetal|lechuga|tomate|remolacha|pepino)\b",
+    re.IGNORECASE,
+)
+
 _PATRON_OPCION_NEGATIVA = re.compile(
     r"^\s*(?:sin\b|nada\b|ningun[ao]?\b|natural\b|solo\b(?!\s+(?:jamon|queso|claras|huevo|carne|pollo)))",
     re.IGNORECASE,
@@ -41,6 +67,7 @@ _PATRON_OPCION_NEGATIVA = re.compile(
 def _norm(texto: str) -> str:
     t = unicodedata.normalize("NFKD", str(texto or "").lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
+    t = t.replace("yogurt", "yogur")
     return " ".join(re.sub(r"[^a-z0-9\s]+", " ", t).split())
 
 
@@ -49,18 +76,23 @@ def _redondeo_macro(v: float, k: str):
 
 
 def _es_duda_tonta(duda: Dict[str, Any], hay_otra_real: bool = False) -> bool:
-    """Detecta preguntas de bajo valor o redundantes (ej. sirope en pancakes visualmente secos)."""
+    """Detecta preguntas de bajo valor o redundantes (ej. sirope en pancakes visualmente secos),
+    pero protege aditivos invisibles o translúcidos sobre bebidas, frutas húmedas o ensaladas."""
     preg_n = _norm(duda.get("pregunta") or "")
     sobre_n = _norm(duda.get("sobre") or "")
     ops = duda.get("opciones") or []
     if not preg_n:
         return True
 
-    # En bebidas (café, té, jugo) lo disuelto (ej. miel) no es visible desde fuera
-    if _PATRON_BEBIDA_DUDA.search(f"{preg_n} {sobre_n}"):
+    contexto = f"{preg_n} {sobre_n}"
+    # En bebidas (café, té, jugo) lo disuelto (ej. miel, azúcar) no se ve desde fuera
+    if _PATRON_BEBIDA_DUDA.search(contexto):
+        return False
+    # En frutas húmedas, bowls o ensaladas: la miel, yogur, aceite o vinagreta no se distinguen del brillo del agua/jugo
+    if _PATRON_HUMEDO_DUDA.search(contexto):
         return False
 
-    # Preguntar "¿Con o sin sirope/ketchup/salsa?" cuando la propia IA ya marcó "Sin ..." como supuesto
+    # Preguntar "¿Con o sin sirope/ketchup/salsa?" en comida seca cuando la propia IA ya marcó "Sin ..." como supuesto
     if _PATRON_TOPPING_TRIVIAL.search(preg_n):
         sup = next((o for o in ops if o.get("supuesta")), None)
         if sup and _PATRON_OPCION_NEGATIVA.search(_norm(sup.get("texto") or "")):
@@ -272,9 +304,225 @@ def _crear_duda_relleno_cerrado(
     }
 
 
+def _detectar_fruta_bowl(result: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Detecta bowls de frutas picadas o mezclas de frutas húmedas donde la miel/yogur/granola son invisibles."""
+    nombre_desc = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
+    sin_jugos = re.sub(r"\b(?:jugo|batid[ao]|licuado|smoothie)\s+(?:natural\s+)?de\s+\w+(?:\s+(?:y|con)\s+\w+)?", " ", nombre_desc)
+    items = result.get("items") or []
+    items_n = [_norm((it or {}).get("name") or "") for it in items if isinstance(it, dict)]
+    todo_n = f"{sin_jugos} {' '.join(items_n)}".strip()
+
+    frutas_presentes = [f for f in _FRUTAS_DULCES_BOWL if re.search(rf"\b{f}s?\b", todo_n)]
+    sobre = next((it.get("name") for it in items if isinstance(it, dict) and (_PATRON_FRUTAS_MULTI.search(_norm(it.get("name"))) or _PATRON_FRUTA_UNITARIA.search(_norm(it.get("name"))))), None)
+
+    es_bowl_frutas = (
+        bool(_PATRON_FRUTAS_MULTI.search(sin_jugos))
+        or len(set(frutas_presentes)) >= 2
+        or (
+            bool(_PATRON_FRUTA_UNITARIA.search(todo_n))
+            and (
+                len(items) <= 2
+                or any(k in sin_jugos for k in ("bowl", "tazon", "picad", "trozo", "cubos", "porcion de fruta"))
+            )
+            and not re.search(r"\b(arroz|pollo|cerdo|res|carne|sandwich|mangu|huevo)\b", sin_jugos)
+        )
+    )
+    if not es_bowl_frutas:
+        return None
+    return {"sobre": str(sobre or "frutas")[:60]}
+
+
+def _duda_es_sobre_fruta_extras(duda: Dict[str, Any]) -> bool:
+    txt = _norm(f"{duda.get('sobre') or ''} {duda.get('pregunta') or ''}")
+    return bool(re.search(r"\b(miel|agave|granola|yogur|condensada|acompanamiento|encima|endulzante|extra|topping)\b", txt)) and (
+        bool(_PATRON_FRUTAS_MULTI.search(txt)) or bool(_PATRON_FRUTA_UNITARIA.search(txt)) or "bowl" in txt or "fruta" in txt
+    )
+
+
+def _aclaracion_menciona_fruta_extras(aclaracion: Optional[str]) -> bool:
+    acl_n = _norm(aclaracion or "")
+    if not acl_n:
+        return False
+    pistas = ("sin miel", "con miel", "solo fruta", "sola la fruta", "sin nada encima", "sin extras", "con granola", "con yogur", "leche condensada", "sin azucar")
+    return any(p in acl_n for p in pistas)
+
+
+def _extra_fruta_asumido(result: Dict[str, Any]) -> Optional[str]:
+    texto_n = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
+    for eid in ("miel_granola", "miel", "yogur", "granola", "leche_condensada", "mani", "chia"):
+        entry = EXTRAS_FRUTA_CATALOGO_POR_ID[eid]
+        if all(tok in texto_n for tok in entry["tokens"]):
+            return eid
+    return None
+
+
+def _delta_extra_fruta(entry: Dict[str, Any], base_id: Optional[str]) -> Dict[str, Any]:
+    base_delta = (EXTRAS_FRUTA_CATALOGO_POR_ID.get(base_id or "") or {}).get("delta") or {
+        "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0
+    }
+    return {
+        k: max(-2000, min(2000, _redondeo_macro(entry["delta"][k] - base_delta[k], k)))
+        for k in ("calories", "protein", "carbs", "healthy_fats")
+    }
+
+
+def _personalizar_duda_fruta(
+    duda: Dict[str, Any],
+    extras_usuario: List[Dict[str, Any]],
+    base_id: Optional[str],
+) -> Dict[str, Any]:
+    ops = [dict(o) for o in (duda.get("opciones") or [])]
+    if not ops or not extras_usuario:
+        return duda
+    textos_n = [_norm(o.get("texto") or "") for o in ops]
+    for hab in extras_usuario[:2]:
+        eid = hab.get("id")
+        entry = EXTRAS_FRUTA_CATALOGO_POR_ID.get(eid or "")
+        if not entry:
+            continue
+        if any(all(tok in t for tok in entry["tokens"]) for t in textos_n):
+            continue
+        nueva_op = {
+            "texto": entry["texto"][:40],
+            "supuesta": False,
+            "ajuste": _delta_extra_fruta(entry, base_id),
+        }
+        if len(ops) < 5:
+            ops.append(nueva_op)
+        else:
+            idx_reemp = next((i for i in range(len(ops) - 1, -1, -1) if not ops[i].get("supuesta")), -1)
+            if idx_reemp >= 0:
+                ops[idx_reemp] = nueva_op
+        textos_n = [_norm(o.get("texto") or "") for o in ops]
+    out = dict(duda)
+    out["opciones"] = ops[:5]
+    return out
+
+
+def _crear_duda_fruta_bowl(
+    info_fruta: Dict[str, str],
+    extras_usuario: List[Dict[str, Any]],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    base_id = _extra_fruta_asumido(result)
+    base_delta = (EXTRAS_FRUTA_CATALOGO_POR_ID.get(base_id or "") or {}).get("delta") or {
+        "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0
+    }
+    solo_fruta_ajuste = {
+        k: _redondeo_macro(-base_delta[k], k) for k in ("calories", "protein", "carbs", "healthy_fats")
+    } if base_id else {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
+
+    candidatos_ids: List[str] = []
+    if base_id:
+        candidatos_ids.append(base_id)
+    for hab in extras_usuario:
+        eid = hab.get("id")
+        if eid and eid in EXTRAS_FRUTA_CATALOGO_POR_ID and eid not in candidatos_ids:
+            candidatos_ids.append(eid)
+    for default_id in ("miel", "yogur", "granola", "miel_granola"):
+        if default_id not in candidatos_ids:
+            candidatos_ids.append(default_id)
+
+    opciones: List[Dict[str, Any]] = [{
+        "texto": "Solo fruta",
+        "supuesta": (base_id is None),
+        "ajuste": solo_fruta_ajuste,
+    }]
+    for eid in candidatos_ids:
+        entry = EXTRAS_FRUTA_CATALOGO_POR_ID[eid]
+        es_sup = (eid == base_id)
+        opciones.append({
+            "texto": entry["texto"][:40],
+            "supuesta": es_sup,
+            "ajuste": (
+                {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
+                if es_sup
+                else _delta_extra_fruta(entry, base_id)
+            ),
+        })
+        if len(opciones) >= 5:
+            break
+
+    return {
+        "sobre": info_fruta["sobre"],
+        "pregunta": "¿Las frutas llevan miel o algún acompañamiento encima?",
+        "opciones": opciones,
+    }
+
+
+def _detectar_ensalada_vegetales(result: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Detecta ensaladas o vegetales frescos servidos donde el aceite de oliva o vinagreta es invisible."""
+    nombre_desc = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
+    if _PATRON_FRUTAS_MULTI.search(nombre_desc) and not re.search(r"\b(lechuga|tomate|pepino|remolacha|repollo)\b", nombre_desc):
+        return None
+    items = result.get("items") or []
+    items_txt = " ".join(_norm((it or {}).get("name") or "") for it in items if isinstance(it, dict))
+    todo = f"{nombre_desc} {items_txt}"
+    m = _PATRON_ENSALADA_VEGETALES.search(todo)
+    if not m:
+        return None
+    sobre = next(
+        (it.get("name") for it in items if isinstance(it, dict) and _PATRON_ENSALADA_VEGETALES.search(_norm(it.get("name")))),
+        None,
+    )
+    return {"sobre": str(sobre or m.group(1))[:60]}
+
+
+def _duda_es_sobre_aderezo(duda: Dict[str, Any]) -> bool:
+    txt = _norm(f"{duda.get('sobre') or ''} {duda.get('pregunta') or ''}")
+    return bool(re.search(r"\b(aceite|vinagreta|aderezo|mayonesa|salsa|limon)\b", txt)) and (
+        bool(_PATRON_ENSALADA_VEGETALES.search(txt)) or "aderezo" in txt or "vinagreta" in txt
+    )
+
+
+def _aclaracion_menciona_aderezo(aclaracion: Optional[str]) -> bool:
+    acl_n = _norm(aclaracion or "")
+    if not acl_n:
+        return False
+    pistas = ("sin aceite", "sin aderezo", "solo limon", "con limon", "aceite de oliva", "vinagreta", "mayonesa", "sin salsa")
+    return any(p in acl_n for p in pistas)
+
+
+def _crear_duda_ensalada(
+    info_ensalada: Dict[str, str],
+    aderezos_usuario: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    candidatos_ids: List[str] = []
+    for hab in aderezos_usuario:
+        aid = hab.get("id")
+        if aid and aid in ADEREZOS_ENSALADA_POR_ID and aid not in candidatos_ids:
+            candidatos_ids.append(aid)
+    for default_id in ("aceite_oliva", "vinagreta", "mayonesa"):
+        if default_id not in candidatos_ids:
+            candidatos_ids.append(default_id)
+
+    opciones: List[Dict[str, Any]] = [{
+        "texto": "Sin aceite / solo limón",
+        "supuesta": True,
+        "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0},
+    }]
+    for aid in candidatos_ids:
+        entry = ADEREZOS_ENSALADA_POR_ID[aid]
+        opciones.append({
+            "texto": entry["texto"][:40],
+            "supuesta": False,
+            "ajuste": dict(entry["delta"]),
+        })
+        if len(opciones) >= 5:
+            break
+
+    return {
+        "sobre": info_ensalada["sobre"],
+        "pregunta": "¿La ensalada o vegetales llevan aceite o aderezo?",
+        "opciones": opciones,
+    }
+
+
 def _prioridad_duda(duda: Dict[str, Any], info_cerrado: Optional[Dict[str, Any]]) -> int:
     preg_n = _norm(duda.get("pregunta") or "")
     if info_cerrado and _duda_es_sobre_relleno(duda, info_cerrado):
+        return 0
+    if _duda_es_sobre_fruta_extras(duda):
         return 0
     if _PATRON_DUDA_RELLENO.search(preg_n):
         return 0
@@ -282,7 +530,7 @@ def _prioridad_duda(duda: Dict[str, Any], info_cerrado: Optional[Dict[str, Any]]
         return 1
     if re.search(r"\b(cuant\w*|huevo|claras|mitades|porcion|taza|piezas|lonjas)\b", preg_n):
         return 2
-    if re.search(r"\b(grasa|aceite|manteca|mantequilla|freiste|cocin)\b", preg_n):
+    if re.search(r"\b(grasa|aceite|manteca|mantequilla|freiste|cocin|aderezo|vinagreta)\b", preg_n):
         return 3
     return 4
 
@@ -295,7 +543,7 @@ def refinar_dudas_del_plato(
     max_dudas: int = 2,
 ) -> List[Dict[str, Any]]:
     """Refina las dudas de un plato sólido: elimina preguntas tontas, obliga duda de relleno en
-    alimentos cerrados e inyecta los hábitos del usuario dentro de las opciones."""
+    alimentos cerrados y aditivos invisibles en frutas/ensaladas, e inyecta hábitos del usuario."""
     if result.get("photo_kind") != "plato":
         return list(dudas_crudas or [])
 
@@ -304,17 +552,25 @@ def refinar_dudas_del_plato(
         return list(dudas_crudas or [])[:2]
 
     rellenos_usuario: List[Dict[str, Any]] = []
+    extras_fruta_usuario: List[Dict[str, Any]] = []
+    aderezos_usuario: List[Dict[str, Any]] = []
     if isinstance(habitos, dict):
         rellenos_usuario = list(habitos.get("rellenos_pan") or [])
+        extras_fruta_usuario = list(habitos.get("extras_fruta") or [])
+        aderezos_usuario = list(habitos.get("aderezos_ensalada") or [])
 
     info_cerrado = _detectar_alimento_cerrado(result)
+    info_fruta = _detectar_fruta_bowl(result)
+    info_ensalada = _detectar_ensalada_vegetales(result)
     dudas = [dict(d) for d in (dudas_crudas or []) if isinstance(d, dict) and str(d.get("pregunta") or "").strip()]
 
-    # ¿Hay otra duda real o alimento cerrado que merezca atención?
-    hay_otra_real = bool(info_cerrado) or any(not _es_duda_tonta(d, hay_otra_real=False) for d in dudas)
+    # ¿Hay otra duda real o elemento que merezca atención?
+    hay_otra_real = bool(info_cerrado or info_fruta or info_ensalada) or any(
+        not _es_duda_tonta(d, hay_otra_real=False) for d in dudas
+    )
     dudas = [d for d in dudas if not _es_duda_tonta(d, hay_otra_real=hay_otra_real)]
 
-    # Si hay sándwich/wrap/arepa/empanada cerrado y no lo aclararon ya: asegurar pregunta + hábitos
+    # 1. Alimento cerrado (sándwich, wrap, arepa, empanada): relleno + hábitos
     if info_cerrado and not _aclaracion_menciona_relleno(aclaracion):
         idx_rel = next((i for i, d in enumerate(dudas) if _duda_es_sobre_relleno(d, info_cerrado)), None)
         if idx_rel is not None:
@@ -324,6 +580,21 @@ def refinar_dudas_del_plato(
         else:
             duda_relleno = _crear_duda_relleno_cerrado(result, info_cerrado, rellenos_usuario)
             dudas.insert(0, duda_relleno)
+
+    # 2. Frutas picadas / bowl húmedo: miel, yogur, granola + hábitos
+    if info_fruta and not _aclaracion_menciona_fruta_extras(aclaracion):
+        idx_fr = next((i for i, d in enumerate(dudas) if _duda_es_sobre_fruta_extras(d)), None)
+        if idx_fr is not None:
+            dudas[idx_fr] = _personalizar_duda_fruta(
+                dudas[idx_fr], extras_fruta_usuario, _extra_fruta_asumido(result)
+            )
+        else:
+            dudas.insert(0, _crear_duda_fruta_bowl(info_fruta, extras_fruta_usuario, result))
+
+    # 3. Ensalada o vegetales frescos: aceite de oliva / vinagreta / aderezo (no desplaza dudas de > impacto)
+    if info_ensalada and not _aclaracion_menciona_aderezo(aclaracion):
+        if not any(_duda_es_sobre_aderezo(d) for d in dudas):
+            dudas.append(_crear_duda_ensalada(info_ensalada, aderezos_usuario))
 
     # Deduplicar preguntas iguales y ordenar por impacto calórico
     vistas = set()

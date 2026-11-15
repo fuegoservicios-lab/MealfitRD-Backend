@@ -258,3 +258,75 @@ def test_cuatro_fotos_por_foto_aplica_respuestas_y_ajustes_independientes():
     assert "Calorías: 40" in prep["items"][3]["description"]
     assert "leche de almendras" in prep["items"][3]["description"].lower()
     assert all("pregúntale solo esto" not in it["description"] for it in prep["items"])
+
+
+def test_bowl_frutas_siempre_pregunta_miel_e_inyecta_habitos_y_ensalada_pregunta_aderezo():
+    """Caso real: bowl de lechosa, piña y sandía debe preguntar por miel/extras aunque esté húmeda;
+    plato con ensalada/vegetales frescos debe preguntar por aceite/aderezo."""
+    habitos = hf.extraer_habitos_desde_registros(
+        [
+            {"meal_name": "Frutas con leche condensada y granola", "ingredients": ["lechosa", "leche condensada", "granola"]},
+            {"meal_name": "Ensalada verde con aceite de oliva", "ingredients": ["lechuga", "tomate", "aceite de oliva"]},
+        ]
+    )
+    assert any(x["id"] == "leche_condensada" for x in habitos["extras_fruta"])
+    assert any(x["id"] == "aceite_oliva" for x in habitos["aderezos_ensalada"])
+
+    bowl_fruta = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Bowl de frutas picadas",
+        "description": "Tazón con lechosa, piña y sandía picadas en trozos.",
+        "calories": 140,
+        "protein": 2,
+        "carbs": 34,
+        "healthy_fats": 0,
+        "items": [
+            {"name": "lechosa", "quantity": 1, "unit": "taza", "calories": 55, "protein": 1, "carbs": 14, "healthy_fats": 0},
+            {"name": "piña", "quantity": 0.5, "unit": "taza", "calories": 40, "protein": 0.5, "carbs": 10, "healthy_fats": 0},
+            {"name": "sandía", "quantity": 1, "unit": "taza", "calories": 45, "protein": 0.5, "carbs": 10, "healthy_fats": 0},
+        ],
+        "dudas": [],
+    }
+    r_fruta = va._coerce_meal_scan(bowl_fruta, habitos_usuario=habitos)
+    assert len(r_fruta["dudas"]) >= 1
+    d_miel = r_fruta["dudas"][0]
+    assert "miel" in d_miel["pregunta"].lower()
+    textos_f = [o["texto"] for o in d_miel["opciones"]]
+    assert "Solo fruta" in textos_f
+    assert "Con miel" in textos_f
+    assert "Con leche condensada" in textos_f
+
+    almuerzo_con_ensalada = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Arroz blanco con cerdo y ensalada",
+        "description": "Plato con arroz blanco, carne de cerdo guisada, tomate y remolacha.",
+        "calories": 650,
+        "protein": 34,
+        "carbs": 75,
+        "healthy_fats": 22,
+        "items": [
+            {"name": "arroz blanco", "quantity": 1.5, "unit": "taza", "calories": 300, "protein": 6, "carbs": 66, "healthy_fats": 0},
+            {"name": "carne de cerdo", "quantity": 120, "unit": "g", "calories": 300, "protein": 26, "carbs": 0, "healthy_fats": 22},
+            {"name": "ensalada de tomate y remolacha", "quantity": 1, "unit": "porción", "calories": 50, "protein": 2, "carbs": 9, "healthy_fats": 0},
+        ],
+        "dudas": [
+            {"sobre": "carne de cerdo", "pregunta": "¿Qué tipo de carne es?", "opciones": [
+                {"texto": "Cerdo", "supuesta": True, "ajuste": {}},
+                {"texto": "Res", "ajuste": {"calories": -15}},
+            ]},
+            {"sobre": "arroz blanco", "pregunta": "¿Cuánto arroz hay en el plato?", "opciones": [
+                {"texto": "1.5 tazas", "supuesta": True, "ajuste": {}},
+                {"texto": "1 taza", "ajuste": {"calories": -100}},
+            ]},
+        ],
+    }
+    r_alm = va._coerce_meal_scan(almuerzo_con_ensalada, habitos_usuario=habitos)
+    assert len(r_alm["dudas"]) == 3
+    assert any("aderezo" in d["pregunta"].lower() or "aceite" in d["pregunta"].lower() for d in r_alm["dudas"])
+
+    import multiphoto_completeness as mc
+    rec = mc.construir_recordatorio_multifoto(["Bowl de frutas", "Arroz con cerdo", "4 sándwiches"])
+    assert "franjas distintas" in rec
+    assert "cantidad exacta" in rec

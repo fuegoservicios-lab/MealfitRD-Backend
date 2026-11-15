@@ -114,7 +114,9 @@ def construir_recordatorio_multifoto(plate_descriptions: list[str]) -> str:
         "Aunque el usuario solo responda dudas de una de las fotos (ej. «Lechoza · Con azúcar») "
         "o diga «esto también fue parte de…», está PROHIBIDO omitir las otras fotos: incluye cada foto "
         "(su alimento, ingredientes y calorías/macros) al crear registros nuevos o al actualizar con `correct_consumed_meal`, "
-        "salvo que el usuario descarte explícitamente alguna."
+        "salvo que el usuario descarte explícitamente alguna. "
+        "Si el usuario asigna franjas distintas en su mensaje (ej. «desayuné X, almorcé Y, cené Z»), registra cada foto en la franja "
+        "indicada; y si precisa una cantidad exacta en su texto (ej. «los 4 sándwiches»), esa cantidad prevalece sobre el conteo visual."
     )
 
 

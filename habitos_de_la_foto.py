@@ -129,12 +129,98 @@ _CATALOGO_RELLENOS_PAN: tuple[dict[str, Any], ...] = (
 
 RELLENOS_CATALOGO_POR_ID = {r["id"]: r for r in _CATALOGO_RELLENOS_PAN}
 
+_PATRON_FRUTA_BOWL_BASE = re.compile(
+    r"\b(?:frutas?|macedonia|ensalada\s+de\s+frutas?|lechosa|papaya|sandia|melon|pina|fresas?|mango|kiwi|arandanos?|uvas?|bowl|tazon|yogur(?:t)?|avena)\b",
+    re.IGNORECASE,
+)
+
+_CATALOGO_EXTRAS_FRUTA_BOWL: tuple[dict[str, Any], ...] = (
+    {
+        "id": "miel_granola",
+        "texto": "Con miel y granola",
+        "tokens": ("miel", "granola"),
+        "delta": {"calories": 175, "protein": 3.0, "carbs": 35.0, "healthy_fats": 3.0},
+    },
+    {
+        "id": "miel",
+        "texto": "Con miel",
+        "tokens": ("miel",),
+        "delta": {"calories": 65, "protein": 0.0, "carbs": 17.0, "healthy_fats": 0.0},
+    },
+    {
+        "id": "yogur",
+        "texto": "Con yogur griego",
+        "tokens": ("yogur",),
+        "delta": {"calories": 85, "protein": 8.0, "carbs": 7.0, "healthy_fats": 2.0},
+    },
+    {
+        "id": "granola",
+        "texto": "Con granola",
+        "tokens": ("granola",),
+        "delta": {"calories": 110, "protein": 3.0, "carbs": 18.0, "healthy_fats": 3.0},
+    },
+    {
+        "id": "leche_condensada",
+        "texto": "Con leche condensada",
+        "tokens": ("leche condensada",),
+        "delta": {"calories": 130, "protein": 3.0, "carbs": 22.0, "healthy_fats": 3.5},
+    },
+    {
+        "id": "mani",
+        "texto": "Con mantequilla de maní",
+        "tokens": ("mantequilla de mani",),
+        "delta": {"calories": 95, "protein": 4.0, "carbs": 3.0, "healthy_fats": 8.0},
+    },
+    {
+        "id": "chia",
+        "texto": "Con semillas de chía",
+        "tokens": ("chia",),
+        "delta": {"calories": 60, "protein": 2.0, "carbs": 5.0, "healthy_fats": 4.0},
+    },
+)
+
+EXTRAS_FRUTA_CATALOGO_POR_ID = {r["id"]: r for r in _CATALOGO_EXTRAS_FRUTA_BOWL}
+
+_PATRON_ENSALADA_BASE = re.compile(
+    r"\b(?:ensalada|vegetales?|lechuga|tomate|pepino|remolacha|repollo|espinaca|rucula)\b",
+    re.IGNORECASE,
+)
+
+_CATALOGO_ADEREZOS_ENSALADA: tuple[dict[str, Any], ...] = (
+    {
+        "id": "aceite_oliva",
+        "texto": "Con aceite de oliva",
+        "tokens": ("aceite",),
+        "delta": {"calories": 90, "protein": 0.0, "carbs": 0.0, "healthy_fats": 10.0},
+    },
+    {
+        "id": "vinagreta",
+        "texto": "Con vinagreta / aderezo",
+        "tokens": ("vinagreta",),
+        "delta": {"calories": 80, "protein": 0.0, "carbs": 2.0, "healthy_fats": 8.0},
+    },
+    {
+        "id": "mayonesa",
+        "texto": "Con mayonesa / crema",
+        "tokens": ("mayonesa",),
+        "delta": {"calories": 100, "protein": 0.0, "carbs": 1.0, "healthy_fats": 11.0},
+    },
+    {
+        "id": "aguacate",
+        "texto": "Con aguacate y limón",
+        "tokens": ("aguacate",),
+        "delta": {"calories": 85, "protein": 1.0, "carbs": 4.5, "healthy_fats": 7.5},
+    },
+)
+
+ADEREZOS_ENSALADA_POR_ID = {r["id"]: r for r in _CATALOGO_ADEREZOS_ENSALADA}
+
 
 def _ascii(texto: str) -> str:
     t = unicodedata.normalize("NFKD", str(texto or "").lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
     t = t.replace("crema de mani", "mantequilla de mani").replace("peanut butter", "mantequilla de mani")
-    t = t.replace("cottage cheese", "cottage")
+    t = t.replace("cottage cheese", "cottage").replace("yogurt", "yogur")
     t = re.sub(r"[^a-z0-9\s]+", " ", t)
     return " ".join(t.split())
 
@@ -167,6 +253,8 @@ def extraer_habitos_desde_registros(
 ) -> Dict[str, Any]:
     """Pura (sin I/O): extrae rellenos frecuentes de pan/sándwich y otros hábitos útiles para el escáner."""
     conteo_rellenos: Counter[str] = Counter()
+    conteo_extras_fruta: Counter[str] = Counter()
+    conteo_aderezos: Counter[str] = Counter()
     conteo_huevos: Counter[str] = Counter()
     conteo_pancakes: Counter[str] = Counter()
 
@@ -189,6 +277,20 @@ def extraer_habitos_desde_registros(
                     conteo_rellenos[entry["id"]] += 1
                     matched_ids.add(entry["id"])
 
+        if _PATRON_FRUTA_BOWL_BASE.search(txt):
+            matched_f = set()
+            for entry in _CATALOGO_EXTRAS_FRUTA_BOWL:
+                if entry["id"] in ("miel", "granola") and "miel_granola" in matched_f:
+                    continue
+                if _matches_tokens(txt, entry["tokens"]):
+                    conteo_extras_fruta[entry["id"]] += 1
+                    matched_f.add(entry["id"])
+
+        if _PATRON_ENSALADA_BASE.search(txt):
+            for entry in _CATALOGO_ADEREZOS_ENSALADA:
+                if _matches_tokens(txt, entry["tokens"]):
+                    conteo_aderezos[entry["id"]] += 1
+
         for h in re.findall(r"\b([1-6])\s+huevos?(?:\s+(?:hervidos?|revueltos?|fritos?|enteros?))?\b", txt):
             conteo_huevos[f"{h} huevos"] += 1
 
@@ -207,6 +309,16 @@ def extraer_habitos_desde_registros(
                 if _matches_tokens(fact_txt, entry["tokens"]):
                     conteo_rellenos[entry["id"]] += 2
                     break
+        if _PATRON_FRUTA_BOWL_BASE.search(fact_txt) or "miel" in fact_txt or "granola" in fact_txt:
+            for entry in _CATALOGO_EXTRAS_FRUTA_BOWL:
+                if _matches_tokens(fact_txt, entry["tokens"]):
+                    conteo_extras_fruta[entry["id"]] += 2
+                    break
+        if _PATRON_ENSALADA_BASE.search(fact_txt) or "aceite de oliva" in fact_txt or "vinagreta" in fact_txt:
+            for entry in _CATALOGO_ADEREZOS_ENSALADA:
+                if _matches_tokens(fact_txt, entry["tokens"]):
+                    conteo_aderezos[entry["id"]] += 2
+                    break
 
     rellenos_pan = [
         {
@@ -217,11 +329,35 @@ def extraer_habitos_desde_registros(
         for rid, count in conteo_rellenos.most_common(4)
         if rid in RELLENOS_CATALOGO_POR_ID
     ]
+    extras_fruta = [
+        {
+            "id": eid,
+            "texto": EXTRAS_FRUTA_CATALOGO_POR_ID[eid]["texto"],
+            "count": count,
+        }
+        for eid, count in conteo_extras_fruta.most_common(4)
+        if eid in EXTRAS_FRUTA_CATALOGO_POR_ID
+    ]
+    aderezos_ensalada = [
+        {
+            "id": aid,
+            "texto": ADEREZOS_ENSALADA_POR_ID[aid]["texto"],
+            "count": count,
+        }
+        for aid, count in conteo_aderezos.most_common(3)
+        if aid in ADEREZOS_ENSALADA_POR_ID
+    ]
 
     partes_resumen: List[str] = []
     if rellenos_pan:
         lista_r = ", ".join(f"{_ascii(r['texto'])} ({r['count']}x)" for r in rellenos_pan[:3])
         partes_resumen.append(f"En pan/sandwich/tostadas suele usar: {lista_r}.")
+    if extras_fruta:
+        lista_f = ", ".join(f"{_ascii(r['texto'])} ({r['count']}x)" for r in extras_fruta[:2])
+        partes_resumen.append(f"En frutas/bowls suele usar: {lista_f}.")
+    if aderezos_ensalada:
+        lista_a = ", ".join(f"{_ascii(r['texto'])} ({r['count']}x)" for r in aderezos_ensalada[:2])
+        partes_resumen.append(f"En ensaladas suele usar: {lista_a}.")
     if conteo_huevos:
         top_h = conteo_huevos.most_common(1)[0][0]
         partes_resumen.append(f"Porcion frecuente de huevos: {top_h}.")
@@ -229,10 +365,12 @@ def extraer_habitos_desde_registros(
         top_p = conteo_pancakes.most_common(1)[0][0]
         partes_resumen.append(f"Suele hacer: {top_p}.")
 
-    resumen_prompt = " ".join(partes_resumen)[:280]
+    resumen_prompt = " ".join(partes_resumen)[:360]
     return {
         "resumen_prompt": resumen_prompt,
         "rellenos_pan": rellenos_pan,
+        "extras_fruta": extras_fruta,
+        "aderezos_ensalada": aderezos_ensalada,
     }
 
 
@@ -246,7 +384,7 @@ def invalidate_habitos_cache(user_id: Optional[str] = None) -> None:
 
 def obtener_habitos_foto(user_id: Optional[str]) -> Dict[str, Any]:
     """Obtiene los hábitos recientes del usuario para el escáner de fotos (fail-open)."""
-    vacio = {"resumen_prompt": "", "rellenos_pan": []}
+    vacio = {"resumen_prompt": "", "rellenos_pan": [], "extras_fruta": [], "aderezos_ensalada": []}
     if not user_id:
         return vacio
 
