@@ -252,7 +252,7 @@ def _ejecutar_stream_con_mocks(monkeypatch, *, prompt: str):
             return SimpleNamespace(values={})
 
         def invoke(self, inputs, **_k):
-            calls["sys_prompt"] = inputs["sys_prompt"]
+            calls["sys_prompt"] = (inputs["sys_prompt"] or _k["config"]["configurable"].get("__mf_sys_prompt", ""))
             raise _StreamPromptCapturado
 
         stream = invoke

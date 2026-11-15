@@ -79,7 +79,7 @@ def _entradas(monkeypatch, *, prompt, vision):
             return SimpleNamespace(values={})
 
         def invoke(self, inputs, **_k):
-            capturado.update(inputs)
+            capturado.update(inputs, sys_prompt=(inputs["sys_prompt"] or _k["config"]["configurable"].get("__mf_sys_prompt", "")))
             raise _PromptCapturado
 
         stream = invoke

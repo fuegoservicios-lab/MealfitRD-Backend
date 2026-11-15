@@ -34,7 +34,7 @@ def _render_real_stream_prompt(monkeypatch, country: str, personality: str, stat
             return SimpleNamespace(values={})
 
         def stream(self, inputs, **_kwargs):
-            captured["prompt"] = inputs["sys_prompt"]
+            captured["prompt"] = (inputs["sys_prompt"] or _kwargs["config"]["configurable"].get("__mf_sys_prompt", ""))
             raise _PromptCaptured
 
     class _Builder:

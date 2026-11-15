@@ -471,7 +471,7 @@ def test_chat_paths_fastpath_prefetcher_and_byte_identical_prefix_e2e(monkeypatc
         def invoke(self, inputs, **_k):
             # Cuando compila e invoca el grafo, la caché temporal de pre-turno ya se cerró
             assert current_turn_cache() is None
-            captured.update(inputs)
+            captured.update(inputs, sys_prompt=(inputs["sys_prompt"] or _k["config"]["configurable"].get("__mf_sys_prompt", "")))
             raise _PromptCaptured
 
         stream = invoke

@@ -95,7 +95,7 @@ def _turno_del_coach(monkeypatch, path: str, memoria):
             return SimpleNamespace(values={})
 
         def invoke(self, inputs, **_k):
-            capturado["prompt"] = inputs["sys_prompt"]
+            capturado["prompt"] = (inputs["sys_prompt"] or _k["config"]["configurable"].get("__mf_sys_prompt", ""))
             raise _PromptCapturado
 
         stream = invoke
