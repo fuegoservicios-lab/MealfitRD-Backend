@@ -187,6 +187,15 @@ class ChatTurnPhaseTracker:
             if output_tokens is not None:
                 entry["output_tokens"] = int(output_tokens)
             self.llm_calls.append(entry)
+        # [P1-PLAN-LOTE-1022 · A-21] fuera del candado: puede escribir una alerta en la base
+        if input_tokens is not None:
+            try:
+                from coach_presupuesto_tokens import vigilar
+                if vigilar(input_tokens, modelo=str(model or "")):
+                    with self._lock:
+                        entry["sobre_presupuesto"] = True
+            except Exception:  # noqa: BLE001 — la medición nunca rompe el turno
+                pass
 
     def record_tool(
         self,

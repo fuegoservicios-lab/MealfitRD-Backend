@@ -110,6 +110,34 @@ def set_ttft_sink(sink):
     return _TTFT_SINK.set(sink)
 
 
+def _leer_y_quitar_cabeceras(trozo, modelo) -> None:
+    """[P1-PLAN-LOTE-1023 · A-32] Con `include_response_headers`, LangChain pone las cabeceras HTTP en el `generation_info`
+    del PRIMER trozo, y de ahí acabarían en `response_metadata` del mensaje guardado (historial y checkpoints). Se lee el
+    margen del límite y se quitan. Nunca lanza."""
+    try:
+        info = getattr(trozo, "generation_info", None)
+        if isinstance(info, dict) and "headers" in info:
+            headers = info.pop("headers")
+            from coach_limites_proveedor import registrar
+            registrar(headers, str(modelo or ""))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _quitar_cabeceras_del_resultado(resultado, modelo):
+    """[P1-PLAN-LOTE-1023 · A-32] Lo mismo para `invoke` (ChatResult): las cabeceras van en el `generation_info` de cada
+    generación y LangChain las copia a `response_metadata` del mensaje."""
+    try:
+        for g in getattr(resultado, "generations", None) or []:
+            _leer_y_quitar_cabeceras(g, modelo)
+            meta = getattr(getattr(g, "message", None), "response_metadata", None)
+            if isinstance(meta, dict):
+                meta.pop("headers", None)
+    except Exception:  # noqa: BLE001
+        pass
+    return resultado
+
+
 def _anotar_ttft(t0: float) -> None:
     sink = _TTFT_SINK.get()
     if sink is not None and "ttft_ms" not in sink:
@@ -194,11 +222,11 @@ class ChatOpenAI(_LangChainChatOpenAI):
 
     def _generate(self, *args, **kwargs):
         try:
-            return super()._generate(*args, **kwargs)
+            return _quitar_cabeceras_del_resultado(super()._generate(*args, **kwargs), self.model_name)
         except Exception as exc:
             if self._intentar_reintento_cache(exc):
                 try:
-                    return super()._generate(*args, **kwargs)
+                    return _quitar_cabeceras_del_resultado(super()._generate(*args, **kwargs), self.model_name)
                 except Exception as retry_exc:
                     self._avisar_saldo(retry_exc)
                     raise
@@ -207,11 +235,11 @@ class ChatOpenAI(_LangChainChatOpenAI):
 
     async def _agenerate(self, *args, **kwargs):
         try:
-            return await super()._agenerate(*args, **kwargs)
+            return _quitar_cabeceras_del_resultado(await super()._agenerate(*args, **kwargs), self.model_name)
         except Exception as exc:
             if self._intentar_reintento_cache(exc):
                 try:
-                    return await super()._agenerate(*args, **kwargs)
+                    return _quitar_cabeceras_del_resultado(await super()._agenerate(*args, **kwargs), self.model_name)
                 except Exception as retry_exc:
                     self._avisar_saldo(retry_exc)
                     raise
@@ -225,6 +253,7 @@ class ChatOpenAI(_LangChainChatOpenAI):
             for trozo in super()._stream(*args, **kwargs):
                 if not yielded:
                     _anotar_ttft(_t0)
+                    _leer_y_quitar_cabeceras(trozo, self.model_name)   # [P1-PLAN-LOTE-1023 · A-32]
                 yielded = True
                 yield trozo
         except Exception as exc:
@@ -232,6 +261,7 @@ class ChatOpenAI(_LangChainChatOpenAI):
                 try:
                     for trozo in super()._stream(*args, **kwargs):
                         _anotar_ttft(_t0)
+                        _leer_y_quitar_cabeceras(trozo, self.model_name)
                         yield trozo
                     return
                 except Exception as retry_exc:
@@ -244,12 +274,15 @@ class ChatOpenAI(_LangChainChatOpenAI):
         yielded = False
         try:
             async for trozo in super()._astream(*args, **kwargs):
+                if not yielded:
+                    _leer_y_quitar_cabeceras(trozo, self.model_name)   # [P1-PLAN-LOTE-1023 · A-32]
                 yielded = True
                 yield trozo
         except Exception as exc:
             if not yielded and self._intentar_reintento_cache(exc):
                 try:
                     async for trozo in super()._astream(*args, **kwargs):
+                        _leer_y_quitar_cabeceras(trozo, self.model_name)
                         yield trozo
                     return
                 except Exception as retry_exc:
@@ -929,5 +962,13 @@ def build_chat_llm(model: str, **kwargs):
         _m_low = str(model or "").strip().lower()
         if "terra" in _m_low and _m_low.startswith("gpt-6") and "use_responses_api" not in kwargs:
             kwargs["use_responses_api"] = True
+        # [P1-PLAN-LOTE-1023 · A-32] el margen del límite viaja en las cabeceras (solo Chat Completions en stream)
+        if "include_response_headers" not in kwargs and not kwargs.get("use_responses_api"):
+            try:
+                from coach_limites_proveedor import vigilancia_activa
+                if vigilancia_activa():
+                    kwargs["include_response_headers"] = True
+            except Exception:  # noqa: BLE001
+                pass
         return ChatOpenAI(model=model, api_key=_openai_api_key(), **kwargs)
     return ChatGLM(model=model, **kwargs)
