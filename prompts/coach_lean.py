@@ -82,6 +82,11 @@ _PATRONES_DUPLICADOS_UNIVERSALES = (
     re.compile(r"FIDELIDAD ESTRICTA DEL INGREDIENTE EN PROPUESTAS:.*?al ingrediente del usuario\.\s*", re.DOTALL),
     # BB-058/BB-059 cola repetida en el bullet de `proponer_comida` (ya en Q2/Q3)
     re.compile(r"PROHIBIDO usarla ante alimentos o productos aislados.*?si tiene atún\)\.", re.DOTALL),
+    # Copias 2x en bullet `log_consumed_meal` ya presentes en Reglas 3, 6-bis, 7, A y Q
+    re.compile(r"Tampoco le preguntes la FRANJA si no la dice:.*?(?:solo si suma\.|usa `correct_consumed_meal`\.)\s*", re.DOTALL),
+    re.compile(r"AL CONFIRMAR(?:\s+EL REGISTRO DE UNA COMIDA)?:.*?(?:si el estimado no cuadra\.|en cada comida\)\.)\s*", re.DOTALL),
+    re.compile(r"NUNCA digas 'lo registro'.*?(?:explícitamente|guardado)\.\s*", re.DOTALL),
+    re.compile(r"BEBIDA LIGERA NO CIERRA LA FRANJA:.*?desayunado\?»\)\.\s*", re.DOTALL),
 )
 
 _PATRONES_POR_HERRAMIENTA = (
@@ -102,7 +107,15 @@ _PATRONES_POR_HERRAMIENTA = (
     ),
     (
         "proponer_comida",
-        re.compile(r"devuelve hasta 3 platos del catálogo.*?cuánto tiempo tiene\.\s*", re.DOTALL),
+        re.compile(r"devuelve hasta 3 platos del catálogo.*?(?:dio esta herramienta\.|cuánto tiempo tiene\.)\s*", re.DOTALL),
+    ),
+    (
+        "proponer_comida",
+        re.compile(r"Cuando presentes la propuesta, PRIORIZA.*?sugerencia es para mañana\.\s*", re.DOTALL),
+    ),
+    (
+        "proponer_comida",
+        re.compile(r"Al recomendar comidas para hoy o para mañana, apóyate primero en.*?«te quedarían ~X kcal»\)\.\s*", re.DOTALL),
     ),
 )
 

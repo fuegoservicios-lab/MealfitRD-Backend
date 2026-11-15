@@ -498,3 +498,68 @@ def test_multiturno_y_nuevos_ingredientes_caseros():
         [HumanMessage(content="Me comí otra manzana verde")]
     )
     assert flag_consumo is False
+
+
+def test_que_hago_recupera_receta_y_pasos_sin_fugas_internas(monkeypatch):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    import agent
+    import coach_day_context as cdc
+    import shopping_calculator
+    import tools
+
+    ai_prev = (
+        "Prueba un revoltillo de claras con espinaca y casabe: lleva 6 claras, 1 huevo, "
+        "1 puñado de espinaca y 1 pieza de casabe, y aporta 410 kcal y 31 g de proteína."
+    )
+    for pregunta in ("Que hago?", "¿Cómo se hace?", "¿Cómo lo preparo?", "Dame los pasos"):
+        assert tools._usuario_pide_pasos_previo(
+            [AIMessage(content=ai_prev), HumanMessage(content=pregunta)]
+        ) is True
+
+    assert tools._usuario_pide_pasos_previo(
+        [AIMessage(content=ai_prev), HumanMessage(content="Dame algo tu")]
+    ) is False
+    assert tools._usuario_pide_pasos_previo([HumanMessage(content="Que hago?")]) is False
+
+    master_stub = [
+        {"name": "Clara de huevo", "kcal_per_100g": 52, "protein_per_100g": 11, "carbs_per_100g": 0.7, "fat_per_100g": 0.2},
+        {"name": "Huevo", "kcal_per_100g": 143, "protein_per_100g": 12.6, "carbs_per_100g": 0.7, "fat_per_100g": 9.5},
+        {"name": "Espinacas", "kcal_per_100g": 23, "protein_per_100g": 2.9, "carbs_per_100g": 3.6, "fat_per_100g": 0.4},
+        {"name": "Casabe", "kcal_per_100g": 340, "protein_per_100g": 1.5, "carbs_per_100g": 82, "fat_per_100g": 0.5},
+        {"name": "Cebolla", "kcal_per_100g": 40, "protein_per_100g": 1.1, "carbs_per_100g": 9.3, "fat_per_100g": 0.1},
+        {"name": "Aceite de oliva", "kcal_per_100g": 884, "protein_per_100g": 0, "carbs_per_100g": 0, "fat_per_100g": 100},
+        {"name": "Sal", "kcal_per_100g": 0, "protein_per_100g": 0, "carbs_per_100g": 0, "fat_per_100g": 0},
+    ]
+    monkeypatch.setattr(shopping_calculator, "get_master_ingredients", lambda: master_stub)
+
+    obj = {"kcal": 410, "protein_g": 31}
+    recetas = cdc.buscar_receta_de_plato({}, [ai_prev], "desayuno", obj)
+    assert len(recetas) == 1
+    assert recetas[0]["name"] == "Revoltillo de claras con espinaca y casabe"
+    assert len(recetas[0]["recipe"]) >= 4
+
+    txt = cdc.formatear_propuestas(
+        recetas,
+        "desayuno",
+        obj,
+        con_nevera=False,
+        nevera_activa=False,
+        es_para_manana=True,
+        usar_medidas_caseras=True,
+        es_receta_pedida=True,
+    )
+    assert "Porción casera aprox.:" in txt
+    assert "Pasos: 1." in txt
+    assert "Pica la cebolla" in txt
+    assert "PROHIBIDO mencionar «herramienta»" in txt
+    assert "nevera" not in txt.lower()
+
+    # `_compact_prior_tool_message` preserva el plato, porciones caseras y Pasos entre turnos en la misma sesión
+    largo_propuesta = txt + "\n" + ("Relleno extra de catálogo " * 15)
+    compacto = agent._compact_prior_tool_message(
+        ToolMessage(content=largo_propuesta, tool_call_id="tc_prop", name="proponer_comida")
+    )
+    assert "[resumido de turno anterior]" in compacto.content
+    assert "1) Revoltillo de claras con espinaca y casabe" in compacto.content
+    assert "Porción casera aprox.:" in compacto.content
+    assert "Pasos: 1." in compacto.content

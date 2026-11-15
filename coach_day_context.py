@@ -678,6 +678,78 @@ def proponer_comidas(form_data: dict, franja: str, objetivo: dict, nevera_nombre
     return out
 
 
+def buscar_receta_de_plato(form_data: dict, textos_o_plato, franja: str, objetivo: dict,
+                           nevera_nombres=None) -> list:
+    """Busca un plato puntual del catálogo por nombre o mención previa en el chat y devuelve sus pasos exactos."""
+    import deterministic_day as dd
+    import dish_registry as dr
+    from constants import cultural_country_for_form_data
+    from shopping_calculator import get_master_ingredients
+
+    fd = form_data if isinstance(form_data, dict) else {}
+    country = cultural_country_for_form_data(fd) or "DO"
+    por_id = dr.templates_by_id(country) or {}
+    catalogo = dd._CatalogoPorNombre(get_master_ingredients() or [])
+    if not por_id or not catalogo:
+        return []
+
+    candidatos_txt = [str(textos_o_plato)] if isinstance(textos_o_plato, str) else [str(x) for x in (textos_o_plato or []) if str(x or "").strip()]
+    if not candidatos_txt:
+        return []
+
+    try:
+        from rutina_del_coach import _tokens_plato, _METODOS_Y_CONTEXTO
+    except Exception:
+        _tokens_plato, _METODOS_Y_CONTEXTO = None, frozenset()
+
+    norm_txts = [dd._norm(x) for x in candidatos_txt]
+    mejor = None
+    mejor_score = (0, 0.0, 0)  # (prioridad_exacta, sim_tokens, len_nombre)
+
+    for tid, t in por_id.items():
+        nombre = str(t.get("name") or "").strip()
+        norm_nom = dd._norm(nombre)
+        if len(norm_nom) < 4:
+            continue
+        exacta = 1 if any(norm_nom in txt or txt in norm_nom for txt in norm_txts) else 0
+        sim = 0.0
+        if exacta:
+            sim = 1.0
+        elif _tokens_plato:
+            toks_nom = _tokens_plato(nombre) - _METODOS_Y_CONTEXTO
+            if toks_nom:
+                min_req = 2 if len(toks_nom) >= 2 else 1
+                for raw in candidatos_txt:
+                    toks_raw = _tokens_plato(raw) - _METODOS_Y_CONTEXTO
+                    inter = len(toks_nom & toks_raw)
+                    if inter >= min_req:
+                        sim = max(sim, inter / float(len(toks_nom)))
+        if exacta or sim >= 0.65:
+            cand_score = (exacta, round(sim, 4), len(norm_nom))
+            if cand_score > mejor_score:
+                mejor_score = cand_score
+                mejor = (tid, t)
+
+    if not mejor:
+        return []
+
+    tid, t = mejor
+    base = dd._macros(dd._de_plantilla(t), catalogo)
+    if not base or not base.get("kcal"):
+        return []
+    slot_t = str(t.get("meal_type") or franja or "desayuno").lower()
+    lo, hi = dd._banda(slot_t if slot_t in FRANJAS else franja)
+    ok = float((objetivo or {}).get("kcal") or base["kcal"])
+    f = min(max(ok / base["kcal"], lo), hi)
+    c = _armar(t, f, catalogo, slot_t if slot_t in FRANJAS else franja, objetivo or {})
+    if not c:
+        return []
+    tiene, falta = cobertura_nevera(c["_lineas"], nevera_nombres)
+    c["recipe"] = _pasos_de_biblioteca(tid, country, f)
+    c.update({"_tid": tid, "_factor": f, "_tiene": tiene, "_falta": falta, "_afinidad": 1})
+    return [c]
+
+
 def _linea_amigable(g: float, nombre: str) -> str:
     """«206.5 g de Yuca» → «205 g de Yuca»; «0.5 g de Sal» → «una pizca de Sal». Las macros ya se calcularon con los
     gramos exactos; esto es solo cómo se LEE (nadie pesa 206,5 g), y redondear a 5 g mueve el plato menos de un 2 %."""
@@ -821,7 +893,8 @@ def _linea_casera(g: float, nombre: str) -> str:
 def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_nevera: bool, contexto: str = "",
                          solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True,
                          rutina_franja_txt: str = "", es_para_manana: bool = False,
-                         usar_medidas_caseras: bool = False, pidio_propuesta_nueva: bool = False) -> str:
+                         usar_medidas_caseras: bool = False, pidio_propuesta_nueva: bool = False,
+                         es_receta_pedida: bool = False) -> str:
     """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo.
 
     [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a mano o sola): ninguna línea
@@ -880,7 +953,7 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         if i == 1 and c.get("recipe"):
             lineas.append("   Pasos: " + " ".join(f"{j}. {p}" for j, p in enumerate(c["recipe"], start=1)))
 
-    modo_default = not (rutina_limpia or es_para_manana or usar_medidas_caseras or pidio_propuesta_nueva)
+    modo_default = not (rutina_limpia or es_para_manana or usar_medidas_caseras or pidio_propuesta_nueva or es_receta_pedida)
     if modo_default:
         lineas.append(
             "(Para el asistente: presenta la nº 1 con sus kcal y proteína y, en una frase, cómo deja su día (la línea «Si se "
@@ -899,7 +972,13 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         rutina_limpia and "YA PROPUESTO EN ESTE CHAT" in rutina_limpia
         and "ya fueron propuestos en el turno anterior" in rutina_limpia
     )
-    if pidio_propuesta_nueva or sin_activos_rutina:
+    if es_receta_pedida:
+        apertura = (
+            "(Para el asistente: el usuario pide CÓMO PREPARAR o los pasos de este plato. Dale directamente los ingredientes "
+            "en «Porción casera aprox.» (y gramos si ayuda), sus kcal/proteína y los Pasos numerados de preparación claros "
+            "y directos — NUNCA digas «la herramienta no me mostró los pasos» ni propongas otro plato distinto sin dárselos."
+        )
+    elif pidio_propuesta_nueva or sin_activos_rutina:
         apertura = (
             "(Para el asistente: el usuario pidió una PROPUESTA NUEVA y distinta; PROHIBIDO repetir cualquier plato marcado "
             "con «⛔ YA PROPUESTO EN ESTE CHAT». Propón directamente la opción nº 1 del catálogo (o un plato de su rutina NO "
@@ -918,7 +997,7 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         )
 
     if es_para_manana:
-        pref = "" if (rutina_limpia or pidio_propuesta_nueva or sin_activos_rutina) else "."
+        pref = "" if (rutina_limpia or pidio_propuesta_nueva or sin_activos_rutina or es_receta_pedida) else "."
         cierre_dia = (
             f"{pref} OJO: esta propuesta es para MAÑANA / su próxima jornada; indica solo cuánto aporta el plato, y "
             "PROHIBIDO decir «si lo comes te quedarían X kcal hoy» o restarlo de un presupuesto futuro. "
@@ -928,17 +1007,25 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
             " Si presentas una opción para hoy y existe la línea «Si se la come», úsala tal cual — no hagas la resta tú. "
         )
 
-    cuerpo = (
-        "Describe el plato recomendado conservando la medida casera de cada ingrediente (incluidos vegetales u hojas, "
-        "ej. «1 puñado de espinaca») y 1 alternativa breve con sus ~kcal y ~g de proteína "
-        "(los gramos en crudo y los PASOS solo si pidió receta, cómo se hace o pesos exactos). "
-        "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?»: da la propuesta práctica completa de una vez. "
-        "No cambies cifras ni macros. "
-        + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
-        + "NO la registres: todavía no se la ha comido "
-        "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
-        "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
-        "propuestos.)"
-    )
+    if es_receta_pedida:
+        cuerpo = (
+            "Si el plato no trajera pasos preescritos arriba, guíalo en 3-4 pasos culinarios sencillos usando únicamente sus "
+            "ingredientes reales. PROHIBIDO mencionar «herramienta» o excusas técnicas. "
+            + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
+            + "NO la registres: cierra ofreciendo anotarla cuando la coma.)"
+        )
+    else:
+        cuerpo = (
+            "Describe el plato recomendado conservando la medida casera de cada ingrediente (incluidos vegetales u hojas, "
+            "ej. «1 puñado de espinaca») y 1 alternativa breve con sus ~kcal y ~g de proteína "
+            "(los gramos en crudo y los PASOS solo si pidió receta, cómo se hace o pesos exactos). "
+            "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?»: da la propuesta práctica completa de una vez. "
+            "No cambies cifras ni macros. "
+            + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
+            + "NO la registres: todavía no se la ha comido "
+            "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
+            "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
+            "propuestos.)"
+        )
     lineas.append(apertura + cierre_dia + cuerpo)
     return "\n".join(lineas)

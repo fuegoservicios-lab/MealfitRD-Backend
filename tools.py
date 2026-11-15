@@ -6582,11 +6582,21 @@ _RE_PIDE_PROPUESTA_NUEVA = re.compile(
 )
 
 
-def _extraer_contexto_turno_propuesta(messages: Optional[list] = None) -> tuple[list[str], bool]:
-    """Lee del historial activo del turno si el usuario pide una propuesta nueva y qué ofreció el coach antes."""
+_RE_PIDE_PASOS_PLATO = re.compile(
+    r"(?:\b(?:como\s+(?:lo|la|se)\s+(?:hago|preparo|cocino|hace|prepara|cocina)|"
+    r"dame\s+(?:la\s+receta|los\s+pasos|las\s+instrucciones)|"
+    r"cual\s+es\s+la\s+receta|pasos\s+para\s+(?:hacer|preparar)|"
+    r"como\s+se\s+(?:hace|prepara|cocina)\b|(?:pasos|instrucciones)\s+de\s+eso|"
+    r"como\s+(?:hago|preparo)\s+eso)\b|^(?:que\s+hago|como\s+lo\s+hago|como\s+hago|pasos|receta)[?!.\s]*$)",
+    re.IGNORECASE,
+)
+
+
+def _parsear_turno_propuesta(messages: Optional[list] = None) -> tuple[str, list[str]]:
+    """Extrae texto normalizado del último turno de usuario y hasta 6 mensajes previos de la IA."""
     msgs = list(messages if messages is not None else (_CURRENT_CHAT_MESSAGES.get() or []))
     if not msgs:
-        return [], False
+        return "", []
 
     def _msg_role(m) -> str:
         if isinstance(m, dict):
@@ -6607,9 +6617,6 @@ def _extraer_contexto_turno_propuesta(messages: Optional[list] = None) -> tuple[
             last_user_txt = _msg_text(msgs[idx])
             break
 
-    norm_user = strip_accents(last_user_txt or "")
-    pidio_nueva = bool(norm_user and _RE_PIDE_PROPUESTA_NUEVA.search(norm_user))
-
     textos_ai_previos: list[str] = []
     limite = last_user_idx if last_user_idx >= 0 else len(msgs)
     for idx in range(limite - 1, -1, -1):
@@ -6620,12 +6627,26 @@ def _extraer_contexto_turno_propuesta(messages: Optional[list] = None) -> tuple[
                 if len(textos_ai_previos) >= 6:
                     break
 
+    return strip_accents(last_user_txt or ""), textos_ai_previos
+
+
+def _extraer_contexto_turno_propuesta(messages: Optional[list] = None) -> tuple[list[str], bool]:
+    """Lee del historial activo del turno si el usuario pide una propuesta nueva y qué ofreció el coach antes."""
+    norm_user, textos_ai_previos = _parsear_turno_propuesta(messages)
+    pidio_nueva = bool(norm_user and _RE_PIDE_PROPUESTA_NUEVA.search(norm_user))
     return textos_ai_previos, pidio_nueva
+
+
+def _usuario_pide_pasos_previo(messages: Optional[list] = None) -> bool:
+    """True si el último mensaje pregunta cómo preparar/hacer el plato propuesto justo antes."""
+    norm_user, textos_ai_previos = _parsear_turno_propuesta(messages)
+    return bool(norm_user and textos_ai_previos and _RE_PIDE_PASOS_PLATO.search(norm_user))
 
 
 @tool
 def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = None, proteina_objetivo: int = None,
-                    solo_con_nevera: bool = False, excluir: list[str] = None, max_minutos: int = None) -> str:
+                    solo_con_nevera: bool = False, excluir: list[str] = None, max_minutos: int = None,
+                    plato: str = None) -> str:
     """
     Propone una comida o receta A LA MEDIDA de lo que al usuario le falta hoy. Devuelve hasta 3 platos del catálogo de
     recetas con gramos, macros calculadas con la tabla de alimentos, tiempo, pasos y qué tiene ya en su Nevera —
@@ -6641,6 +6662,7 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
     - solo_con_nevera: true si pide cocinar SOLO con lo que tiene en casa.
     - excluir: nombres de platos ya propuestos que no quiso, para que salgan otros.
     - max_minutos: si dice cuánto tiempo tiene para cocinar.
+    - plato: nombre de un plato puntual si pide cómo prepararlo, sus ingredientes o pasos.
     """
     _nevera_on = True   # [P1-NEVERA-OPCIONAL · 2026-09-23] también decide el mensaje de error de abajo
     try:
@@ -6687,6 +6709,30 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
                     "(Para el asistente: pregúntale cuántas calorías quiere para esa comida y vuelve a llamar esta "
                     "herramienta con `kcal_objetivo`.)")
         textos_ai_previos, pidio_nueva = _extraer_contexto_turno_propuesta()
+        contexto = ""
+        falta_fmt = None if es_para_manana else falta
+        if es_para_manana:
+            contexto = " — planificación para mañana"
+        elif falta and falta.get("kcal") is not None and not kcal_objetivo:
+            contexto = (f" — hoy le faltan ~{int(round(max(falta['kcal'], 0)))} kcal"
+                        + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
+                           if falta.get("protein_g") is not None else ""))
+
+        plato_limpio = str(plato or "").strip()
+        pide_pasos = bool(plato_limpio or (_usuario_pide_pasos_previo() and not pidio_nueva))
+        if pide_pasos:
+            objetivo_receta = [plato_limpio] if plato_limpio else textos_ai_previos[:1]
+            prop_receta = cdc.buscar_receta_de_plato(
+                ctx["hp"], objetivo_receta, franja, objetivo, nevera_nombres=ctx["nevera"],
+            )
+            if prop_receta:
+                return cdc.formatear_propuestas(
+                    prop_receta, franja, objetivo, con_nevera=bool(ctx["nevera"]), contexto=contexto,
+                    solo_nevera=bool(solo_con_nevera), falta=falta_fmt, nevera_activa=_nevera_on,
+                    es_para_manana=es_para_manana, usar_medidas_caseras=True,
+                    pidio_propuesta_nueva=False, es_receta_pedida=True,
+                )
+
         excluir_total = [str(x) for x in (excluir or []) if str(x or "").strip()] + textos_ai_previos
         gustos_tokens: set[str] = set()
         try:
@@ -6701,14 +6747,6 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
             solo_nevera=bool(solo_con_nevera), max_minutos=max_minutos, n=3,
             rotacion=_date_r.fromisoformat(_local_date_str_for_user(user_id)).toordinal(),
             gustos_tokens=gustos_tokens)
-        contexto = ""
-        falta_fmt = None if es_para_manana else falta
-        if es_para_manana:
-            contexto = " — planificación para mañana"
-        elif falta and falta.get("kcal") is not None and not kcal_objetivo:
-            contexto = (f" — hoy le faltan ~{int(round(max(falta['kcal'], 0)))} kcal"
-                        + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
-                           if falta.get("protein_g") is not None else ""))
         rutina_txt = ""
         try:
             from rutina_del_coach import formatear_rutina_para_propuesta
