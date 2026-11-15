@@ -96,3 +96,9 @@ def test_extract_targets_from_plan_data_soporta_nested_assessment_y_strings():
 
 def test_kv_prefix_incluido_en_borrado_de_cuenta():
     assert KV_PREFIX in db_profiles._USER_SCOPED_KV_PREFIXES
+
+
+def test_queries_meal_plans_no_asumen_columna_status_inexistente():
+    src = (BACKEND / "diary_targets.py").read_text(encoding="utf-8")
+    assert "status IS DISTINCT FROM" not in src
+    assert "generation_status" in src

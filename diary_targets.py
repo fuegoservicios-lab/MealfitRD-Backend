@@ -252,7 +252,7 @@ def resolve_targets_by_day(
                    ) AS main_goal
             FROM meal_plans
             WHERE user_id = %s
-              AND status IS DISTINCT FROM 'failed'
+              AND COALESCE(plan_data->>'generation_status', '') <> 'failed'
               AND plan_data IS NOT NULL
               AND plan_data ? 'calories'
             ORDER BY created_at ASC
@@ -378,7 +378,7 @@ def snapshot_current_targets_for_user(
                    ) AS main_goal
             FROM meal_plans
             WHERE user_id = %s
-              AND status IS DISTINCT FROM 'failed'
+              AND COALESCE(plan_data->>'generation_status', '') <> 'failed'
               AND plan_data IS NOT NULL
               AND plan_data ? 'calories'
             ORDER BY created_at DESC
@@ -441,7 +441,7 @@ def record_calculator_snapshot_if_tracking_only(user_id: str, health_profile: An
         if not connection_pool:
             return False
         has_plan = execute_sql_query(
-            "SELECT 1 FROM meal_plans WHERE user_id = %s AND status IS DISTINCT FROM 'failed' "
+            "SELECT 1 FROM meal_plans WHERE user_id = %s AND COALESCE(plan_data->>'generation_status', '') <> 'failed' "
             "AND plan_data IS NOT NULL AND plan_data ? 'calories' LIMIT 1",
             (user_id,),
             fetch_one=True,
