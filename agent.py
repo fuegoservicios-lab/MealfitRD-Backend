@@ -6651,6 +6651,12 @@ def execute_tools(state: ChatState):
             _src_guard_blocked = False
             try:
                 _src_block = _guard_source_intent_mutation(tool_name, tool_args, state, messages)
+                if not _src_block and tool_name == "update_form_field":
+                    # [P1-PLAN-LOTE-1018 · D2] «se me acabó el pollo» no puede acabar en dislikes=pollo
+                    from guarda_nevera_no_es_gusto import bloqueo_si_es_la_nevera
+                    _src_block = bloqueo_si_es_la_nevera(tool_name, tool_args, _extraer_ultimo_texto_usuario(messages))
+                    if _src_block:
+                        logger.warning(f"🛡️ [LOTE-1018 NEVERA≠GUSTO] Bloqueado update_form_field({tool_args!r})")
                 if _src_block:
                     _src_guard_blocked = True
                     tool_result = _src_block
