@@ -76,3 +76,75 @@ def test_chat_voice_rules_rule_p_forbids_asking_whats_unlogged_when_covered():
     assert "PROHIBIDO preguntar «¿qué comiste hoy?»" in _CHAT_VOICE_RULES
     assert "la próxima comida del plan POR SU NOMBRE" in _CHAT_VOICE_RULES
     assert "techo, no meta" in _CHAT_VOICE_RULES
+
+
+def test_rechazar_autolog_disponibilidad_blocks_manzana_verde_after_tienes_a_mano():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    msgs = [
+        AIMessage(content="Si tienes hambre, elige algo pequeño y ligero; ¿qué alimentos tienes a mano?"),
+        HumanMessage(content="Manzana verde"),
+    ]
+    res = agent._rechazar_autolog_disponibilidad(msgs, plate_photos=[])
+    assert res is not None and "BLOQUEADO" in res
+
+
+def test_rechazar_autolog_disponibilidad_allows_explicit_consumption_verb():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    msgs_eat = [
+        AIMessage(content="Si tienes hambre, elige algo pequeño y ligero; ¿qué alimentos tienes a mano?"),
+        HumanMessage(content="Me comí una manzana verde"),
+    ]
+    assert agent._rechazar_autolog_disponibilidad(msgs_eat, plate_photos=[]) is None
+
+    msgs_log_q = [
+        AIMessage(content="¿Qué cenaste hoy?"),
+        HumanMessage(content="Manzana verde"),
+    ]
+    assert agent._rechazar_autolog_disponibilidad(msgs_log_q, plate_photos=[]) is None
+
+
+def test_1_kcal_over_target_does_not_fire_critical_excess():
+    out_rem = agent._build_today_remaining_context(
+        None,
+        consumed_today=[{"meal_type": "cena", "calories": 2051}],
+        target_cal_int=2050,
+        total_consumed=2051,
+        local_date_str="2026-07-28",
+    )
+    assert "ALERTA CRÍTICA" not in out_rem
+    assert "NO digas que «superaste tu meta»" in out_rem
+
+    out_gap = cdc.build_day_gap_context(
+        form_data={"goal": "maintain"},
+        plan_vigente={"calories": 2050, "protein": 134, "carbs": 230, "fat": 68},
+        consumed_today=[{"meal_type": "cena", "calories": 2051, "protein": 134}],
+        hora_local=1.2,
+    )
+    assert "ya se pasó de su meta por ~1 kcal" not in out_gap
+    assert "en rango, sin exceso" in out_gap
+
+
+def test_night_cookies_380_kcal_with_prior_cena_classified_as_merienda_nocturna():
+    from unittest.mock import patch
+    from tools import log_consumed_meal
+
+    mock_cena = {"id": "cena-01", "meal_type": "cena", "meal_name": "4 sándwiches", "calories": 1240}
+    with patch("tools._hora_local_float", return_value=1.22), \
+         patch("tools.user_tz_offset_min", return_value=240), \
+         patch("tools._buscar_cena_principal_hoy", return_value=mock_cena), \
+         patch("tools.db_log_consumed_meal", return_value="meal-cookies-1") as mock_db_log:
+        res = log_consumed_meal.invoke({
+            "user_id": "user-test-cookies",
+            "meal_name": "4 galletas pequeñas caseras de avena con mantequilla de maní y miel",
+            "calories": 380,
+            "protein": 8,
+            "carbs": 42,
+            "healthy_fats": 18,
+            "meal_type": "cena",
+            "explicit_slot": False,
+        })
+        assert mock_db_log.call_args[1]["meal_type"] == "merienda"
+        assert "merienda nocturna / extra de la noche" in res
+

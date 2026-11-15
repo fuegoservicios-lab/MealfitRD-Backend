@@ -2125,7 +2125,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         _es_horario_nocturno = _hora_actual is not None and (_hora_actual >= 18.0 or _hora_actual < 4.0)
         _cena_principal = _buscar_cena_principal_hoy(user_id) if (_es_horario_nocturno and _days_ago == 0) else None
 
-        if _cena_principal and calories is not None and calories <= 350:
+        _es_snack_nocturno = bool(re.search(
+            r"\b(gallet\w*|cookie\w*|postre\w*|helado\w*|brownie\w*|bizcoch\w*|torta\w*|pastel\w*|"
+            r"dulce\w*|chocolate\w*|chucher\w*|snack\w*|picader\w*|frut\w*|manzana\w*|guineo\w*|"
+            r"banano\w*|yogur\w*|batido\w*|smoothie\w*|avena|cereal\w*|palomita\w*|cotufa\w*|"
+            r"nuez|nueces|alme[dn]dr\w*|mani|maní|tostad\w*|panqueque\w*|pancake\w*)\b",
+            _norm_txt(meal_name or ""),
+        ))
+        _max_kcal_merienda_nocturna = 600 if _es_snack_nocturno else 450
+        if _cena_principal and calories is not None and calories <= _max_kcal_merienda_nocturna:
             _cal_cena_previa = int(_cena_principal.get("calories") or 0)
             _es_merienda_nocturna = True
             _meal_type = "merienda"

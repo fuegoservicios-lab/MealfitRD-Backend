@@ -307,9 +307,14 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
         out = ("\n\n🎯 LO QUE LE FALTA HOY (la resta ya está hecha por el sistema — usa ESTAS cifras tal cual, no las "
                f"recalcules; son estimadas porque el diario lo es): meta del día {meta_txt}. ")
         partes = []
+        _tol_kcal = max(50, int(round(0.03 * metas["kcal"])))
         if fk is not None:
-            partes.append(f"le faltan ~{int(round(fk))} kcal" if fk > 0 else
-                          f"ya se pasó de su meta por ~{int(round(-fk))} kcal")
+            if fk > 0:
+                partes.append(f"le faltan ~{int(round(fk))} kcal")
+            elif -fk <= _tol_kcal:
+                partes.append("ya cubrió su meta calórica del día (en rango, sin exceso)")
+            else:
+                partes.append(f"ya se pasó de su meta por ~{int(round(-fk))} kcal")
         if fp is not None:
             partes.append(f"le faltan {_g(fp)} de proteína" if fp > 5 else
                           ("ya cubrió su proteína del día" if fp <= 0 else f"le faltan solo {_g(fp)} de proteína"))

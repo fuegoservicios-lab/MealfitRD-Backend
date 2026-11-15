@@ -5623,6 +5623,78 @@ def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photo
     return tool_args
 
 
+_RE_PREGUNTA_DISPONIBILIDAD = re.compile(
+    r"(?:qué|que)\s+(?:alimentos|comida|cosas|opciones|ingredientes)\s+(?:tienes|hay)"
+    r"|tienes\s+a\s+mano"
+    r"|en\s+(?:tu|la)\s+nevera"
+    r"|elige\s+algo"
+    r"|(?:qué|que)\s+(?:se\s+te\s+antoja|te\s+provoca|prefieres\s+(?:comer|preparar))",
+    re.IGNORECASE,
+)
+
+_RE_VERBO_CONSUMO_O_REGISTRO = re.compile(
+    r"\b(?:comi|comí|comiend|cene|cené|almorce|almorcé|desayune|desayuné|merende|merendé|"
+    r"tome|tomé|bebi|bebí|pique|piqué|anota|anóta\w*|anotam\w*|registra\w*|regístr\w*|"
+    r"apunta\w*|agrega\w*|suma\w*|sumale|súmale|me\s+lo\s+com|me\s+la\s+com|"
+    r"fue\s+mi|ese\s+fue|eso\s+com)\b",
+    re.IGNORECASE,
+)
+
+
+def _extraer_texto_msg_reciente(msg) -> str:
+    content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        partes = [
+            str(b.get("text") or "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        return " ".join(p.strip() for p in partes if p.strip()).strip()
+    return str(content or "").strip()
+
+
+def _rechazar_autolog_disponibilidad(messages: list, plate_photos: list) -> Optional[str]:
+    """Si el coach preguntó qué alimentos tiene a mano el usuario y este solo respondió
+    nombrando ingredientes/comida sin foto ni verbo de consumo/registro, bloquea
+    `log_consumed_meal` para evitar registrar inventario disponible como comida comida."""
+    if plate_photos or not messages:
+        return None
+    ultimo_txt = _extraer_ultimo_texto_usuario(messages)
+    if not ultimo_txt or _RE_VERBO_CONSUMO_O_REGISTRO.search(ultimo_txt):
+        return None
+    # Buscar la última respuesta del asistente anterior al último mensaje del usuario
+    ultimo_ai = ""
+    vio_humano = False
+    for msg in reversed(messages):
+        es_ai = (
+            (isinstance(msg, dict) and str(msg.get("role") or msg.get("sender") or "").lower() in ("assistant", "ai", "model"))
+            or (msg.__class__.__name__ == "AIMessage" or str(getattr(msg, "type", "")).lower() == "ai")
+        )
+        es_humano = (
+            (isinstance(msg, dict) and str(msg.get("role") or msg.get("sender") or "").lower() in ("user", "human"))
+            or (msg.__class__.__name__ == "HumanMessage" or str(getattr(msg, "type", "")).lower() == "human")
+        )
+        if not vio_humano:
+            if es_humano:
+                vio_humano = True
+            continue
+        if es_ai:
+            ultimo_ai = _extraer_texto_msg_reciente(msg)
+            if ultimo_ai:
+                break
+    if not ultimo_ai or not _RE_PREGUNTA_DISPONIBILIDAD.search(ultimo_ai):
+        return None
+    return (
+        f"BLOQUEADO: El usuario solo respondió '{ultimo_txt}' a tu pregunta sobre qué alimentos tiene a mano "
+        "o qué prefiere elegir — NO dijo que ya lo haya comido ni pidió registrarlo. "
+        "Está PROHIBIDO llamar a `log_consumed_meal` o decir «Anoté tu...». "
+        "Responde sugiriéndole qué hacer con ese alimento según sus calorías/proteína restantes y "
+        "pregúntale si le gustaría comerlo (o que te avise si lo come para anotarlo)."
+    )
+
+
 def _promover_slot_plato_fuerte_tarde(tool_args: dict, user_id: str, local_hour: Optional[float], messages: list) -> dict:
     """[BB-043] Si se registra un plato fuerte (≥ 450 kcal) por la tarde (12:00 PM a 6:30 PM),
     y el usuario NO nombró explícitamente 'merienda' o 'snack', y el almuerzo está vacío hoy:
@@ -6117,6 +6189,7 @@ def execute_tools(state: ChatState):
                     if _user_named_slot:
                         tool_args["explicit_slot"] = True
                     elif not tool_args.get("days_ago"):
+                        tool_args["explicit_slot"] = False
                         from meal_registration_time import infer_current_meal_slot
                         _slot_registro = infer_current_meal_slot(
                             messages, _hora_registro, (state.get("form_data") or {}).get("scheduleType"))
@@ -6514,6 +6587,10 @@ def execute_tools(state: ChatState):
                             continue
 
                 if tool_name == "log_consumed_meal":
+                    _r_disp = _rechazar_autolog_disponibilidad(messages, state.get("turn_plate_photos") or [])
+                    if _r_disp:
+                        tool_messages.append(ToolMessage(content=_r_disp, tool_call_id=tool_id))
+                        continue
                     # [BB-040] Sanitizar alucinaciones de foto (aguacate, espárragos, etc.) y rescatar proteínas detectadas
                     tool_args = _sanitizar_ingredientes_contra_alucinacion_foto(
                         tool_args, state.get("turn_plate_photos") or [], state.get("messages") or []
@@ -9770,12 +9847,19 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
         remaining = target_cal_int - total_consumed
 
         # --- (a) tier de calorías restantes ---
-        if remaining <= 0:
+        _tol_kcal = max(50, round(target_cal_int * 0.03))
+        if remaining < -_tol_kcal:
             out += (
                 f"\n🚨 ALERTA CRÍTICA (MEJORA 6): El usuario ha superado su presupuesto "
                 f"calórico de hoy. Tiene un exceso estimado de {abs(round(remaining))} kcal. "
                 f"Indícale esto con empatía de coach y dale recomendaciones proactivas sobre "
                 f"cómo equilibrarse en la cena o mañana."
+            )
+        elif remaining <= 0:
+            out += (
+                f"\n📊 ESTADO DEL DÍA: El usuario lleva un estimado de {round(total_consumed)} "
+                f"kcal frente a su meta de {target_cal_int} kcal (prácticamente en meta, dentro del "
+                f"margen normal de estimación; NO digas que «superaste tu meta» ni señales exceso)."
             )
         elif remaining < (target_cal_int * 0.35):
             out += (
