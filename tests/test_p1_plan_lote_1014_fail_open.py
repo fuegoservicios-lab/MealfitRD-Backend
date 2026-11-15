@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "scripts"))   # al final: en cabeza sombrea plan_gym (lote 13)
 _BACKEND = Path(__file__).resolve().parent.parent
 
 
