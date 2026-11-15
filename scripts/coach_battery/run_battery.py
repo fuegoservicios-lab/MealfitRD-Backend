@@ -812,7 +812,7 @@ def main() -> int:
         for t in r["turns"]:
             md.append(f"\n**Usuario:** {t['prompt']}" + (f"  _(foto: {t['vision']['kind']})_" if t.get("vision") else ""))
             for tc in t["tools"]:
-                md.append(f"- 🔧 `{tc['tool']}` {json.dumps(tc.get('args'), ensure_ascii=False)[:300]} → "
+                md.append(f"- 🔧 `{tc['tool']}` {json.dumps(tc.get('args'), ensure_ascii=False, default=str)[:300]} → "
                           f"{(tc.get('result') or tc.get('error') or '')[:260]!r}")
             if t["errors"]:
                 md.append(f"- ❗ errores: {json.dumps(t['errors'], ensure_ascii=False)[:300]}")
