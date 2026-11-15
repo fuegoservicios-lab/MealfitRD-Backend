@@ -240,12 +240,31 @@ def aplicar_respuesta_a_descripcion(descripcion: str, respuesta: str) -> tuple[s
     return desc, sup
 
 
+def _por_foto_map(vision) -> dict[int, dict]:
+    """Mapa `indice_foto -> {respuestas, ajuste}` cuando el cliente envía desglose por foto (1..4 fotos)."""
+    raw = vision.get("por_foto") if isinstance(vision, dict) else None
+    if not isinstance(raw, list):
+        return {}
+    out: dict[int, dict] = {}
+    for pf in raw:
+        if not isinstance(pf, dict):
+            continue
+        try:
+            idx = int(pf.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < 4:
+            out[idx] = pf
+    return out
+
+
 def preparar_vision(vision):
     """El `vision` del turno listo para el prompt. Sin respuestas, el MISMO objeto (conducta de siempre).
 
-    Con respuestas: las descripciones pierden el bloque de dudas y, si hay UNA sola foto de plato con estimación, esa
-    estimación recibe el ajuste de las opciones elegidas (con varias no se sabe a qué plato va cada duda: se deja al
-    coach).
+    Con respuestas: las descripciones pierden el bloque de dudas y:
+    - si viene `por_foto` (1..4 fotos), cada foto recibe solo sus propias respuestas y su propio `ajuste`;
+    - si NO viene `por_foto` y hay UNA sola foto de plato con estimación, esa estimación recibe `ajuste`
+      (legacy: con varias sin `por_foto` no se sabe a qué plato va cada duda).
     [BB-026] Idempotente: _preparado previene re-ejecución."""
     if not respuestas_de(vision):
         return vision
@@ -254,22 +273,61 @@ def preparar_vision(vision):
     v = dict(vision)
     ajuste = _ajuste(vision)
     r_texto = respuestas_de(vision)
+    por_foto = _por_foto_map(vision)
+    tiene_por_foto = bool(por_foto)
     if isinstance(v.get("items"), list):
         items = [dict(it) if isinstance(it, dict) else it for it in v["items"]]
         platos = [it for it in items if isinstance(it, dict) and str(it.get("kind") or "plato") == "plato"]
-        for it in items:
-            if isinstance(it, dict) and it.get("description"):
-                desc_reemplazada, sup_reemp, reemps = aplicar_respuestas_multiples(it["description"], r_texto)
+        sup_acum: list[str] = []
+        reemps_acum: list[tuple[str, str]] = []
+        hay_escrita_pf = any(
+            bool(" ".join(str(pf.get("respuestas") or "").split())) and pf.get("ajuste") is None
+            for pf in por_foto.values()
+        )
+        todas_pf_tienen_ajuste = bool(por_foto) and not hay_escrita_pf
+        algun_cambio_pf = False
+        alguna_estimacion_pf = False
+        for idx, it in enumerate(items):
+            if not (isinstance(it, dict) and it.get("description")):
+                continue
+            pf = por_foto.get(idx) if tiene_por_foto else None
+            r_it = (
+                " ".join(str(pf.get("respuestas") or "").split())[:200]
+                if (tiene_por_foto and pf is not None)
+                else ("" if tiene_por_foto else r_texto)
+            )
+            if r_it:
+                desc_reemplazada, sup_reemp, reemps = aplicar_respuestas_multiples(it["description"], r_it)
                 if sup_reemp:
-                    v["_supuesto_reemplazado"] = sup_reemp
+                    sup_acum.append(sup_reemp)
                 if reemps:
-                    v["_reemplazos_aplicados"] = reemps
+                    reemps_acum.extend(reemps)
                     it["description"] = desc_reemplazada
-                it["description"] = sin_dudas(it["description"])
-                if len(platos) == 1 and it is platos[0]:
-                    nueva = con_ajuste(it["description"], ajuste)
-                    v["_ajuste_aplicado"] = bool(v.get("_ajuste_aplicado")) or (nueva != it["description"])
+            it["description"] = sin_dudas(it["description"])
+            if tiene_por_foto:
+                if pf is not None and isinstance(pf.get("ajuste"), dict):
+                    if _ESTIMACION.search(it["description"]):
+                        alguna_estimacion_pf = True
+                    aj_it = _ajuste({"ajuste": pf.get("ajuste")})
+                    nueva = con_ajuste(it["description"], aj_it)
+                    if nueva != it["description"]:
+                        algun_cambio_pf = True
                     it["description"] = nueva
+                elif pf is not None and pf.get("ajuste") is None:
+                    todas_pf_tienen_ajuste = False
+            elif len(platos) == 1 and it is platos[0]:
+                nueva = con_ajuste(it["description"], ajuste)
+                v["_ajuste_aplicado"] = bool(v.get("_ajuste_aplicado")) or (nueva != it["description"])
+                it["description"] = nueva
+        if sup_acum:
+            v["_supuesto_reemplazado"] = ", ".join(dict.fromkeys(sup_acum))
+        if reemps_acum:
+            v["_reemplazos_aplicados"] = reemps_acum
+        if tiene_por_foto:
+            if hay_escrita_pf:
+                v["_ajuste_aplicado"] = False
+            elif todas_pf_tienen_ajuste and (algun_cambio_pf or alguna_estimacion_pf):
+                v["_ajuste_aplicado"] = True
         v["items"] = items
     elif v.get("description"):
         desc_reemplazada, sup_reemp, reemps = aplicar_respuestas_multiples(v["description"], r_texto)

@@ -160,3 +160,101 @@ def test_prompt_y_scope_de_habitos():
     )
     assert "HABITOS DEL USUARIO" in prompt_h
     assert "cottage y mantequilla de mani" in prompt_h
+
+
+def test_plato_complejo_resuelve_hasta_6_dudas_necesarias():
+    payload = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Desayuno variado",
+        "description": "2 sandwiches de jamon, huevos revueltos, pancakes, cafe con leche y guineo.",
+        "calories": 890,
+        "protein": 44,
+        "carbs": 95,
+        "healthy_fats": 35,
+        "items": [
+            {"name": "sandwich de jamon", "quantity": 2, "unit": "unidad", "calories": 380, "protein": 18, "carbs": 42, "healthy_fats": 14},
+            {"name": "huevo revuelto", "quantity": 3, "unit": "unidad", "calories": 216, "protein": 19, "carbs": 2, "healthy_fats": 14},
+            {"name": "pancake", "quantity": 2, "unit": "unidad", "calories": 160, "protein": 5, "carbs": 28, "healthy_fats": 3},
+            {"name": "cafe con leche", "quantity": 1, "unit": "taza", "calories": 60, "protein": 2, "carbs": 5, "healthy_fats": 3},
+        ],
+        "dudas": [
+            {"sobre": "huevo revuelto", "pregunta": "¿Cuántos huevos revueltos eran?", "opciones": [
+                {"texto": "3 huevos", "supuesta": True, "ajuste": {}},
+                {"texto": "4 huevos", "ajuste": {"calories": 72}},
+            ]},
+            {"sobre": "huevo revuelto", "pregunta": "¿Con qué grasa hiciste los huevos?", "opciones": [
+                {"texto": "Poco aceite", "supuesta": True, "ajuste": {}},
+                {"texto": "Con mantequilla", "ajuste": {"calories": 60}},
+            ]},
+            {"sobre": "pancake", "pregunta": "¿De qué es la masa de los pancakes?", "opciones": [
+                {"texto": "Harina normal", "supuesta": True, "ajuste": {}},
+                {"texto": "Avena y guineo", "ajuste": {"calories": -25}},
+            ]},
+            {"sobre": "cafe con leche", "pregunta": "¿Qué leche y azúcar lleva el café?", "opciones": [
+                {"texto": "Leche entera sin azúcar", "supuesta": True, "ajuste": {}},
+                {"texto": "Con azúcar", "ajuste": {"calories": 32}},
+            ]},
+        ],
+    }
+    r = va._coerce_meal_scan(payload)
+    # 4 del modelo + 1 obligatoria inyectada para el sándwich cerrado = 5 dudas reales
+    assert len(r["dudas"]) == 5
+    assert any("sándwich" in d["pregunta"].lower() for d in r["dudas"])
+
+
+def test_cuatro_fotos_por_foto_aplica_respuestas_y_ajustes_independientes():
+    vision = {
+        "kind": "multi",
+        "items": [
+            {
+                "kind": "plato",
+                "description": (
+                    "2 sándwiches de jamón. DUDAS (pregúntale solo esto): ¿Qué llevan? "
+                    "(opciones: Solo jamón (supuesto) · Cottage y mantequilla de maní) "
+                    "(Estimación: Calorías: 400, Proteína: 20g, Carbohidratos: 44g, Grasas Saludables: 14g)"
+                ),
+            },
+            {
+                "kind": "plato",
+                "description": (
+                    "Huevos hervidos (3 huevos enteros). DUDAS (pregúntale solo esto): ¿Cuántos huevos? "
+                    "(opciones: 3 huevos enteros (supuesto) · 4 huevos enteros) "
+                    "(Estimación: Calorías: 216, Proteína: 19g, Carbohidratos: 2g, Grasas Saludables: 14g)"
+                ),
+            },
+            {
+                "kind": "plato",
+                "description": (
+                    "2 pancakes de harina normal. DUDAS (pregúntale solo esto): ¿De qué masa? "
+                    "(opciones: Harina normal (supuesto) · Avena) "
+                    "(Estimación: Calorías: 180, Proteína: 6g, Carbohidratos: 30g, Grasas Saludables: 4g)"
+                ),
+            },
+            {
+                "kind": "plato",
+                "description": (
+                    "Café negro con leche entera. DUDAS (pregúntale solo esto): ¿Qué leche? "
+                    "(opciones: Leche entera (supuesto) · Leche de almendras) "
+                    "(Estimación: Calorías: 80, Proteína: 4g, Carbohidratos: 6g, Grasas Saludables: 4g)"
+                ),
+            },
+        ],
+        "respuestas": "Cottage y mantequilla de maní · 4 huevos enteros · Harina normal · Leche de almendras",
+        "por_foto": [
+            {"index": 0, "respuestas": "Cottage y mantequilla de maní", "ajuste": {"calories": 310, "protein": 17, "carbs": 8, "healthy_fats": 23}},
+            {"index": 1, "respuestas": "4 huevos enteros", "ajuste": {"calories": 72, "protein": 6, "carbs": 0, "healthy_fats": 5}},
+            {"index": 2, "respuestas": "Harina normal", "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}},
+            {"index": 3, "respuestas": "Leche de almendras", "ajuste": {"calories": -40, "protein": -3, "carbs": -4, "healthy_fats": -2}},
+        ],
+    }
+    prep = rf.preparar_vision(vision)
+    assert prep.get("_ajuste_aplicado") is True
+    assert "Calorías: 710" in prep["items"][0]["description"]
+    assert "cottage y mantequilla de maní" in prep["items"][0]["description"].lower()
+    assert "Calorías: 288" in prep["items"][1]["description"]
+    assert "4 huevos enteros" in prep["items"][1]["description"].lower()
+    assert "Calorías: 180" in prep["items"][2]["description"]
+    assert "Calorías: 40" in prep["items"][3]["description"]
+    assert "leche de almendras" in prep["items"][3]["description"].lower()
+    assert all("pregúntale solo esto" not in it["description"] for it in prep["items"])

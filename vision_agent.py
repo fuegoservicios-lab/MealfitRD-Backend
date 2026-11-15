@@ -346,7 +346,7 @@ _MEAL_VISION_PROMPT = (
     "mas grande y grueso, de cascara dura (verde o maduro), y se cocina. Si "
     "es la fruta dulce de comer cruda, llamala 'guineo'. "
     # [P1-PLAN-LOTE-305 · 2026-09-25] El dueño: «lo que es obvio debe apuntarlo de una vez; la duda, preguntarla».
-    "DUDAS (solo 'plato'): en 'dudas' pon como MAXIMO 2 cosas (o hasta 3 si hay 3 componentes distintos ambiguos) que NO se pueden saber mirando la foto Y que cambian "
+    "DUDAS (solo 'plato'): en 'dudas' pon como MAXIMO 2 cosas en platos simples (y hasta 6 dudas si hay varios componentes ambiguos, todas las necesarias para resolver el plato al 100%) que NO se pueden saber mirando la foto Y que cambian "
     "mucho las calorias: rellenos ocultos dentro de panes/wraps/empanadas, una cantidad que no se puede contar (ej: huevos revueltos fusionados -> 'Cuantos huevos "
     "eran?'; un bowl hondo de arroz -> 'Cuanto arroz, 1 taza o 2?'), un alimento que se confunde con otro (queso "
     "blanco o tofu, pollo o cerdo) o la grasa de coccion que no se ve si es mucha (frito vs. a la plancha). Cada una "
@@ -478,7 +478,7 @@ class _MealVisionResult(BaseModel):
     food_facts: Optional[FoodLabel] = None
     supplement_facts: Optional[SupplementFacts] = Field(default=None, description="Only supplement labels: literal serving size, vitamin/mineral amounts and warnings. Null for meals/foods.")
     # [P1-PLAN-LOTE-305] solo 'plato': lo que no se puede saber mirando y cambia la cuenta
-    dudas: list[_MealVisionDuda] = Field(default_factory=list, description="Solo si photo_kind='plato': máx. 2 dudas reales (cantidad no contable, alimento ambiguo, grasa de cocción invisible). Vacío si todo se ve claro.")
+    dudas: list[_MealVisionDuda] = Field(default_factory=list, description="Solo si photo_kind='plato': dudas reales necesarias para resolver el plato (máx. 2 en platos simples, hasta 6 en platos con varios componentes ambiguos). Vacío si todo se ve claro.")
 
 
 # Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
@@ -621,11 +621,11 @@ def _redondeo(v: float, k: str):
 
 
 def _dudas_del_plato(data, max_dudas: Optional[int] = None) -> list:
-    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 en platos simples (3 si hay varios componentes) `{sobre, pregunta, opciones}`."""
+    """[P1-PLAN-LOTE-305] `dudas` del modelo → máx. 2 en platos simples (hasta 6 si hay varios componentes) `{sobre, pregunta, opciones}`."""
     if max_dudas is None:
         items = data.get("items") if isinstance(data, dict) else None
-        max_dudas = 3 if isinstance(items, list) and len(items) >= 2 else 2
-    max_dudas = max(2, min(3, int(max_dudas)))
+        max_dudas = 6 if isinstance(items, list) and len(items) >= 2 else 2
+    max_dudas = max(2, min(6, int(max_dudas)))
     out = []
     for d in (data.get("dudas") if isinstance(data, dict) else None) or []:
         if not isinstance(d, dict):
@@ -944,7 +944,7 @@ def _coerce_meal_scan(data: dict, aclaracion: Optional[str] = None, habitos_usua
     # de identidad y aditivos antes de resolver con la aclaración.
     from bebidas_de_la_foto import inyectar_dudas_bebida
     from dudas_del_plato_inteligentes import refinar_dudas_del_plato
-    _max_dudas = 3 if len(plato_items) >= 2 else 2
+    _max_dudas = 6 if len(plato_items) >= 2 else 2
     _dudas_crudas = _dudas_del_plato(data, max_dudas=_max_dudas) if kind == "plato" else []
     _dudas_con_bebida = inyectar_dudas_bebida(result, _dudas_crudas, aclaracion) if kind == "plato" else []
     _dudas_refinadas = refinar_dudas_del_plato(

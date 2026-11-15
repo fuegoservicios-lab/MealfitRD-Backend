@@ -309,8 +309,8 @@ _PROGRESS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # del P2-GUEST-LLM-RATELIMIT (que cubrió /swap-meal + /recipe/expand). Bucket por
 # user_id (autenticado) o `ip:<client_ip>` (guest) → aísla abusadores. Se APILA
 # sobre `verify_api_quota` (no lo reemplaza). Cap 10/60s holgado para el flujo
-# real de subir fotos del diario.
-_VISION_UPLOAD_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+# Cap 20/60s holgado para subir hasta 4 fotos por turno más posibles re-análisis del diario.
+_VISION_UPLOAD_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 # [P1-DIARY-EDITABLE · 2026-07-28] Rate-limiter para `DELETE /consumed/{meal_id}`.
 # Borrar una comida mal registrada es cero costo LLM (un DELETE filtrado por

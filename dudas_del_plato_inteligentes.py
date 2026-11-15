@@ -23,7 +23,12 @@ _PATRON_DUDA_RELLENO = re.compile(
 )
 
 _PATRON_TOPPING_TRIVIAL = re.compile(
-    r"\b(sirope|maple|jarabe|miel|caramelo|ketchup|catsup|mayonesa|aderezo|salsa|azucar)\b",
+    r"\b(sirope|maple|jarabe|miel|caramelo|ketchup|catsup|mayonesa|aderezo|salsa)\b",
+    re.IGNORECASE,
+)
+
+_PATRON_BEBIDA_DUDA = re.compile(
+    r"\b(cafe|te|jugo|batid[ao]|licuado|infusion|bebida|chocolate)\b",
     re.IGNORECASE,
 )
 
@@ -46,9 +51,14 @@ def _redondeo_macro(v: float, k: str):
 def _es_duda_tonta(duda: Dict[str, Any], hay_otra_real: bool = False) -> bool:
     """Detecta preguntas de bajo valor o redundantes (ej. sirope en pancakes visualmente secos)."""
     preg_n = _norm(duda.get("pregunta") or "")
+    sobre_n = _norm(duda.get("sobre") or "")
     ops = duda.get("opciones") or []
     if not preg_n:
         return True
+
+    # En bebidas (café, té, jugo) lo disuelto (ej. miel) no es visible desde fuera
+    if _PATRON_BEBIDA_DUDA.search(f"{preg_n} {sobre_n}"):
+        return False
 
     # Preguntar "¿Con o sin sirope/ketchup/salsa?" cuando la propia IA ya marcó "Sin ..." como supuesto
     if _PATRON_TOPPING_TRIVIAL.search(preg_n):
@@ -324,7 +334,7 @@ def refinar_dudas_del_plato(
             continue
         vistas.add(key)
         limpias.append(d)
-        if len(limpias) >= max(2, min(3, max_dudas)):
+        if len(limpias) >= max(2, min(6, max_dudas)):
             break
 
     return limpias
