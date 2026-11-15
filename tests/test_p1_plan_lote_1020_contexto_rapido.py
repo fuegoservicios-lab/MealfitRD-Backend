@@ -65,17 +65,11 @@ def test_un_error_deja_las_decisiones_como_venian(canario):
     assert ccr.aplicar(None, _UID, "qué puedo cenar hoy?", True, True, True, "prev", revienta) == (True, True, "prev")
 
 
-def test_camino_sin_stream(canario):
-    llamado = []
-    router = lambda p: llamado.append(p) or {"skip": False, "query": "reescrita"}
-    assert ccr.router_del_turno(_UID, "qué ceno?", router, _sin_router) == {"skip": False, "query": "qué ceno?"}
-    assert llamado == []
-    assert ccr.router_del_turno("u-otro", "qué ceno?", router, _sin_router)["query"] == "reescrita"
-
 
 def test_enganchado_antes_del_pool_y_en_el_camino_sin_stream():
     s = (Path(__file__).resolve().parent.parent / "agent.py").read_text(encoding="utf-8")
     i = s.index("_ctx_rapido_aplicar(\n")
     assert i < s.index("_pre_ex.submit(classify_sentiment, prompt)") and i > s.index("[SENTIMENT FASTPATH]")
-    assert "_router_del_turno(user_id, prompt, rag_query_router, _rag_sin_router)" in s
+    # [P1-PLAN-LOTE-1025] el camino sin stream (y su `router_del_turno`) ya no existe: decide `_ctx_rapido_aplicar`
+    assert "_f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag_router else None" in s
     assert s.count("rag_query_router(prompt)") == 0

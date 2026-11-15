@@ -74,7 +74,7 @@ def test_no_se_confunde_con_aviso_de_duplicado():
 
 def test_cableado():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert src.count('__import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)') == 2
+    assert src.count('__import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)') == 1
     i_freno = src.index("tool_messages.append(ToolMessage(content=_freno, tool_call_id=tool_id))")
     assert i_freno < src.index("_rechazo_ref(_trusted_uid, _txt_ref, tool_args.get(\"calories\"), state.get(\"tz_offset\"))")
 

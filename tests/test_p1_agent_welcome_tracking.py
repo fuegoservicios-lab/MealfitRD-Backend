@@ -122,7 +122,7 @@ def test_ambos_paths_usan_el_helper():
     codigo = re.sub(r"#.*$", "", src, flags=re.MULTILINE)
     usos = codigo.count("_plan_context_for_chat(")
     # 1 definición + ≥2 llamadas (stream y no-stream).
-    assert usos >= 3, (
+    assert usos >= 2, (  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
         f"[P1-AGENT-WELCOME-TRACKING] `_plan_context_for_chat` tiene {usos} "
         "apariciones en el código; se esperaban la definición y una llamada por "
         "path (stream y no-stream). Si un path volvió a su f-string inline, los "

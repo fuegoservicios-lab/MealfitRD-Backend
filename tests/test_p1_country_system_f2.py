@@ -586,7 +586,9 @@ def test_cache_no_colisiona_entre_idiomas():
 def test_chat_with_agent_inline_llama_build_language_directive():
     src = _read(_AGENT_PY)
     body = _fn_body(src, "def chat_with_agent(session_id: str", end_marker="def chat_with_agent_stream(")
-    assert "build_language_directive(" in body
+    # [P1-PLAN-LOTE-1025 · A-26] /api/chat delega en el stream: la directiva la pone el único constructor
+    assert "for evento in chat_with_agent_stream(" in body
+    assert "build_language_directive(" not in body
 
 
 def test_chat_with_agent_stream_llama_build_language_directive():
@@ -606,7 +608,6 @@ def test_agent_importa_build_language_directive_de_prompts_chat_agent():
 # ── F6. Guests ⇒ es-DO (nunca leen `locale`, se quedan en el default) — parser + funcional ──
 
 @pytest.mark.parametrize("def_line,end_marker", [
-    ("def chat_with_agent(session_id: str", "def chat_with_agent_stream("),
     ("def chat_with_agent_stream(session_id: str", None),
 ])
 def test_guest_nunca_gana_locale_default_precede_al_guard_de_autenticado(def_line, end_marker):
@@ -623,7 +624,6 @@ def test_guest_nunca_gana_locale_default_precede_al_guard_de_autenticado(def_lin
 
 
 @pytest.mark.parametrize("def_line,end_marker", [
-    ("def chat_with_agent(session_id: str", "def chat_with_agent_stream("),
     ("def chat_with_agent_stream(session_id: str", None),
 ])
 def test_coach_locale_del_profile_tiene_fallback_es_do_si_es_falsy(def_line, end_marker):
@@ -645,7 +645,6 @@ def test_build_language_directive_de_guest_es_cadena_vacia_extremo_funcional():
 # ── F7. Reuso del profile ya leído — cero round-trips DB extra (paridad con el patrón country) ─
 
 @pytest.mark.parametrize("def_line,end_marker", [
-    ("def chat_with_agent(session_id: str", "def chat_with_agent_stream("),
     ("def chat_with_agent_stream(session_id: str", None),
 ])
 def test_locale_se_lee_del_mismo_get_user_profile_que_full_name(def_line, end_marker):

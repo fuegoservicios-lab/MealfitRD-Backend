@@ -138,7 +138,7 @@ def test_macros_del_plan_vigente_sin_la_g_doble():
 
 def test_los_dos_paths_pasan_el_plan_vigente():
     s = _src("agent.py")
-    assert s.count("system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)") == 2
+    assert s.count("system_prompt += _macro_totals_line(consumed_today, plan_vigente, form_data)") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
     assert "_macro_totals_line(consumed_today, current_plan)" not in s
 
 
@@ -194,7 +194,7 @@ def test_el_bullet_del_contador_nombra_la_puerta_real():
     normal = p._plan_tools_bullets_inline(False, False)
     assert "página Plan" in normal and "Capacidades" not in normal
     s = _src("agent.py")
-    assert s.count("contador_sin_plan=_contador_sin_plan") == 4, "los cuatro call sites de los dos paths"
+    assert s.count("contador_sin_plan=_contador_sin_plan") == 2, "los dos call sites del stream (lote 1025)"
 
 
 def test_sin_plan_no_se_afirma_un_plan_actual():
@@ -202,7 +202,7 @@ def test_sin_plan_no_se_afirma_un_plan_actual():
     assert "plan actual" not in build_inventory_context("Arroz, Huevo", "", sin_plan=True)
     assert "plan actual" in build_inventory_context("Arroz, Huevo", "")
     assert "plan actual" not in build_inventory_context("Arroz, Huevo", "", plan_en_pausa=True)
-    assert _src("agent.py").count("sin_plan=not current_plan") == 2
+    assert _src("agent.py").count("sin_plan=not current_plan") == 1
 
 
 def test_sin_horario_declarado_no_hay_dia_clasico():
@@ -213,7 +213,7 @@ def test_sin_horario_declarado_no_hay_dia_clasico():
     assert "Turno Nocturno" in build_circadian_context("night_shift")
     s = _src("agent.py")
     assert 'form_data.get("scheduleType", "standard")' not in s
-    assert s.count('(form_data.get("scheduleType") or "")') == 2
+    assert s.count('(form_data.get("scheduleType") or "")') == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
 
 
 def test_la_alerta_de_la_tarde_no_manda_a_una_tool_que_no_existe():

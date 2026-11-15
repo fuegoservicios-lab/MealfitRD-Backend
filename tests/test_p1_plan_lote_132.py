@@ -281,8 +281,8 @@ def test_la_hora_del_bloque_sale_del_mismo_reloj_que_el_contexto_temporal(monkey
 def test_los_dos_paths_del_chat_inyectan_el_bloque():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     llamada = "system_prompt += _day_gap_context_for_chat(form_data, plan_vigente, _diario_de_hoy, tz_offset, schedule_type)"
-    assert src.count(llamada) == 2, "stream y no-stream: la divergencia entre ambos ya costó bugs"
-    assert src.count("_diario_de_hoy = list(consumed_today or [])") == 2
+    assert src.count(llamada) == 1, "un solo constructor del turno (lote 1025)"
+    assert src.count("_diario_de_hoy = list(consumed_today or [])") == 1
     k = src.index("def _day_gap_context_for_chat(")
     assert "if diario_de_hoy is None:\n        return \"\"" in src[k:k + 1200].replace("\r\n", "\n"), \
         "sin diario legible no se afirma «le falta todo»"

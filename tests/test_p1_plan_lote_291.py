@@ -165,4 +165,4 @@ def test_bloque_sin_potes_y_con_fallo_de_lectura(monkeypatch):
 def test_el_chat_inyecta_el_bloque_en_las_dos_rutas():
     src = _src("agent.py")
     # [P1-PLAN-LOTE-988] referencia_a_registro tiene su propio `bloque_para_chat(`: se cuenta el de suplementos
-    assert src.count("+= bloque_para_chat(user_id)") == 2
+    assert src.count("+= bloque_para_chat(user_id)") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream

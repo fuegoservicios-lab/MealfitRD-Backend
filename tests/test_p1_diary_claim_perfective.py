@@ -97,4 +97,4 @@ def test_el_hilo_nuevo_no_siembra_el_mensaje_dos_veces():
 def test_el_stream_vacia_el_buffer_en_una_segunda_pasada_sin_tool():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert "if _step is not None and _buf_step is not None and _step != _buf_step:" in src
-    assert src.count("_seed_thread_messages(memory[\"recent_messages\"], prompt)") == 2
+    assert src.count("_seed_thread_messages(memory[\"recent_messages\"], prompt)") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream

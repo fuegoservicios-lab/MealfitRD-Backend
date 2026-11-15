@@ -72,7 +72,7 @@ def test_el_compacto_solo_puede_encenderse_si_conserva_las_reglas_del_legacy(mon
 def test_el_handoff_del_router_siembra_el_alcance_del_turno():
     """Antes `_tc_consume_handoff` se llamaba y su resultado se tiraba: el perfil se releía en cada turno."""
     src = io.open(_BACKEND / "agent.py", encoding="utf-8").read()
-    assert src.count("_tc_scope(initial=_tc_consume_handoff(user_id, session_id))") == 2   # stream y no-stream
+    assert src.count("_tc_scope(initial=_tc_consume_handoff(user_id, session_id))") == 1   # [P1-PLAN-LOTE-1025] solo el stream
     from turn_cache import consume_handoff, get_cached, stash_handoff, turn_cache_scope, set_cached
     with turn_cache_scope():
         set_cached("profile", "u-h", {"health_profile": {"country": "DO"}})

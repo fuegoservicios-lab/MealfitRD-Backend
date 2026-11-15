@@ -56,15 +56,3 @@ def aplicar(tracker, user_id: Optional[str], prompt: str, do_sentiment: bool, do
         except Exception:
             logger.debug(f"[LOTE-1020] contexto rápido no aplicado: {exc!r}")
         return original
-
-
-def router_del_turno(user_id: Optional[str], prompt: str, rag_query_router: Callable[[str], dict],
-                     rag_sin_router: Callable[[str], dict]) -> dict:
-    """Camino sin stream: la misma decisión del router (sin tracker de fases)."""
-    try:
-        from coach_canario import activa
-        if activa(user_id, "contexto_rapido"):
-            return rag_sin_router(prompt)
-    except Exception:
-        pass
-    return rag_query_router(prompt)

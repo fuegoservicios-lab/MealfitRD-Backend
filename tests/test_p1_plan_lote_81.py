@@ -53,7 +53,7 @@ def test_is_spanish_message():
 
 def test_los_cuatro_call_sites_y_el_marcador():
     a = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert a.count("system_prompt += build_message_language_directive(prompt, _coach_locale)") == 4
+    assert a.count("system_prompt += build_message_language_directive(prompt, _coach_locale)") == 2  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', (_BACKEND / "app.py").read_text(encoding="utf-8"))
     assert m and int(m.group(1)) >= 81
     assert "P1-PLAN-LOTE-81" in (_BACKEND / "docs" / "coach_bateria_2026_09_15.md").read_text(encoding="utf-8")

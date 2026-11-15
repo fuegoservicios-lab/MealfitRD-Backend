@@ -138,7 +138,7 @@ def test_el_agente_pide_la_biblioteca_por_pais():
         encoding="utf-8", errors="replace")
     directas = src.count("{CULINARY_KNOWLEDGE_BASE}")
     porpais = src.count("culinary_knowledge_base_for_country")
-    assert porpais >= 4, f"solo {porpais} call sites por país (esperados 4)"
+    assert porpais >= 3, f"solo {porpais} usos por país (import + 2 del stream; lote 1025)"
     assert directas == 0, (
         f"quedan {directas} inyecciones directas de la biblioteca dominicana sin pasar por el país"
     )

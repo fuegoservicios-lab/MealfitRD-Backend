@@ -114,11 +114,8 @@ def test_sanitize_applied_in_chat_with_agent_return(agent_py_src: str):
     """`chat_with_agent` (non-stream) debe aplicar el helper antes del
     return final."""
     # Match: `_sanitize_chat_output_for_wire(...)` antes del `return ...content`
-    pattern = re.compile(
-        r"_sanitize_chat_output_for_wire\s*\([^)]*content[^)]*\)[\s\S]{0,500}?"
-        r"return\s+\w+,\s*final_state\.get",
-    )
-    assert pattern.search(agent_py_src), (
+    # [P1-PLAN-LOTE-1025 · A-26] chat_with_agent delega en el stream: lo sanitiza el done del stream
+    assert "final_content = _sanitize_chat_output_for_wire(final_content)" in agent_py_src, (
         "P2-CHAT-SANITIZE regresión: `chat_with_agent` ya no sanitiza "
         "`content` antes del return. El frontend recibiría HTML peligroso "
         "raw si rehype-sanitize fallara."

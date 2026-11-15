@@ -103,7 +103,7 @@ def test_el_tiempo_de_cocina_llega_resumido_y_con_la_respuesta_honesta():
     # El reporte crudo (hashes incluidos) ya no viaja en el JSON del plan.
     assert "_fidelity_report" not in A._prune_plan_for_chat(plan)
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert src.count("_prep_time_context_for_chat(plan_vigente)") == 2, "paridad stream / no-stream"
+    assert src.count("_prep_time_context_for_chat(plan_vigente)") == 1, "un solo constructor del turno (lote 1025)"
 
 
 def test_la_meta_diaria_llega_con_su_distancia_al_mantenimiento(monkeypatch):
@@ -123,7 +123,7 @@ def test_la_meta_diaria_llega_con_su_distancia_al_mantenimiento(monkeypatch):
     monkeypatch.setattr(nc, "get_nutrition_targets", lambda fd: {})
     assert A._daily_goal_context(fd, None) == ""
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert src.count("_daily_goal_context(form_data, plan_vigente)") == 2, "paridad stream / no-stream"
+    assert src.count("_daily_goal_context(form_data, plan_vigente)") == 1, "un solo constructor del turno (lote 1025)"
 
 
 def _turno(tool: str, texto: str) -> list:

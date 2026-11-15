@@ -242,8 +242,8 @@ def test_los_dos_caminos_del_chat_no_leen_el_inventario_apagado():
                   "if not inventory_str and form_data and _nevera_on:",
                   "nevera_activa=_nevera_on,",
                   "system_prompt += _build_pantry_context(user_id, nevera_on=_nevera_on)"):
-        assert src.count(ancla) == 2, ancla
-    for fn in ("def chat_with_agent(", "def chat_with_agent_stream("):
+        assert src.count(ancla) == 1, ancla  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
+    for fn in ("def chat_with_agent_stream(",):
         i = src.index(fn)
         j = src.find("\ndef ", i + 10)   # tras `chat_with_agent_stream` no hay otra función de módulo
         cuerpo = src[i:j if j > 0 else len(src)]

@@ -248,8 +248,8 @@ def test_both_chat_paths_call_the_shared_helper():
     src = (_BACKEND_ROOT / "agent.py").read_text(encoding="utf-8")
     # 1 def + 2 callsites (non-stream ~4268, stream ~4650). Si baja a 2, un
     # path se desconectó del helper y volvió a duplicar/perder el bloque.
-    assert len(re.findall(r"_build_today_remaining_context\(", src)) == 3, (
-        "esperaba 1 def + 2 callsites (non-stream y stream) de "
+    assert len(re.findall(r"_build_today_remaining_context\(", src)) == 2, (  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
+        "esperaba 1 def + 1 callsite (el stream) de "
         "_build_today_remaining_context — alguno de los dos paths dejó de "
         "usar la SSOT compartida."
     )

@@ -87,7 +87,7 @@ def test_injected_in_both_paths():
         r"system_prompt \+= _build_plan_today_context\(\s*(?:current_plan|plan_vigente)\b",
         src,
     ))
-    assert inyecciones >= 2, (
+    assert inyecciones >= 1, (  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
         f"Sólo {inyecciones} path(s) del chat inyectan `_build_plan_today_context`. "
         "Los dos (welcome y turno normal) tienen que hacerlo: la divergencia entre "
         "ambos ya ha causado bugs antes (P1-CHAT-PAST-DAYS)."

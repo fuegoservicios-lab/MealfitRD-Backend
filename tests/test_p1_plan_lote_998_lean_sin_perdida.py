@@ -123,7 +123,7 @@ def test_el_knob_lo_apaga_y_el_ahorro_es_el_medido(monkeypatch):
 
 def test_el_cableado_esta_en_los_dos_caminos():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    assert src.count("_adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id") == 2
+    assert src.count("_adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id") == 1
     # va ANTES de los bloques volátiles: solo toca el manual estático
     for m in re.finditer(r"system_prompt = _adelgazar_prompt_coach\(system_prompt", src):
         assert "bloques dinámicos (volátiles)" in src[m.start():m.start() + 600]

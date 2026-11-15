@@ -432,9 +432,9 @@ def test_agent_inyecta_los_bloques_despues_del_diario_de_hoy():
     hoy = [m.start() for m in re.finditer(r"DIARIO DE HOY: El usuario no ha registrado", src)]
     call = [m.start() for m in re.finditer(r"system_prompt \+= _build_past_days_context\(", src)]
     pref = [m.start() for m in re.finditer(r"if _chat_prompt_static_prefix\(\):", src)]
-    assert len(hoy) == 2, "esperaba los 2 paths (no-stream y stream), vi %d" % len(hoy)
-    assert len(call) == 2, "el bloque nuevo debe estar en LOS DOS paths, vi %d" % len(call)
-    assert len(pref) >= 2, "esperaba el reorden del prefijo estático en ambos paths"
+    assert len(hoy) == 1, "esperaba los 2 paths (no-stream y stream), vi %d" % len(hoy)
+    assert len(call) == 1, "el bloque nuevo debe estar en LOS DOS paths, vi %d" % len(call)
+    assert len(pref) >= 1, "esperaba el reorden del prefijo estático en ambos paths"
     for i, (h, c, p) in enumerate(zip(hoy, call, pref)):
         assert c > h, "path %d: el bloque de días pasados debe ir DESPUÉS del DIARIO DE HOY" % i
         assert c > p, "path %d: el bloque no puede ir antes del reorden del prefijo estático" % i

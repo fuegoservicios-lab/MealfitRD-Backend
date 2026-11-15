@@ -206,11 +206,11 @@ def _src():
 
 def test_los_dos_constructores_y_el_estado_estan_cableados():
     s = _src()
-    assert s.count("_cache_v2 = _cache_v2_para_turno(") == 2
-    assert s.count("_split_volatile = _chat_split_volatile_sys_prompt() or _cache_v2") == 2
-    assert s.count("_cache_v2 = False   # [P1-PLAN-LOTE-1015 · A-01] definido ANTES del try") == 2
-    assert s.count('"cache_v2": _cache_v2,') == 2
-    assert s.count("system_prompt = _reordenar_capa(system_prompt, _VOLATILE_SYS_SPLIT_MARKER)") == 2
+    assert s.count("_cache_v2 = _cache_v2_para_turno(") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
+    assert s.count("_split_volatile = _chat_split_volatile_sys_prompt() or _cache_v2") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
+    assert s.count("_cache_v2 = False   # [P1-PLAN-LOTE-1015 · A-01] definido ANTES del try") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
+    assert s.count('"cache_v2": _cache_v2,') == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
+    assert s.count("system_prompt = _reordenar_capa(system_prompt, _VOLATILE_SYS_SPLIT_MARKER)") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
     assert 'forzar_split=bool(state.get("cache_v2"))' in s
 
 

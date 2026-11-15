@@ -461,5 +461,5 @@ def test_lote_999_marker_y_wiring_en_agent():
     assert m is not None and int(m.group(1)) >= 999
 
     agent_src = (_BACKEND_DIR / "agent.py").read_text(encoding="utf-8")
-    assert agent_src.count('"prompt_breakdown": _prompt_breakdown') == 2
+    assert agent_src.count('"prompt_breakdown": _prompt_breakdown') == 1
     assert "extra_metadata=_call_extra_meta" in agent_src

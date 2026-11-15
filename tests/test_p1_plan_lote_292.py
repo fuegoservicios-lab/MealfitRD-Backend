@@ -71,7 +71,7 @@ def test_el_orquestador_y_el_coach_leen_el_formulario_nuevo():
     assert 'if not form_data.get("includeSupplements"):' not in go
     assert "suplementos_activos(form_data)" in go
     ag = _src("agent.py")
-    assert 'form_data.get("includeSupplements")' not in ag and ag.count("normalizar_suplementos(form_data)") == 2
+    assert 'form_data.get("includeSupplements")' not in ag and ag.count("normalizar_suplementos(form_data)") == 1
 
 
 def test_el_router_valida_lo_que_toma():

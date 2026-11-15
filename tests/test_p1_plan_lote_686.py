@@ -118,7 +118,7 @@ def test_call_model_pasa_los_kwargs_y_el_estado_declara_el_campo():
     assert "**_kwargs_de_razonamiento_modo_voz(state)," in src
     assert "modo_voz" in agent.ChatState.__annotations__, "fuera del schema LangGraph descarta la clave en silencio"
     full = inspect.getsource(agent)
-    assert '"modo_voz": False,' in full and '"modo_voz": bool(is_call_mode),' in full, "los DOS inputs la fijan"
+    assert '"modo_voz": bool(is_call_mode),' in full, "el input del stream la fija (único constructor, lote 1025)"
 
 
 def test_deepseek_apaga_de_verdad_y_glm_lo_traduce(monkeypatch):

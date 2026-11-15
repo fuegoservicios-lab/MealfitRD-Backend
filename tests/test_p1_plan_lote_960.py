@@ -138,7 +138,7 @@ def test_la_nevera_apagada_o_el_knob_apagado_callan(monkeypatch):
 def test_va_cableado_en_los_dos_caminos_del_chat_y_en_el_aviso():
     raiz = os.path.dirname(os.path.abspath(n.__file__))
     agent = open(os.path.join(raiz, "agent.py"), encoding="utf-8").read()
-    assert agent.count('__import__("nevera_del_coach").para_chat(') == 2
+    assert agent.count('__import__("nevera_del_coach").para_chat(') == 1
     pro = open(os.path.join(raiz, "proactive_agent.py"), encoding="utf-8").read()
     assert '__import__("nevera_del_coach").para_aviso(user_id, health, consumed, meal_to_check)' in pro
     assert "prompt += _nevera_aviso" in pro

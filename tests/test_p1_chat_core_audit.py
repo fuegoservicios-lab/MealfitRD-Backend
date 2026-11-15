@@ -284,10 +284,11 @@ def test_los_campos_del_turno_se_reinician_en_inputs(campo):
 
 
 def test_el_timeout_no_stream_no_espera_al_grafo():
-    i = _AGENT_SRC.index("_graph_timeout_s = _chat_graph_total_timeout_s()")
-    ventana = _AGENT_SRC[i:i + 2500]
-    assert "_ex.shutdown(wait=False)" in ventana
-    assert "with concurrent.futures.ThreadPoolExecutor(" not in ventana
+    # [P1-PLAN-LOTE-1025 · A-26] /api/chat ya no corre su propio grafo: delega en el stream (y su timeout)
+    i = _AGENT_SRC.index("def chat_with_agent(session_id: str")
+    cuerpo = _AGENT_SRC[i:_AGENT_SRC.index("\ndef ", i + 10)]
+    assert "for evento in chat_with_agent_stream(" in cuerpo
+    assert "ThreadPoolExecutor" not in cuerpo and "chat_graph_app.invoke" not in cuerpo
 
 
 def test_el_stream_detecta_chunks_de_tool_y_filtra_el_nodo():

@@ -153,7 +153,7 @@ def test_el_aviso_es_best_effort_y_va_en_los_dos_caminos(monkeypatch):
     assert agent._conversacion_de_dias_anteriores("s1", "2026-09-22", 240) == ""
     assert agent._conversacion_de_dias_anteriores("s1", None, 240) == ""
     assert _src("agent.py").count(
-        "system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)") == 2
+        "system_prompt += _conversacion_de_dias_anteriores(session_id, local_date, tz_offset)") == 1  # [P1-PLAN-LOTE-1025 · A-26] un solo constructor: el stream
 
 
 # ── 3. La regla y la instrucción de la foto ───────────────────────────────────────────────────────
@@ -260,8 +260,6 @@ def test_el_grafo_y_el_estado_llevan_el_guard():
     i = src.index("existing_state = chat_graph_app.get_state(config)\n    \n    inputs = {")
     assert '"turn_plate_photos": _plate_photos_from_vision(vision),' in src[i:i + 2000]
     assert '"plate_photo_retried": False,' in src[i:i + 2000]
-    j = src.index('"new_plan": None,            # Reinicia el plan nuevo en cada ejecución')
-    assert '"turn_plate_photos": [],' in src[j:j + 600]
 
 
 # ── 5. `force` solo como respuesta a un aviso de duplicado ────────────────────────────────────────

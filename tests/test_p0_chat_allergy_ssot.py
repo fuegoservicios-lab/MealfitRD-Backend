@@ -379,4 +379,4 @@ def test_el_bloque_se_inyecta_en_LOS_DOS_call_sites():
         f"el bloque clínico se inyecta en {n_clinico} sitios y la identidad en "
         f"{n_identidad}: hay un camino del chat que no recibe las alergias"
     )
-    assert n_clinico >= 2, "esperaba al menos los dos call sites (chat y stream)"
+    assert n_clinico >= 1, "esperaba el call site del stream (único constructor desde el lote 1025)"
