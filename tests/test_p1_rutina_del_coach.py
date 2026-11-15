@@ -245,7 +245,8 @@ def test_proponer_comida_madrugada_con_dia_biologico_planifica_manana_sin_restar
     fn = getattr(tools.proponer_comida, "func", tools.proponer_comida)
     out = fn("u-madrugada-1", meal_type="desayuno")
     assert out.startswith("PROPUESTAS DE DESAYUNO")
-    assert "planificación para mañana" in out
+    assert "nueva jornada de hoy (madrugada)" in out
+    assert "PROHIBIDO decir «para mañana»" in out
     assert "RUTINA REAL DEL USUARIO EN Desayuno" in out
     assert "sándwiches" in out.lower() and "lechoza" in out.lower()
     assert "PRIORIZA primero la rutina/plato real del usuario" in out
@@ -255,10 +256,10 @@ def test_proponer_comida_madrugada_con_dia_biologico_planifica_manana_sin_restar
     assert "hoy le faltan" not in out
     assert "nevera" not in out.lower()
 
-    # Incluso si el modelo omite `meal_type` a las 1:28 AM tras completar el día biológico, apunta al desayuno de mañana
+    # Incluso si el modelo omite `meal_type` a las 1:28 AM tras completar el día biológico, apunta al desayuno de hoy
     out_auto = fn("u-madrugada-1")
     assert out_auto.startswith("PROPUESTAS DE DESAYUNO")
-    assert "planificación para mañana" in out_auto
+    assert "nueva jornada de hoy (madrugada)" in out_auto
 
 
 def test_linea_casera_convierte_ingredientes_a_medidas_cotidianas():
@@ -590,7 +591,8 @@ def test_q_mas_excluye_previo_y_yuca_conserva_trozo_casero():
     assert cdc._linea_casera(210, "Yuca") == "1 trozo grande de Yuca"
     assert "trozo" in cdc._linea_casera(300, "Yuca")
     assert cdc._linea_casera(21, "Queso blanco") == "1 lonja pequeña de Queso blanco"
-    assert cdc._linea_casera(90, "Tomate") == "1 unidad pequeña de Tomate"
+    assert cdc._linea_casera(90, "Tomate") == "1 tomate pequeño"
+    assert cdc._linea_casera(60, "Tomate") == "1/2 tomate mediano"
     assert cdc._linea_casera(130, "Claras cocidas") == "4 claras cocidas"
 
     txt = cdc.formatear_propuestas(
@@ -613,5 +615,37 @@ def test_q_mas_excluye_previo_y_yuca_conserva_trozo_casero():
         pidio_propuesta_nueva=True,
     )
     assert "1 trozo mediano de Yuca" in txt
-    assert "PROHIBIDO omitir cantidades" in txt
+    assert "PROHIBIDO listar ingredientes sin cantidad" in txt
+    assert "nevera" not in txt.lower()
+
+
+def test_cena_en_madrugada_se_presenta_para_hoy_sin_decir_manana():
+    import coach_day_context as cdc
+
+    txt = cdc.formatear_propuestas(
+        [{
+            "name": "Revoltillo de atún con plátano hervido",
+            "calories": 615,
+            "protein": "40g",
+            "carbs": "62g",
+            "fats": "21g",
+            "_lineas": [
+                (170.0, "Atún en agua"), (55.0, "Huevo"),
+                (270.0, "Plátano maduro"), (60.0, "Tomate"), (30.0, "Cebolla"),
+            ],
+            "_tiene": [],
+            "_falta": [],
+        }],
+        "cena",
+        {"kcal": 2050, "protein_g": 134},
+        con_nevera=False,
+        contexto=" — nueva jornada de hoy (madrugada)",
+        nevera_activa=False,
+        es_para_manana=True,
+        usar_medidas_caseras=True,
+        en_madrugada=True,
+    )
+    assert "PROHIBIDO decir «para mañana»" in txt
+    assert "para la cena de hoy" in txt
+    assert "1/2 tomate mediano" in txt
     assert "nevera" not in txt.lower()

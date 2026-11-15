@@ -6712,7 +6712,7 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
         contexto = ""
         falta_fmt = None if es_para_manana else falta
         if es_para_manana:
-            contexto = " — planificación para mañana"
+            contexto = " — nueva jornada de hoy (madrugada)" if _en_madrugada else " — planificación para mañana"
         elif falta and falta.get("kcal") is not None and not kcal_objetivo:
             contexto = (f" — hoy le faltan ~{int(round(max(falta['kcal'], 0)))} kcal"
                         + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
@@ -6731,6 +6731,7 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
                     solo_nevera=bool(solo_con_nevera), falta=falta_fmt, nevera_activa=_nevera_on,
                     es_para_manana=es_para_manana, usar_medidas_caseras=True,
                     pidio_propuesta_nueva=False, es_receta_pedida=True,
+                    en_madrugada=bool(_en_madrugada),
                 )
 
         excluir_total = [str(x) for x in (excluir or []) if str(x or "").strip()] + textos_ai_previos
@@ -6761,6 +6762,7 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
             solo_nevera=bool(solo_con_nevera), falta=falta_fmt, nevera_activa=_nevera_on,
             rutina_franja_txt=rutina_txt, es_para_manana=es_para_manana,
             usar_medidas_caseras=True, pidio_propuesta_nueva=pidio_nueva,
+            en_madrugada=bool(_en_madrugada),
         )
     except Exception as e:
         logger.error(f"❌ [TOOL] proponer_comida falló: {e}")

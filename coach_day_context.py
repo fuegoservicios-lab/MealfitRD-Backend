@@ -828,7 +828,7 @@ _UNIDAD_POR_ALIMENTO = (
     (("platano",), 180.0, "plátano mediano", "plátanos medianos", False),
     (("yuca", "batata", "auyama"), 150.0, "trozo mediano", "trozos medianos", True),
     (("papa", "yautia"), 150.0, "unidad mediana", "unidades medianas", True),
-    (("guineo", "banano", "manzana", "pera", "naranja", "tomate"), 120.0, "unidad mediana", "unidades medianas", True),
+    (("guineo", "banano", "manzana", "pera", "naranja"), 120.0, "unidad mediana", "unidades medianas", True),
     (("atun",), 115.0, "lata", "latas", True),
 )
 
@@ -877,6 +877,14 @@ def _linea_casera(g: float, nombre: str) -> str:
             return f"1 puñado de {nombre}"
         cdas = max(1, int(round(g / 12.0)))
         return f"{cdas} {'cucharada' if cdas == 1 else 'cucharadas'} de {nombre}"
+    if "tomate" in nom_l:
+        if g < 45.0:
+            return "1/2 tomate pequeño"
+        if g < 85.0:
+            return "1/2 tomate mediano"
+        if g <= 105.0:
+            return "1 tomate pequeño"
+        return _a_unidad_simple(g, 120.0, "tomate mediano", "tomates medianos")
     for claves, g_u, sing, plur, con_nombre in _UNIDAD_POR_ALIMENTO:
         if any(k in nom_l for k in claves):
             if claves[0] == "yuca":
@@ -909,7 +917,7 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
                          solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True,
                          rutina_franja_txt: str = "", es_para_manana: bool = False,
                          usar_medidas_caseras: bool = False, pidio_propuesta_nueva: bool = False,
-                         es_receta_pedida: bool = False) -> str:
+                         es_receta_pedida: bool = False, en_madrugada: bool = False) -> str:
     """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo.
 
     [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a mano o sola): ninguna línea
@@ -1013,10 +1021,18 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
 
     if es_para_manana:
         pref = "" if (rutina_limpia or pidio_propuesta_nueva or sin_activos_rutina or es_receta_pedida) else "."
-        cierre_dia = (
-            f"{pref} OJO: esta propuesta es para MAÑANA / su próxima jornada; indica solo cuánto aporta el plato, y "
-            "PROHIBIDO decir «si lo comes te quedarían X kcal hoy» o restarlo de un presupuesto futuro. "
-        )
+        if en_madrugada:
+            cierre_dia = (
+                f"{pref} OJO (es madrugada, ya pasó la medianoche): esta comida es para HOY (ej. «para la cena de hoy» / "
+                "«para esta noche», «para el almuerzo de hoy» o «para el desayuno de hoy» — PROHIBIDO decir «para mañana»). "
+                "Indica solo cuánto aporta el plato sobre el presupuesto nuevo de hoy; "
+                "PROHIBIDO decir «si lo comes te quedarían X kcal hoy» o restar calorías de lo registrado antes de dormir. "
+            )
+        else:
+            cierre_dia = (
+                f"{pref} OJO: esta propuesta es para MAÑANA / su próxima jornada; indica solo cuánto aporta el plato, y "
+                "PROHIBIDO decir «si lo comes te quedarían X kcal hoy» o restarlo de un presupuesto futuro. "
+            )
     else:
         cierre_dia = (
             " Si presentas una opción para hoy y existe la línea «Si se la come», úsala tal cual — no hagas la resta tú. "
@@ -1031,9 +1047,9 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
         )
     else:
         cuerpo = (
-            "Presenta el plato conservando la medida casera EXACTA de CADA ingrediente (carbohidrato/vívere base, "
-            "proteína, grasa y vegetales — PROHIBIDO omitir cantidades diciendo solo «la yuca», «el arroz» o «un poco de cebolla» "
-            "si arriba aparece su «Porción casera aprox.»). Los gramos en crudo y los PASOS solo van si pidió receta o cómo se hace. "
+            "Presenta el plato conservando la medida casera de CADA ingrediente de «Porción casera aprox.» "
+            "(proteína, vívere/carbohidrato, grasa y vegetales — PROHIBIDO listar ingredientes sin cantidad como "
+            "«tomate y cebolla», «espinaca» o «la yuca» cuando tienen su medida arriba). Los gramos en crudo y los PASOS solo van si pidió receta o cómo se hace. "
             "Si aporta valor, menciona 1 alternativa breve con sus ~kcal y ~g de proteína. "
             "PROHIBIDO cerrar preguntando «¿Quieres que te dé la receta de...?». No cambies cifras ni macros. "
             + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")
