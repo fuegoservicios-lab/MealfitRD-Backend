@@ -818,6 +818,7 @@ _TAZA_POR_ALIMENTO = (
     (("leche", "batida", "jugo"), 240.0),
     (("avena",), 80.0),
     (("arroz", "quinoa", "granola", "cereal"), 150.0),
+    (("harina", "maicena", "fecula", "almidon", "pan rallado"), 120.0),
     (("cebolla", "pimiento", "aji", "zanahoria", "pepino", "calabacin", "hongos", "champinon"), 120.0),
     (("lechoza", "papaya", "sandia", "pina", "fresa", "arandano", "blueberry", "frambuesa", "uva",
       "mango", "melon", "brocoli", "vegetal", "ensalada", "habichuela", "lenteja", "garbanzo", "maiz"), 150.0),

@@ -594,6 +594,8 @@ def test_q_mas_excluye_previo_y_yuca_conserva_trozo_casero():
     assert cdc._linea_casera(90, "Tomate") == "1 tomate pequeño"
     assert cdc._linea_casera(60, "Tomate") == "1/2 tomate mediano"
     assert cdc._linea_casera(130, "Claras cocidas") == "4 claras cocidas"
+    assert cdc._linea_casera(16, "Harina") == "2 cucharadas de Harina"
+    assert cdc._linea_casera(30, "Harina") == "1/4 taza de Harina"
 
     txt = cdc.formatear_propuestas(
         [{
