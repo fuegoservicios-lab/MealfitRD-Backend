@@ -589,6 +589,9 @@ def test_q_mas_excluye_previo_y_yuca_conserva_trozo_casero():
     assert cdc._linea_casera(150, "Yuca") == "1 trozo mediano de Yuca"
     assert cdc._linea_casera(210, "Yuca") == "1 trozo grande de Yuca"
     assert "trozo" in cdc._linea_casera(300, "Yuca")
+    assert cdc._linea_casera(21, "Queso blanco") == "1 lonja pequeña de Queso blanco"
+    assert cdc._linea_casera(90, "Tomate") == "1 unidad pequeña de Tomate"
+    assert cdc._linea_casera(130, "Claras cocidas") == "4 claras cocidas"
 
     txt = cdc.formatear_propuestas(
         [{

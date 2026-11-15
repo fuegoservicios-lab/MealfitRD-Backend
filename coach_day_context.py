@@ -773,7 +773,12 @@ def _a_unidad_simple(g: float, g_por_unidad: float, sing: str, plur: str, nombre
     elif ratio < 0.65:
         lbl = f"1/2 {sing}"
     elif ratio < 0.88:
-        lbl = f"3/4 de {sing}"
+        if sing == "lonja":
+            lbl = "1 lonja pequeña"
+        elif sing == "unidad mediana":
+            lbl = "1 unidad pequeña"
+        else:
+            lbl = f"3/4 de {sing}"
     else:
         n = round(ratio * 2.0) / 2.0
         n_txt = f"{int(n)}" if n.is_integer() else f"{n:g}"
@@ -834,8 +839,10 @@ def _linea_casera(g: float, nombre: str) -> str:
     if g < 1.5:
         return f"una pizca de {nombre}"
     nom_l = _norm_casera(nombre)
-    if "clara" in nom_l and "huevo" in nom_l:
+    if "clara" in nom_l and ("huevo" in nom_l or nom_l.startswith("clara")):
         n = max(1, int(round(g / 33.0)))
+        if "cocid" in nom_l:
+            return f"{n} {'clara cocida' if n == 1 else 'claras cocidas'}"
         return f"{n} {'clara' if n == 1 else 'claras'} de huevo"
     if "huevo" in nom_l:
         n = max(1, int(round(g / 55.0)))
