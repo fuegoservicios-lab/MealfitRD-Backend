@@ -255,6 +255,10 @@ def test_chat_with_agent_non_stream_emits_total_duration(agent_src: str):
     body = _function_body(
         agent_src, r"def\s+chat_with_agent\s*\(\s*session_id\s*:", max_chars=20000
     )
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream). La duración total la emite el stream.
+    if "for evento in chat_with_agent_stream(" in body:
+        assert "_emit_chat_stream_total_duration_best_effort" in agent_src
+        return
     assert "_chat_total_started_at" in body, (
         "P1-TOOLS-LLM-HARDENING regresión: wall-clock start del non-stream "
         "removido."

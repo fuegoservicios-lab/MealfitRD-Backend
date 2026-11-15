@@ -150,7 +150,8 @@ def test_agent_postgres_saver_uses_checkpoint_pool_fallback():
         r"chat_checkpoint_pool\s+or\s+connection_pool",
         src,
     )
-    assert len(fallback_pattern) >= 2, (
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert len(fallback_pattern) >= 1, (
         f"Esperaba ≥2 callsites con fallback `chat_checkpoint_pool or "
         f"connection_pool`; encontrados: {len(fallback_pattern)}. Refactor "
         f"incompleto del split."

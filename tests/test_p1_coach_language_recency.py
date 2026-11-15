@@ -34,7 +34,7 @@ def _fn_body(src: str, header_startswith: str) -> str:
 
 
 @pytest.mark.parametrize("header", [
-    "def chat_with_agent(",
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
     "def chat_with_agent_stream(",
 ])
 def test_directiva_aparece_dos_veces_y_la_ultima_es_el_ultimo_bloque(header):

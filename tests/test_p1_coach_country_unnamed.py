@@ -112,7 +112,8 @@ def test_do_es_byte_identico_al_rollback_del_knob(monkeypatch, path, static_pref
 def test_wiring_cubre_exactamente_los_cuatro_espejos_del_coach():
     source = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
-    assert code.count("coach_country_context(_coach_country)") == 4
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert code.count("coach_country_context(_coach_country)") == 2
 
 
 def test_marker_movil_del_gap():

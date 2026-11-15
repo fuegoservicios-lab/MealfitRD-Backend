@@ -246,6 +246,9 @@ def test_los_dos_paths_arman_el_contexto_temporal_igual():
     Se compara la firma desnormalizada (kwargs ordenados), asi que reordenar argumentos no lo
     rompe; cambiar u omitir uno, si.
     """
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    if "for evento in chat_with_agent_stream(" in ast.unparse(_func(agent, "chat_with_agent")):
+        return   # un solo constructor: los dos paths arman por fuerza el mismo contexto temporal
     non = _llamadas_temporales(_func(agent, "chat_with_agent"))
     stream = _llamadas_temporales(_func(agent, "chat_with_agent_stream"))
 
@@ -287,6 +290,9 @@ def test_la_ventana_del_diario_de_hoy_es_local_en_el_no_stream():
     """`DIARIO DE HOY` con la ventana del servidor le presenta al coach la cena de anoche como
     "registrado hoy" — el defecto que `P1-DIARY-TZ-DEFAULT-RD` cerro en el stream."""
     nodo = _func(agent, "chat_with_agent")
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    if "for evento in chat_with_agent_stream(" in ast.unparse(nodo):
+        nodo = _func(agent, "chat_with_agent_stream")   # el DIARIO DE HOY del no-stream ES el del stream
     llamadas = [
         n for n in ast.walk(nodo)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
