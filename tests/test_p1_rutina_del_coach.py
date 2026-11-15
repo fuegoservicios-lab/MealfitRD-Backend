@@ -649,3 +649,32 @@ def test_cena_en_madrugada_se_presenta_para_hoy_sin_decir_manana():
     assert "para la cena de hoy" in txt
     assert "1/2 tomate mediano" in txt
     assert "nevera" not in txt.lower()
+
+    gap = cdc.build_day_gap_context(
+        {"goal": "maintain"},
+        {"calories": 2050, "protein": 134, "carbs": 230, "fat": 68},
+        [],
+        hora_local=3.45,
+    )
+    assert "COMIDAS PRÓXIMAS EN MADRUGADA" in gap
+    assert "PROHIBIDO decir «para mañana»" in gap
+
+    from prompts import chat_agent
+    assert "preparar algo para mañana" not in chat_agent._CHAT_VOICE_RULES
+
+    # Verificar nota_madrugada de build_temporal_context simulando las 03:27 AM local
+    import datetime as _dt_mod
+
+    class _MadrugadaDatetime(_dt_mod.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 15, 7, 27, 0, tzinfo=_dt_mod.timezone.utc)
+
+    orig_dt = chat_agent.datetime
+    try:
+        chat_agent.datetime = _MadrugadaDatetime
+        tc = chat_agent.build_temporal_context(local_date="2026-11-15", tz_offset=240)
+    finally:
+        chat_agent.datetime = orig_dt
+    assert "OJO CON COMIDAS FUTURAS O PROPUESTAS" in tc
+    assert "PROHIBIDO decir que es «para mañana»" in tc

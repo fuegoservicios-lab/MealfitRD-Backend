@@ -348,6 +348,12 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
                 " 🌙 MADRUGADA (jornada biológica en curso): los registros anteriores pertenecen a esta misma jornada "
                 "todavía abierta hasta las 04:00 AM; a esta hora NO toca ninguna comida ni debes pedirle registrar nada si solo saluda o conversa."
             )
+        if momento == "madrugada":
+            out += (
+                " ⏰ COMIDAS PRÓXIMAS EN MADRUGADA: como el reloj ya pasó de medianoche, cualquier desayuno, almuerzo o cena futuro "
+                "que propongas o te consulten («¿pa cuándo es la cena?») es para HOY («hoy en la mañana», «esta noche» / «la cena de hoy»), "
+                "PROHIBIDO decir «para mañana» (si un turno previo del chat dijo «mañana», rectifica diciendo que es para hoy / esta noche)."
+            )
 
         corto = (fk is not None and metas["kcal"] > 0
                  and cons["kcal"] < FRACCION_DIARIO_CORTO * metas["kcal"]
