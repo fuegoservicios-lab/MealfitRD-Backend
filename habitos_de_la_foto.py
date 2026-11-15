@@ -32,13 +32,14 @@ _PATRON_PAN_BASE = re.compile(
 )
 
 _PATRON_PAN_INICIO = re.compile(
-    r"^(?:\d+\s+|(?:un|una|dos|tres|medio|media)\s+)?(?:sandwich(?:es)?|emparedados?|pan(?:es|ecillos?)?|tostadas?|wraps?|burritos?|"
+    r"^(?:\d+\s+|(?:un|una|dos|tres|cuatro|medio|media)\s+)?(?:rebanadas?\s+de\s+)?(?:sandwich(?:es)?|emparedados?|pan(?:es|ecillos?)?|tostadas?|wraps?|burritos?|"
     r"arepas?|croissants?|bagels?)\b",
     re.IGNORECASE,
 )
-# «tostadas de mantequilla de maní», «sándwich de cottage», «pan con aguacate» (no «pan de agua/molde…»: es el tipo de pan)
+# «tostadas de mantequilla de maní», «sándwich de cottage», «pan integral con aguacate» (no «pan de agua/molde…»: es el tipo de pan)
 _PATRON_PAN_PLATO = re.compile(
-    r"\b(?:sandwich(?:es)?|emparedados?|pan(?:es|ecillos?)?|tostadas?|wraps?|arepas?|croissants?|bagels?)\s+(?:de|con)\s+"
+    r"\b(?:sandwich(?:es)?|emparedados?|pan(?:es|ecillos?)?|tostadas?|wraps?|arepas?|croissants?|bagels?)"
+    r"(?:\s+(?:integral|tostad[oa]s?|multigrano|blanco|fresco))?\s+(?:de|con)\s+"
     r"(?!(?:agua|molde|sobao|centeno|maiz|ajo|yuca|batata|trigo|avena|masa\s+madre)\b)",
     re.IGNORECASE,
 )

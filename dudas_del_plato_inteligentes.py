@@ -21,6 +21,20 @@ _PATRON_CERRADO = re.compile(
     r"\b(sandwich(?:es)?|emparedados?|wraps?|burritos?|arepas?(?:\s+rellenas?)?|empanadas?|croissants?)\b",
     re.IGNORECASE,
 )
+_PATRON_PAN_SUELTO = re.compile(
+    r"\b(tostadas?|bagels?|panecillos?|rebanadas?\s+de\s+pan(?:\s+(?:integral|de\s+molde|tostado|multigrano|centeno|sobao|blanco))?|"
+    r"pan(?:\s+(?:integral|de\s+molde|tostado|multigrano|centeno|sobao|blanco))?)\b",
+    re.IGNORECASE,
+)
+_PATRON_PLATO_ACOMPANANTE = re.compile(
+    r"\b(?:arroz|moro|locrio|chofan|asopao|sancocho|mondongo|sopa|pasta|espaguetis|fettuccine|lasana|pizza|risotto|paella)\b",
+    re.IGNORECASE,
+)
+_PATRON_PAN_CON_UNTABLE = re.compile(
+    r"\b(?:pan(?:\s+(?:integral|de\s+molde|tostado|multigrano|centeno|sobao|blanco))?|tostadas?|bagels?|panecillos?)"
+    r"\s+(?:de|con|untad[oa]s?\s+con)\s+([^,.;()]+)",
+    re.IGNORECASE,
+)
 
 _PATRON_FRUTAS_MULTI = re.compile(
     r"\b(frutas?|macedonia|ensalada\s+de\s+frutas?|fruta\s+picada)\b",
@@ -152,11 +166,12 @@ def _duda_es_sobre_relleno(duda: Dict[str, Any], info_cerrado: Dict[str, Any]) -
     sobre_n = _norm(duda.get("sobre") or "")
     preg_n = _norm(duda.get("pregunta") or "")
     tipo_n = _norm(info_cerrado.get("tipo") or "")
-    if _PATRON_CERRADO.search(sobre_n) or (tipo_n and tipo_n in sobre_n) or "pan" in sobre_n.split():
+    palabras_pan = ("pan", "panes", "rebanada", "rebanadas", "tostada", "tostadas", "bagel", "bagels", "panecillo", "panecillos")
+    if _PATRON_CERRADO.search(sobre_n) or (tipo_n and tipo_n in sobre_n) or any(w in sobre_n.split() for w in palabras_pan):
         return True
     if _PATRON_CERRADO.search(preg_n) and _PATRON_DUDA_RELLENO.search(preg_n):
         return True
-    if ("pan" in preg_n.split() or "panes" in preg_n.split()) and _PATRON_DUDA_RELLENO.search(preg_n):
+    if any(w in preg_n.split() for w in palabras_pan) and _PATRON_DUDA_RELLENO.search(preg_n):
         return True
     return False
 
@@ -165,15 +180,115 @@ def _aclaracion_menciona_relleno(aclaracion: Optional[str]) -> bool:
     acl_n = _norm(aclaracion or "")
     if not acl_n:
         return False
-    pistas = ("cottage", "mantequilla de mani", "jamon", "queso", "pavo", "atun", "pollo", "huevo", "aguacate", "sin nada", "pan solo")
+    pistas = ("cottage", "mantequilla", "jamon", "queso", "pavo", "atun", "pollo", "huevo", "aguacate", "sin nada", "sin untable", "pan solo")
     return any(p in acl_n for p in pistas) and (
         bool(_PATRON_CERRADO.search(acl_n))
         or "pan" in acl_n.split()
         or "panes" in acl_n.split()
+        or "tostada" in acl_n.split()
+        or "tostadas" in acl_n.split()
         or "rellen" in acl_n
         or "dentro" in acl_n
         or "lleva" in acl_n
+        or "tiene" in acl_n
+        or "untad" in acl_n
     )
+
+
+def _relleno_asumido_en_pan(result: Dict[str, Any]) -> Optional[str]:
+    """Detecta un relleno/untable declarado específicamente SOBRE el pan o tostada, sin
+    confundirlo con otros acompañantes del plato (p. ej. jamón o aguacate aparte)."""
+    frases_pan: List[str] = []
+    for it in result.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        it_n = _norm(it.get("name") or "")
+        if _PATRON_PAN_SUELTO.search(it_n):
+            frases_pan.append(it_n)
+    # Conservar signos de puntuación (,.;()) al quitar tildes para no cruzar cláusulas de otros acompañantes
+    raw_texto = f"{result.get('meal_name') or ''}, {result.get('description') or ''}"
+    raw_sin_acentos = "".join(
+        c for c in unicodedata.normalize("NFKD", raw_texto.lower())
+        if not unicodedata.combining(c)
+    )
+    for m in _PATRON_PAN_CON_UNTABLE.finditer(raw_sin_acentos):
+        clausula = _norm(m.group(1))
+        if clausula and not re.match(r"^(?:agua|molde|sobao|centeno|maiz|ajo|yuca|batata|trigo|avena)\b", clausula):
+            frases_pan.append(clausula)
+    if not frases_pan:
+        return None
+    objetivo = " ".join(frases_pan)
+    for rid in ("cottage_mani", "mani_queso", "jamon_queso", "pavo_queso", "huevo_queso", "cottage", "mani", "queso_crema", "aguacate", "atun", "pollo", "jamon", "queso"):
+        entry = RELLENOS_CATALOGO_POR_ID[rid]
+        if _matches_tokens(objetivo, entry["tokens"]):
+            return rid
+    return None
+
+
+def _cantidad_pan_desde_texto(texto_n: str) -> int:
+    m_num = re.search(r"\b(\d+)\s+(?:rebanadas?\s+de\s+)?(?:pan(?:es|ecillos?)?|tostadas?|bagels?)\b", texto_n)
+    if m_num:
+        try:
+            return max(1, min(6, int(m_num.group(1))))
+        except (TypeError, ValueError):
+            pass
+    for palabra, num in (("dos", 2), ("tres", 3), ("cuatro", 4), ("cinco", 5), ("seis", 6)):
+        if re.search(rf"\b{palabra}\s+(?:rebanadas?\s+de\s+)?(?:pan(?:es|ecillos?)?|tostadas?|bagels?)\b", texto_n):
+            return num
+    return 1
+
+
+def _detectar_pan_suelto_untable(
+    result: Dict[str, Any],
+    rellenos_usuario: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Detecta pan, rebanadas o tostadas como elemento principal del plato donde puede haber
+    un untable oculto (por debajo o por costumbre del usuario), excluyendo pan acompañante."""
+    texto_n = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
+    if _PATRON_PLATO_ACOMPANANTE.search(texto_n):
+        return None
+    if _relleno_asumido_en_pan(result) is not None:
+        return None
+
+    sobre = None
+    qty = 1
+    es_tostada_o_bagel = False
+    for it in result.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        name_n = _norm(name)
+        m = _PATRON_PAN_SUELTO.search(name_n)
+        if m:
+            sobre = name[:60]
+            try:
+                qty = max(1, min(6, int(round(float(it.get("quantity") or 1)))))
+            except (TypeError, ValueError):
+                qty = 1
+            if "tostad" in name_n or "bagel" in name_n:
+                es_tostada_o_bagel = True
+            break
+
+    if not sobre:
+        m = _PATRON_PAN_SUELTO.search(texto_n)
+        if not m:
+            return None
+        sobre = m.group(1)[:60]
+        qty = _cantidad_pan_desde_texto(texto_n)
+        es_tostada_o_bagel = ("tostad" in m.group(1).lower() or "bagel" in m.group(1).lower())
+    elif qty == 1:
+        qty = max(qty, _cantidad_pan_desde_texto(texto_n))
+
+    if not (rellenos_usuario or es_tostada_o_bagel or qty >= 2):
+        return None
+
+    return {
+        "sobre": sobre,
+        "tipo": "tostada" if es_tostada_o_bagel else "pan",
+        "cantidad": qty,
+        "es_sandwich": False,
+        "es_pan_suelto": True,
+    }
 
 
 def _relleno_asumido_en_plato(result: Dict[str, Any]) -> Optional[str]:
@@ -248,16 +363,24 @@ def _crear_duda_relleno_cerrado(
     rellenos_usuario: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     qty = info_cerrado["cantidad"]
-    base_id = _relleno_asumido_en_plato(result)
+    es_pan_suelto = bool(info_cerrado.get("es_pan_suelto"))
+    porciones = max(1, (qty + 1) // 2) if es_pan_suelto else qty
+    base_id = _relleno_asumido_en_pan(result) if es_pan_suelto else _relleno_asumido_en_plato(result)
     base_entry = RELLENOS_CATALOGO_POR_ID.get(base_id or "")
 
     plural = qty > 1
-    sujeto = "los sándwiches" if (info_cerrado["es_sandwich"] and plural) else ("el sándwich" if info_cerrado["es_sandwich"] else f"el/la {info_cerrado['tipo']}")
-    if base_entry:
-        base_lbl = re.sub(r"^solo\s+", "", base_entry["texto"].lower()).strip()
-        pregunta = f"¿Qué llevan {sujeto} además de {base_lbl} (o por dentro)?" if plural else f"¿Qué lleva {sujeto} además de {base_lbl} (o por dentro)?"
+    if es_pan_suelto:
+        if info_cerrado.get("tipo") == "tostada":
+            pregunta = "¿Las tostadas llevan algo untado o por dentro?" if plural else "¿La tostada lleva algo untado o por dentro?"
+        else:
+            pregunta = "¿Las rebanadas de pan llevan algo untado o por dentro?" if plural else "¿El pan lleva algo untado o por dentro?"
     else:
-        pregunta = f"¿Qué llevan {sujeto} por dentro?" if plural else f"¿Qué lleva {sujeto} por dentro?"
+        sujeto = "los sándwiches" if (info_cerrado["es_sandwich"] and plural) else ("el sándwich" if info_cerrado["es_sandwich"] else f"el/la {info_cerrado['tipo']}")
+        if base_entry:
+            base_lbl = re.sub(r"^solo\s+", "", base_entry["texto"].lower()).strip()
+            pregunta = f"¿Qué llevan {sujeto} además de {base_lbl} (o por dentro)?" if plural else f"¿Qué lleva {sujeto} además de {base_lbl} (o por dentro)?"
+        else:
+            pregunta = f"¿Qué llevan {sujeto} por dentro?" if plural else f"¿Qué lleva {sujeto} por dentro?"
 
     candidatos_ids: List[str] = []
     if base_id:
@@ -266,7 +389,12 @@ def _crear_duda_relleno_cerrado(
         hid = hab.get("id")
         if hid and hid in RELLENOS_CATALOGO_POR_ID and hid not in candidatos_ids:
             candidatos_ids.append(hid)
-    for default_id in ("jamon_queso", "cottage_mani", "mani", "huevo_queso", "atun", "queso"):
+    defaults = (
+        ("mani", "cottage", "queso_crema", "aguacate", "jamon_queso")
+        if es_pan_suelto
+        else ("jamon_queso", "cottage_mani", "mani", "huevo_queso", "atun", "queso")
+    )
+    for default_id in defaults:
         if default_id not in candidatos_ids:
             candidatos_ids.append(default_id)
         if len(candidatos_ids) >= (5 if base_id else 4):
@@ -275,7 +403,7 @@ def _crear_duda_relleno_cerrado(
     opciones: List[Dict[str, Any]] = []
     if not base_id:
         opciones.append({
-            "texto": "Solo / sin relleno extra",
+            "texto": "Sin untable / pan solo" if es_pan_suelto else "Solo / sin relleno extra",
             "supuesta": True,
             "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0},
         })
@@ -286,7 +414,7 @@ def _crear_duda_relleno_cerrado(
         ajuste = (
             {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
             if es_sup
-            else _delta_para_opcion(entry, base_id, qty)
+            else _delta_para_opcion(entry, base_id, porciones)
         )
         opciones.append({
             "texto": entry["texto"][:40],
@@ -565,25 +693,29 @@ def refinar_dudas_del_plato(
         aderezos_usuario = list(habitos.get("aderezos_ensalada") or [])
 
     info_cerrado = _detectar_alimento_cerrado(result)
+    info_pan = _detectar_pan_suelto_untable(result, rellenos_usuario) if not info_cerrado else None
     info_fruta = _detectar_fruta_bowl(result)
     info_ensalada = _detectar_ensalada_vegetales(result)
     dudas = [dict(d) for d in (dudas_crudas or []) if isinstance(d, dict) and str(d.get("pregunta") or "").strip()]
 
     # ¿Hay otra duda real o elemento que merezca atención?
-    hay_otra_real = bool(info_cerrado or info_fruta or info_ensalada) or any(
+    hay_otra_real = bool(info_cerrado or info_pan or info_fruta or info_ensalada) or any(
         not _es_duda_tonta(d, hay_otra_real=False) for d in dudas
     )
     dudas = [d for d in dudas if not _es_duda_tonta(d, hay_otra_real=hay_otra_real)]
 
-    # 1. Alimento cerrado (sándwich, wrap, arepa, empanada): relleno + hábitos
-    if info_cerrado and not _aclaracion_menciona_relleno(aclaracion):
-        idx_rel = next((i for i, d in enumerate(dudas) if _duda_es_sobre_relleno(d, info_cerrado)), None)
+    # 1. Alimento cerrado o pan/tostadas con posible untable oculto: relleno + hábitos
+    info_relleno = info_cerrado or info_pan
+    if info_relleno and not _aclaracion_menciona_relleno(aclaracion):
+        idx_rel = next((i for i, d in enumerate(dudas) if _duda_es_sobre_relleno(d, info_relleno)), None)
         if idx_rel is not None:
+            porc = max(1, (info_relleno["cantidad"] + 1) // 2) if info_relleno.get("es_pan_suelto") else info_relleno["cantidad"]
+            base_rel = _relleno_asumido_en_pan(result) if info_relleno.get("es_pan_suelto") else _relleno_asumido_en_plato(result)
             dudas[idx_rel] = _personalizar_opciones_duda_relleno(
-                dudas[idx_rel], rellenos_usuario, info_cerrado["cantidad"], _relleno_asumido_en_plato(result)
+                dudas[idx_rel], rellenos_usuario, porc, base_rel
             )
         else:
-            duda_relleno = _crear_duda_relleno_cerrado(result, info_cerrado, rellenos_usuario)
+            duda_relleno = _crear_duda_relleno_cerrado(result, info_relleno, rellenos_usuario)
             dudas.insert(0, duda_relleno)
 
     # 2. Frutas picadas / bowl húmedo: miel, yogur, granola + hábitos
@@ -604,7 +736,7 @@ def refinar_dudas_del_plato(
     # Deduplicar preguntas iguales y ordenar por impacto calórico
     vistas = set()
     limpias: List[Dict[str, Any]] = []
-    for d in sorted(dudas, key=lambda item: _prioridad_duda(item, info_cerrado)):
+    for d in sorted(dudas, key=lambda item: _prioridad_duda(item, info_relleno)):
         key = _norm(d.get("pregunta") or "")
         if not key or key in vistas:
             continue

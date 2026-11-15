@@ -330,3 +330,73 @@ def test_bowl_frutas_siempre_pregunta_miel_e_inyecta_habitos_y_ensalada_pregunta
     rec = mc.construir_recordatorio_multifoto(["Bowl de frutas", "Arroz con cerdo", "4 sándwiches"])
     assert "franjas distintas" in rec
     assert "cantidad exacta" in rec
+
+
+def test_caso_real_pan_integral_suelto_pregunta_por_untables_e_inyecta_cottage_y_mani():
+    """Regresión 15-nov (moises02emsd@gmail.com 10:54 AM): 2 rebanadas de pan integral con huevos,
+    jamón y aguacate devolvía dudas=[] aunque el usuario usa cottage y mantequilla de maní en pan."""
+    habitos = hf.extraer_habitos_desde_registros([
+        {
+            "meal_name": "2 rebanadas de pan integral con queso cottage y mantequilla de maní, 3 huevos hervidos",
+            "ingredients": ["pan integral (2 rebanadas)", "queso cottage", "mantequilla de maní", "huevos"],
+        },
+        {
+            "meal_name": "Pan integral tostado con mantequilla de maní y queso cottage, jamón cocido y atún en aceite",
+            "ingredients": ["4 rebanadas de pan integral tostado", "mantequilla de maní", "queso cottage", "atún"],
+        },
+    ])
+    assert any(h["id"] == "cottage_mani" for h in habitos["rellenos_pan"])
+
+    payload = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Pan integral con huevos hervidos, jamón y aguacate",
+        "description": "Dos rebanadas de pan integral, tres huevos hervidos cortados en seis mitades, dos lascas grandes de jamon y un cuarto de aguacate.",
+        "calories": 525,
+        "protein": 39,
+        "carbs": 34,
+        "healthy_fats": 27,
+        "items": [
+            {"name": "pan integral", "quantity": 2, "unit": "rebanada", "calories": 140, "protein": 6, "carbs": 26, "healthy_fats": 2},
+            {"name": "huevo hervido", "quantity": 3, "unit": "unidad", "calories": 215, "protein": 19, "carbs": 2, "healthy_fats": 14},
+            {"name": "jamón", "quantity": 2, "unit": "lasca", "calories": 85, "protein": 13, "carbs": 2, "healthy_fats": 3},
+            {"name": "aguacate", "quantity": 0.25, "unit": "unidad", "calories": 85, "protein": 1, "carbs": 4, "healthy_fats": 8},
+        ],
+        "dudas": [],
+    }
+
+    r = va._coerce_meal_scan(payload, habitos_usuario=habitos)
+    assert len(r["dudas"]) >= 1
+    assert "untado" in r["dudas"][0]["pregunta"].lower() or "pan" in r["dudas"][0]["pregunta"].lower()
+    ops = {o["texto"]: o for o in r["dudas"][0]["opciones"]}
+    assert ops["Sin untable / pan solo"]["supuesta"] is True
+    assert ops["Sin untable / pan solo"]["ajuste"]["calories"] == 0
+    assert "Cottage y mantequilla de maní" in ops
+    # Jamón y aguacate del plato NO deben restarse del ajuste del untable del pan
+    assert ops["Cottage y mantequilla de maní"]["ajuste"]["calories"] == 155
+    assert ops["Cottage y mantequilla de maní"]["ajuste"]["protein"] == 8.5
+    assert "DUDAS (pregúntale solo esto):" in r["description"]
+
+    # Si el usuario ya lo aclaró en el texto de la foto, no vuelve a preguntar lo mismo
+    ya_dicho = va._coerce_meal_scan(payload, aclaracion="el pan tiene queso cottage y mantequilla de mani", habitos_usuario=habitos)
+    assert not any("untado" in d["pregunta"].lower() for d in ya_dicho["dudas"])
+
+    # Un pan acompañante junto a un plato de arroz/pollo NO dispara duda falsa de untables
+    arroz_con_pan = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Arroz blanco con pollo guisado y pan",
+        "description": "Plato de arroz blanco, pollo guisado y una rebanada de pan.",
+        "calories": 680,
+        "protein": 36,
+        "carbs": 80,
+        "healthy_fats": 22,
+        "items": [
+            {"name": "arroz blanco", "quantity": 1, "unit": "taza", "calories": 240, "protein": 5, "carbs": 52, "healthy_fats": 0},
+            {"name": "pollo guisado", "quantity": 150, "unit": "g", "calories": 320, "protein": 28, "carbs": 4, "healthy_fats": 20},
+            {"name": "pan", "quantity": 1, "unit": "rebanada", "calories": 120, "protein": 3, "carbs": 24, "healthy_fats": 2},
+        ],
+        "dudas": [],
+    }
+    r_arroz = va._coerce_meal_scan(arroz_con_pan, habitos_usuario=habitos)
+    assert r_arroz["dudas"] == []
