@@ -2085,6 +2085,22 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 f"o si no sabes qué alimento es, pregúntale primero al usuario qué consumió antes de llamar. "
                 f"NO digas que quedó registrado.")
 
+    # [P1-UNIDENTIFIED-MEAL-GUARD · 2026-11-15] Si todas las fotos fallaron (unavailable) y el texto
+    # no nombraba comida («Almorcé esto»), impedir registrar inventos como «contenido no identificable».
+    _norm_meal_guard = unicodedata.normalize("NFKD", str(meal_name or "").lower())
+    _norm_meal_guard = "".join(c for c in _norm_meal_guard if not unicodedata.combining(c))
+    if re.search(
+        r"\b(?:no\s+identificabl\w*|sin\s+identificar|contenido\s+(?:no\s+identificabl\w*|desconocido)|"
+        r"comida\s+no\s+identificad\w*|plato\s+no\s+identificad\w*|foto\s+no\s+disponible)\b",
+        _norm_meal_guard,
+    ):
+        logger.warning(f"[P1-UNIDENTIFIED-MEAL-GUARD] log_consumed_meal bloqueado: meal_name={meal_name!r}")
+        return (
+            f"⚠️ NO REGISTRADO: '{meal_name}' no identifica alimentos reales (probable fallo de análisis de foto). "
+            "NO inventes calorías ni registres la comida; pídele al usuario que vuelva a enviar la foto o describa "
+            "qué comió por texto. NO digas que quedó registrado."
+        )
+
     # [P1-PLAN-LOTE-983 · 2026-11-11] Desde foto, cada ingrediente con su cantidad (rechaza una vez; ver el módulo).
     try:
         import ingredientes_con_cantidad as _icc

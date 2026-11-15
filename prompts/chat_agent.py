@@ -1364,6 +1364,17 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
                 instruction += construir_recordatorio_multifoto(plate_descs)
             instruction += _con_dudas(" ".join(lines))   # [P1-PLAN-LOTE-305]
             instruction += _respuestas   # [P1-PLAN-LOTE-690]
+        if unavailable == len(items):
+            motivo = _VISION_REASONS.get(str(items[0].get("reason") or ""), _VISION_REASONS["down"])
+            return (
+                f"\n\n📷 CONTEXTO DE VARIAS FOTOS: El usuario subió {len(items)} foto(s), pero {motivo}, "
+                "así que NO tienes análisis de ninguna imagen. Discúlpate brevemente, pídele que lo "
+                "intente de nuevo en un momento o que te describa por texto qué comida era. "
+                "ESTÁ TERMINANTEMENTE PROHIBIDO llamar a `log_consumed_meal` o inventar calorías, "
+                "proteína o nombres genéricos (como «plato variado» o «contenido no identificable») si "
+                "el texto del usuario no describe alimentos concretos."
+                + (" Responde a su mensaje." if vision.get("has_text") else "")
+            )
         if unavailable:
             instruction += (
                 f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "
@@ -1384,7 +1395,9 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
         return (
             f"\n\n📷 CONTEXTO DE FOTO: El usuario subió una foto pero {motivo}, así que NO tienes "
             f"análisis de la imagen. Discúlpate brevemente, pídele que lo intente de nuevo en un "
-            f"momento o que te describa la comida por texto"
+            f"momento o que te describa la comida por texto. ESTÁ TERMINANTEMENTE PROHIBIDO llamar "
+            f"a `log_consumed_meal` o inventar calorías, proteína o nombres genéricos si el texto "
+            f"del usuario no describe alimentos concretos"
             + (", y responde a su mensaje" if has_text else "") + "."
         )
     if kind == "otro":

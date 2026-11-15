@@ -473,3 +473,31 @@ def test_sopa_con_repollo_no_dispara_duda_ensalada_y_reemplazo_proteina_escrita(
     pre_m = desc_m_out[:desc_m_out.find("DUDAS")].lower()
     assert "mantequilla" in pre_m
     assert "manteca de cerdo" in pre_m
+
+
+def test_todas_las_fotos_unavailable_prohibe_inventar_y_bloquea_registro_no_identificable():
+    """Regresión 15-nov (6:45 PM, HTTP 429 en Vision): si las 2 fotos caen en unavailable,
+    build_vision_context prohíbe llamar a log_consumed_meal y la tool bloquea nombres
+    de contenido no identificable."""
+    from prompts.chat_agent import build_vision_context
+    from tools import log_consumed_meal
+
+    ctx = build_vision_context({
+        "kind": "multi",
+        "has_text": True,
+        "items": [
+            {"kind": "unavailable", "reason": "down"},
+            {"kind": "unavailable", "reason": "down"},
+        ],
+    })
+    assert "PROHIBIDO" in ctx
+    assert "log_consumed_meal" in ctx
+
+    out = log_consumed_meal.invoke({
+        "user_id": "test-user-guard",
+        "meal_name": "Almuerzo de contenido no identificable",
+        "calories": 600,
+        "protein": 25,
+        "meal_type": "almuerzo",
+    })
+    assert "NO REGISTRADO" in out
