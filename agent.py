@@ -4342,6 +4342,9 @@ class ChatState(MessagesState):
     # razonaba ~1.000 tokens invisibles antes de anotar: 7,8 s en la prueba del dueño). Del TURNO: los dos `inputs` lo
     # fijan siempre (sin reducer, un valor viejo del checkpoint se heredaría en el turno siguiente).
     modo_voz: bool
+    # [P1-PLAN-LOTE-1015 · A-01] Este turno usa el bloque de sistema ÚNICO y estable por usuario (el contexto volátil viaja
+    # en el mensaje de usuario) y el catálogo de herramientas fijo con `allowed_tools`: lo que hace acertar la caché del modelo.
+    cache_v2: bool
     # [P1-PLAN-LOTE-999 · 2026-11-13] Desglose de caracteres por bloque del system_prompt (Fase 0).
     prompt_breakdown: Optional[dict]
     # [P1-PLAN-LOTE-1010 · G-19 · 2026-11-14] Degradación suave al >=80% del tope diario por usuario.
@@ -4452,17 +4455,27 @@ def _assemble_rag_context_block(user_facts_text: str, visual_facts_text: str) ->
     return out
 
 
+_BUDGET_CAP_TEXTOS = {
+    # [P1-PLAN-LOTE-1016 · A-05] La ventana es de 24 h CORRIDAS, no «hasta mañana»: el aviso no promete una hora que no es.
+    "es": ("Llegaste al límite de consultas al coach de las últimas 24 horas. Tu diario, tus macros y tu plan siguen activos en la app, "
+           "y podrás volver a escribirle en unas horas."),
+    "en": ("You've reached the coach usage limit for the last 24 hours. Your diary, macros and plan stay fully available in the app, "
+           "and you'll be able to message the coach again in a few hours."),
+    "pt": ("Você atingiu o limite de consultas ao coach nas últimas 24 horas. Seu diário, seus macros e seu plano continuam ativos no app, "
+           "e você poderá falar com o coach de novo em algumas horas."),
+    "fr": ("Vous avez atteint la limite de consultations du coach sur les dernières 24 heures. Votre journal, vos macros et votre plan "
+           "restent disponibles dans l'application, et vous pourrez réécrire au coach dans quelques heures."),
+    "it": ("Hai raggiunto il limite di consultazioni con il coach nelle ultime 24 ore. Il tuo diario, i tuoi macro e il tuo piano restano "
+           "attivi nell'app e potrai scrivere di nuovo al coach tra qualche ora."),
+}
+
+
 def _budget_exceeded_graceful_reply(form_data: Optional[dict]) -> str:
     locale = str((form_data or {}).get("locale") or "").strip().lower()
-    if locale.startswith("en"):
-        return (
-            "You've reached today's smart assistant usage limit. "
-            "Your logged meals, progress, and plan remain safe and available, and your coach resets tomorrow."
-        )
-    return (
-        "Alcanzaste el límite diario de consultas inteligentes por hoy. "
-        "Tu diario, tus macros y tu plan siguen activos en la app, y tu coach se restablece mañana."
-    )
+    for prefijo in ("en", "pt", "fr", "it"):
+        if locale.startswith(prefijo):
+            return _BUDGET_CAP_TEXTOS[prefijo]
+    return _BUDGET_CAP_TEXTOS["es"]
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -4539,15 +4552,36 @@ def _tool_gating_enabled_for_model(model_name: Optional[str]) -> bool:
     return _env_bool("MEALFIT_CHAT_TOOL_GATING_ENABLED", True)
 
 
+def _cache_v2_para_turno(user_id, *, modo_voz: bool = False, tracker=None) -> bool:
+    """[P1-PLAN-LOTE-1015 · A-01] ¿Este turno usa la arquitectura de caché v2? Canario `cache_v2` (off/canary/on), solo con
+    un modelo de OpenAI y sin modo voz (su prompt y su pila son otros). Anota el brazo en el tracker del turno."""
+    try:
+        if modo_voz:
+            return False
+        from coach_canario import registrar_brazo
+        if not registrar_brazo(tracker, user_id, "cache_v2"):
+            return False
+        import llm_provider
+        return bool(llm_provider.is_openai_model(_chat_agent_model_name(user_id)))
+    except Exception as _exc:  # noqa: BLE001
+        from fail_open import fail_open
+        fail_open("cache_v2_decision", _exc, critico=True)
+        return False
+
+
 def _adelgazar_prompt_coach(system_prompt: str, prompt: str, *, user_id=None, con_foto: bool = False,
-                            modo_voz: bool = False) -> str:
+                            modo_voz: bool = False, cache_v2: bool = False) -> str:
     """[P1-PLAN-LOTE-998] Recorte sin pérdida del manual estático (etiquetas de procedencia + bullets de herramientas que
     este turno no liga). Misma decisión que `call_model`: `_select_tools_for_turn`. Fail-open: ante cualquier fallo, el
     prompt intacto. Ver prompts/coach_lean.py."""
     try:
         from prompts.coach_lean import adelgazar
         ligadas = None
-        if (not con_foto and not modo_voz and (prompt or "").strip()
+        if cache_v2:
+            # [P1-PLAN-LOTE-1015 · A-01] Con la caché v2 el manual es el MISMO en todos los turnos: se poda contra el catálogo
+            # entero, no contra lo que este mensaje activa (podar por turno cambia el comienzo del prompt y rompe el acierto).
+            ligadas = {t.name for t in agent_tools}
+        elif (not con_foto and not modo_voz and (prompt or "").strip()
                 and _tool_gating_enabled_for_model(_chat_agent_model_name(user_id))):
             ligadas = {t.name for t in _select_tools_for_turn(
                 agent_tools, {"messages": [HumanMessage(content=prompt)]})}
@@ -4597,7 +4631,7 @@ def _compact_prior_tool_message(msg: ToolMessage) -> ToolMessage:
     )
 
 
-def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
+def _llm_messages_from_state(messages: list, sys_prompt: str, forzar_split: bool = False) -> list:
     """Payload del modelo: system prompt fresco + historial saneado.
 
     [P1-DIARY-NUDGE-VISIBLE · 2026-09-14] Los SystemMessage del historial se descartaban
@@ -4615,7 +4649,7 @@ def _llm_messages_from_state(messages: list, sys_prompt: str) -> list:
     """
     static_sys = sys_prompt or ""
     volatile_sys = ""
-    if _chat_split_volatile_sys_prompt() and _VOLATILE_SYS_SPLIT_MARKER in static_sys:
+    if (_chat_split_volatile_sys_prompt() or forzar_split) and _VOLATILE_SYS_SPLIT_MARKER in static_sys:
         static_sys, volatile_sys = static_sys.split(_VOLATILE_SYS_SPLIT_MARKER, 1)
         volatile_sys = volatile_sys.strip()
 
@@ -4744,6 +4778,15 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
             last_user_text = str(c).lower()
             break
 
+    # [P1-PLAN-LOTE-1016 · A-17] Las palabras clave se comparan SIN acentos en ambos lados: «se me acabó el pollo» no contenía «acabo»
+    # (ó ≠ o), el coach no veía las herramientas de la Nevera y la batería lo vio escribir `dislikes=pollo` en el perfil.
+    import unicodedata as _ud
+
+    def _sin_acentos(_t: str) -> str:
+        return "".join(ch for ch in _ud.normalize("NFKD", _t) if not _ud.combining(ch))
+
+    last_user_text = _sin_acentos(last_user_text)
+
     if not last_user_text:
         return base_tools
 
@@ -4762,21 +4805,21 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     }
     needed = set(_CORE_NAMES)
 
-    if any(k in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno")):
+    if any(_sin_acentos(k) in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno")):
         needed.update({"analizar_suplemento", "guardar_suplemento"})
-    if any(k in last_user_text for k in ("comprar", "supermercado", "compra", "lista", "colmado", "bravo", "sirena", "nacional", "precio")):
+    if any(_sin_acentos(k) in last_user_text for k in ("comprar", "supermercado", "compra", "lista", "colmado", "bravo", "sirena", "nacional", "precio")):
         needed.update({"check_shopping_list", "mark_shopping_list_purchased"})
-    if any(k in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel", "bota", "bote", "daño", "acabo", "gast", "compre", "quedan", "falta")):
+    if any(_sin_acentos(k) in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel", "bota", "bote", "daño", "acabo", "gast", "compre", "quedan", "falta")):
         needed.update({"check_current_pantry", "modify_pantry_inventory"})
-    if any(k in last_user_text for k in ("ajuste", "notificac", "recordatorio", "configura", "pantalla", "abrir", "modo oscuro", "idioma", "tema", "activar", "desactivar", "navegar", "ir a", "mostrar")):
+    if any(_sin_acentos(k) in last_user_text for k in ("ajuste", "notificac", "recordatorio", "configura", "pantalla", "abrir", "modo oscuro", "idioma", "tema", "activar", "desactivar", "navegar", "ir a", "mostrar")):
         needed.update({"cambiar_ajuste_de_la_app", "abrir_pantalla_de_la_app"})
-    if any(k in last_user_text for k in ("nutriente", "hierro", "potasio", "magnesio", "calcio", "zinc", "vitamina")):
+    if any(_sin_acentos(k) in last_user_text for k in ("nutriente", "hierro", "potasio", "magnesio", "calcio", "zinc", "vitamina")):
         needed.update({"suggest_foods_for_nutrient"})
-    if any(k in last_user_text for k in ("alergia", "medico", "clinico", "enfermedad", "diagnost", "intoleranc")):
+    if any(_sin_acentos(k) in last_user_text for k in ("alergia", "medico", "clinico", "enfermedad", "diagnost", "intoleranc")):
         needed.update({"check_clinical_profile"})
-    if any(k in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil", "peso", "pese", "libras", "kilos", "kg", "lb")):
+    if any(_sin_acentos(k) in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil", "peso", "pese", "libras", "kilos", "kg", "lb")):
         needed.update({"update_form_field"})
-    if any(k in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):
+    if any(_sin_acentos(k) in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):
         needed.update({"buscar_etiqueta_en_internet"})
 
     needed.update(_opc.tools_usadas_en_turno(messages))
@@ -4790,7 +4833,7 @@ def call_model(state: ChatState):
     sys_prompt = state.get("sys_prompt", "")
 
     # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE + P1-DIARY-NUDGE-VISIBLE · 2026-09-14]
-    llm_messages = _llm_messages_from_state(messages, sys_prompt)
+    llm_messages = _llm_messages_from_state(messages, sys_prompt, forzar_split=bool(state.get("cache_v2")))
 
     # [P0-LLM-PROVIDER-MIGRATION] Identidad para tier-routing (paid→pro). Guests
     # (session_id) resuelven a flash via fail-cheap del router.
@@ -4836,7 +4879,37 @@ def call_model(state: ChatState):
             **_primary_retry_kwargs,
             **_kwargs_de_razonamiento_modo_voz(state),
         )
-    llm_with_tools = chat_llm.bind_tools(active_tools)
+    if state.get("cache_v2") and not _hard_info.get("escalated"):
+        # [P1-PLAN-LOTE-1015 · A-01] Catálogo FIJO (las 19, en su orden) y la restricción del turno por `tool_choice.allowed_tools`:
+        # no forma parte de lo cacheado (sondas T5/T6/Q1-Q4 del 14-nov), así que cambiar de 8 a 19 herramientas ya no rompe el acierto.
+        from coach_capa_estable import nombres_de_herramientas_permitidas as _perm_names, tool_choice_permitidas as _tc_perm
+        _perm = _perm_names(active_tools, agent_tools)
+        llm_with_tools = chat_llm.bind_tools(list(agent_tools))
+        if _perm:
+            llm_with_tools = llm_with_tools.bind(tool_choice=_tc_perm(_perm))
+    else:
+        llm_with_tools = chat_llm.bind_tools(active_tools)
+
+    # [P1-PLAN-LOTE-1016 · A-07] Tope de rondas y corte de repeticiones: la batería vio 277 llamadas idénticas en un turno (US$ 0,116).
+    try:
+        from coach_tool_loop import motivo_de_corte as _motivo_corte, INSTRUCCION_DE_CORTE as _INSTR_CORTE
+        _corte = _motivo_corte(messages)
+    except Exception as _exc_loop:  # noqa: BLE001
+        from fail_open import fail_open
+        fail_open("chat_tool_loop_guard", _exc_loop, critico=True)
+        _corte = None
+    if _corte:
+        from fail_open import fail_open
+        fail_open("chat_tool_loop_cut", f"turno cortado por {_corte}", critico=True)
+        try:
+            from chat_phase_metrics import get_active_turn_tracker as _gat_loop
+            _trk_loop = _gat_loop(state.get("session_id"))
+            if _trk_loop is not None:
+                _trk_loop.record_nudge(f"tool_loop_cut:{_corte}")
+        except Exception:  # noqa: BLE001
+            pass
+        llm_with_tools = chat_llm          # sin herramientas: tiene que contestar con lo que ya tiene
+        llm_messages = list(llm_messages) + [HumanMessage(content=_INSTR_CORTE)]
 
     # [P1-CHAT-CB · 2026-05-19] Gate per-modelo. Si el breaker está abierto
     # (failures >= MEALFIT_CB_FAILURE_THRESHOLD dentro de la ventana
@@ -10137,9 +10210,17 @@ def _extract_ai_message_text(msg) -> str:
     """
     content = msg.content
     if isinstance(content, list):
-        content = "\n".join(
-            [str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content]
-        )
+        # [P1-PLAN-LOTE-1016 · A-07] La Responses API (gpt-6.1-terra) devuelve BLOQUES: `function_call`, `reasoning`, `text`. Antes
+        # `str(c.get("text", c))` convertía un bloque sin «text» en el texto de TODO el diccionario ({'arguments': …, 'call_id': …}) y
+        # ese texto iba al `done` y al historial. Solo el texto es texto; lo demás no es para el usuario.
+        partes = []
+        for c in content:
+            if isinstance(c, dict):
+                if isinstance(c.get("text"), str) and c.get("type") in (None, "text", "output_text"):
+                    partes.append(c["text"])
+            else:
+                partes.append(str(c))
+        content = "\n".join(partes)
     return str(content) if content else ""
 
 
@@ -10634,6 +10715,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
     _scope.__enter__()
+    _cache_v2 = False   # [P1-PLAN-LOTE-1015 · A-01] definido ANTES del try: se usa tras él aunque el armado del contexto falle
     try:
 
         # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
@@ -10751,9 +10833,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
         # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
         # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
+        _cache_v2 = False
         if _chat_prompt_static_prefix():
             import openai_prompt_cache as _opc
-            _split_volatile = _chat_split_volatile_sys_prompt()
+            _cache_v2 = _cache_v2_para_turno(user_id, modo_voz=False, tracker=_pt)
+            _split_volatile = _chat_split_volatile_sys_prompt() or _cache_v2
             _pausa = bool(current_plan) and plan_vigente is None
             _est_kw = {"plan_en_pausa": _pausa, "contador_sin_plan": _contador_sin_plan}
             _use_static_tools = False
@@ -10796,7 +10880,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     if _use_static_tools:
                         system_prompt += f"El user_id del usuario actual es: {user_id}"
             _bd_antes_lean = len(system_prompt)
-            system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id)
+            system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id, cache_v2=_cache_v2)
             _bd_lean_ahorro = max(0, _bd_antes_lean - len(system_prompt))
             _bd_prefijo_chars = len(system_prompt)
             if _use_static_tools and not _split_volatile:
@@ -11144,6 +11228,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         checkpointer = MemorySaver()
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
 
+    if _cache_v2:
+        # [P1-PLAN-LOTE-1015 · A-01] identidad, bloque clínico, meta diaria e idioma pasan DENTRO del bloque de sistema (estable por
+        # usuario, siempre en rol sistema); el resto de lo volátil queda tras el marcador y viaja en el mensaje de usuario.
+        from coach_capa_estable import reordenar as _reordenar_capa
+        system_prompt = _reordenar_capa(system_prompt, _VOLATILE_SYS_SPLIT_MARKER)
+        _bd_prefijo_chars = len(system_prompt.split(_VOLATILE_SYS_SPLIT_MARKER, 1)[0])
     from prompt_desglose import desglosar_prompt as _desglosar_prompt
     _prompt_breakdown = _desglosar_prompt(
         system_prompt,
@@ -11176,6 +11266,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         "turn_plate_photos": [],
         "turn_photo_to_log": False,   # [P1-PLAN-LOTE-694] el chat sin stream no lleva fotos
         "modo_voz": False,            # [P1-PLAN-LOTE-686] el chat sin stream nunca es modo voz
+        "cache_v2": _cache_v2,        # [P1-PLAN-LOTE-1015 · A-01]
         "prompt_breakdown": _prompt_breakdown,
         "chat_budget_soft_degraded": _budget_soft_degraded,
         "ajustes_de_app": None,       # [P1-PLAN-LOTE-900] del turno
@@ -11405,10 +11496,18 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         return
 
     _t_ctx_b0 = time.monotonic()
+    # [P1-PLAN-LOTE-1017 · A-10] Primera señal al recibir el turno, NO tras armar el contexto (0,4-2,0 s después). El cliente traduce
+    # `phase` con su i18n (`frasesDeFase`); el texto solo lo usa en español si la fase no está en su tabla.
+    from coach_canario import registrar_brazo as _registrar_brazo
+    _early_progress = _registrar_brazo(_pt, user_id, "senal_temprana")
+    if _early_progress:
+        _pt.mark_first_progress()
+        yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': 'Analizando...'})}\n\n"
     # [P1-PLAN-LOTE-998] El handoff del router (perfil, inventario, 5 s, one-shot) siembra el alcance: antes se
     # consumía y se tiraba, así que cada turno volvía a leer el perfil que el router ya tenía.
     _scope = _tc_scope(initial=_tc_consume_handoff(user_id, session_id))
     _scope.__enter__()
+    _cache_v2 = False   # [P1-PLAN-LOTE-1015 · A-01] definido ANTES del try: se usa tras él aunque el armado del contexto falle
     try:
 
         # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
@@ -11591,9 +11690,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
         # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
         # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
+        _cache_v2 = False
         if _chat_prompt_static_prefix():
             import openai_prompt_cache as _opc
-            _split_volatile = _chat_split_volatile_sys_prompt()
+            _cache_v2 = _cache_v2_para_turno(user_id, modo_voz=bool(is_call_mode), tracker=_pt)
+            _split_volatile = _chat_split_volatile_sys_prompt() or _cache_v2
             _pausa = bool(current_plan) and plan_vigente is None
             _est_kw = {"plan_en_pausa": _pausa, "contador_sin_plan": _contador_sin_plan}
             _orig_base = _ORIG_CHAT_VOICE_MODE if is_call_mode else _ORIG_CHAT_STREAM_INLINE
@@ -11638,7 +11739,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         system_prompt += f"El user_id actual es: {user_id}"
             _bd_antes_lean = len(system_prompt)
             system_prompt = _adelgazar_prompt_coach(system_prompt, prompt, user_id=user_id, con_foto=bool(vision),
-                                                    modo_voz=bool(is_call_mode))
+                                                    modo_voz=bool(is_call_mode), cache_v2=_cache_v2)
             _bd_lean_ahorro = max(0, _bd_antes_lean - len(system_prompt))
             _bd_prefijo_chars = len(system_prompt)
             if _use_static_tools and not _split_volatile:
@@ -11976,6 +12077,12 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     else:
         chat_graph_app = chat_builder.compile(checkpointer=MemorySaver())
         
+    if _cache_v2:
+        # [P1-PLAN-LOTE-1015 · A-01] identidad, bloque clínico, meta diaria e idioma pasan DENTRO del bloque de sistema (estable por
+        # usuario, siempre en rol sistema); el resto de lo volátil queda tras el marcador y viaja en el mensaje de usuario.
+        from coach_capa_estable import reordenar as _reordenar_capa
+        system_prompt = _reordenar_capa(system_prompt, _VOLATILE_SYS_SPLIT_MARKER)
+        _bd_prefijo_chars = len(system_prompt.split(_VOLATILE_SYS_SPLIT_MARKER, 1)[0])
     from prompt_desglose import desglosar_prompt as _desglosar_prompt
     _prompt_breakdown = _desglosar_prompt(
         system_prompt,
@@ -12022,6 +12129,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-694] ¿este turno es anotar la foto? (dudas contestadas o texto-rótulo)
         "turn_photo_to_log": _foto_para_anotar(vision, prompt),
         "modo_voz": bool(is_call_mode),   # [P1-PLAN-LOTE-686]
+        "cache_v2": _cache_v2,            # [P1-PLAN-LOTE-1015 · A-01]
         "photo_log_retried": False,
     }
 
@@ -12045,8 +12153,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         }
         return random.choice(opts.get(msg_type, ["Procesando..."]))
 
-    _pt.mark_first_progress()   # [P1-PLAN-LOTE-1012 · A-06] lo primero que ve el cliente
-    yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
+    _pt.mark_first_progress()   # [P1-PLAN-LOTE-1012 · A-06] lo primero que ve el cliente (no cuenta si ya salió el temprano)
+    if not _early_progress:
+        yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
     
     # Emitir el sentimiento detectado al frontend
     if sentiment_result.get("sentiment") != "neutral":

@@ -255,7 +255,7 @@ def test_g19_user_daily_chat_budget_soft_and_hard_caps(monkeypatch):
     monkeypatch.setattr(agent.chat_builder, "compile", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no graph")))
 
     reply, upd, nplan = agent.chat_with_agent("s-cap", "hola", user_id="u-1", form_data={"locale": "es-DO"})
-    assert "límite diario" in reply and upd == {} and nplan is None
+    assert "límite de consultas" in reply and upd == {} and nplan is None   # [P1-PLAN-LOTE-1016] ventana de 24 h, ya no «diario»
 
     events = list(agent.chat_with_agent_stream("s-cap", "hola", user_id="u-1", form_data={"locale": "en-US"}))
     assert any('"type": "chunk"' in ev and "usage limit" in ev.lower() for ev in events)

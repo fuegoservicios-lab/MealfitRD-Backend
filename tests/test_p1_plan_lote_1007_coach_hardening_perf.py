@@ -209,6 +209,7 @@ def test_g13_gpt61_terra_pricing_escalation_and_hard_budget_cap(monkeypatch):
     assert db_profiles.compute_llm_cost_micros("gpt-6.1-terra", 1_000_000, 1_000_000, 800_000) == 5_240_000
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake")
+    monkeypatch.setenv("MEALFIT_CHAT_CANARY_TERRA", "on")   # [P1-PLAN-LOTE-1016] terra va por canario; aquí se prueba su lógica, no el canario
     monkeypatch.delenv("MEALFIT_CHAT_HARD_TURN_ESCALATION_ENABLED", raising=False)
     monkeypatch.delenv("MEALFIT_CHAT_HARD_TURN_MAX_COST_USD", raising=False)
     monkeypatch.delenv("MEALFIT_CHAT_HARD_TURN_MODEL", raising=False)
@@ -366,6 +367,7 @@ def test_admin_chat_perf_exposes_efficiency_and_call_model_escalates_cleanly(mon
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake")
     monkeypatch.setenv("MEALFIT_CHAT_AGENT_MODEL", "gpt-6-luna")
+    monkeypatch.setenv("MEALFIT_CHAT_CANARY_TERRA", "on")   # [P1-PLAN-LOTE-1016] terra va por canario
     monkeypatch.delenv("MEALFIT_CHAT_HARD_TURN_ESCALATION_ENABLED", raising=False)
 
     built = {}

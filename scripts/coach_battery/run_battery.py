@@ -543,9 +543,11 @@ LAST_SYS = {"prompt": ""}
 _orig_llm_msgs = agent._llm_messages_from_state
 
 
-def _capture_sys(messages, sys_prompt):
+def _capture_sys(messages, sys_prompt, *args, **kwargs):
+    # [P1-PLAN-LOTE-1015] transparente a firmas: `_llm_messages_from_state` ganó `forzar_split` y la envoltura de firma fija
+    # rompía TODOS los casos con `TypeError` (lo cazó la primera corrida con la caché v2 encendida).
     LAST_SYS["prompt"] = sys_prompt
-    return _orig_llm_msgs(messages, sys_prompt)
+    return _orig_llm_msgs(messages, sys_prompt, *args, **kwargs)
 
 
 agent._llm_messages_from_state = _capture_sys
