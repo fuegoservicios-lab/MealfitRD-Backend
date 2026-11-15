@@ -1667,6 +1667,8 @@ def admin_chat_perf(request: Request, hours: int = 168, include_insights: bool =
     window_h = max(1, min(720, int(hours) if hours else 168))
     try:
         from chat_phase_metrics import (
+            query_chat_by_arm,
+            query_chat_cache_summary,
             query_chat_efficiency_breakdown,
             query_chat_ops_insights,
             query_chat_phase_percentiles,
@@ -1677,6 +1679,18 @@ def admin_chat_perf(request: Request, hours: int = 168, include_insights: bool =
             summary["efficiency"] = query_chat_efficiency_breakdown(window_h)
         except Exception:
             pass
+        # [P1-PLAN-LOTE-1012 · A-06 / A-03] caché del proveedor y coste por turno (C1/C2 del plan v2) y turnos por brazo
+        # del canario. Un fallo aquí se AVISA (warning): un panel que calla es lo que escondió dos SQL rotos el 14-nov.
+        try:
+            summary["cache"] = query_chat_cache_summary(window_h)
+        except Exception as _e:
+            logger.warning(f"[A-06 CHAT-PERF] sección cache falló: {type(_e).__name__}: {str(_e)[:200]}")
+            summary["cache"] = {"error": type(_e).__name__}
+        try:
+            summary["by_arm"] = query_chat_by_arm(window_h)
+        except Exception as _e:
+            logger.warning(f"[A-03 CHAT-PERF] sección by_arm falló: {type(_e).__name__}: {str(_e)[:200]}")
+            summary["by_arm"] = {"error": type(_e).__name__}
         if include_insights:
             try:
                 summary["insights"] = query_chat_ops_insights(window_h)

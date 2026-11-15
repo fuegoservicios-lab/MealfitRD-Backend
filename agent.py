@@ -94,6 +94,8 @@ def _sanitize_chat_output_for_wire(text):
     """
     if not text or not isinstance(text, str):
         return text
+    from fuga_de_razonamiento import cortar_razonamiento_filtrado   # [P1-PLAN-LOTE-1013 · A-02]
+    text = cortar_razonamiento_filtrado(text)
     text = _DANGEROUS_HTML_TAG_RE.sub(r"&lt;\g<slash>\g<tag>", text)
     text = _ON_HANDLER_RE.sub(r"data-stripped-on\1=", text)
     text = _JS_URI_RE.sub(r"\1=\2data-stripped:", text)
@@ -4848,6 +4850,9 @@ def call_model(state: ChatState):
     _chat_invoke_start = _time_chat.time()
     response = None
     _primary_exc = None
+    _ttft_sink: dict = {}   # [P1-PLAN-LOTE-1012 · A-06] primer token de esta llamada (lo anota llm_provider)
+    from llm_provider import set_ttft_sink as _set_ttft_sink
+    _set_ttft_sink(_ttft_sink)
     if not _cb.can_proceed():
         logger.warning(
             f"🛑 [P1-CHAT-CB] LLM circuit breaker abierto para model={_cb_model!r} "
@@ -5080,8 +5085,10 @@ def call_model(state: ChatState):
                     input_tokens=_in_t,
                     cached_tokens=_ca_t,
                     output_tokens=_out_t,
+                    ttft_ms=_ttft_sink.get("ttft_ms"),
                 )
         finally:
+            _set_ttft_sink(None)
             if _cost_tok is not None:
                 _cost_uid_var.reset(_cost_tok)
     except Exception:
@@ -10441,6 +10448,17 @@ class _ChatContextPrefetcher:
         self._futures: dict = {}
         self._data: dict = {}
         self._done_flags: dict = {}
+        # [P1-PLAN-LOTE-1012 · A-06] tiempo de cada tarea (desde que se lanza hasta que termina) → `context_blocks_ms`
+        self.blocks_ms: dict = {}
+
+    def _sub(self, key: str, executor, fn, *args, **kwargs):
+        def _cronometrada():
+            t0 = time.monotonic()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self.blocks_ms[key] = int((time.monotonic() - t0) * 1000)
+        return _tc_submit(executor, _cronometrada)
 
     def start(self):
         if not _chat_prefetch_enabled():
@@ -10450,7 +10468,7 @@ class _ChatContextPrefetcher:
         )
         ex = self._executor
         mem_uid = self.user_id if self.memoria_on else None
-        self._futures["memory"] = _tc_submit(
+        self._futures["memory"] = self._sub("memory", 
             ex, build_memory_context, self.session_id, mem_uid,
         )
         if not self._is_auth:
@@ -10458,7 +10476,7 @@ class _ChatContextPrefetcher:
         uid = self.user_id
         if self.nevera_on:
             from db_inventory import get_user_inventory
-            self._futures["user_phys_inv"] = _tc_submit(ex, get_user_inventory, uid)
+            self._futures["user_phys_inv"] = self._sub("user_phys_inv", ex, get_user_inventory, uid)
 
         def _load_plan_and_past_days():
             plan_rec = get_latest_usable_meal_plan_with_id(uid)
@@ -10468,8 +10486,8 @@ class _ChatContextPrefetcher:
             )
             return plan_rec, past_ctx
 
-        self._futures["plan_and_past"] = _tc_submit(ex, _load_plan_and_past_days)
-        self._futures["consumed_today"] = _tc_submit(
+        self._futures["plan_and_past"] = self._sub("plan_and_past", ex, _load_plan_and_past_days)
+        self._futures["consumed_today"] = self._sub("consumed_today", 
             ex,
             lambda: _ctx_cache_get_or_load(
                 uid,
@@ -10480,15 +10498,15 @@ class _ChatContextPrefetcher:
                 ),
             ),
         )
-        self._futures["suppl"] = _tc_submit(ex, _safe_suplementos_bloque_para_chat, uid)
-        self._futures["prev_conv"] = _tc_submit(
+        self._futures["suppl"] = self._sub("suppl", ex, _safe_suplementos_bloque_para_chat, uid)
+        self._futures["prev_conv"] = self._sub("prev_conv", 
             ex, _conversacion_de_dias_anteriores, self.session_id, self.local_date, self.tz_offset,
         )
-        self._futures["prev_sess"] = _tc_submit(ex, _contexto_sesion_previa, uid, self.session_id)
-        self._futures["hydration"] = _tc_submit(
+        self._futures["prev_sess"] = self._sub("prev_sess", ex, _contexto_sesion_previa, uid, self.session_id)
+        self._futures["hydration"] = self._sub("hydration", 
             ex, _build_hydration_context, uid, local_date_str=self.local_date,
         )
-        self._futures["pantry"] = _tc_submit(
+        self._futures["pantry"] = self._sub("pantry", 
             ex, _build_pantry_context, uid, nevera_on=self.nevera_on,
         )
         return self
@@ -10541,6 +10559,14 @@ class _ChatContextPrefetcher:
                     logger.debug("[P1-PLAN-LOTE-997] prefetch %s fallback: %r", key, _pe)
         finally:
             self._futures.clear()
+            try:
+                from chat_phase_metrics import get_active_turn_tracker as _gat
+                _trk = _gat(self.session_id)
+                if _trk is not None:
+                    for _k, _v in list(self.blocks_ms.items()):
+                        _trk.record_context_block(_k, _v)
+            except Exception as _exc:  # noqa: BLE001 — la medición nunca rompe el turno
+                logger.debug("[A-06] tiempos de contexto no registrados: %r", _exc)
             if self._executor is not None:
                 self._executor.shutdown(wait=True)
                 self._executor = None
@@ -12018,6 +12044,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         }
         return random.choice(opts.get(msg_type, ["Procesando..."]))
 
+    _pt.mark_first_progress()   # [P1-PLAN-LOTE-1012 · A-06] lo primero que ve el cliente
     yield f"data: {json.dumps({'type': 'progress', 'phase': 'analizando', 'message': get_progress_msg('analizando')})}\n\n"
     
     # Emitir el sentimiento detectado al frontend

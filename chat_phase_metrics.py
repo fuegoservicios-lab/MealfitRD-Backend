@@ -109,9 +109,34 @@ class ChatTurnPhaseTracker:
         self.llm_calls: list[dict[str, Any]] = []
         self.tools: list[dict[str, Any]] = []
         self.nudges: list[str] = []
+        # [P1-PLAN-LOTE-1012 · A-06 / A-03] primera señal visible, tiempo por bloque de contexto y brazo del canario.
+        self.first_progress_ms: Optional[int] = None
+        self.context_blocks_ms: dict[str, int] = {}
+        self.arm: dict[str, str] = {}
 
     def elapsed_ms(self) -> int:
         return max(0, int((time.monotonic() - self.t0_mono) * 1000))
+
+    def mark_first_progress(self) -> None:
+        """Primer evento del stream hacia el cliente (cualquier tipo): lo que el usuario ve primero."""
+        ms = self.elapsed_ms()
+        with self._lock:
+            if self.first_progress_ms is None:
+                self.first_progress_ms = ms
+
+    def record_context_block(self, name: str, duration_ms: float) -> None:
+        clamped = _clamp_ms(duration_ms)
+        if clamped is None:
+            return
+        with self._lock:
+            if len(self.context_blocks_ms) < 24:
+                self.context_blocks_ms[str(name or "unknown")[:32]] = clamped
+
+    def set_arm(self, feature: str, mode: str) -> None:
+        """Brazo de una función con canario (`off`/`canary`/`on` o `treated`/`control`) para comparar por brazo."""
+        with self._lock:
+            if len(self.arm) < 12:
+                self.arm[str(feature)[:32]] = str(mode)[:16]
 
     def set_phase_ms(self, field: str, duration_ms: int) -> None:
         clamped = _clamp_ms(duration_ms)
@@ -144,6 +169,7 @@ class ChatTurnPhaseTracker:
         input_tokens: Optional[int] = None,
         cached_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
+        ttft_ms: Optional[int] = None,
     ) -> None:
         with self._lock:
             entry: dict[str, Any] = {
@@ -152,6 +178,8 @@ class ChatTurnPhaseTracker:
                 "duration_ms": _clamp_ms(duration_ms) or 0,
                 "fallback_used": bool(fallback_used),
             }
+            if ttft_ms is not None and _clamp_ms(ttft_ms) is not None:
+                entry["ttft_ms"] = _clamp_ms(ttft_ms)
             if input_tokens is not None:
                 entry["input_tokens"] = int(input_tokens)
             if cached_tokens is not None:
@@ -213,6 +241,9 @@ class ChatTurnPhaseTracker:
                 "rag_ms": self.rag_ms,
                 "context_build_ms": self.context_build_ms,
                 "context_ready_ms": self.context_ready_ms,
+                "first_progress_ms": self.first_progress_ms,
+                "context_blocks_ms": dict(self.context_blocks_ms),
+                "arm": dict(self.arm),
                 "first_word_ms": self.first_word_ms,
                 "first_word_source": self.first_word_source,
                 "done_ms": total_ms,
@@ -411,6 +442,8 @@ def query_chat_phase_percentiles(hours: int = 168) -> dict[str, Any]:
             ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'rag_ms', '')::numeric))::numeric)::int AS rag_p90_ms,
             ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'context_build_ms', '')::numeric))::numeric)::int AS context_build_p50_ms,
             ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'context_build_ms', '')::numeric))::numeric)::int AS context_build_p90_ms,
+            ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_progress_ms', '')::numeric))::numeric)::int AS first_progress_p50_ms,
+            ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_progress_ms', '')::numeric))::numeric)::int AS first_progress_p90_ms,
             ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_word_ms', '')::numeric))::numeric)::int AS server_first_word_p50_ms,
             ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_word_ms', '')::numeric))::numeric)::int AS server_first_word_p90_ms,
             ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'llm_total_ms', '')::numeric))::numeric)::int AS llm_total_p50_ms,
@@ -662,3 +695,79 @@ def query_chat_ops_insights(hours: int = 168, limit: int = 20) -> dict[str, Any]
         "nudge_outcomes": nudge_outcome_rows or [],
         "proactive_nudge_outcomes": proactive_rows or [],
     }
+
+
+def query_chat_cache_summary(hours: int = 24) -> dict[str, Any]:
+    """[P1-PLAN-LOTE-1012 · A-06 · consultas C1/C2 del plan v2] Caché del proveedor en la 1.ª llamada de cada turno y
+    coste por turno, por modelo. Solo `llm_usage_events` (sin coste de IA). Columnas verificadas contra la base real."""
+    window_h = max(1, min(720, int(hours) if hours else 24))
+    from db_core import execute_sql_query
+
+    by_model = execute_sql_query(
+        """
+        WITH c AS (
+            SELECT model,
+                   metadata->>'corr' AS corr,
+                   input_tokens, cached_tokens, cost_usd_micros,
+                   ROW_NUMBER() OVER (PARTITION BY metadata->>'corr' ORDER BY created_at) AS rn
+            FROM public.llm_usage_events
+            WHERE node = 'chat_call_model'
+              AND created_at > NOW() - make_interval(hours => %s)
+        )
+        SELECT model,
+               COUNT(*) FILTER (WHERE rn = 1)::int AS turns,
+               ROUND(AVG(cached_tokens::numeric / NULLIF(input_tokens, 0)) FILTER (WHERE rn = 1), 3)::float AS first_call_cache_ratio,
+               COUNT(*) FILTER (WHERE rn = 1 AND cached_tokens::numeric / NULLIF(input_tokens, 0) >= 0.6)::int AS first_call_cached_turns,
+               ROUND(AVG(cached_tokens::numeric / NULLIF(input_tokens, 0)) FILTER (WHERE rn > 1), 3)::float AS followup_cache_ratio,
+               ROUND(AVG(input_tokens) FILTER (WHERE rn = 1))::int AS first_call_avg_input_tokens
+        FROM c
+        GROUP BY model
+        ORDER BY turns DESC
+        """,
+        (window_h,),
+        fetch_all=True,
+    ) or []
+
+    cost_row = execute_sql_query(
+        """
+        SELECT COUNT(*)::int AS turns,
+               ROUND(AVG(usd)::numeric, 5)::float AS usd_avg,
+               ROUND(MAX(usd)::numeric, 5)::float AS usd_max
+        FROM (
+            SELECT metadata->>'corr' AS corr, SUM(cost_usd_micros) / 1e6 AS usd
+            FROM public.llm_usage_events
+            WHERE node LIKE 'chat%%'
+              AND metadata ? 'corr'
+              AND created_at > NOW() - make_interval(hours => %s)
+            GROUP BY 1
+        ) t
+        """,
+        (window_h,),
+        fetch_one=True,
+    ) or {}
+    return {"window_hours": window_h, "by_model": by_model, "cost_per_turn": cost_row}
+
+
+def query_chat_by_arm(hours: int = 168) -> list[dict[str, Any]]:
+    """[P1-PLAN-LOTE-1012 · A-03] Turnos, latencia, llamadas y primera palabra separados por brazo del canario
+    (`metadata.arm`). Un turno sin brazo cuenta como `{}`."""
+    window_h = max(1, min(720, int(hours) if hours else 168))
+    from db_core import execute_sql_query
+
+    return execute_sql_query(
+        """
+        SELECT COALESCE(metadata->'arm', '{}'::jsonb)::text AS arm,
+               COUNT(*)::int AS turns,
+               ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms))::numeric)::int AS done_p50_ms,
+               ROUND((percentile_cont(0.90) WITHIN GROUP (ORDER BY duration_ms))::numeric)::int AS done_p90_ms,
+               ROUND((percentile_cont(0.50) WITHIN GROUP (ORDER BY NULLIF(metadata->>'first_word_ms', '')::numeric))::numeric)::int AS first_word_p50_ms,
+               ROUND(AVG(NULLIF(metadata->>'llm_calls_count', '')::numeric), 2)::float AS avg_llm_calls
+        FROM public.pipeline_metrics
+        WHERE node = %s
+          AND created_at > NOW() - make_interval(hours => %s)
+        GROUP BY 1
+        ORDER BY turns DESC
+        """,
+        (_NODE_TURN_PHASES, window_h),
+        fetch_all=True,
+    ) or []
