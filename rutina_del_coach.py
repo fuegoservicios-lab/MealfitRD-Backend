@@ -381,6 +381,119 @@ def formatear_bloque_rutina(rutina: Dict[str, Any]) -> str:
     return out
 
 
+def obtener_rutina_usuario(
+    user_id: Optional[str],
+    consumed_today: Any = None,
+) -> Dict[str, Any]:
+    """Carga (con caché TTL) y extrae la rutina y gustos reales del usuario. Fail-open."""
+    if not activo() or not user_id or str(user_id) == "guest":
+        return {}
+    try:
+        meals, facts = _cargar_historial_usuario(str(user_id))
+        meals = _combinar_con_diario_hoy(meals, consumed_today)
+        if not meals and not facts:
+            return {}
+        return extraer_rutina_desde_registros(meals, facts)
+    except Exception as err:
+        logger.debug(f"[rutina_del_coach] obtener_rutina_usuario omitido: {err!r}")
+        return {}
+
+
+def _sugerencia_plato_para_objetivo(plato: Dict[str, Any], objetivo: Optional[dict]) -> str:
+    nombre = str(plato.get("nombre") or "").strip()
+    k_media = float(plato.get("kcal") or 0.0)
+    p_media = float(plato.get("protein") or 0.0)
+    etiqueta = "habitual" if plato.get("habitual") else "reciente"
+    macros_txt = f"~{int(round(k_media))} kcal, ~{int(round(p_media))} g prot"
+
+    obj_k = float((objetivo or {}).get("kcal") or 0.0)
+    obj_p = float((objetivo or {}).get("protein_g") or 0.0)
+    meta_k_txt = f"~{int(round(obj_k))} kcal" if obj_k > 0 else "su meta de esta comida"
+    meta_txt = f"{meta_k_txt} y ~{int(round(obj_p))} g de proteína" if obj_p > 0 else meta_k_txt
+
+    kcal_alta = obj_k > 0 and k_media > obj_k * 1.35 and (k_media - obj_k) >= 200
+    prot_baja = obj_p > 0 and p_media < obj_p * 0.65 and (obj_p - p_media) >= 10
+
+    if prot_baja and not kcal_alta:
+        return (
+            f"- «{nombre}» ({etiqueta}, {macros_txt}): tiene poca proteína para esta franja; "
+            f"sugiere mantenerlo como base y sumarle una proteína práctica en medida casera "
+            f"(ej. 2-3 huevos o claras, 1 taza de yogurt griego o queso cottage) para acercarse a {meta_txt}."
+        )
+    if kcal_alta and not prot_baja:
+        return (
+            f"- «{nombre}» ({etiqueta}, {macros_txt}): suele quedar alto en calorías para esta franja; "
+            f"propón su mismo plato reduciendo la porción en medida casera (ej. la mitad o menos unidades) "
+            f"para encajar cerca de {meta_txt}."
+        )
+    if kcal_alta and prot_baja:
+        return (
+            f"- «{nombre}» ({etiqueta}, {macros_txt}): queda alto en calorías y bajo en proteína; "
+            f"propón reducir la porción en medida casera y acompañarlo con proteína magra para acercarse a {meta_txt}."
+        )
+    return (
+        f"- «{nombre}» ({etiqueta}, {macros_txt}): encaja bien con esta franja; "
+        "puede repetirlo tal cual o con mínimo ajuste en medida casera."
+    )
+
+
+def formatear_rutina_para_propuesta(
+    user_id: Optional[str],
+    franja: str,
+    objetivo: Optional[dict] = None,
+    consumed_today: Any = None,
+) -> str:
+    """Bloque compacto de rutina real para `proponer_comida` según la franja y el objetivo.
+
+    Nunca menciona la palabra prohibida para mantener la compatibilidad con el modo sin Nevera.
+    """
+    rutina = obtener_rutina_usuario(user_id, consumed_today=consumed_today)
+    if not rutina:
+        return ""
+    try:
+        from chat_history_context import slot_canonico
+        slot = slot_canonico(franja) or str(franja or "").strip().lower()
+    except Exception:
+        slot = str(franja or "").strip().lower()
+
+    por_franja = rutina.get("por_franja") or {}
+    platos_franja = list(por_franja.get(slot) or [])[:2]
+
+    frecuentes_global: list[Dict[str, Any]] = []
+    if not platos_franja:
+        candidatos = [
+            p for s in _SLOTS_ORDEN for p in (por_franja.get(s) or []) if p.get("habitual")
+        ]
+        candidatos.sort(key=lambda x: (x.get("count") or 0, x.get("kcal") or 0), reverse=True)
+        frecuentes_global = candidatos[:2]
+
+    habitos = rutina.get("habitos") or {}
+    resumen_hab = str(habitos.get("resumen_prompt") or "").strip()
+    gustos_facts = [
+        g for g in (rutina.get("gustos_facts") or [])
+        if "nevera" not in _ascii(g)
+    ]
+
+    if not platos_franja and not frecuentes_global and not gustos_facts:
+        return ""
+
+    lineas = [f"RUTINA REAL DEL USUARIO EN {_SLOT_ETIQUETA.get(slot, slot.upper())}:"]
+    if platos_franja:
+        for p in platos_franja:
+            lineas.append(_sugerencia_plato_para_objetivo(p, objetivo))
+    elif frecuentes_global:
+        desc = " · ".join(
+            f"«{p['nombre']}» ({p['count']}x, ~{p['kcal']} kcal)"
+            for p in frecuentes_global
+        )
+        lineas.append(f"- Sin historial en esta franja todavía; en otras suele repetir: {desc}.")
+    if resumen_hab and "nevera" not in _ascii(resumen_hab):
+        lineas.append(f"- Combinaciones aprendidas: {resumen_hab}")
+    if gustos_facts:
+        lineas.append("- Gustos declarados: " + " | ".join(gustos_facts))
+    return "\n".join(lineas)
+
+
 def para_chat(
     user_id: Optional[str],
     form_data: Any = None,
@@ -388,14 +501,10 @@ def para_chat(
     consumed_today: Any = None,
 ) -> str:
     """Builder fail-open para inyectar en `chat_with_agent` y `chat_with_agent_stream`."""
-    if not activo() or not user_id or user_id == "guest":
+    rutina = obtener_rutina_usuario(user_id, consumed_today=consumed_today)
+    if not rutina:
         return ""
     try:
-        meals, facts = _cargar_historial_usuario(str(user_id))
-        meals = _combinar_con_diario_hoy(meals, consumed_today)
-        if not meals and not facts:
-            return ""
-        rutina = extraer_rutina_desde_registros(meals, facts)
         return formatear_bloque_rutina(rutina)
     except Exception as err:
         logger.debug(f"[rutina_del_coach] omitido por error no bloqueante: {err!r}")

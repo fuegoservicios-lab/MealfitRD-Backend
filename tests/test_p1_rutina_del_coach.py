@@ -139,3 +139,123 @@ def test_plan_context_en_pausa_prohibe_plan_para_manana_sin_decir_activo(monkeyp
     assert "mañana" in bloque.lower()
     assert "pausa" in bloque.lower()
     assert "activo" not in bloque.lower()
+
+
+def test_formatear_rutina_para_propuesta_tres_casos():
+    solo_fruta = [
+        {
+            "id": "d-fruta",
+            "meal_type": "Desayuno",
+            "meal_name": "Bowl de lechoza, sandía y piña",
+            "calories": 86,
+            "protein": 1,
+            "consumed_at": "2026-11-15T12:00:00Z",
+        },
+        {
+            "id": "a-cerdo",
+            "meal_type": "Almuerzo",
+            "meal_name": "Arroz blanco con cerdo guisado y vegetales",
+            "calories": 630,
+            "protein": 33,
+            "consumed_at": "2026-11-15T18:00:00Z",
+        },
+        {
+            "id": "c-sand",
+            "meal_type": "Cena",
+            "meal_name": "4 sándwiches de jamón y queso",
+            "calories": 950,
+            "protein": 50,
+            "consumed_at": "2026-11-15T23:50:00Z",
+        },
+    ]
+    rc.invalidate_rutina_cache("u-prop-3casos")
+    with patch("db_facts.get_consumed_meals_since", return_value=solo_fruta), \
+         patch("db_facts.get_all_user_facts", return_value=[]):
+        des_txt = rc.formatear_rutina_para_propuesta(
+            "u-prop-3casos", "desayuno", {"kcal": 410, "protein_g": 27}
+        )
+        cena_txt = rc.formatear_rutina_para_propuesta(
+            "u-prop-3casos", "cena", {"kcal": 615, "protein_g": 40}
+        )
+        alm_txt = rc.formatear_rutina_para_propuesta(
+            "u-prop-3casos", "almuerzo", {"kcal": 717, "protein_g": 47}
+        )
+
+    assert "Bowl de lechoza, sandía y piña" in des_txt
+    assert "poca proteína" in des_txt and "medida casera" in des_txt
+    assert "nevera" not in des_txt.lower()
+
+    assert "4 sándwiches de jamón y queso" in cena_txt
+    assert "alto en calorías" in cena_txt and "reduciendo la porción en medida casera" in cena_txt
+    assert "nevera" not in cena_txt.lower()
+
+    assert "Arroz blanco con cerdo guisado y vegetales" in alm_txt
+    assert "encaja bien" in alm_txt
+    assert "nevera" not in alm_txt.lower()
+
+
+def test_proponer_comida_madrugada_con_dia_biologico_planifica_manana_sin_restar(monkeypatch):
+    import coach_day_context as cdc
+    import db_facts
+    import plan_mode
+    import tools
+
+    diario_ayer = [
+        {"id": "h1", "meal_type": "Desayuno", "meal_name": "Bowl de lechoza, sandía y piña",
+         "calories": 86, "protein": 1, "carbs": 21, "healthy_fats": 0},
+        {"id": "h2", "meal_type": "Almuerzo", "meal_name": "Arroz blanco con cerdo guisado y vegetales",
+         "calories": 630, "protein": 33, "carbs": 68, "healthy_fats": 24},
+        {"id": "h3", "meal_type": "Cena", "meal_name": "4 sándwiches de jamón y queso",
+         "calories": 1240, "protein": 61, "carbs": 140, "healthy_fats": 45},
+    ]
+
+    def _mock_gcmt(uid, date_str=None, tz_offset_mins=None):
+        return list(diario_ayer) if date_str == "2026-11-14" else []
+
+    rc.invalidate_rutina_cache("u-madrugada-1")
+    monkeypatch.setattr(tools, "get_user_profile", lambda _uid: {
+        "health_profile": {"weight": 150, "height": 175, "age": 25, "gender": "male", "mainGoal": "maintain"}
+    })
+    monkeypatch.setattr(tools, "_hora_local_float", lambda _uid: 1.47)
+    monkeypatch.setattr(tools, "user_tz_offset_min", lambda _uid: 240)
+    monkeypatch.setattr(tools, "_local_date_str_for_user", lambda _uid=None: "2026-11-15")
+    monkeypatch.setattr(tools, "_diary_date_str_for_user", lambda _uid=None: "2026-11-14")
+    monkeypatch.setattr(tools, "nevera_activa", lambda _uid: False)
+    monkeypatch.setattr(plan_mode, "get_plan_mode", lambda _uid: {"plan_mode": "tracking"})
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", _mock_gcmt)
+    monkeypatch.setattr(db_facts, "get_consumed_meals_since", lambda *a, **k: list(_HISTORIAL_REAL))
+    monkeypatch.setattr(db_facts, "get_all_user_facts", lambda *a, **k: [])
+    monkeypatch.setattr(cdc, "metas_del_dia", lambda _fd, _plan: {
+        "kcal": 2050, "protein_g": 134, "carbs_g": 230, "fats_g": 68, "fuente": "contador"
+    })
+    plato_cat = {
+        "name": "Queso cottage con casabe, tomate y aguacate",
+        "calories": 410,
+        "protein": "27g",
+        "carbs": "20g",
+        "fats": "18g",
+        "_minutos": 5,
+        "_lineas": [(240.0, "Queso cottage"), (35.0, "Casabe"), (55.0, "Tomate"), (40.0, "Aguacate")],
+        "_tiene": [],
+        "_falta": [],
+        "recipe": ["Servir todo junto."],
+    }
+    monkeypatch.setattr(cdc, "proponer_comidas", lambda *a, **k: [dict(plato_cat)])
+
+    fn = getattr(tools.proponer_comida, "func", tools.proponer_comida)
+    out = fn("u-madrugada-1", meal_type="desayuno")
+    assert out.startswith("PROPUESTAS DE DESAYUNO")
+    assert "planificación para mañana" in out
+    assert "RUTINA REAL DEL USUARIO EN Desayuno" in out
+    assert "sándwiches" in out.lower() and "lechoza" in out.lower()
+    assert "PRIORIZA primero la rutina/plato real del usuario" in out
+    assert "PROHIBIDO decir «si lo comes te quedarían X kcal hoy»" in out
+    assert "Si se la come:" not in out
+    assert "le quedarían ~1640 kcal" not in out
+    assert "hoy le faltan" not in out
+    assert "nevera" not in out.lower()
+
+    # Incluso si el modelo omite `meal_type` a las 1:28 AM tras completar el día biológico, apunta al desayuno de mañana
+    out_auto = fn("u-madrugada-1")
+    assert out_auto.startswith("PROPUESTAS DE DESAYUNO")
+    assert "planificación para mañana" in out_auto

@@ -6536,6 +6536,12 @@ def _contexto_del_dia_para_propuesta(user_id: str) -> dict:
         _tz = user_tz_offset_min(user_id)
         _hoy = _date_p.fromisoformat(_local_date_str_for_user(user_id))
         ctx["diario"] = list(_gcmt(user_id, date_str=_hoy.isoformat(), tz_offset_mins=_tz) or [])
+        if ctx["hora"] is not None and (0.0 <= float(ctx["hora"]) % 24 < 4.5) and not ctx["diario"]:
+            _bio_str = _diary_date_str_for_user(user_id)
+            if _bio_str and _bio_str != _hoy.isoformat():
+                _bio_rows = list(_gcmt(user_id, date_str=_bio_str, tz_offset_mins=_tz) or [])
+                if _bio_rows:
+                    ctx["diario_bio_madrugada"] = _bio_rows
         _dia = find_plan_day_for_date(ctx["plan"], _hoy, _hoy, int(_tz)) if ctx["plan"] else None
         ctx["faltan"] = list(comidas_sin_registrar(ctx["diario"], _dia) or [])
         _d = _dia.get("day") if isinstance(_dia, dict) and isinstance(_dia.get("day"), dict) else _dia
@@ -6589,18 +6595,38 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
         franja = _resolver_meal_type(meal_type)
         if franja == "snack":
             franja = "merienda"
+        diario_efectivo = ctx.get("diario") or ctx.get("diario_bio_madrugada") or []
+        _hora_val = ctx.get("hora")
+        _en_madrugada = _hora_val is not None and (0.0 <= float(_hora_val) % 24 < 4.5)
+        _anotadas_eff = cdc.franjas_anotadas(diario_efectivo)
         if franja not in cdc.FRANJAS:
-            franja = cdc.franja_por_hora(ctx["hora"], ctx["faltan"])
+            if _en_madrugada and ("cena" in _anotadas_eff or {"desayuno", "almuerzo"}.issubset(_anotadas_eff)):
+                franja = "desayuno"
+            else:
+                franja = cdc.franja_por_hora(ctx["hora"], ctx["faltan"])
         metas = cdc.metas_del_dia(ctx["hp"], ctx["plan"])
-        falta = cdc.falta_hoy(metas, cdc.consumido_hoy(ctx["diario"])) if metas else None
+        _principales_cubiertas = {"desayuno", "almuerzo", "cena"}.issubset(_anotadas_eff)
+        _cons_eff = cdc.consumido_hoy(diario_efectivo)
+        _kcal_cubierta = bool(
+            metas and metas.get("kcal") and float(_cons_eff.get("kcal") or 0) >= 0.85 * float(metas["kcal"])
+        )
+        es_para_manana = bool(
+            (_en_madrugada and bool(diario_efectivo))
+            or _principales_cubiertas
+            or (franja in _anotadas_eff and _kcal_cubierta)
+        )
+        falta = cdc.falta_hoy(metas, _cons_eff) if metas else None
         # De noche (con su reloj: un turno nocturno no cuenta) la comida de cierre es más corta y, si él no dijo cuánto
         # tiempo tiene, se prefiere lo que se hace en ~25 min: nadie se pone a guisar una hora a las 9 pm.
         _de_noche = cdc.momento_del_dia(ctx["hora"], ctx["hp"].get("scheduleType")) == "noche"
-        if _de_noche and not max_minutos:
+        if _de_noche and not es_para_manana and not max_minutos:
             max_minutos = 25
-        objetivo = cdc.objetivo_de_la_comida(franja, metas, falta, ctx["hora"], n_comidas=ctx["n_comidas"],
-                                             kcal=kcal_objetivo, proteina=proteina_objetivo, de_noche=_de_noche,
-                                             faltan=ctx["faltan"], hay_registros=bool(ctx["diario"]))
+        objetivo = cdc.objetivo_de_la_comida(
+            franja, metas, None if es_para_manana else falta, ctx["hora"], n_comidas=ctx["n_comidas"],
+            kcal=kcal_objetivo, proteina=proteina_objetivo, de_noche=(_de_noche and not es_para_manana),
+            faltan=[] if es_para_manana else ctx["faltan"],
+            hay_registros=False if es_para_manana else bool(ctx["diario"]),
+        )
         if not objetivo:
             return ("No tengo su meta de calorías (su perfil no trae peso, estatura y edad, y no hay plan vigente). "
                     "(Para el asistente: pregúntale cuántas calorías quiere para esa comida y vuelve a llamar esta "
@@ -6612,12 +6638,26 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
             solo_nevera=bool(solo_con_nevera), max_minutos=max_minutos, n=3,
             rotacion=_date_r.fromisoformat(_local_date_str_for_user(user_id)).toordinal())
         contexto = ""
-        if falta and falta.get("kcal") is not None and not kcal_objetivo:
+        falta_fmt = None if es_para_manana else falta
+        if es_para_manana:
+            contexto = " — planificación para mañana"
+        elif falta and falta.get("kcal") is not None and not kcal_objetivo:
             contexto = (f" — hoy le faltan ~{int(round(max(falta['kcal'], 0)))} kcal"
                         + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
                            if falta.get("protein_g") is not None else ""))
-        return cdc.formatear_propuestas(propuestas, franja, objetivo, con_nevera=bool(ctx["nevera"]), contexto=contexto,
-                                        solo_nevera=bool(solo_con_nevera), falta=falta, nevera_activa=_nevera_on)
+        rutina_txt = ""
+        try:
+            from rutina_del_coach import formatear_rutina_para_propuesta
+            rutina_txt = formatear_rutina_para_propuesta(
+                user_id, franja, objetivo, consumed_today=diario_efectivo
+            )
+        except Exception as _rut_err:
+            logger.debug(f"[proponer_comida] rutina_del_coach omitida: {_rut_err!r}")
+        return cdc.formatear_propuestas(
+            propuestas, franja, objetivo, con_nevera=bool(ctx["nevera"]), contexto=contexto,
+            solo_nevera=bool(solo_con_nevera), falta=falta_fmt, nevera_activa=_nevera_on,
+            rutina_franja_txt=rutina_txt, es_para_manana=es_para_manana,
+        )
     except Exception as e:
         logger.error(f"❌ [TOOL] proponer_comida falló: {e}")
         return ("No pude armar la propuesta ahora mismo (error interno). (Para el asistente: díselo y ofrécele una idea "

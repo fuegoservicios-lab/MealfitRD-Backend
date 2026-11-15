@@ -669,22 +669,29 @@ def _linea_amigable(g: float, nombre: str) -> str:
 
 
 def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_nevera: bool, contexto: str = "",
-                         solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True) -> str:
+                         solo_nevera: bool = False, falta: Optional[dict] = None, nevera_activa: bool = True,
+                         rutina_franja_txt: str = "", es_para_manana: bool = False) -> str:
     """El texto que lee el modelo. Cifras y pasos EXACTOS; al final, cómo presentarlo.
 
     [P1-NEVERA-OPCIONAL · 2026-09-23] `nevera_activa=False` (apagada en modo contador, a mano o sola): ninguna línea
     nombra la Nevera —el coach tiene la orden de no mencionarla—. Con `True` (default), el texto de siempre."""
     con_nevera = con_nevera and nevera_activa
+    rutina_limpia = str(rutina_franja_txt or "").strip()
     if not propuestas:
-        return (f"No encontré en el catálogo de recetas un plato de {franja} que encaje con ese objetivo y con su "
-                "perfil (dieta, alergias, rechazos" + (", solo con su Nevera" if con_nevera else "") + "). "
-                "(Para el asistente: díselo tal cual y propón TÚ una comida sencilla"
-                + (" con lo que hay en su Nevera" if nevera_activa else "")
-                + ", marcando las macros como estimadas con «~». No inventes una receta «del catálogo».)")
+        base_vacia = (
+            f"No encontré en el catálogo de recetas un plato de {franja} que encaje con ese objetivo y con su "
+            "perfil (dieta, alergias, rechazos" + (", solo con su Nevera" if con_nevera else "") + "). "
+            "(Para el asistente: díselo tal cual y propón TÚ una comida sencilla"
+            + (" con lo que hay en su Nevera" if nevera_activa else "")
+            + ", marcando las macros como estimadas con «~». No inventes una receta «del catálogo».)"
+        )
+        return f"{base_vacia}\n{rutina_limpia}" if rutina_limpia else base_vacia
     cab = (f"PROPUESTAS DE {franja.upper()} a su medida (objetivo de esta comida: ~{int(round(objetivo['kcal']))} kcal, "
            f"~{int(round(objetivo['protein_g']))} g de proteína){contexto}. Platos del catálogo de recetas; los gramos y "
            "las macros salen de la tabla de alimentos (no son estimaciones tuyas):")
     lineas = [cab]
+    if rutina_limpia:
+        lineas.append(rutina_limpia)
     if solo_nevera and not nevera_activa:   # sin inventario no se finge saber qué tiene, y sin nombrar la Nevera
         lineas.append("OJO: pidió cocinar SOLO con lo que tiene, pero no sabes qué hay en su casa: estas son ideas "
                       "generales. Pregúntale qué tiene para afinar.")
@@ -709,7 +716,7 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
                               + ", ".join(c["_falta"]))
             else:
                 lineas.append("   Nevera: lo tiene TODO en casa.")
-        if falta and falta.get("kcal") is not None:
+        if falta and falta.get("kcal") is not None and not es_para_manana:
             # La resta hecha: en la batería del lote el modelo la hizo de cabeza y dio 1.560 donde eran 1.476.
             qk = float(falta["kcal"]) - float(c["calories"])
             txt = (f"le quedarían ~{int(round(qk))} kcal" if qk >= 0 else f"se pasaría por ~{int(round(-qk))} kcal")
@@ -719,14 +726,43 @@ def formatear_propuestas(propuestas: list, franja: str, objetivo: dict, con_neve
             lineas.append(f"   Si se la come: {txt}.")
         if i == 1 and c.get("recipe"):
             lineas.append("   Pasos: " + " ".join(f"{j}. {p}" for j, p in enumerate(c["recipe"], start=1)))
-    lineas.append(
-        "(Para el asistente: presenta la nº 1 con sus kcal y proteína y, en una frase, cómo deja su día (la línea «Si se "
-        "la come», tal cual — no hagas la resta tú). Da los ingredientes con sus gramos; los PASOS solo si pidió receta o cómo se hace, "
-        "resumidos sin cambiarles el sentido ni añadir ingredientes. Nombra la nº 2 como alternativa en media frase. "
-        "No cambies cifras ni gramos. "
+    if rutina_limpia:
+        apertura = (
+            "(Para el asistente: PRIORIZA primero la rutina/plato real del usuario de arriba (en porciones caseras, "
+            "con su ajuste o proteína extra si hace falta, y SIN recitar gramos en crudo salvo que él pida receta o "
+            "gramaje), y nombra la nº 1 del catálogo como alternativa práctica para variar."
+        )
+    else:
+        apertura = "(Para el asistente: presenta la nº 1 con sus kcal y proteína"
+
+    if es_para_manana:
+        pref = "" if rutina_limpia else "."
+        cierre_dia = (
+            f"{pref} OJO: esta propuesta es para MAÑANA / su próxima jornada; indica solo cuánto aporta el plato, y "
+            "PROHIBIDO decir «si lo comes te quedarían X kcal hoy» o restarlo de un presupuesto futuro. "
+        )
+    elif not rutina_limpia:
+        cierre_dia = (
+            " y, en una frase, cómo deja su día (la línea «Si se "
+            "la come», tal cual — no hagas la resta tú). "
+        )
+    else:
+        cierre_dia = (
+            " Si presentas una opción para hoy y existe la línea «Si se la come», úsala tal cual — no hagas la resta tú. "
+        )
+
+    cuerpo = (
+        ("Da los ingredientes con sus gramos; los PASOS solo si pidió receta o cómo se hace, "
+         if not rutina_limpia
+         else "Los ingredientes en gramos y los PASOS solo si pidió receta, cómo se hace o pesos exactos, ")
+        + "resumidos sin cambiarles el sentido ni añadir ingredientes. "
+        + ("Nombra la nº 2 como alternativa en media frase. " if not rutina_limpia else "")
+        + "No cambies cifras ni gramos. "
         + ("Si le falta algo de la Nevera, dilo. " if nevera_activa else "")   # [P1-NEVERA-OPCIONAL · 2026-09-23]
         + "NO la registres: todavía no se la ha comido "
         "— cierra ofreciendo anotarla cuando se la coma (entonces `log_consumed_meal` con ESTAS macros y estos "
         "ingredientes). Si pide otra opción, vuelve a llamar esta herramienta pasando en `excluir` los nombres ya "
-        "propuestos.)")
+        "propuestos.)"
+    )
+    lineas.append(apertura + cierre_dia + cuerpo)
     return "\n".join(lineas)
