@@ -3155,6 +3155,16 @@ def health_version():
         fail_open_total, fail_open_critical = _fo_total(), _fo_total(solo_criticos=True)
     except Exception:
         pass
+    # [P1-PLAN-LOTE-1023 · A-32] el uso de la ventana de OpenAI (solo porcentajes: el límite de la cuenta no es público)
+    openai_ratelimit = {}
+    try:
+        from coach_limites_proveedor import snapshot as _rl_snapshot
+        _rl = _rl_snapshot()
+        if _rl:
+            openai_ratelimit = {"uso_tokens_pct": _rl.get("uso_tokens_pct"),
+                                "uso_peticiones_pct": _rl.get("uso_peticiones_pct"), "hace_s": _rl.get("hace_s")}
+    except Exception:
+        pass
 
     git_sha = os.environ.get("GIT_SHA") or "unknown"
     return {
@@ -3189,6 +3199,7 @@ def health_version():
         **effective_models,
         "fail_open_total": fail_open_total,
         "fail_open_critical": fail_open_critical,
+        "openai_ratelimit": openai_ratelimit,
     }
 
 
