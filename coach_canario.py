@@ -28,6 +28,7 @@ _LECTORES = {
     "una_llamada": lambda: _env_str("MEALFIT_CHAT_CANARY_UNA_LLAMADA", "off", MODOS),    # A-09
     "senal_temprana": lambda: _env_str("MEALFIT_CHAT_CANARY_SENAL_TEMPRANA", "on", MODOS),  # A-10 (solo emite eventos nuevos)
     "terra": lambda: _env_str("MEALFIT_CHAT_CANARY_TERRA", "canary", MODOS),             # A-07: turnos difíciles
+    "contexto_rapido": lambda: _env_str("MEALFIT_CHAT_CANARY_CONTEXTO_RAPIDO", "canary", MODOS),  # A-11 (lote 1020)
 }
 
 FUNCIONES = tuple(_LECTORES)

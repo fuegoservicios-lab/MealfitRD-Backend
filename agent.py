@@ -10757,7 +10757,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             if _chat_fastpath_present_logs() and _rag_es_presente_sin_rag(prompt):
                 rag_decision = {"skip": True}
             else:
-                rag_decision = rag_query_router(prompt)
+                from coach_contexto_rapido import router_del_turno as _router_del_turno   # [P1-PLAN-LOTE-1020 · A-11]
+                rag_decision = _router_del_turno(user_id, prompt, rag_query_router, _rag_sin_router)
 
             if not rag_decision.get("skip"):
                 optimized_query = rag_decision.get("query", prompt)
@@ -11610,6 +11611,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             if skip_sentiment_present_logs_activo() and es_turno_objetivo_sin_sentimiento(prompt):
                 _do_sentiment = False
                 logger.info("⏭️ [SENTIMENT FASTPATH] Turno objetivo sin señales afectivas → skip sentiment.")
+        # [P1-PLAN-LOTE-1020 · A-11] por canario: memoria sin el router y sentimiento solo con señal afectiva (85 % de la fase)
+        from coach_contexto_rapido import aplicar as _ctx_rapido_aplicar
+        _do_sentiment, _do_rag_router, rag_decision = _ctx_rapido_aplicar(
+            _pt, user_id, prompt, _do_sentiment, _do_rag_router, _do_rag, rag_decision, _rag_sin_router)
         if _do_sentiment or _do_rag_router:
             _t_sr0 = time.monotonic()
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
