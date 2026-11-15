@@ -86,7 +86,8 @@ def test_injected_in_both_chat_paths():
     with open(path, encoding="utf-8") as f:
         src = f.read()
     n = src.count("build_user_identity_context(form_data or {}, _id_name)")
-    assert n >= 2, (
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert n >= 1, (
         f"Esperaba ≥2 inyecciones de build_user_identity_context en agent.py "
         f"(stream + no-stream); hallé {n}."
     )

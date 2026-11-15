@@ -83,6 +83,10 @@ _BLOQUES = [
 @pytest.mark.parametrize("bloque,obligatorios,dano", _BLOQUES)
 def test_el_bloque_recibe_la_fecha_local_en_el_no_stream(bloque, obligatorios, dano):
     nodo = _func("chat_with_agent")
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    if "for evento in chat_with_agent_stream(" in ast.unparse(nodo):
+        assert _llamadas(_func("chat_with_agent_stream"), bloque), f"el stream ya no invoca `{bloque}`"
+        return
     llamadas = _llamadas(nodo, bloque)
     assert llamadas, (
         f"`chat_with_agent` ya no invoca `{bloque}`. Si el bloque se retiro a proposito, borra "
@@ -137,6 +141,10 @@ def test_el_comentario_de_paridad_ya_no_miente():
     stream mientras la llamada la incumplia. Un comentario no puede satisfacer un assert (regla
     del repo), asi que lo que se comprueba es el CODIGO: si la paridad de ese bloque se rompe,
     esto se pone rojo aunque el comentario siga diciendo lo mismo."""
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream). La paridad ya no se puede romper: hay UNA llamada.
+    if "for evento in chat_with_agent_stream(" in ast.unparse(_func("chat_with_agent")):
+        assert len(_llamadas(_func("chat_with_agent_stream"), "_build_past_days_context")) == 1
+        return
     non = _llamadas(_func("chat_with_agent"), "_build_past_days_context")
     stream = _llamadas(_func("chat_with_agent_stream"), "_build_past_days_context")
     assert len(non) == 1 and len(stream) == 1

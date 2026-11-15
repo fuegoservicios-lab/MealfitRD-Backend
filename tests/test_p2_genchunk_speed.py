@@ -154,7 +154,8 @@ def test_a_both_chat_paths_use_prune():
     # se ancla es la COBERTURA de ambos paths, no cuál de las dos formas se use.
     via_helper = len(re.findall(r"system_prompt \+= _plan_context_for_chat\(", src))
     via_inline = src.count("json.dumps(_prune_plan_for_chat(current_plan))")
-    assert via_helper >= 2 or via_inline >= 2, (
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert via_helper >= 1 or via_inline >= 1, (
         f"A: sólo {via_helper} path(s) llaman `_plan_context_for_chat` y {via_inline} "
         "serializan el plan podado inline. Los dos paths del chat (welcome y turno "
         "normal) tienen que recibir el bloque del plan."
@@ -301,6 +302,9 @@ def test_h_stream_preamble_parallel():
 
 def test_h_nonstream_embeddings_parallel():
     body = _slice_fn(_read(_AGENT_PY), "def chat_with_agent(")
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    if "for evento in chat_with_agent_stream(" in body:
+        return   # la paralelización la comprueba test_h_stream_* sobre el stream
     assert "_rag_text_unit" in body and "_rag_visual_unit" in body, (
         "H: el path non-stream debe paralelizar los embeddings text/multimodal."
     )

@@ -157,7 +157,8 @@ def test_postgressaver_callsites_use_checkpoint_pool():
         r"chat_checkpoint_pool\s+or\s+connection_pool",
         src,
     )
-    assert len(fallback_pattern) >= 2, (
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert len(fallback_pattern) >= 1, (
         f"Esperaba >=2 callsites con fallback `chat_checkpoint_pool or "
         f"connection_pool` (chat_with_agent + chat_with_agent_stream); "
         f"encontrados: {len(fallback_pattern)}. Refactor incompleto?"

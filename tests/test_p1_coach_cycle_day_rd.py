@@ -64,7 +64,8 @@ def test_stream_nonstream_y_router_enhebran_el_offset():
     router = (_BACKEND / "routers" / "chat.py").read_text(encoding="utf-8")
 
     call = "_build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)"
-    assert agent.count(call) >= 2, "stream y non-stream deben pasar el mismo par fecha/offset"
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert agent.count(call) >= 1 and "for evento in chat_with_agent_stream(" in agent, "el stream (y por él el non-stream) pasa el par fecha/offset"
 
     nonstream_start = router.index("def api_chat(")
     nonstream = router[nonstream_start:]

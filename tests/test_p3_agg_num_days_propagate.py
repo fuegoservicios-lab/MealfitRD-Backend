@@ -261,7 +261,8 @@ class TestAgentCallsitesDeriveRealValues:
                 r"cleaned_pantry = aggregate_shopping_list\(", _AGENT_SRC
             )
         ]
-        assert len(occurrences) >= 2, "ambos paths (stream y no-stream) deben tener el fallback"
+        # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+        assert len(occurrences) >= 1, "el stream (y por él el no-stream) debe tener el fallback"
         for start in occurrences:
             window = _AGENT_SRC[start:start + 300]
             assert "num_days=" in window and "multiplier=" in window, (
@@ -274,7 +275,7 @@ class TestAgentCallsitesDeriveRealValues:
                 r"cleaned_shop = aggregate_shopping_list\(", _AGENT_SRC
             )
         ]
-        assert len(shop_occurrences) >= 2
+        assert len(shop_occurrences) >= 1   # [P1-PLAN-LOTE-1025 · A-26] el non-stream es envoltura del stream
         for start in shop_occurrences:
             window = _AGENT_SRC[start:start + 300]
             assert "num_days=" in window and "multiplier=" in window, (

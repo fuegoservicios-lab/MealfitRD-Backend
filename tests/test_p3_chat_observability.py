@@ -199,6 +199,10 @@ def test_rag_metric_emit_in_both_chat_functions(agent_src: str):
         r'_emit_chat_rag_embedding_failed_metric_best_effort\([^)]*"chat_with_agent_stream"',
         agent_src,
     )
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    if "for evento in chat_with_agent_stream(" in agent_src:
+        assert stream is not None
+        return
     assert non_stream is not None, (
         "P3-CHAT-OBSERVABILITY regresión: `chat_with_agent` (non-stream) "
         "NO emite la métrica RAG-failed. SRE no podría desglosar el "
@@ -282,7 +286,8 @@ def test_pool_split_alert_emitted_at_both_callsites(agent_src: str):
         r"(?<!def\s)_emit_checkpoint_pool_split_missing_alert_best_effort\(\s*\)",
         agent_src,
     )
-    assert len(emit_calls) >= 2, (
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert len(emit_calls) >= 1, (
         f"P3-CHAT-OBSERVABILITY regresión: el alert emit aparece {len(emit_calls)} "
         f"veces (excluyendo def), esperado ≥2 (uno por callsite: "
         f"chat_with_agent + chat_with_agent_stream). Si la condición de "

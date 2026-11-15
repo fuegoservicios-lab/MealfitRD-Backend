@@ -155,6 +155,10 @@ def test_graph_invoke_wrapped_with_total_timeout(agent_src: str):
     # `chat_graph_app.invoke(...)` como pasado por referencia a un submit
     # (`_ex.submit(chat_graph_app.invoke, ...)`), que es el patrón canónico
     # post-P0-CHAT-LLM-TIMEOUT.
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream). El stream tiene su propio plazo total.
+    if "for evento in chat_with_agent_stream(" in agent_src:
+        assert not re.search(r"chat_graph_app\.invoke[\s,(]", agent_src)
+        return
     invoke_re = re.compile(r"chat_graph_app\.invoke[\s,(]")
     matches = list(invoke_re.finditer(agent_src))
     assert len(matches) >= 1, (

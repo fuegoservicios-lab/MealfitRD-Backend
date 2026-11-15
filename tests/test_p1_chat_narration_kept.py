@@ -227,7 +227,8 @@ def test_both_call_sites_use_the_shared_helper(agent_src: str = None):
     # a inlinear `final_messages[-1]` en cualquiera de los dos, este count
     # cae a 1 y el test debe fallar loud.
     call_count = len(re.findall(r"_build_final_content_from_messages\(", src))
-    assert call_count >= 3, (
+    # [P1-PLAN-LOTE-1025 · A-26] `chat_with_agent` es una envoltura del stream: el bloque vive UNA vez (en el stream).
+    assert call_count >= 2, (
         "esperaba la definición + al menos 2 callsites (stream y "
         "non-stream) de _build_final_content_from_messages en agent.py, "
         f"encontré {call_count} — ¿un path volvió a usar messages[-1] "
