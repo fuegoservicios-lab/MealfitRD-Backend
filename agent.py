@@ -4837,7 +4837,7 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
-    sys_prompt = state.get("sys_prompt", "")
+    sys_prompt = __import__("coach_checkpoint_ligero").prompt_del_turno(state)   # [P1-PLAN-LOTE-1026 · A-13]
 
     # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE + P1-DIARY-NUDGE-VISIBLE · 2026-09-14]
     llm_messages = _llm_messages_from_state(messages, sys_prompt, forzar_split=bool(state.get("cache_v2")))
@@ -6130,7 +6130,7 @@ def _maybe_append_fast_tool_confirmation(
     # pedía un vaso de agua recibía la confirmación en español. Todas las directivas de idioma del coach empiezan por
     # «🌐» (prompts/chat_agent.py::build_language_directive y build_message_language_directive), y el idioma del
     # MENSAJE manda aunque la app esté en español (regla F): cualquiera de los dos ⇒ que responda el modelo.
-    sys_prompt = str(state.get("sys_prompt") or "")
+    sys_prompt = __import__("coach_checkpoint_ligero").prompt_del_turno(state)   # [P1-PLAN-LOTE-1026 · A-13]
     if "🌐" in sys_prompt:
         return None
 
@@ -11721,11 +11721,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # non-stream chat — el cooldown 1h dedupea bajo carga concurrente.
     if chat_checkpoint_pool is None and connection_pool is not None:
         _emit_checkpoint_pool_split_missing_alert_best_effort()
+    # [P1-PLAN-LOTE-1026 · A-13] compilado una vez; cada turno, una copia con SU saver (el saver lleva un lock propio)
+    from coach_grafo_compilado import para_turno as _grafo_para_turno
     if _checkpoint_pool:
         checkpointer = PostgresSaver(_checkpoint_pool)
-        chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
+        chat_graph_app = _grafo_para_turno(chat_builder, checkpointer)
     else:
-        chat_graph_app = chat_builder.compile(checkpointer=MemorySaver())
+        chat_graph_app = _grafo_para_turno(chat_builder, MemorySaver())
         
     if _cache_v2:
         # [P1-PLAN-LOTE-1015 · A-01] identidad, bloque clínico, meta diaria e idioma pasan DENTRO del bloque de sistema (estable por
@@ -11757,7 +11759,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         "form_data": form_data or {},
         "tz_offset": tz_offset,
         "current_plan": current_plan or {},
-        "sys_prompt": system_prompt,
+        # [P1-PLAN-LOTE-1026 · A-13] el prompt viaja en la config (clave «__», no se persiste); el estado guarda ""
+        "sys_prompt": __import__("coach_checkpoint_ligero").preparar(config, system_prompt),
         "prompt_breakdown": _prompt_breakdown,
         "chat_budget_soft_degraded": _budget_soft_degraded,
         "updated_fields": {},

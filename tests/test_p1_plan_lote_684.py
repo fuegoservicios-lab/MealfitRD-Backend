@@ -105,7 +105,7 @@ def _turno(monkeypatch, *, is_call_mode, prompt):
             return SimpleNamespace(values={})
 
         def invoke(self, inputs, **_k):
-            llamadas["prompt"] = inputs["sys_prompt"]
+            llamadas["prompt"] = (inputs["sys_prompt"] or _k["config"]["configurable"].get("__mf_sys_prompt", ""))
             raise _PromptCapturado
 
         stream = invoke

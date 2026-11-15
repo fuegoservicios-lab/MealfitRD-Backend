@@ -30,11 +30,11 @@ def _render_coach_prompt(monkeypatch, path: str, country: str, static_prefix: bo
             return SimpleNamespace(values={})
 
         def invoke(self, inputs, **_kwargs):
-            captured["prompt"] = inputs["sys_prompt"]
+            captured["prompt"] = (inputs["sys_prompt"] or _kwargs["config"]["configurable"].get("__mf_sys_prompt", ""))
             raise _PromptCaptured
 
         def stream(self, inputs, **_kwargs):
-            captured["prompt"] = inputs["sys_prompt"]
+            captured["prompt"] = (inputs["sys_prompt"] or _kwargs["config"]["configurable"].get("__mf_sys_prompt", ""))
             raise _PromptCaptured
 
     class _Builder:
