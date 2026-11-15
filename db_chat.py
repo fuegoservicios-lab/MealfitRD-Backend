@@ -9,6 +9,8 @@ import hashlib
 import hmac
 import time
 import threading
+import re
+from datetime import datetime, timezone, timedelta
 logger = logging.getLogger(__name__)
 from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
 # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Tenacity para retry exponencial
@@ -1219,6 +1221,229 @@ def save_message(
     _save_message_insert_with_retry(session_id, role, content, user_id)
 
 
+_PATRONES_COMIDA_AVISO = (
+    ("desayuno", re.compile(r"\b(?:desayun\w*|breakfast|cafe\s+da\s+manha|petit[- ]dejeuner|colazione)\b")),
+    ("almuerzo", re.compile(r"\b(?:almuerz\w*|almorz\w*|lunch|almoc(?:o|ar)|pranzo|pranz\w*)\b|(?<!petit[- ])\bdejeuner\b")),
+    ("merienda", re.compile(r"\b(?:meriend\w*|merend\w*|snack\w*|afternoon\s+snack|lanche|gouter)\b")),
+    ("cena", re.compile(r"\b(?:cen(?:a|as|e|o|ando|ar|aste|aron)|dinner|jantar|janta|diner)\b")),
+)
+
+
+def _normalizar_texto_aviso(texto: str) -> str:
+    crudo = str(texto or "").lower()
+    return "".join(c for c in _uc.normalize("NFD", crudo) if _uc.category(c) != "Mn")
+
+
+def _inferir_comida_aviso(texto: str) -> Optional[str]:
+    """Identifica el slot principal ('desayuno'|'almuerzo'|'merienda'|'cena') de un aviso proactivo."""
+    norm = _normalizar_texto_aviso(texto)
+    if not norm:
+        return None
+    mejor_slot = None
+    mejor_pos = None
+    for slot, patron in _PATRONES_COMIDA_AVISO:
+        match = patron.search(norm)
+        if match and (mejor_pos is None or match.start() < mejor_pos):
+            mejor_slot = slot
+            mejor_pos = match.start()
+    return mejor_slot
+
+
+def _normalizar_slot_comida_consumida(meal_type: Any) -> Optional[str]:
+    norm = _normalizar_texto_aviso(meal_type).strip()
+    if not norm:
+        return None
+    if norm in ("desayuno", "breakfast", "cafe da manha", "petit-dejeuner", "petit dejeuner", "colazione"):
+        return "desayuno"
+    if norm in ("almuerzo", "lunch", "comida", "almoco", "dejeuner", "pranzo"):
+        return "almuerzo"
+    if "merienda" in norm or "snack" in norm or "lanche" in norm or "gouter" in norm:
+        return "merienda"
+    if norm in ("cena", "dinner", "jantar", "janta", "diner"):
+        return "cena"
+    return None
+
+
+def _parse_utc_dt(raw: Any) -> Optional[datetime]:
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw.replace(tzinfo=timezone.utc) if raw.tzinfo is None else raw.astimezone(timezone.utc)
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    elif re.search(r"[+-]\d{2}$", s):
+        s = s + ":00"
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _fecha_biologica_aviso(dt_utc: datetime, tz_offset_mins: int, rollover_h: int) -> str:
+    return (dt_utc - timedelta(minutes=tz_offset_mins) - timedelta(hours=rollover_h)).date().isoformat()
+
+
+def _fetch_session_rows_for_proactive(session_id: str) -> List[Dict[str, Any]]:
+    return execute_sql_query(
+        "SELECT id::text AS id, role, content, created_at::text AS created_at "
+        "FROM public.agent_messages "
+        "WHERE session_id = %s AND (content IS NULL OR content NOT LIKE '[SYSTEM_TITLE]%%') "
+        "ORDER BY created_at ASC, id ASC",
+        (str(session_id),),
+        fetch_all=True,
+    ) or []
+
+
+def _split_unanswered_proactive_tail(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    visibles = [
+        r for r in (rows or [])
+        if not str(r.get("content") or "").startswith("[SYSTEM_TITLE]")
+    ]
+    if not visibles:
+        return []
+    last_user_idx = -1
+    for idx, row in enumerate(visibles):
+        if row.get("role") == "user":
+            last_user_idx = idx
+    if last_user_idx == -1:
+        return [r for r in visibles if r.get("role") == "model" and r.get("id")]
+    trailing = visibles[last_user_idx + 1:]
+    return [r for r in trailing[1:] if r.get("role") == "model" and r.get("id")]
+
+
+def _delete_proactive_ids(session_id: str, stale_ids: List[str]) -> int:
+    if not stale_ids:
+        return 0
+    deleted = execute_sql_write(
+        "DELETE FROM public.agent_messages WHERE session_id = %s AND id::text = ANY(%s) RETURNING id::text AS id",
+        (str(session_id), stale_ids),
+        returning=True,
+    )
+    return len(deleted or [])
+
+
+def _aviso_sigue_vigente(
+    row: Dict[str, Any],
+    consumed_items: List[Dict[str, Any]],
+    tz_offset_mins: int,
+    rollover_h: int,
+    now_utc: datetime,
+) -> bool:
+    """Devuelve True solo si el aviso proactivo sigue vigente para este día y comida aún no registrada."""
+    bio_today = _fecha_biologica_aviso(now_utc, tz_offset_mins, rollover_h)
+    msg_utc = _parse_utc_dt(row.get("created_at"))
+    msg_hour = None
+    if msg_utc is not None:
+        if _fecha_biologica_aviso(msg_utc, tz_offset_mins, rollover_h) != bio_today:
+            return False
+        msg_local = msg_utc - timedelta(minutes=tz_offset_mins)
+        msg_hour = msg_local.hour + msg_local.minute / 60.0
+
+    slot = _inferir_comida_aviso(row.get("content") or "")
+    if slot is None:
+        return True
+
+    local_now = now_utc - timedelta(minutes=tz_offset_mins)
+    local_hour = local_now.hour + local_now.minute / 60.0
+    consumed_pairs = []
+    for item in consumed_items or []:
+        s = _normalizar_slot_comida_consumida(item.get("meal_type"))
+        if s:
+            m_dt = _parse_utc_dt(item.get("consumed_at") or item.get("created_at"))
+            consumed_pairs.append((s, m_dt))
+    consumed_set = {s for s, _ in consumed_pairs}
+
+    if slot == "desayuno":
+        if consumed_set & {"desayuno", "almuerzo", "cena"}:
+            return False
+        return rollover_h <= local_hour < 12.0
+
+    if slot == "almuerzo":
+        if consumed_set & {"almuerzo", "cena"}:
+            return False
+        return rollover_h <= local_hour < 19.0
+
+    if slot == "merienda":
+        if "cena" in consumed_set:
+            return False
+        if msg_hour is not None and msg_hour < 12.0:
+            if "almuerzo" in consumed_set or local_hour >= 12.0 or local_hour < rollover_h:
+                return False
+            for s, m_dt in consumed_pairs:
+                if s == "merienda" and (m_dt is None or (m_dt - timedelta(minutes=tz_offset_mins)).hour < 12 or (msg_utc and m_dt >= msg_utc)):
+                    return False
+            return True
+        if local_hour >= 19.0 or local_hour < rollover_h:
+            return False
+        for s, m_dt in consumed_pairs:
+            if s == "merienda":
+                if m_dt is None or (msg_utc is not None and m_dt >= msg_utc) or (msg_utc is None and (m_dt - timedelta(minutes=tz_offset_mins)).hour >= 12):
+                    return False
+        return True
+
+    if slot == "cena":
+        return "cena" not in consumed_set
+
+    return True
+
+
+def reconcile_unanswered_proactive_messages(
+    session_id: str,
+    user_id: Optional[str] = None,
+    now_utc: Optional[datetime] = None,
+) -> int:
+    """Fusiona/limpia avisos automáticos sin respuesta al leer el historial.
+
+    - Si hay varios avisos proactivos encadenados sin respuesta (p. ej. desayuno + almuerzo),
+      elimina todos menos el más reciente para que nunca salgan apilados por separado.
+    - El aviso restante se conserva mientras esa comida siga pendiente en su ventana útil
+      (p. ej. almuerzo a las 3:11 PM si aún no se ha registrado), y se elimina en cuanto el
+      usuario registra esa comida o cambia su ventana/día biológico.
+    Fail-open ante errores de DB.
+    """
+    if not connection_pool or not session_id:
+        return 0
+    try:
+        rows = _fetch_session_rows_for_proactive(session_id)
+        unanswered = _split_unanswered_proactive_tail(rows)
+        if not unanswered:
+            return 0
+
+        stale_ids = [str(r["id"]) for r in unanswered[:-1] if r.get("id")]
+        latest = unanswered[-1]
+
+        from db_facts import (
+            user_tz_offset_min,
+            get_consumed_meals_today,
+            diary_local_date_str,
+            _fallback_tz_offset_min,
+            _diary_rollover_hour,
+        )
+
+        now_dt = _parse_utc_dt(now_utc) or datetime.now(timezone.utc)
+        uid = user_id or get_session_owner(session_id)
+        tz_min = user_tz_offset_min(uid) if (uid and uid != "guest") else _fallback_tz_offset_min()
+        rollover_h = _diary_rollover_hour()
+        bio_today = diary_local_date_str(tz_min, now_utc=now_dt)
+        consumed_items = (
+            get_consumed_meals_today(uid, date_str=bio_today, tz_offset_mins=tz_min)
+            if (uid and uid != "guest")
+            else []
+        )
+        if not _aviso_sigue_vigente(latest, consumed_items, tz_min, rollover_h, now_dt):
+            if latest.get("id"):
+                stale_ids.append(str(latest["id"]))
+
+        return _delete_proactive_ids(session_id, stale_ids)
+    except Exception as e:
+        logger.warning(f"No se pudieron conciliar avisos proactivos sin respuesta en {session_id}: {e}")
+        return 0
+
+
 def prune_unanswered_proactive_messages(session_id: str) -> int:
     """Elimina avisos proactivos previos sin respuesta antes de guardar uno nuevo.
 
@@ -1230,31 +1455,10 @@ def prune_unanswered_proactive_messages(session_id: str) -> int:
     if not connection_pool or not session_id:
         return 0
     try:
-        rows = execute_sql_query(
-            "SELECT id::text AS id, role FROM public.agent_messages "
-            "WHERE session_id = %s ORDER BY created_at ASC, id ASC",
-            (str(session_id),),
-            fetch_all=True,
-        ) or []
-        if not rows:
-            return 0
-        last_user_idx = -1
-        for idx, row in enumerate(rows):
-            if row.get("role") == "user":
-                last_user_idx = idx
-        if last_user_idx == -1:
-            stale_ids = [str(r["id"]) for r in rows if r.get("role") == "model" and r.get("id")]
-        else:
-            trailing = rows[last_user_idx + 1:]
-            stale_ids = [str(r["id"]) for r in trailing[1:] if r.get("role") == "model" and r.get("id")]
-        if not stale_ids:
-            return 0
-        deleted = execute_sql_write(
-            "DELETE FROM public.agent_messages WHERE session_id = %s AND id::text = ANY(%s) RETURNING id::text AS id",
-            (str(session_id), stale_ids),
-            returning=True,
-        )
-        return len(deleted or [])
+        rows = _fetch_session_rows_for_proactive(session_id)
+        unanswered = _split_unanswered_proactive_tail(rows)
+        stale_ids = [str(r["id"]) for r in unanswered if r.get("id")]
+        return _delete_proactive_ids(session_id, stale_ids)
     except Exception as e:
         logger.warning(f"No se pudieron podar avisos previos sin respuesta en {session_id}: {e}")
         return 0

@@ -18,7 +18,7 @@ from db import (
     save_message, save_message_with_attachments, save_message_feedback, log_api_usage,
     get_model_response_id_for_regeneration, replace_model_response_for_regeneration,
     get_chat_attachment, build_chat_attachment_url, verify_chat_attachment_signature,
-    count_user_chat_sessions, CHAT_SESSIONS_PAGE_SIZE,
+    count_user_chat_sessions, CHAT_SESSIONS_PAGE_SIZE, reconcile_unanswered_proactive_messages,
 )
 from memory_manager import build_memory_context, summarize_and_prune
 from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist, is_turn_active
@@ -423,6 +423,7 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
                 logger.warning(f"🚫 [HISTORY AUTH FAILED] REJECTED. owner={session_owner} != verified={verified_user_id}")
                 raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
 
+        reconcile_unanswered_proactive_messages(session_id, verified_user_id or session_owner)
         messages = get_session_messages(session_id)
         # Ocultar mensajes de sistema como el system_title
         filtered_messages = _hydrate_chat_attachment_urls(
