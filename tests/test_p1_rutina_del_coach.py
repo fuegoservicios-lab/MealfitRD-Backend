@@ -681,3 +681,49 @@ def test_cena_en_madrugada_se_presenta_para_hoy_sin_decir_manana():
         chat_agent.datetime = orig_dt
     assert "OJO CON COMIDAS FUTURAS O PROPUESTAS" in tc
     assert "PROHIBIDO decir que es «para mañana»" in tc
+
+
+def test_receta_sugerida_fuera_de_catalogo_no_cae_en_almuerzo_ni_devuelve_sin_cantidades(monkeypatch):
+    """Regresión 15-nov (3:51 p. m.): tras aviso proactivo de merienda ('arepita de maíz con pavo y aguacate'),
+    preguntar 'Como lo hago?' no debe devolver 3 almuerzos ni decir 'no tengo cantidades ni macros'."""
+    from langchain_core.messages import AIMessage, HumanMessage
+    import coach_day_context as cdc
+    import db_facts
+    import plan_mode
+    import tools
+
+    monkeypatch.setattr(tools, "get_user_profile", lambda _uid: {
+        "health_profile": {"weight": 150, "height": 175, "age": 25, "gender": "male", "mainGoal": "gain_muscle"}
+    })
+    monkeypatch.setattr(tools, "_hora_local_float", lambda _uid: 15.85)
+    monkeypatch.setattr(tools, "user_tz_offset_min", lambda _uid: 240)
+    monkeypatch.setattr(tools, "_local_date_str_for_user", lambda _uid=None: "2026-11-15")
+    monkeypatch.setattr(tools, "_diary_date_str_for_user", lambda _uid=None: "2026-11-15")
+    monkeypatch.setattr(tools, "nevera_activa", lambda _uid: False)
+    monkeypatch.setattr(plan_mode, "get_plan_mode", lambda _uid: {"plan_mode": "tracking"})
+    monkeypatch.setattr(db_facts, "get_consumed_meals_today", lambda *a, **k: [])
+    monkeypatch.setattr(cdc, "metas_del_dia", lambda _fd, _plan: {
+        "kcal": 2050, "protein_g": 134, "carbs_g": 230, "fats_g": 68, "fuente": "contador"
+    })
+    monkeypatch.setattr(cdc, "buscar_receta_de_plato", lambda *a, **k: [])
+    monkeypatch.setattr(cdc, "proponer_comidas", lambda *a, **k: pytest.fail("No debe caer a propuestas aleatorias de catálogo"))
+
+    msgs = [
+        AIMessage(content="Una arepita de maíz con pavo y aguacate te caería buenísima para merendar; tiene proteína y queda bien sabrosa."),
+        HumanMessage(content="Como lo hago?"),
+    ]
+    token = tools._CURRENT_CHAT_MESSAGES.set(msgs)
+    try:
+        fn = getattr(tools.proponer_comida, "func", tools.proponer_comida)
+        out = fn("u-arepita-1", plato="arepita de maíz con pavo y aguacate")
+    finally:
+        tools._CURRENT_CHAT_MESSAGES.reset(token)
+
+    assert "arepita de maíz con pavo y aguacate" in out
+    assert "(merienda " in out
+    assert "PROPUESTAS DE ALMUERZO" not in out
+    assert "porciones caseras prácticas y realistas" in out
+    assert "PROHIBIDO decir «la sugerí como idea»" in out
+    assert "«no tengo cantidades ni macros»" in out
+    assert "PROHIBIDO mencionar «herramienta»" in out
+    assert "nevera" not in out.lower()

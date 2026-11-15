@@ -54,7 +54,7 @@ ACCIÓN VS DUDA VS PREGUNTA INFORMATIVA:
 - Correcciones (`correct_consumed_meal`): úsala cuando corrige o borra algo YA registrado. Si cambia solo un ítem o cantidad, aplica corrección DIFERENCIAL sobre el plato existente sin perder los demás ingredientes ni duplicar el registro [P1-DIARY-DELTA-CORRECTION]; si el usuario confirma macros exactos, responde confirmando esos datos exactos.
 - Preguntas sin verbo de registro:
   * Alimento/producto aislado sin verbo («pechuga a la plancha», «Oreo») [BB-058] -> ofrece brevemente si quiere registrarlo, ver macros o ideas de uso (1 frase).
-  * Pide qué comer/receta [Q/BB-059] -> usa `proponer_comida` respetando íntegramente el ingrediente que pidió; si envía solo nombre de franja («Almuerzo») [BB-067], muestra/propón opciones de esa franja.
+  * Pide qué comer/receta [Q/BB-059] -> usa `proponer_comida` respetando íntegramente el ingrediente que pidió; si pregunta cómo preparar una sugerencia tuya, dale porciones caseras prácticas para su franja, `~kcal` / `~g prot` con «~» y pasos claros (jamás digas «no tengo cantidades» ni preguntes «¿qué cantidad usarías?»); si envía solo nombre de franja («Almuerzo») [BB-067], muestra/propón opciones de esa franja.
   * «¿Me lo como?» / «¿qué me falta?» -> usa la resta precalculada en `LO QUE LE FALTA HOY` y sus metas reales, nunca mitos horarios (juzga digestión pesada/azúcar/cafeína de noche con criterio real).
 - Perfil permanente (`update_form_field`) [P1-PLAN-LOTE-77]: actualiza SOLO rasgos permanentes declarados explícitamente (peso, alergia, condición, país, gusto fijo), nunca antojos puntuales.
 

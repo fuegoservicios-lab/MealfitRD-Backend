@@ -6644,6 +6644,56 @@ def _usuario_pide_pasos_previo(messages: Optional[list] = None) -> bool:
     return bool(norm_user and textos_ai_previos and _RE_PIDE_PASOS_PLATO.search(norm_user))
 
 
+_FRANJA_TEXTO_PATRONES = (
+    ("merienda", re.compile(r"\b(?:para\s+(?:la\s+)?)?(?:merendar|merienda|snack)\b", re.I)),
+    ("desayuno", re.compile(r"\b(?:para\s+(?:el\s+)?)?(?:desayunar|desayuno)\b", re.I)),
+    ("almuerzo", re.compile(r"\b(?:para\s+(?:el\s+)?)?(?:almorzar|almuerzo)\b", re.I)),
+    ("cena", re.compile(r"\b(?:para\s+(?:la\s+)?)?(?:cenar|cena)\b", re.I)),
+)
+
+
+def _inferir_franja_desde_texto(texto: str) -> Optional[str]:
+    """Deduce la franja (`desayuno`/`almuerzo`/`merienda`/`cena`) cuando la sugerencia previa la nombra."""
+    limpio = strip_accents(str(texto or "")).lower()
+    if not limpio:
+        return None
+    for franja, rx in _FRANJA_TEXTO_PATRONES:
+        if rx.search(limpio):
+            return franja
+    return None
+
+
+def _formatear_receta_sin_catalogo(
+    *,
+    plato_nombre: str,
+    franja: str,
+    objetivo: dict,
+    nevera: list,
+    nevera_activa: bool,
+    contexto: str,
+) -> str:
+    """Directiva cuando piden pasos de un plato sugerido o pedido que no existe en `dish_registry`."""
+    nombre_limpio = str(plato_nombre or "").strip() or "el plato recién sugerido"
+    kcal = int(round(float(objetivo.get("kcal") or 0)))
+    prot = int(round(float(objetivo.get("protein_g") or 0)))
+    linea_nevera = ""
+    if nevera_activa and nevera:
+        linea_nevera = " Ingredientes en casa: " + ", ".join(str(x) for x in nevera[:12]) + "."
+    return (
+        f"RECETA PEDIDA: «{nombre_limpio}» ({franja} — objetivo aprox.: ~{kcal} kcal, "
+        f"~{prot} g de proteína{contexto}).{linea_nevera}\n"
+        f"(Para el asistente: el usuario pide CÓMO PREPARAR «{nombre_limpio}». "
+        "Respóndele directamente sobre ESE plato — NO propongas platos distintos. "
+        "Dale: 1) ingredientes con porciones caseras prácticas y realistas "
+        "(tazas, cucharadas, lonjas, unidades) calibradas a ese objetivo aproximado de su "
+        f"{franja}; 2) ~kcal y ~g de proteína estimadas marcadas con «~»; y "
+        "3) 3-4 pasos claros de preparación. PROHIBIDO decir «la sugerí como idea», "
+        "«no tengo cantidades ni macros», «¿qué cantidad usarías?» ni pedirle al usuario que "
+        "calcule las porciones. PROHIBIDO mencionar «herramienta», «catálogo» o excusas técnicas. "
+        "NO la registres aún: cierra ofreciendo anotarla cuando se la coma.)"
+    )
+
+
 @tool
 def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = None, proteina_objetivo: int = None,
                     solo_con_nevera: bool = False, excluir: list[str] = None, max_minutos: int = None,
@@ -6670,6 +6720,9 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
         import coach_day_context as cdc
         ctx = _contexto_del_dia_para_propuesta(user_id)
         _nevera_on = ctx.get("nevera_activa", True)
+        textos_ai_previos, pidio_nueva = _extraer_contexto_turno_propuesta()
+        plato_limpio = str(plato or "").strip()
+        pide_pasos = bool(plato_limpio or (_usuario_pide_pasos_previo() and not pidio_nueva))
         franja = _resolver_meal_type(meal_type)
         if franja == "snack":
             franja = "merienda"
@@ -6677,6 +6730,12 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
         _hora_val = ctx.get("hora")
         _en_madrugada = _hora_val is not None and (0.0 <= float(_hora_val) % 24 < 4.5)
         _anotadas_eff = cdc.franjas_anotadas(diario_efectivo)
+        if franja not in cdc.FRANJAS and pide_pasos:
+            franja_prev = _inferir_franja_desde_texto(
+                f"{plato_limpio} {(textos_ai_previos or [''])[0]}"
+            )
+            if franja_prev in cdc.FRANJAS:
+                franja = franja_prev
         if franja not in cdc.FRANJAS:
             if _en_madrugada and ("cena" in _anotadas_eff or {"desayuno", "almuerzo"}.issubset(_anotadas_eff)):
                 franja = "desayuno"
@@ -6709,7 +6768,6 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
             return ("No tengo su meta de calorías (su perfil no trae peso, estatura y edad, y no hay plan vigente). "
                     "(Para el asistente: pregúntale cuántas calorías quiere para esa comida y vuelve a llamar esta "
                     "herramienta con `kcal_objetivo`.)")
-        textos_ai_previos, pidio_nueva = _extraer_contexto_turno_propuesta()
         contexto = ""
         falta_fmt = None if es_para_manana else falta
         if es_para_manana:
@@ -6719,8 +6777,6 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
                         + (f" y ~{int(round(max(falta['protein_g'], 0)))} g de proteína"
                            if falta.get("protein_g") is not None else ""))
 
-        plato_limpio = str(plato or "").strip()
-        pide_pasos = bool(plato_limpio or (_usuario_pide_pasos_previo() and not pidio_nueva))
         if pide_pasos:
             objetivo_receta = [plato_limpio] if plato_limpio else textos_ai_previos[:1]
             prop_receta = cdc.buscar_receta_de_plato(
@@ -6734,6 +6790,14 @@ def proponer_comida(user_id: str, meal_type: str = None, kcal_objetivo: int = No
                     pidio_propuesta_nueva=False, es_receta_pedida=True,
                     en_madrugada=bool(_en_madrugada),
                 )
+            return _formatear_receta_sin_catalogo(
+                plato_nombre=plato_limpio or (textos_ai_previos[0][:100] if textos_ai_previos else ""),
+                franja=franja,
+                objetivo=objetivo,
+                nevera=ctx["nevera"],
+                nevera_activa=_nevera_on,
+                contexto=contexto,
+            )
 
         excluir_total = [str(x) for x in (excluir or []) if str(x or "").strip()] + textos_ai_previos
         gustos_tokens: set[str] = set()
