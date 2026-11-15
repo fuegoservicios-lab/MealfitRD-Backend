@@ -1030,6 +1030,16 @@ async def api_nutrition_targets(
         from nutrition_calculator import get_nutrition_targets
         t = await asyncio.to_thread(get_nutrition_targets, hp)
         m = t.get("macros") or {}
+        try:
+            from diary_targets import snapshot_current_targets_for_user
+            await asyncio.to_thread(
+                snapshot_current_targets_for_user,
+                verified_user_id,
+                overwrite_today=False,
+                tz_offset_mins=hp.get("tz_offset_minutes") if hp.get("tz_offset_minutes") is not None else hp.get("tzOffset"),
+            )
+        except Exception:
+            pass
         return {
             "ok": True,
             "calories": int(t.get("target_calories") or 0),

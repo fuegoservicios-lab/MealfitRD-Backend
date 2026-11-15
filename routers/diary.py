@@ -1994,7 +1994,20 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
                 m.pop("ingredients", None)
                 m.setdefault("micros", None)
 
-        return {
+        # [P1-DIARY-DAY-TARGETS] Resolver meta calórica y de macros vigente en esa fecha (fail-open).
+        _day_targets = None
+        try:
+            from diary_targets import resolve_targets_by_day, resolve_user_effective_off_min
+            from datetime import datetime, timedelta, timezone
+            _eff_off = resolve_user_effective_off_min(user_id, tzOffset)
+            _date_key = str(date)[:10] if (date and len(str(date)) >= 10) else (
+                datetime.now(timezone.utc) - timedelta(minutes=_eff_off)
+            ).date().isoformat()
+            _day_targets = resolve_targets_by_day(user_id, [_date_key], _eff_off).get(_date_key)
+        except Exception as _te:
+            logger.debug(f"[P1-DIARY-DAY-TARGETS] meta del día no resuelta en /consumed: {_te}")
+
+        out_payload = {
             "meals": meals,
             "totals": {
                 "calories": total_cal,
@@ -2003,8 +2016,11 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
                 "healthy_fats": total_fat,
                 "micros": _resumen["micros"],
                 "micros_coverage": _resumen["micros_coverage"],
-            }
+            },
         }
+        if _day_targets:
+            out_payload["targets"] = _day_targets
+        return out_payload
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -2198,19 +2214,37 @@ def api_get_consumed_range(
             fetch_all=True,
         ) or []
 
-        return {
-            "days": [
-                {
-                    "date": str(r.get("dia")),
-                    "calories": int(r.get("calories") or 0),
-                    "protein": int(r.get("protein") or 0),
-                    "carbs": int(r.get("carbs") or 0),
-                    "healthy_fats": int(r.get("healthy_fats") or 0),
-                    "meals_count": int(r.get("meals_count") or 0),
-                }
-                for r in rows
-            ]
-        }
+        # [P1-DIARY-DAY-TARGETS] Meta vigente por fecha para que un cambio de plan/objetivo
+        # posterior no reescriba retrospectivamente los días ya cumplidos. Fail-open.
+        targets_map = {}
+        try:
+            from diary_targets import resolve_targets_by_day
+            _dates = [str(r.get("dia")) for r in rows if r.get("dia")]
+            targets_map = resolve_targets_by_day(user_id, _dates, effective_off_min)
+        except Exception as _te:
+            logger.debug(f"[P1-DIARY-DAY-TARGETS] meta por día no resuelta en /consumed-range: {_te}")
+
+        days_out = []
+        for r in rows:
+            d_str = str(r.get("dia"))
+            item = {
+                "date": d_str,
+                "calories": int(r.get("calories") or 0),
+                "protein": int(r.get("protein") or 0),
+                "carbs": int(r.get("carbs") or 0),
+                "healthy_fats": int(r.get("healthy_fats") or 0),
+                "meals_count": int(r.get("meals_count") or 0),
+            }
+            dt = targets_map.get(d_str)
+            if dt:
+                item["target_calories"] = dt["calories"]
+                if "macros" in dt:
+                    item["target_macros"] = dt["macros"]
+                if "main_goal" in dt:
+                    item["main_goal"] = dt["main_goal"]
+            days_out.append(item)
+
+        return {"days": days_out}
     except HTTPException as he:
         raise he
     except Exception as e:

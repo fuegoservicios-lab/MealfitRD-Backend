@@ -1061,6 +1061,12 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             mark_nudge_logged_from_diary(user_id, meal_type)
         except Exception:
             pass
+        if not consumed_at_override:
+            try:
+                from diary_targets import snapshot_current_targets_for_user
+                snapshot_current_targets_for_user(user_id, overwrite_today=False)
+            except Exception:
+                pass
         return str(_rows[0]["id"]) if _rows else True
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")

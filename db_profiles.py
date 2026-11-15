@@ -777,6 +777,12 @@ def update_user_health_profile_atomic(user_id: str, mutator):
                 f"[P1-ORQ-1] Sync TZ falló post-commit para {user_id}: {sync_e}"
             )
 
+    try:
+        from diary_targets import record_calculator_snapshot_if_tracking_only
+        record_calculator_snapshot_if_tracking_only(user_id, new_hp)
+    except Exception:
+        pass
+
     return new_hp
 
 
@@ -838,6 +844,12 @@ def update_user_health_profile(user_id: str, health_profile: dict):
                 _sync_chunk_queue_tz_offsets(target_user_id=user_id)
             except Exception as sync_e:
                 logger.warning(f"⚠️ [P0-5] Sync inmediato de TZ falló para {user_id}: {sync_e}")
+
+        try:
+            from diary_targets import record_calculator_snapshot_if_tracking_only
+            record_calculator_snapshot_if_tracking_only(user_id, health_profile)
+        except Exception:
+            pass
 
         return res
     except Exception as e:
@@ -1427,6 +1439,7 @@ _USER_SCOPED_TABLES_ANONYMIZE = ("llm_usage_events",)
 # del aviso de la Nevera (`pantry_nudge_last:`), las otras dos claves exactas con el uid.
 _USER_SCOPED_KV_PREFIXES = (
     "hydration_state:", "avisos_locales:", "plan_invite:", "pending_pipeline:", "pantry_nudge_last:",
+    "diary_targets_hist:",
 )
 
 # [P1-PLAN-LOTE-716 · 2026-09-28] Cachés con el uid DENTRO de la clave, seguido de más texto: el contexto RAG

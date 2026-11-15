@@ -1902,6 +1902,19 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
 
     if n_cancelled > 0:
         logger.info(f"✅ [P0-3/ATOMIC] {n_cancelled} chunk(s) huérfano(s) cancelados (incl. failed/stale/pending_user_action) al crear plan {plan_id} para {user_id}")
+    try:
+        from diary_targets import extract_targets_from_plan_data, record_daily_target_snapshot
+        _plan_snap = extract_targets_from_plan_data(safe_data.get("plan_data"))
+        if _plan_snap:
+            record_daily_target_snapshot(
+                user_id,
+                calories=_plan_snap["calories"],
+                macros=_plan_snap.get("macros"),
+                main_goal=_plan_snap.get("main_goal"),
+                overwrite_today=True,
+            )
+    except Exception:
+        pass
     return plan_id if return_id else True
 
 
