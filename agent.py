@@ -6429,6 +6429,16 @@ def execute_tools(state: ChatState):
                                    f"otra porción consumida → force=false")
                     tool_args["force"] = False
 
+                # [P1-PLAN-LOTE-1019 · J6] «¿esto está bien para mi cena o me paso?» es una pregunta, no un registro.
+                if tool_name == "log_consumed_meal":
+                    from guarda_pregunta_no_es_registro import bloqueo_si_solo_pregunta
+                    _preg = bloqueo_si_solo_pregunta(tool_name, _extraer_ultimo_texto_usuario(messages))
+                    if _preg:
+                        logger.warning(f"🛡️ [LOTE-1019 PREGUNTA≠REGISTRO] Bloqueado log_consumed_meal "
+                                       f"(user={str(state.get('user_id'))[:8]})")
+                        tool_messages.append(ToolMessage(content=_preg, tool_call_id=tool_id))
+                        continue
+
                 # [P1-DECISION-TRIAGE · 2026-11-11] BB-078: bebida ambigua (Gemini Decision 1, en paralelo desde
                 # la entrada del turno). Solo FRENA una vez para que el coach pregunte el azúcar; jamás escribe.
                 # Va DESPUÉS del override de user_id (P0-AGENT-1). Fail-open: sin triaje ⇒ None ⇒ como siempre.
