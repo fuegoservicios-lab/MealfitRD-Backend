@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -400,3 +401,75 @@ def test_caso_real_pan_integral_suelto_pregunta_por_untables_e_inyecta_cottage_y
     }
     r_arroz = va._coerce_meal_scan(arroz_con_pan, habitos_usuario=habitos)
     assert r_arroz["dudas"] == []
+
+
+def test_sopa_con_repollo_no_dispara_duda_ensalada_y_reemplazo_proteina_escrita():
+    """Regresión 15-nov (sarahacevedo13@icloud.com 4:20 PM & 10:08 AM):
+    1) Una sopa con repollo y zanahoria no debe disparar duda de aderezo de ensalada.
+    2) Si la duda asumió cantidad de pollo ('Normal (como 3 oz)') y el usuario escribe
+       'Pescado uno pequeño', se sustituye 'pollo' en la descripción (no se suman ambos).
+    3) En el desayuno con 'Mantequilla · Manteca de cerdo', la mantequilla supuesta confirmada
+       sigue visible en la descripción del plato."""
+    sopa_payload = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Arroz blanco con sopa de pollo y verduras",
+        "description": "Bowl de arroz blanco cocido acompañado de un bowl de sopa de pollo con caldo, trozos de pollo, un trozo de maíz, papa, tayota, zanahoria y repollo.",
+        "calories": 588,
+        "protein": 37,
+        "carbs": 84,
+        "healthy_fats": 10,
+        "items": [
+            {"name": "arroz blanco cocido", "quantity": 1, "unit": "taza", "calories": 200, "protein": 4, "carbs": 44, "healthy_fats": 0},
+            {"name": "sopa de pollo con maíz, papa, tayota, zanahoria y repollo", "quantity": 1, "unit": "bowl", "calories": 388, "protein": 33, "carbs": 40, "healthy_fats": 10},
+        ],
+        "dudas": [],
+    }
+    r_sopa = va._coerce_meal_scan(sopa_payload)
+    assert not any("ensalada" in d["pregunta"].lower() or "aderezo" in d["pregunta"].lower() for d in r_sopa["dudas"])
+
+    # Si de verdad hay una ensalada explícita junto a un caldo/guiso, sí debe detectarla
+    sopa_y_ensalada = dict(sopa_payload, items=list(sopa_payload["items"]) + [{"name": "ensalada verde de repollo y tomate", "quantity": 1, "unit": "porción"}])
+    assert any("ensalada" in d["pregunta"].lower() for d in va._coerce_meal_scan(sopa_y_ensalada)["dudas"])
+
+    # Sustitución de proteína escrita cuando supuesta era cantidad ("Normal (como 3 oz)")
+    desc_sopa = (
+        "Bowl de arroz blanco cocido acompañado de un bowl de sopa de pollo con caldo, trozos de pollo, "
+        "un trozo de maíz, papa, tayota, zanahoria y repollo. "
+        "DUDAS (pregúntale solo esto): ¿Qué tanta carne de pollo tiene la sopa? "
+        "(opciones: Normal (como 3 oz) (supuesto) · Bastante (como 5 oz) · Muy poca o casi nada) "
+        "¿Cuánto arroz hay en el bowl? (opciones: 1 taza (supuesto) · 1.5 tazas · 0.5 taza) "
+        "(Estimación: Calorías: 588, Proteína: 37g, Carbohidratos: 84g, Grasas Saludables: 10g)"
+    )
+    desc_out, sup_out, reemps_out = rf.aplicar_respuestas_multiples(desc_sopa, "Pescado uno pequeño · 1 taza")
+    pre_out = desc_out[:desc_out.find("DUDAS")]
+    assert "pescado uno pequeño" in pre_out.lower()
+    assert not re.search(r"\bpollo\b", pre_out.lower())
+    assert "repollo" in pre_out.lower()
+    assert sup_out == "pollo"
+    assert ("pollo", "Pescado uno pequeño") in reemps_out
+
+    v_sopa = rf.preparar_vision({
+        "kind": "multi",
+        "items": [{"kind": "plato", "description": desc_sopa}],
+        "respuestas": "Pescado uno pequeño · 1 taza",
+        "ajuste": None,
+    })
+    instr = rf.instruccion(v_sopa)
+    assert "REEMPLAZO, NO SUMA" in instr
+    assert "NO copies esas calorías y macros idénticas" in instr
+    assert "«pollo»" in instr
+
+    # Desayuno 10:08 AM: Mantequilla (supuesta) + Manteca de cerdo -> conserva ambas grasas
+    desc_mangu = (
+        "Mangú de plátano (aprox. 1 taza), 2 huevos fritos y 1 lasca de aguacate. "
+        "DUDAS (pregúntale solo esto): ¿Con qué grasa se hizo el mangú? "
+        "(opciones: Mantequilla (supuesto) · Aceite · Manteca de cerdo · Sin grasa) "
+        "¿Con qué grasa se frieron los huevos? "
+        "(opciones: Aceite vegetal (supuesto) · Mantequilla · Manteca de cerdo · Sin grasa / a la plancha) "
+        "(Estimación: Calorías: 590, Proteína: 16g, Carbohidratos: 67g, Grasas Saludables: 29g)"
+    )
+    desc_m_out, _, _ = rf.aplicar_respuestas_multiples(desc_mangu, "Mantequilla · Manteca de cerdo")
+    pre_m = desc_m_out[:desc_m_out.find("DUDAS")].lower()
+    assert "mantequilla" in pre_m
+    assert "manteca de cerdo" in pre_m

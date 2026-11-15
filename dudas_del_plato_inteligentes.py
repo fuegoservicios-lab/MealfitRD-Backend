@@ -52,6 +52,14 @@ _PATRON_ENSALADA_VEGETALES = re.compile(
     r"\b(ensalada(?!\s+de\s+frutas?)|lechuga|tomate|pepino|remolacha|repollo|rucula)\b",
     re.IGNORECASE,
 )
+_PATRON_ENSALADA_EXPLICITA = re.compile(
+    r"\b(ensalada(?!\s+de\s+frutas?)|lechuga|rucula)\b",
+    re.IGNORECASE,
+)
+_PATRON_CALDO_GUISO = re.compile(
+    r"\b(sopa|caldo|sancocho|asopao|consome|potaje|cocido|guisad[oa]s?|estofad[oa]|mondongo)\b",
+    re.IGNORECASE,
+)
 
 _PATRON_DUDA_RELLENO = re.compile(
     r"\b(llevan?|tienen?|rellen\w*|dentro|unt\w*|ademas|interior|encima)\b",
@@ -584,18 +592,39 @@ def _crear_duda_fruta_bowl(
 
 
 def _detectar_ensalada_vegetales(result: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    """Detecta ensaladas o vegetales frescos servidos donde el aceite de oliva o vinagreta es invisible."""
+    """Detecta ensaladas o vegetales frescos servidos donde el aceite de oliva o vinagreta es invisible.
+
+    No confunde repollo, tomate o verduras cocidas dentro de una sopa/caldo/sancocho/guiso con una ensalada."""
     nombre_desc = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
     if _PATRON_FRUTAS_MULTI.search(nombre_desc) and not re.search(r"\b(lechuga|tomate|pepino|remolacha|repollo)\b", nombre_desc):
         return None
     items = result.get("items") or []
     items_txt = " ".join(_norm((it or {}).get("name") or "") for it in items if isinstance(it, dict))
     todo = f"{nombre_desc} {items_txt}"
+    # Si el plato es una sopa, caldo, sancocho o guiso sin mención explícita de ensalada/hojas frescas,
+    # los vegetales como repollo, tomate o zanahoria van cocidos en el caldo (no llevan aderezo).
+    tiene_ensalada_explicita = bool(_PATRON_ENSALADA_EXPLICITA.search(todo))
+    if _PATRON_CALDO_GUISO.search(nombre_desc) and not tiene_ensalada_explicita:
+        return None
     m = _PATRON_ENSALADA_VEGETALES.search(todo)
     if not m:
         return None
     sobre = next(
-        (it.get("name") for it in items if isinstance(it, dict) and _PATRON_ENSALADA_VEGETALES.search(_norm(it.get("name")))),
+        (
+            it.get("name")
+            for it in items
+            if isinstance(it, dict)
+            and _PATRON_ENSALADA_EXPLICITA.search(_norm(it.get("name")))
+        ),
+        None,
+    ) or next(
+        (
+            it.get("name")
+            for it in items
+            if isinstance(it, dict)
+            and _PATRON_ENSALADA_VEGETALES.search(_norm(it.get("name")))
+            and not _PATRON_CALDO_GUISO.search(_norm(it.get("name")))
+        ),
         None,
     )
     return {"sobre": str(sobre or m.group(1))[:60]}

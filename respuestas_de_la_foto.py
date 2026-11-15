@@ -113,6 +113,66 @@ def _parse_dudas_y_opciones(raw_dudas: str) -> list[dict]:
     return preguntas
 
 
+_FAMILIAS_PROTEINA: tuple[tuple[str, str], ...] = (
+    ("pollo", r"(?:pollo|pechuga(?:\s+de\s+pollo)?|muslo(?:\s+de\s+pollo)?)"),
+    ("pescado", r"(?:pescado|salm[oó]n|at[uú]n|tuna|tilapia|bacalao|chillo|mero)"),
+    ("res", r"(?:carne\s+de\s+res|res|bistec|churrasco)"),
+    ("cerdo", r"(?:cerdo|puerco|chuleta|pernil|costilla|masa\s+de\s+cerdo|chicharr[oó]n)"),
+    ("pavo", r"pavo"),
+    ("mariscos", r"(?:camarones|mariscos|pulpo|calamar)"),
+    ("huevo", r"(?:huevos?|claras)"),
+)
+_RE_PREGUNTA_ANADIDO = re.compile(
+    r"\b(grasa|aceite|manteca|mantequilla|unt|rellen|aderez|vinagret|miel|leche|azucar|endulz|lleva|acompa)\b"
+)
+
+
+def _detectar_familia_proteina(texto: str) -> tuple[str, str] | None:
+    if not texto:
+        return None
+    for nombre, pat in _FAMILIAS_PROTEINA:
+        if re.search(rf"\b{pat}\b", texto, flags=re.IGNORECASE):
+            return nombre, pat
+    return None
+
+
+def _reemplazar_proteina_por_sujeto(pre: str, titulo: str, supuesto: str, r_item: str) -> tuple[str, str] | None:
+    """Si la duda preguntaba por una carne/proteína concreta (ej. pollo en sopa) pero su `supuesta` era
+    una cantidad («Normal (como 3 oz)») y el usuario escribió otra proteína («Pescado uno pequeño»),
+    sustituye la proteína original en `pre` para que no queden ambas sumadas."""
+    dest = _detectar_familia_proteina(r_item)
+    src = _detectar_familia_proteina(titulo) or _detectar_familia_proteina(supuesto)
+    if not dest or not src or dest[0] == src[0]:
+        return None
+    src_name, src_pat = src
+    re_src = re.compile(rf"\b{src_pat}\b", flags=re.IGNORECASE)
+    if not re_src.search(pre):
+        return None
+
+    r_low = r_item.lower()
+    re_pieza = re.compile(
+        rf"\b(?:trozos?|carne|piezas?|filetes?|pechugas?|muslos?|tiras?|pedazos?|lonjas?)\s+de\s+{src_pat}\b",
+        flags=re.IGNORECASE,
+    )
+    re_platillo = re.compile(
+        rf"\b(sopa|caldo|sancocho|asopao|guiso|crema|arroz|locrio|moro)\s+de\s+{src_pat}\b",
+        flags=re.IGNORECASE,
+    )
+    nueva = pre
+    if re_pieza.search(nueva):
+        nueva = re_platillo.sub(r"\1", nueva)
+        nueva = re_pieza.sub(r_low, nueva, count=1)
+        nueva = re.sub(rf"\s+de\s+{src_pat}\b", "", nueva, flags=re.IGNORECASE)
+        nueva = re_src.sub("", nueva)
+    elif re_platillo.search(nueva):
+        nueva = re_platillo.sub(rf"\1 con {r_low}", nueva, count=1)
+        nueva = re_src.sub("", nueva)
+    else:
+        nueva = re_src.sub(r_low, nueva, count=1)
+    nueva = re.sub(r"\s{2,}", " ", nueva).replace(" ,", ",").replace(" .", ".")
+    return nueva, src_name
+
+
 def aplicar_respuestas_multiples(descripcion: str, respuesta: str) -> tuple[str, str | None, list[tuple[str, str]]]:
     """[P1-PHOTO-MEAT-REPLACE / BB-026] Reemplaza supuestos de la visión por las aclaraciones reales del usuario.
     Soporta fotos con una o múltiples dudas (separadas por ·)."""
@@ -166,10 +226,20 @@ def aplicar_respuestas_multiples(descripcion: str, respuesta: str) -> tuple[str,
         supuesto = q.get("supuesto")
         if not supuesto:
             continue
-        # Si la respuesta elegida es la misma opción supuesta, no hay corrección
+        # Si la respuesta elegida es la misma opción supuesta, no hay corrección de alimento,
+        # pero si confirma una grasa/untable/aditivo positivo que no estaba nombrado en `pre`, dejarlo explícito.
         r_norm = _plano(r_item)
         s_norm = _plano(supuesto)
         if r_norm == s_norm or (r_norm in s_norm and len(r_norm) >= len(s_norm) * 0.8):
+            tit_norm = _plano(q.get("titulo") or "")
+            if (
+                _RE_PREGUNTA_ANADIDO.search(tit_norm)
+                and not re.match(r"^(?:sin|nada|solo|natural)\b", r_norm)
+                and r_norm not in _plano(pre)
+            ):
+                pre = pre.rstrip()
+                sep = " " if pre.endswith((".", ",", ";")) else ". "
+                pre = f"{pre}{sep}(Confirmado: {r_item.lower()}). "
             continue
 
         # Realizar reemplazo en el texto previo a DUDAS
@@ -210,6 +280,13 @@ def aplicar_respuestas_multiples(descripcion: str, respuesta: str) -> tuple[str,
                 flags=re.IGNORECASE,
             )
             reemplazos.append((supuesto, r_item))
+            continue
+
+        # Sustitución por sujeto/proteína cuando la supuesta era cantidad (ej. "¿Qué tanta carne de pollo?" -> "Pescado uno pequeño")
+        reemp_subj = _reemplazar_proteina_por_sujeto(pre, q.get("titulo") or "", supuesto, r_item)
+        if reemp_subj is not None:
+            pre, src_label = reemp_subj
+            reemplazos.append((src_label, r_item))
             continue
 
         # Fallback seguro: si el supuesto no aparecía literal en `pre`, dejar explícita la aclaración del usuario
@@ -357,8 +434,10 @@ def instruccion(vision) -> str:
         cifras = "la «Estimación» de la foto YA incluye sus respuestas: registra esas cifras del PLATO COMPLETO"
     else:
         cifras = ("la «Estimación» de la foto es la de ANTES de sus respuestas: recalcula y ajusta sobre la «Estimación» del PLATO COMPLETO "
-                  "incorporando el alimento, proteína o porción indicado (ej. salmón en lugar de pollo, más porción, o ×2 si dijo «me comí otro aparte de eso» / «otro igual»), "
-                  "pero JAMÁS descartes el resto del plato visible (arroz, ensalada, etc.) para registrar solo ese ingrediente")
+                  "incorporando el alimento, proteína, grasa o porción indicado (NO copies esas calorías y macros idénticas si cambió proteína, porción o aceite/aderezo; "
+                  "ej. si cambió pollo por 1 pescado pequeño, resta el pollo y suma ese pescado pequeño; si agregó aceite de oliva, suma ~45 kcal y ~5 g de grasa; "
+                  "o ×2 si dijo «me comí otro aparte de eso» / «otro igual»), "
+                  "pero JAMÁS descartes el resto del plato visible (arroz, ensalada, víveres, caldo, etc.) para registrar solo ese ingrediente")
 
     extra_carne = ""
     if reemplazos:
@@ -368,7 +447,8 @@ def instruccion(vision) -> str:
         extra_carne = (
             f" ACLARACIÓN DE LA PROTEÍNA/CARNE / IDENTIDAD DEL ALIMENTO (LA PALABRA DEL USUARIO ES LEY): "
             f"El usuario aclaró en las opciones de la foto que {detalles_reemp}. "
-            f"El plato a registrar es el plato completo USANDO DIRECTAMENTE {alimentos_aclarados}. "
+            f"El plato a registrar es el plato completo USANDO DIRECTAMENTE {alimentos_aclarados} EN REEMPLAZO DE {nombres_prohibidos} "
+            f"(REEMPLAZO, NO SUMA: no pongas ambos en el nombre, en ingredients ni en las calorías). "
             f"NUNCA registres solo el ingrediente aclarado ni registres comidas separadas: es UN SOLO PLATO con su comida principal. "
             f"ESTÁ TERMINANTEMENTE PROHIBIDO registrar o nombrar en tu respuesta visible los supuestos descartados ({nombres_prohibidos}), "
             f"y PROHIBIDO decir frases como «Tomé {alimentos_aclarados} como aclaración del plato; si en realidad eran... dime y lo ajusto» "
