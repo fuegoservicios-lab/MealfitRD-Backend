@@ -31,6 +31,18 @@ _PATRON_PAN_BASE = re.compile(
     re.IGNORECASE,
 )
 
+_PATRON_PAN_INICIO = re.compile(
+    r"^(?:\d+\s+|(?:un|una|dos|tres|medio|media)\s+)?(?:sandwich(?:es)?|emparedados?|pan(?:es|ecillos?)?|tostadas?|wraps?|burritos?|"
+    r"arepas?|croissants?|bagels?)\b",
+    re.IGNORECASE,
+)
+# «tostadas de mantequilla de maní», «sándwich de cottage», «pan con aguacate» (no «pan de agua/molde…»: es el tipo de pan)
+_PATRON_PAN_PLATO = re.compile(
+    r"\b(?:sandwich(?:es)?|emparedados?|pan(?:es|ecillos?)?|tostadas?|wraps?|arepas?|croissants?|bagels?)\s+(?:de|con)\s+"
+    r"(?!(?:agua|molde|sobao|centeno|maiz|ajo|yuca|batata|trigo|avena|masa\s+madre)\b)",
+    re.IGNORECASE,
+)
+
 # Catálogo ordenado de rellenos frecuentes: los compuestos van primero para capturar combos reales
 # (ej. "queso cottage y mantequilla de maní") antes de contar ingredientes por separado.
 _CATALOGO_RELLENOS_PAN: tuple[dict[str, Any], ...] = (
@@ -265,7 +277,11 @@ def extraer_habitos_desde_registros(
         if not txt:
             continue
 
-        if _PATRON_PAN_BASE.search(txt):
+        # [REVISION-ESCANER-14NOV] «Arroz con pollo y pan» no es un sándwich de pollo: el pan tiene que SER un plato en el nombre
+        # (empieza por él, o «tostadas de/con…», «sándwich de…»). Antes cualquier comida con «pan» y «pollo» enseñaba al
+        # escáner un relleno falso.
+        nombre = _ascii(m.get("meal_name") or "")
+        if _PATRON_PAN_INICIO.match(nombre) or _PATRON_PAN_PLATO.search(nombre):
             matched_ids = set()
             for entry in _CATALOGO_RELLENOS_PAN:
                 # Si ya coincidió un combo que contiene "cottage" o "mantequilla de mani", no duplicar sus partes simples

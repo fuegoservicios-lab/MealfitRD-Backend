@@ -14,6 +14,7 @@ from habitos_de_la_foto import (
     ADEREZOS_ENSALADA_POR_ID,
     EXTRAS_FRUTA_CATALOGO_POR_ID,
     RELLENOS_CATALOGO_POR_ID,
+    _matches_tokens,
 )
 
 _PATRON_CERRADO = re.compile(
@@ -48,8 +49,10 @@ _PATRON_TOPPING_TRIVIAL = re.compile(
     re.IGNORECASE,
 )
 
+# [REVISION-ESCANER-14NOV] tras normalizar, «té» y el pronombre «te» son la misma palabra: «¿Te pusiste sirope?» desactivaba el
+# filtro de preguntas tontas. El té solo cuenta precedido de artículo/posesivo/preposición («un te», «el te», «de te», «tu te»).
 _PATRON_BEBIDA_DUDA = re.compile(
-    r"\b(cafe|te|jugo|batid[ao]|licuado|infusion|bebida|chocolate)\b",
+    r"\b(cafe|(?:un|el|al|del|de|tu|su|mi)\s+te|jugo|batid[ao]|licuado|infusion|bebida|chocolate)\b",
     re.IGNORECASE,
 )
 
@@ -177,7 +180,8 @@ def _relleno_asumido_en_plato(result: Dict[str, Any]) -> Optional[str]:
     texto_n = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
     for rid in ("cottage_mani", "mani_queso", "jamon_queso", "pavo_queso", "huevo_queso", "cottage", "mani", "queso_crema", "aguacate", "atun", "pollo", "jamon", "queso"):
         entry = RELLENOS_CATALOGO_POR_ID[rid]
-        if all(tok in texto_n for tok in entry["tokens"]):
+        # [REVISION-ESCANER-14NOV] palabra entera: «sándwich de repollo» contenía «pollo» y el ajuste restaba macros de pollo
+        if _matches_tokens(texto_n, entry["tokens"]):
             return rid
     return None
 
@@ -351,7 +355,8 @@ def _extra_fruta_asumido(result: Dict[str, Any]) -> Optional[str]:
     texto_n = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
     for eid in ("miel_granola", "miel", "yogur", "granola", "leche_condensada", "mani", "chia"):
         entry = EXTRAS_FRUTA_CATALOGO_POR_ID[eid]
-        if all(tok in texto_n for tok in entry["tokens"]):
+        # [REVISION-ESCANER-14NOV] palabra entera, como en los rellenos (subcadena: «mani» en «manicho», «chia» en «chiabatta»)
+        if _matches_tokens(texto_n, entry["tokens"]):
             return eid
     return None
 

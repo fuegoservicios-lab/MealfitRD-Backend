@@ -398,7 +398,7 @@ def snapshot_current_targets_for_user(
             from db_profiles import get_user_profile
             profile = get_user_profile(user_id)
             hp = (profile or {}).get("health_profile") or {}
-            req = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal", "medicalConditions")
+            req = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal")   # [REVISION-DIARIO-14NOV] sin «medicalConditions»: lista vacía = sin condiciones, y dejaba fuera a 7 de 28 perfiles («weightUnit» se queda: sin ella la calculadora asume libras)
             if all(hp.get(k) for k in req):
                 from nutrition_calculator import get_nutrition_targets
                 t = get_nutrition_targets(hp)
@@ -433,7 +433,7 @@ def record_calculator_snapshot_if_tracking_only(user_id: str, health_profile: An
     """Si el usuario no tiene un plan activo guardado, actualiza la meta de hoy tras editar su perfil."""
     if not user_id or user_id == "guest" or not isinstance(health_profile, dict):
         return False
-    req = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal", "medicalConditions")
+    req = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal")   # [REVISION-DIARIO-14NOV] sin «medicalConditions»: lista vacía = sin condiciones, y dejaba fuera a 7 de 28 perfiles («weightUnit» se queda: sin ella la calculadora asume libras)
     if not all(health_profile.get(k) for k in req):
         return False
     try:
