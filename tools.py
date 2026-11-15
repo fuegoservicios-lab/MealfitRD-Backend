@@ -626,7 +626,8 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
                     logger.info(
                         f"🛡 [P0-CHAT-ALLERGY-MERGE] {field}: se conservan "
                         f"{len(_union) - len(_new_field_value)} valor(es) previos que el "
-                        f"modelo no repitió ({_previos} + {_new_field_value} → {_union})"
+                        f"modelo no repitió ({len(_previos or [])} previos + {len(_new_field_value)} nuevos → "
+                        f"{len(_union)}; [P1-PLAN-LOTE-1021 · A-24] sin los valores: son datos de salud)"
                     )
                 _hp[field] = _union
             elif field == "weight":

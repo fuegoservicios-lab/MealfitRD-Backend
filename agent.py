@@ -5878,9 +5878,10 @@ def _guard_source_intent_mutation(
     if len(clean_user) >= 4 and _SOURCE_INTENT_PROFILE_RE.search(clean_user):
         return None
 
+    from log_sin_datos_de_salud import claves as _log_claves, huella as _log_huella   # [P1-PLAN-LOTE-1021 · A-24]
     logger.warning(
-        f"🛡️ [G-20 SOURCE-INTENT-GUARD] Bloqueado {tool_name}({tool_args if isinstance(tool_args, dict) else '?'}) "
-        f"por venir de fuente foto/web sin petición explícita (texto={clean_user[:60]!r})."
+        f"🛡️ [G-20 SOURCE-INTENT-GUARD] Bloqueado {tool_name}(campo={(tool_args or {}).get('field') if isinstance(tool_args, dict) else '?'}; "
+        f"args={_log_claves(tool_args)}) por venir de fuente foto/web sin petición explícita (texto {_log_huella(clean_user)})."
     )
     return (
         "BLOQUEADO: La foto o etiqueta consultada en este turno NO autoriza cambiar el perfil ni los ajustes "
@@ -6666,7 +6667,7 @@ def execute_tools(state: ChatState):
                     from guarda_nevera_no_es_gusto import bloqueo_si_es_la_nevera
                     _src_block = bloqueo_si_es_la_nevera(tool_name, tool_args, _extraer_ultimo_texto_usuario(messages))
                     if _src_block:
-                        logger.warning(f"🛡️ [LOTE-1018 NEVERA≠GUSTO] Bloqueado update_form_field({tool_args!r})")
+                        logger.warning(f"🛡️ [LOTE-1018 NEVERA≠GUSTO] Bloqueado update_form_field(field={tool_args.get('field')})")
                 if _src_block:
                     _src_guard_blocked = True
                     tool_result = _src_block
@@ -9398,10 +9399,12 @@ def rag_query_router(prompt: str) -> dict:
         result = str(content).strip().strip('"').strip("'")
 
         if result.upper() == "SKIP":
-            logger.info(f"⏭️ [RAG ROUTER] Flash-Lite determinó que no necesita RAG: '{prompt[:30]}'")
+            from log_sin_datos_de_salud import huella as _log_huella   # [P1-PLAN-LOTE-1021 · A-24]
+            logger.info(f"⏭️ [RAG ROUTER] Flash-Lite determinó que no necesita RAG ({_log_huella(prompt)})")
             return {"skip": True}
 
-        logger.info(f"🎯 [RAG ROUTER] Query reescrita: '{prompt[:30]}...' → '{result}'")
+        from log_sin_datos_de_salud import huella as _log_huella   # [P1-PLAN-LOTE-1021 · A-24]
+        logger.info(f"🎯 [RAG ROUTER] Query reescrita ({_log_huella(prompt)} → {_log_huella(result)})")
         return {"skip": False, "query": result}
 
     except Exception as e:
