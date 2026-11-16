@@ -1160,7 +1160,7 @@ def update_consumed_meal(
         logger.error(f"Error corrigiendo comida consumida {meal_id}: {e}")
         return None
 
-def delete_consumed_meal(user_id: str, meal_id: str) -> bool:
+def delete_consumed_meal(user_id: str, meal_id: str, via: Optional[str] = None) -> bool:
     """Elimina una fila de `consumed_meals` mal registrada por el usuario.
 
     [P1-DIARY-EDITABLE · 2026-07-28] `consumed_meals` era append-only: una
@@ -1184,6 +1184,10 @@ def delete_consumed_meal(user_id: str, meal_id: str) -> bool:
             returning=True,
         )
         if rows:
+            # [P1-PLAN-LOTE-1027 · A-16] borrado a mano de una comida que anotó el coach (el del coach pasa por el
+            # mismo DELETE y su señal la pone la herramienta; aquí solo se cuenta el del diario: via="diario")
+            if via == "diario":
+                __import__("coach_senales_calidad").borrado_en_diario(user_id, rows[0])
             try:
                 from coach_live import notificar_borrado
                 notificar_borrado(user_id, rows[0])

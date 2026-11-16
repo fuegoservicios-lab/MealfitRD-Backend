@@ -1718,7 +1718,12 @@ def admin_chat_insights(request: Request, hours: int = 168, limit: int = 20):
 
         insights = query_chat_ops_insights(window_h, limit=row_limit)
         from fail_open import snapshot as _fo_snapshot   # [P1-PLAN-LOTE-1014 · A-04]
-        return {"success": True, **insights, "fail_open": _fo_snapshot()}
+        try:   # [P1-PLAN-LOTE-1027 · A-16] tasa de «registro corregido» y señales implícitas
+            from coach_senales_calidad import resumen as _senales_resumen
+            _senales = _senales_resumen(window_h)
+        except Exception as _se:
+            _senales = {"error": type(_se).__name__}
+        return {"success": True, **insights, "fail_open": _fo_snapshot(), "senales_calidad": _senales}
     except Exception as e:
         logger.warning(f"[G-16/G-29 CHAT-INSIGHTS] query falló: {e}")
         raise HTTPException(status_code=503, detail="DB query falló (best-effort).")
