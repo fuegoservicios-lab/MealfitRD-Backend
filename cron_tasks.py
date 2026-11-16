@@ -6856,6 +6856,8 @@ def _llm_daily_spend_alert_job():
             evaluar_salud_coach_y_alertar(execute_sql_query=execute_sql_query, execute_sql_write=execute_sql_write, include_hourly_and_cost=True)
         except Exception as _health_err:
             logger.debug(f"[G-18] evaluar_salud_coach_y_alertar omitido: {_health_err!r}")
+        # [P1-PLAN-LOTE-1038 · A-25] las alertas que importan salen por push al dueño (nunca lanza; sin job nuevo)
+        __import__("alertas_al_dueno").avisar_pendientes(execute_sql_query=execute_sql_query, execute_sql_write=execute_sql_write)
     except Exception as e:
         fallo = True
         logger.error(f"❌ [P1-PLAN-LOTE-1000] el vigilante de gasto diario LLM falló: {type(e).__name__}: {e}")
