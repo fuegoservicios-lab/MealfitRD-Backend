@@ -1090,7 +1090,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1009 · 2026-11-14] (G-05/G-07/G-13/G-20) `use_responses_api=True` en `gpt-6.1-terra`, captura de tokens `vision_scan` vía `include_raw=True` + prep rápida 1280px/q=80, guard pasivo `source="chat"` y confirmación directa sin segunda llamada LLM tras escritura limpia (`log_water_glass`).
 # [P1-PLAN-LOTE-1010 · 2026-11-14] (G-10/11/12/14/18/19/21/30) Semáforo aislado del coach (`16`), barrido de checkpoints superados (`keep=2`, `batch=500`) + GC `pipeline_metrics`, caché de contexto de usuario 30 s (`_CHAT_USER_CTX_CACHE`) con `context_build_ms` y tope diario de gasto US$ 0,25 + alertas horarias 1 h / 3x.
 # [P1-PLAN-LOTE-1011 · 2026-11-14] (G-16/26/27/28/29) `query_chat_ops_insights` + `/admin/chat-insights` (feedback negativo, turnos >15 s y nudges internos/proactivos), paridad voz↔texto (`coach_live` ↔ `chat_agent`) e idempotencia ante reintentos (`log_consumed_meal` dedup/force, `mark_shopping_list_purchased`, `client_message_id`) (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1039 · 2026-11-16"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1040 · 2026-11-16"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
