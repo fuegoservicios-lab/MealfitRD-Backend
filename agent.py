@@ -12306,7 +12306,12 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
     try:
-        yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids})}\n\n"
+        # [P1-PLAN-LOTE-1040 · A-27] qué refrescar en pantalla, por lo que EJECUTÓ el turno (no por si el modelo escribió la marca)
+        try:
+            _ui_actions = __import__("acciones_de_ui").acciones_del_turno(list(getattr(_pt, "tools", []) or []), final_content)
+        except Exception:
+            _ui_actions = []
+        yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids, 'ui_actions': _ui_actions})}\n\n"
         _pt.mark_done(_stream_outcome, _chat_agent_model_name())   # [P1-PLAN-LOTE-1001] tras emitir el `done`
     finally:
         if not _pt.owned_by_router:

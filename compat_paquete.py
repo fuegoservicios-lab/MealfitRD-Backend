@@ -38,7 +38,7 @@ CAMPOS_OPCIONALES = {
     "progress": frozenset(),
     "chunk": frozenset({"budget_cap", "replayed"}),
     "done": frozenset({"updated_fields", "new_plan", "coherence_warnings", "ajustes_de_app", "pantry_modified_at",
-                       "pantry_depleted_items", "diary_corrected_meal_ids", "budget_cap", "replayed"}),
+                       "pantry_depleted_items", "diary_corrected_meal_ids", "budget_cap", "replayed", "ui_actions"}),
     "error": frozenset(),
 }
 CONTRATO_STREAM = {t: CAMPOS_MINIMOS[t] | CAMPOS_OPCIONALES[t] for t in CAMPOS_MINIMOS}

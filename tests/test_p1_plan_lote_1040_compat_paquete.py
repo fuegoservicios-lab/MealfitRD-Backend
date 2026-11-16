@@ -163,3 +163,30 @@ def test_el_cliente_manda_su_paquete_en_el_cuerpo_no_en_una_cabecera():
     perf = (fe / "utils" / "chatPerf.js").read_text(encoding="utf-8")
     assert "export const paqueteDelCliente" in perf
     assert "X-Bundle" not in agente and "X-Mealfit-Bundle" not in perf, "una cabecera nueva exigiría su preflight CORS"
+
+
+# ───────────────────────────────────────────────────────────── A-27: acciones de interfaz como dato
+def test_las_acciones_salen_de_lo_ejecutado_aunque_el_modelo_no_escriba_la_marca():
+    from acciones_de_ui import acciones_del_turno
+    assert acciones_del_turno([{"name": "log_consumed_meal", "duration_ms": 30}], "¡Listo! Anoté tu cena.") == ["REFRESH_INVENTORY"]
+    assert acciones_del_turno(["log_water_glass", "generate_new_plan_from_chat"]) == ["REFRESH_HYDRATION", "REFRESH_PLAN"]
+
+
+def test_lo_que_bloqueo_una_guarda_no_refresca_y_las_marcas_tambien_cuentan():
+    from acciones_de_ui import acciones_del_turno
+    assert acciones_del_turno([{"name": "log_consumed_meal", "guard_blocked": True}]) == []
+    assert acciones_del_turno([], "Hecho [UI_ACTION: REFRESH_HYDRATION] [UI_ACTION: NO_EXISTE]") == ["REFRESH_HYDRATION"]
+    assert acciones_del_turno(None, None) == []
+
+
+def test_toda_herramienta_mapeada_existe_en_tools():
+    from acciones_de_ui import POR_HERRAMIENTA
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    faltan = [n for n in POR_HERRAMIENTA if f"def {n}(" not in src and n != "delete_consumed_meal"]
+    assert not faltan, faltan
+
+
+def test_el_done_lleva_ui_actions():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert "'ui_actions': _ui_actions})}" in src
+    assert "ui_actions" in cp.CAMPOS_OPCIONALES["done"]
