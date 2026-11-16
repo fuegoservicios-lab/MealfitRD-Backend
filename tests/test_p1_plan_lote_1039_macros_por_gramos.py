@@ -216,3 +216,88 @@ def test_toda_coccion_comun_cuenta_la_carne_como_cocida(linea):
     """[A-41] La misma pechuga daba 38 g «a la parrilla» y 52 g «a la plancha»: una contada cruda, la otra cocida."""
     import cocido_en_catalogo as cec
     assert cec._PROT_COCIDO_RX.search(mpg._plano(linea))
+
+
+# ───────────────────────────────────────────────────────────── paso 3: gramos editables en la ficha
+def test_que_renglones_son_ajustables():
+    aj = mpg.ajustables(CENA_16["ingredients"], CatalogoFalso())
+    assert aj == {0: 150, 1: 120, 2: 210, 3: 120, 4: 200}, "la ensalada con mayonesa (5) es compuesta: no"
+
+
+def test_subir_el_pollo_mueve_los_totales_lo_que_aporta_esa_pieza():
+    n = mpg.ajustar_gramos(CENA_16, 1, 170, CatalogoFalso())
+    assert n["ingredients"][1] == "pechuga de pollo a la plancha (≈170 g)"
+    assert n["protein"] == round(78 + 51.6 - 120 * 51.6 / 170)
+    assert n["calories"] == round(1250 + 246.5 - 120 * 246.5 / 170)
+    assert n["ingredients"][0] == CENA_16["ingredients"][0], "los demás renglones no se tocan"
+
+
+def test_el_numero_que_cambia_es_el_de_los_gramos_no_el_de_las_tazas():
+    n = mpg.ajustar_gramos(CENA_16, 2, 250, CatalogoFalso())
+    assert n["ingredients"][2] == "puré de papa (≈1 taza, 250 g)"
+    assert mpg._con_gramos("75 g de Aguacate", 100) == "100 g de Aguacate"
+
+
+def test_lo_no_ajustable_o_fuera_de_rango_no_cambia_nada():
+    assert mpg.ajustar_gramos(CENA_16, 5, 300, CatalogoFalso()) is None        # ensalada compuesta
+    assert mpg.ajustar_gramos(CENA_16, 9, 300, CatalogoFalso()) is None        # no existe
+    bajo = mpg.ajustar_gramos(CENA_16, 1, 0, CatalogoFalso())
+    assert bajo["gramos"] == mpg.GRAMOS_MIN and bajo["protein"] >= 0
+
+
+def test_la_ficha_marca_los_renglones_ajustables():
+    from ficha_comida import desglose_de_ingredientes
+    d = desglose_de_ingredientes(CENA_16["ingredients"], 1250, CatalogoFalso())
+    assert [l.get("ajustable_g") for l in d["lineas"]] == [150, 120, 210, 120, 200, None]
+
+
+class _Fila(dict):
+    pass
+
+
+def _endpoint(monkeypatch, fila, actualizar_ok=True):
+    import routers.diary as diary
+    import nutrition_db
+    import db_facts
+    vistas = {"sql": [], "update": []}
+
+    def consulta(sql, params=None, **k):
+        vistas["sql"].append((sql, params))
+        return dict(fila) if fila and params and params[1] == "u-1" else None
+    monkeypatch.setattr(diary, "execute_sql_query", consulta)
+    monkeypatch.setattr(nutrition_db, "IngredientNutritionDB", CatalogoFalso)
+    monkeypatch.setattr(db_facts, "update_consumed_meal",
+                        lambda uid, mid, **kw: (vistas["update"].append((uid, mid, kw)), "ok" if actualizar_ok else None)[1])
+    return diary, vistas
+
+
+MEAL_ID = "8a2b1c3d-1111-4222-8333-944455556666"
+
+
+def test_el_endpoint_ajusta_y_devuelve_la_ficha_nueva(monkeypatch):
+    diary, vistas = _endpoint(monkeypatch, {**CENA_16, "id": MEAL_ID, "meal_name": "Cena"})
+    r = diary.api_ajustar_gramos_de_una_pieza(MEAL_ID, diary.AjusteGramosRequest(indice=1, gramos=170), "u-1")
+    assert r["success"] and r["meal"]["protein"] == 93
+    assert "AND user_id = %s" in vistas["sql"][0][0] and vistas["sql"][0][1] == (MEAL_ID, "u-1")
+    uid, mid, kw = vistas["update"][0]
+    assert (uid, mid) == ("u-1", MEAL_ID) and kw["ingredients"][1].endswith("(≈170 g)")
+
+
+def test_el_endpoint_404_si_es_de_otro_y_409_si_no_es_ajustable(monkeypatch):
+    from fastapi import HTTPException
+    diary, _ = _endpoint(monkeypatch, {**CENA_16, "id": MEAL_ID})
+    with pytest.raises(HTTPException) as e:
+        diary.api_ajustar_gramos_de_una_pieza(MEAL_ID, diary.AjusteGramosRequest(indice=1, gramos=170), "otro")
+    assert e.value.status_code == 404
+    with pytest.raises(HTTPException) as e:
+        diary.api_ajustar_gramos_de_una_pieza(MEAL_ID, diary.AjusteGramosRequest(indice=5, gramos=170), "u-1")
+    assert e.value.status_code == 409
+
+
+def test_el_endpoint_no_cobra_cuota_ni_llama_a_un_modelo():
+    src = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
+    i = src.index('@router.post("/consumed/{meal_id}/gramos")')
+    cuerpo = src[i:src.index("\n@router.", i + 10)]
+    assert "Depends(_AJUSTE_GRAMOS_LIMITER)" in cuerpo
+    for prohibido in ("verify_api_quota", "invoke(", "openai", "gemini"):
+        assert prohibido not in cuerpo

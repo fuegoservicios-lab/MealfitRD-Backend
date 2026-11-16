@@ -87,9 +87,9 @@ def test_desglose_con_kcal_cuando_todo_resuelve_y_cuadra():
     out = fc.desglose_de_ingredientes(["150 g de Pechuga de pollo", "185 g de Arroz blanco"], 420, db)
     assert out["con_kcal"] is True
     assert out["lineas"] == [
-        {"texto": "150 g de Pechuga de pollo", "kcal": 161, "gramos": 150},
-        {"texto": "185 g de Arroz blanco", "kcal": 239, "gramos": 185},
-    ]
+        {"texto": "150 g de Pechuga de pollo", "kcal": 161, "gramos": 150, "ajustable_g": 150},
+        {"texto": "185 g de Arroz blanco", "kcal": 239, "gramos": 185, "ajustable_g": 185},
+    ]   # [P1-PLAN-LOTE-1039] ajustable_g: el −/+ de la ficha
 
 
 def test_desglose_sin_kcal_si_un_renglon_no_resuelve():
@@ -97,7 +97,7 @@ def test_desglose_sin_kcal_si_un_renglon_no_resuelve():
     db = _DB({"150 g de Pechuga de pollo": (150, 161.1)})
     out = fc.desglose_de_ingredientes(["150 g de Pechuga de pollo", "1 porción de salsa de la casa"], 420, db)
     assert out["con_kcal"] is False
-    assert out["lineas"] == [{"texto": "150 g de Pechuga de pollo"}, {"texto": "1 porción de salsa de la casa"}]
+    assert out["lineas"] == [{"texto": "150 g de Pechuga de pollo", "ajustable_g": 150}, {"texto": "1 porción de salsa de la casa"}]
 
 
 def test_desglose_sin_kcal_si_la_suma_no_cuadra_con_la_comida():

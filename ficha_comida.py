@@ -111,6 +111,14 @@ def desglose_de_ingredientes(ingredients: Any, kcal_comida: Any, db: Any) -> dic
             except (TypeError, ValueError):
                 pass
         lineas.append(linea)
+    # [P1-PLAN-LOTE-1039 · A-41] los renglones cuyos gramos se pueden ajustar con −/+ (piezas simples con gramos)
+    if db is not None and hasattr(db, "macros_from_ingredient_string"):
+        try:
+            from macros_por_gramos import ajustables
+            for i, g in ajustables(textos, db).items():
+                lineas[i]["ajustable_g"] = g
+        except Exception:
+            pass
     return {"lineas": lineas, "con_kcal": con_kcal}
 
 

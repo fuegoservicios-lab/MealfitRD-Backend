@@ -227,3 +227,71 @@ def al_registrar(user_id: Optional[str], calories, protein, carbs, healthy_fats,
     nota = (f" (Para el asistente: la proteína se ajustó a los gramos de cada pieza que anotaste — "
             f"{int(round(c['antes']['protein']))} → {c['protein']} g, {c['calories']} kcal —; usa ESTAS cifras.)")
     return c["calories"], c["protein"], c["carbs"], c["healthy_fats"], nota
+
+
+# ───────────────────────────────────────────────────────────── [A-41 · paso 3] gramos editables en la ficha
+# La foto no sabe cuánto pesa la pechuga; el usuario sí. Un toque de −/+ en la ficha cambia los gramos de UNA pieza y
+# los totales se mueven exactamente lo que esa pieza aporta según el catálogo (sin modelo). Solo piezas simples con
+# gramos explícitos —las mismas que ponen el suelo—: en un plato compuesto no hay forma honesta de repartir el cambio.
+PASO_GRAMOS = 10
+
+_RE_GRAMOS_EDITABLE = re.compile(r"(\d+(?:[.,]\d+)?)(\s*(?:g|gr|grs|gramos)\b)", re.I)
+
+
+def ajustables(ingredients: Any, db) -> dict:
+    """{índice del renglón: gramos} de los renglones que se pueden ajustar."""
+    out = {}
+    try:
+        r = resolver(ingredients, db)
+    except Exception:
+        return out
+    if not r:
+        return out
+    textos = [x for x in ingredients if isinstance(x, str) and x.strip()]
+    if len(textos) != len(r["componentes"]):
+        return out
+    for i, comp in enumerate(r["componentes"]):
+        if comp["macros"] and comp["gramos"]:
+            out[i] = int(round(comp["gramos"]))
+    return out
+
+
+def _con_gramos(texto: str, gramos: int) -> str:
+    """El renglón con sus gramos cambiados: el número dentro del paréntesis («(≈170 g)») o el de delante («75 g de…»)."""
+    m = _RE_PAREN.search(texto)
+    if m:
+        dentro = _RE_GRAMOS_EDITABLE.sub(lambda g: f"{gramos}{g.group(2)}", m.group(1), count=1)
+        return texto[:m.start(1)] + dentro + texto[m.end(1):]
+    return _RE_GRAMOS_EDITABLE.sub(lambda g: f"{gramos}{g.group(2)}", texto, count=1)
+
+
+def ajustar_gramos(row: dict, indice: int, gramos_nuevos: Any, db) -> Optional[dict]:
+    """Nueva {calories, protein, carbs, healthy_fats, ingredients} tras poner `gramos_nuevos` en el renglón `indice`, o
+    None si ese renglón no es ajustable. Los totales se mueven la DIFERENCIA de esa pieza (y nunca bajan de 0)."""
+    try:
+        textos = [x for x in (row.get("ingredients") or []) if isinstance(x, str) and x.strip()]
+        indice = int(indice)
+        if not (0 <= indice < len(textos)):
+            return None
+        if indice not in ajustables(textos, db):
+            return None
+        g = int(round(float(gramos_nuevos)))
+        g = int(min(GRAMOS_MAX, max(GRAMOS_MIN, g)))
+        comp = componente(textos[indice])
+        antes = db.macros_from_ingredient_string(comp["cadena"])
+        despues = db.macros_from_ingredient_string(f"{g} g de {comp['pieza']}")
+        if not antes or not despues:
+            return None
+        delta = {k: float(despues.get(k) or 0) - float(antes.get(k) or 0) for k in ("kcal", "protein", "carbs", "fats")}
+        nuevos = list(textos)
+        nuevos[indice] = _con_gramos(textos[indice], g)
+        return {
+            "calories": max(0, round(float(row.get("calories") or 0) + delta["kcal"])),
+            "protein": max(0, round(float(row.get("protein") or 0) + delta["protein"])),
+            "carbs": max(0, round(float(row.get("carbs") or 0) + delta["carbs"])),
+            "healthy_fats": max(0, round(float(row.get("healthy_fats") or 0) + delta["fats"])),
+            "ingredients": nuevos,
+            "gramos": g,
+        }
+    except Exception:
+        return None
