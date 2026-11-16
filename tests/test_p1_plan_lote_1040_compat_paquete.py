@@ -190,3 +190,17 @@ def test_el_done_lleva_ui_actions():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert "'ui_actions': _ui_actions})}" in src
     assert "ui_actions" in cp.CAMPOS_OPCIONALES["done"]
+
+
+# ───────────────────────────────────────────────────────────── A-28: la voz en vivo es OTRO cliente del mismo stream
+def test_la_voz_en_vivo_corre_el_mismo_turno_y_lee_solo_campos_del_contrato():
+    src = (_BACKEND / "coach_live.py").read_text(encoding="utf-8")
+    i = src.index("def correr_turno_del_coach(")
+    cuerpo = src[i:]
+    assert "from routers.chat import api_chat_stream" in cuerpo and '"is_call_mode": True,' in cuerpo, (
+        "la paridad de la voz (guardas, clínico, tope, A-41) viene de correr EL MISMO turno")
+    leidos = set(re.findall(r'ev\.get\("([a-z_]+)"\)', cuerpo)) - {"type"}
+    tipos = set(re.findall(r'ev\.get\("type"\) == "([a-z_]+)"', cuerpo))
+    assert tipos <= set(cp.CONTRATO_STREAM)
+    contrato = set().union(*cp.CONTRATO_STREAM.values())
+    assert leidos and leidos <= contrato, f"coach_live lee {sorted(leidos - contrato)} fuera del contrato"
