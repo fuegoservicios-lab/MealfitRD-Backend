@@ -95,7 +95,10 @@ def test_el_horario_que_programa_el_telefono(monkeypatch):
     horas = {"Desayuno": 10.8, "Almuerzo": 14.5, "Merienda": 17.5, "Cena": 1.0}   # quien cena a las 23:30
     monkeypatch.setattr(pa, "hora_del_aviso", lambda _u, meal, _d, _h=None: horas[meal])
     monkeypatch.delenv("MEALFIT_PROACTIVE_QUIET_UNTIL_HOUR", raising=False)
-    out = mr.horario_de_avisos("u", locale="es-DO", consumed_today=[{"meal_type": "desayuno", "meal_name": "Mangú"}])
+    # [P1-PLAN-LOTE-1044] la merienda nace apagada: sin configuración no se programa; encendida, sí
+    assert "merienda" not in [r["meal"] for r in mr.horario_de_avisos("u", locale="es-DO", consumed_today=[])]
+    out = mr.horario_de_avisos("u", locale="es-DO", consumed_today=[{"meal_type": "desayuno", "meal_name": "Mangú"}],
+                               health={"avisos_por_comida": {"merienda": {"activo": True}}})
     assert [(r["meal"], r["hour"], r["minute"]) for r in out] == [("desayuno", 10, 48), ("almuerzo", 14, 30), ("merienda", 17, 30)], \
         "[P1-PLAN-LOTE-150] el minuto SALE de la hora calculada; clavarlo en :35 mandaba el aviso de una cena de " \
         "las 19:30 a las 19:35, es decir DESPUÉS de la cena"

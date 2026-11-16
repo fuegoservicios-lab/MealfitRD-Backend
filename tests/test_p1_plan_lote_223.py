@@ -86,10 +86,15 @@ def test_una_hora_ilegible_no_se_inventa(valor):
 
 def test_el_interruptor_de_cada_comida_ausente_es_encendido():
     import proactive_agent as pa
-    assert pa.comida_con_aviso({}, "Merienda") is True
-    assert pa.comida_con_aviso({"avisos_por_comida": {"merienda": {"hora": "16:00"}}}, "Merienda") is True
+    assert pa.comida_con_aviso({}, "Almuerzo") is True
+    assert pa.comida_con_aviso({"avisos_por_comida": {"almuerzo": {"hora": "13:00"}}}, "Almuerzo") is True
+    assert pa.comida_con_aviso({"avisos_por_comida": {"almuerzo": {"activo": False}}}, "Almuerzo") is False
+    assert pa.comida_con_aviso({"avisos_por_comida": "basura"}, "Almuerzo") is True, "lo que no se entiende no apaga"
+    # [P1-PLAN-LOTE-1044 · decisión del dueño 16-nov] la merienda nace APAGADA; un `True` explícito la enciende
+    assert pa.comida_con_aviso({}, "Merienda") is False
+    assert pa.comida_con_aviso({"avisos_por_comida": {"merienda": {"hora": "16:00"}}}, "Merienda") is False
+    assert pa.comida_con_aviso({"avisos_por_comida": {"merienda": {"activo": True}}}, "Merienda") is True
     assert pa.comida_con_aviso({"avisos_por_comida": {"merienda": {"activo": False}}}, "Merienda") is False
-    assert pa.comida_con_aviso({"avisos_por_comida": "basura"}, "Merienda") is True, "lo que no se entiende no apaga"
 
 
 # ───────────────────────── 2. Lo que se guarda: se valida, no se corrige ─────────────────────────

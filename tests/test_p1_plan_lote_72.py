@@ -204,6 +204,9 @@ def test_un_aviso_ya_enviado_hoy_no_se_repite(dia, monkeypatch):
 def test_pasada_la_ventana_toca_la_siguiente_comida(dia, monkeypatch):
     # 17:30: el almuerzo (12:45) ya no se reintenta; toca la merienda (16:00 − 15 min = 15:45, ventana 15-17).
     monkeypatch.setenv("MEALFIT_PROACTIVE_MAX_NUDGES_PER_DAY", "4")
+    # [P1-PLAN-LOTE-1044] la merienda nace apagada; aquí se mide la VENTANA, con la merienda encendida
+    import proactive_agent as pa
+    monkeypatch.setattr(pa, "_APAGADAS_POR_DEFECTO", frozenset())
     dia.update(ahora=_utc(16, 21))
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Merienda"]
@@ -216,8 +219,11 @@ def test_con_la_ventana_en_1_la_conducta_es_la_de_antes(dia, monkeypatch):
     assert dia["avisos_nuevos"] == []
 
 
-def test_con_el_tope_de_cuatro_la_merienda_llega_tras_desayuno_y_almuerzo(dia):
+def test_con_el_tope_de_cuatro_la_merienda_llega_tras_desayuno_y_almuerzo(dia, monkeypatch):
     # Decisión del dueño (16-sep): un aviso por comida. Con el 2 de antes, este caso se quedaba sin merienda.
+    # [P1-PLAN-LOTE-1044] y desde el 16-nov la merienda nace apagada: aquí se mide el TOPE, con ella encendida.
+    import proactive_agent as pa
+    monkeypatch.setattr(pa, "_APAGADAS_POR_DEFECTO", frozenset())
     dia.update(ahora=_utc(16, 21), avisos_hoy=["Desayuno", "Almuerzo"])
     dia["correr"]()
     assert dia["avisos_nuevos"] == ["Merienda"]

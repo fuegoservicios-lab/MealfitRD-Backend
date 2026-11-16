@@ -360,9 +360,12 @@ def build_day_gap_context(form_data, plan_vigente, consumed_today, hora_local: O
                  and not _principales_ok
                  and momento in ("tarde", "noche", "madrugada"))
         if corto:
+            # [P1-PLAN-LOTE-1044 · A-19 · decisión del dueño 16-nov] Antes la pregunta iba PRIMERO y tapaba lo que el coach
+            # sabe del usuario (batería Y1: «entrena a las 8» llegaba al prompt y la respuesta solo preguntaba qué comió).
             out += (" OJO: a esta hora un diario tan corto casi siempre significa que le falta REGISTRAR, no que no "
-                    "haya comido. Antes de recomendarle comer más, pregúntale en una frase qué ha comido hoy que no "
-                    "esté anotado — y anótalo.")
+                    "haya comido: no le recomiendes comer más por eso. Contesta PRIMERO lo que pregunta usando lo que "
+                    "sabes de él (su rutina, sus horarios, sus gustos aprendidos) y, AL FINAL, pregúntale en una línea "
+                    "si comió algo hoy que no esté anotado — y si te lo dice, anótalo.")
         if momento == "noche" and fk is not None and fk > 0:
             tope = int(round(FRACCION_CIERRE_NOCHE * metas["kcal"] / 10.0) * 10)
             out += (

@@ -257,9 +257,19 @@ def error_en_avisos_por_comida(valor) -> Optional[str]:
     return None
 
 
+# [P1-PLAN-LOTE-1044 · A-29 · decisión del dueño 16-nov] La merienda nace APAGADA: solo el 6 % respondía a su aviso
+# (desayuno 45 %, cena 64 %; tono_del_aviso.py) y es la comida que de verdad se salta. Sigue en Configuración para quien
+# la encienda: un `True` explícito la manda como antes. El resumen del día no cambia.
+_APAGADAS_POR_DEFECTO = frozenset({"merienda"})
+
+
 def comida_con_aviso(health: dict, meal: str) -> bool:
-    """¿Quiere el recordatorio de ESTA comida? Ausente ⇒ sí, como `avisos_comida`: solo lo apaga un `False` explícito."""
-    return _config_de_la_comida(health, meal).get("activo") is not False
+    """¿Quiere el recordatorio de ESTA comida? Ausente ⇒ sí (salvo la merienda, que nace apagada); un valor explícito
+    manda siempre."""
+    activo = _config_de_la_comida(health, meal).get("activo")
+    if activo is None:
+        return str(meal or "").strip().lower() not in _APAGADAS_POR_DEFECTO
+    return activo is not False
 
 
 def hora_elegida(health: dict, meal: str) -> Optional[float]:
