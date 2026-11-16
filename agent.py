@@ -11180,9 +11180,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             return f"data: {json.dumps(payload)}\n\n"
 
         _b_reply = _sanitize_chat_output_for_wire(_budget_exceeded_graceful_reply(form_data))
-        _b_chunk_payload = {"type": "chunk", "text": _b_reply}
+        # [P1-PLAN-LOTE-1037 · A-34] `budget_cap`: este turno NO llamo al modelo; el router no lo cobra contra la cuota mensual
+        _b_chunk_payload = {"type": "chunk", "text": _b_reply, "budget_cap": True}
         _b_done_payload = {
-            "type": "done", "corr": _pt.corr, "response": _b_reply,
+            "type": "done", "corr": _pt.corr, "response": _b_reply, "budget_cap": True,
             "updated_fields": {}, "new_plan": None, "coherence_warnings": [],
             "pantry_modified_at": None, "pantry_depleted_items": None,
             "ajustes_de_app": None, "diary_corrected_meal_ids": [],

@@ -609,6 +609,12 @@ _CHAT_STREAM_LIMITER = RateLimiter(
     period_seconds=60,
 )
 
+
+def _cupo_de_invitado(request: Request, verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> None:
+    """[P1-PLAN-LOTE-1037 · A-34] Sin cuenta no hay cuota mensual ni tope de gasto: tope de turnos por IP y dia."""
+    from coach_bordes_del_turno import exigir_cupo_de_invitado
+    exigir_cupo_de_invitado(request.client.host if request.client else None, verified_user_id)
+
 # [P1-PLAN-LOTE-685 · 2026-09-28] La voz del coach en el modo voz: Gemini 3.8 Flash-Lite TTS (`coach_voz.py`). El dueño:
 # «la voz no es nada realista» (era el lector de accesibilidad del teléfono). Exenta del paywall como todo el modo voz:
 # el gasto va a `llm_usage_events` (node="coach_voice_tts"), NUNCA a `api_usage` —cada frase quemaría un crédito del
@@ -861,7 +867,7 @@ async def api_chat_client_metrics(
     return {"success": True, **result}
 
 
-@router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
+@router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER), Depends(_cupo_de_invitado)])
 def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota),
                     _ia: None = Depends(requiere_consentimiento_ia)):
     _phase_tracker = None
@@ -883,6 +889,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # [P3-CHAT-NOSTREAM-CONTEXTO-TEMPORAL-RD · 2026-08-23] Relleno server-side de los
         # huecos. Este endpoint SÍ tiene caller y siempre los manda, así que aquí es una
         # red de seguridad; en `POST /api/chat` (abajo) es la única defensa que hay.
+        local_date, tz_offset = __import__("coach_bordes_del_turno").fecha_y_huso_del_turno(local_date, tz_offset)   # [P1-PLAN-LOTE-1037 · A-34]
         local_date, tz_offset = _resolve_chat_local_time(local_date, tz_offset, verified_user_id)
         is_call_mode = data.get("is_call_mode", False)
         from coach_live import turno_live_sin_cuota
@@ -1052,6 +1059,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             _gen_outcome = "ok"
             from chat_phase_metrics import _ACTIVE_TRACKER_VAR, release_turn_tracker
             _gen_tok = _ACTIVE_TRACKER_VAR.set(_phase_tracker)
+            _serie = __import__("coach_bordes_del_turno").entrar_en_serie(session_id)   # [P1-PLAN-LOTE-1037 · A-34] espera al turno anterior de ESTE chat
             try:
                 for chunk in chat_with_agent_stream(
                     session_id=session_id,
@@ -1077,7 +1085,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                             # `type=="chunk"` (texto streaming del LLM principal)
                             # cuenta como tokens reales. `progress`/`sentiment`/
                             # `error` no justifican facturar la cuota.
-                            if _chunk_type == "chunk":
+                            _sin_modelo = __import__("coach_bordes_del_turno").turno_sin_modelo(data_obj)   # [P1-PLAN-LOTE-1037 · A-34] tope diario
+                            if _chunk_type == "chunk" and not _sin_modelo:
                                 _chunk_observed = True
                             elif _chunk_type == "error":
                                 _error_seen = True
@@ -1132,7 +1141,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                     # `done` con response no-vacío también garantiza
                                     # consumo de tokens incluso si por alguna razón
                                     # los chunks intermedios no se observaron.
-                                    _chunk_observed = True
+                                    _chunk_observed = not _sin_modelo
                                 if _phase_tracker is not None:
                                     _phase_tracker.set_phase_ms(
                                         "persist_ms",
@@ -1178,7 +1187,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
                                 # [P1-BG-THREAD-TIMEOUT · 2026-05-15] submit
                                 # al pool compartido con timeout + alert.
-                                submit_bg_task(bg_tasks, task_name="chat_sse_bg_tasks")
+                                if not _sin_modelo:   # [P1-PLAN-LOTE-1037 · A-34] sin modelo no hay hechos que extraer (y eso gasta IA)
+                                    submit_bg_task(bg_tasks, task_name="chat_sse_bg_tasks")
                         except Exception as e_json:
                             logger.error(f"Error parseando chunk de fin: {e_json}")
 
@@ -1215,6 +1225,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 if not _error_seen:
                     yield f"data: {json.dumps({'type': 'error', 'code': 'internal', 'message': 'El asistente tuvo un problema. Intenta de nuevo.'})}\n\n"
             finally:
+                _serie.salir()
                 try:
                     if _phase_tracker is not None:
                         _phase_tracker.emit_once(outcome=_gen_outcome)
@@ -1277,7 +1288,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
 
 
-@router.post("", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
+@router.post("", dependencies=[Depends(_CHAT_STREAM_LIMITER), Depends(_cupo_de_invitado)])
 def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota),
              _ia: None = Depends(requiere_consentimiento_ia)):
     try:
@@ -1294,6 +1305,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # días pasados, comidas que quedan hoy) se armaba en hora dominicana cuando el cliente
         # no mandaba estos dos campos. Se resuelve desde el `verified_user_id`, que ya está
         # delante: es la opción que no depende de que el caller colabore.
+        local_date, tz_offset = __import__("coach_bordes_del_turno").fecha_y_huso_del_turno(local_date, tz_offset)   # [P1-PLAN-LOTE-1037 · A-34]
         local_date, tz_offset = _resolve_chat_local_time(local_date, tz_offset, verified_user_id)
 
         # [P2-CHAT-WRITE-IDOR · 2026-05-30] Tercer hermano del guard de escritura
