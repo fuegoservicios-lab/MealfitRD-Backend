@@ -205,3 +205,14 @@ def test_el_replay_solo_lee():
     fuente = (_BACKEND / "scripts" / "coach_battery" / "replay_macros.py").read_text(encoding="utf-8").upper()
     for verbo in ("INSERT ", "UPDATE ", "DELETE ", "OPENAI", "GEMINI"):
         assert verbo not in fuente
+
+
+@pytest.mark.parametrize("linea", [
+    "170 g de pechuga de pollo a la parrilla", "175 g de pechuga de pollo cocinada", "80 g de pollo al horno",
+    "140 g de salmón sellado con limón", "120 g de bistec de res encebollado", "150 g de pollo rostizado",
+    "150 g de cerdo a la brasa",
+])
+def test_toda_coccion_comun_cuenta_la_carne_como_cocida(linea):
+    """[A-41] La misma pechuga daba 38 g «a la parrilla» y 52 g «a la plancha»: una contada cruda, la otra cocida."""
+    import cocido_en_catalogo as cec
+    assert cec._PROT_COCIDO_RX.search(mpg._plano(linea))

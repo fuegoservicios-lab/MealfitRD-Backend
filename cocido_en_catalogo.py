@@ -58,7 +58,10 @@ _UNIDAD_LATA = {"lata", "latas"}
 # CRUDO (nunca jamón, salami, chorizo…: esos se venden ya hechos), solo líneas en gramos (una «1 pechuga cocida» sigue
 # siendo una pechuga) y nunca si el paréntesis ya dice «crudo». Knob `MEALFIT_COOKED_PROTEIN_RAW_FACTOR` (1,35; 1,0 =
 # apagado). tooltip-anchor: P1-PLAN-LOTE-301-PROTEINA-COCIDA
-_PROT_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|hervid[oa]s?|asad[oa]s?|hornead[oa]s?|desmenuzad[oa]s?|frit[oa]s?|guisad[oa]s?|estofad[oa]s?|a la plancha|plancha|saltead[oa]s?|al vapor)\b")
+# [P1-PLAN-LOTE-1039 · A-41] + cocinada, a la parrilla, al horno, sellado, rostizado, a la brasa, encebollado: el replay
+# del 16-nov vio «pechuga de pollo a la parrilla (170 g)» = 38 g de proteína y «a la plancha (170 g)» = 52 g (la misma
+# pieza contada cruda en una y cocida en la otra).
+_PROT_COCIDO_RX = re.compile(r"\b(cocid[oa]s?|cocinad[oa]s?|hervid[oa]s?|asad[oa]s?|hornead[oa]s?|al horno|desmenuzad[oa]s?|frit[oa]s?|guisad[oa]s?|estofad[oa]s?|a la plancha|plancha|a la parrilla|parrilla|a la brasa|sellad[oa]s?|rostizad[oa]s?|encebollad[oa]s?|saltead[oa]s?|al vapor)\b")
 _PROT_FILA_RX = re.compile(r"\b(pollo|pechuga|muslo|pavo|res|carne|cerdo|chivo|conejo|pernil|higado|filete|pescado|mero|"
                            r"tilapia|salmon|trucha|chillo|camaron\w*|gambas?|cangrejo|mejillon\w*|vieiras?|percebes?)\b")
 _PROT_PROCESADO_RX = re.compile(r"\b(jamon|embuchado|chorizo|salchich\w*|salami|longaniza|tocineta|panceta|chicharron|"
