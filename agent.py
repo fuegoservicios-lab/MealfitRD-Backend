@@ -5632,6 +5632,45 @@ def _es_intencion_restauracion_comida_borrada(messages: list) -> bool:
     return bool(re.search(pat, texto, re.IGNORECASE))
 
 
+def _kcal_objetivo_fotos_para_registro(tool_args: dict, plate_photos: list, user_txt: str) -> Optional[float]:
+    """[BB-053 / LOTE-1002] Calorías de referencia de las fotos cubiertas por este registro.
+
+    Con 1 foto devuelve su `kcal`. Con >=2 fotos suma la `kcal` de las fotos activas
+    emparejadas por `attachment_ids` o tokens del alimento (en vez de tomar solo
+    `plate_photos[0]`, que aplastaba registros combinados al total de la primera foto).
+    """
+    if len(plate_photos) == 1:
+        p0 = plate_photos[0]
+        return float(p0["kcal"]) if isinstance(p0, dict) and p0.get("kcal") else None
+
+    from multiphoto_completeness import (
+        _foto_descartada_en_texto,
+        _tokens_en_tool_args,
+        _tokens_primarios_foto,
+    )
+    from respuestas_de_la_foto import sin_dudas
+
+    nut = tool_args.get("nutrition")
+    call_att_ids = {
+        str(a) for a in ((nut.get("attachment_ids") if isinstance(nut, dict) else None) or []) if a
+    }
+    call_tokens = _tokens_en_tool_args(tool_args)
+    total = 0.0
+    matched = 0
+    for idx, p in enumerate(plate_photos, start=1):
+        if not isinstance(p, dict):
+            continue
+        p_toks = _tokens_primarios_foto(sin_dudas(p.get("desc") or ""))
+        if _foto_descartada_en_texto(user_txt, idx, p_toks):
+            continue
+        att_id = str(p.get("attachment_id") or "").strip()
+        if (att_id and att_id in call_att_ids) or (p_toks and bool(p_toks & call_tokens)):
+            if p.get("kcal"):
+                total += float(p["kcal"])
+                matched += 1
+    return total if matched > 0 else None
+
+
 def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photos: list, messages: list) -> dict:
     """[BB-040] Protege contra alucinaciones comunes de alimentos no detectados por la visión
     ni mencionados por el usuario (ej. aguacate, espárragos, salsa de hierbas, pan tostado).
@@ -5639,7 +5678,8 @@ def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photo
     if not plate_photos or not isinstance(tool_args, dict):
         return tool_args
 
-    desc_completa = " ".join(str(p.get("desc") or "") for p in plate_photos).lower()
+    from respuestas_de_la_foto import sin_dudas
+    desc_completa = " ".join(sin_dudas(str(p.get("desc") or "")) for p in plate_photos if isinstance(p, dict)).lower()
     user_txt = _extraer_ultimo_texto_usuario(messages).lower()
     m_name = str(tool_args.get("meal_name") or "")
 
@@ -5667,9 +5707,9 @@ def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photo
 
     tool_args["meal_name"] = m_name
 
-    # 3. Kcal dentro de ±15% de la estimación de visión salvo que usuario haya especificado porción
+    # 3. Kcal dentro de ±20% de la estimación de visión salvo que usuario haya especificado porción
     # o alimentos/ingredientes adicionales en el mensaje de texto [BB-053]
-    kcal_foto = plate_photos[0].get("kcal")
+    kcal_foto = _kcal_objetivo_fotos_para_registro(tool_args, plate_photos, user_txt)
     if kcal_foto:
         tokens_foto = _tokens_de_comida(desc_completa)
         tokens_user = _tokens_de_comida(user_txt)
@@ -5679,13 +5719,15 @@ def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photo
         alimentos_extra_confirmados = (tokens_reg - tokens_foto) & tokens_user
 
         tiene_unidades_o_porcion = bool(re.search(
-            r"\b(?:gramos?|[0-9]+\s*g|[0-9]+\s*oz|porci[oó]n|cucharadas?|tazas?|vasos?|scoops?|unidades?|piezas?|mitad|doble|solo|solamente|menos|mas|más)\b",
+            r"\b(?:gramos?|[0-9]+\s*g|[0-9]+\s*oz|porci[oó]n|cucharadas?|tazas?|vasos?|scoops?|unidades?|piezas?|"
+            r"[0-9]+(?:\.[0-9]+)?\s+(?:huevos?|lascas?|rodajas?|rebanadas?|tortillas?|arepas?|empanadas?|tostones?|panes?|muslos?|filetes?|presas?|pedazos?|trozos?|lonjas?|sandwich(?:es)?|s[aá]ndwich(?:es)?)|"
+            r"mitad|doble|triple|extra|solo|solamente|menos|mas|más)\b",
             user_txt,
             re.IGNORECASE
         ))
 
         current_kcal = int(tool_args.get("calories") or 0)
-        kf = int(kcal_foto)
+        kf = int(round(kcal_foto))
         if current_kcal > kf * 1.20:
             if not alimentos_extra_confirmados and not tiene_unidades_o_porcion:
                 logger.info(
@@ -5699,7 +5741,9 @@ def _sanitizar_ingredientes_contra_alucinacion_foto(tool_args: dict, plate_photo
                         if tool_args.get(k) is not None:
                             tool_args[k] = int(round(tool_args[k] * ratio))
         elif current_kcal > 0 and current_kcal < kf * 0.80:
-            if not tiene_unidades_o_porcion:
+            from multiphoto_completeness import _ya_bloqueado_en_este_turno
+            dejar_a_guard_multifoto = len(plate_photos) >= 2 and not _ya_bloqueado_en_este_turno(messages)
+            if not tiene_unidades_o_porcion and not dejar_a_guard_multifoto:
                 logger.info(f"🛡️ [BB-040/BB-053] Ajustando calorías ({current_kcal} -> {kf}) hacia la estimación de visión ({kf} kcal).")
                 tool_args["calories"] = kf
                 if current_kcal > 0:

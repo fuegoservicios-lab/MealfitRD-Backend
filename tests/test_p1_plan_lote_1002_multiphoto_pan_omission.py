@@ -398,3 +398,65 @@ def test_multiphoto_breakfast_208_vs_908_context_and_guard():
         res_ok = execute_tools(state_retry)
     assert mock_db_log_ok.called
     assert "[ID_REGISTRO_DIARIO:" in res_ok["messages"][0].content
+    # Guard contra regresión BB-040/BB-053: `_sanitizar_ingredientes_contra_alucinacion_foto`
+    # NO debe aplastar las 908 kcal combinadas hacia plate_photos[0].kcal (208).
+    saved_kwargs = mock_db_log_ok.call_args.kwargs
+    saved_cal = saved_kwargs.get("calories") if "calories" in saved_kwargs else mock_db_log_ok.call_args.args[2]
+    assert saved_cal == 908
+
+
+def test_multiphoto_sanitizer_uses_matched_photo_sum_not_first_photo():
+    """Regresión viva (15-nov 22:52): cuando Vision estima Photo 1=208 y Photo 2=700,
+    un registro combinado con 918 kcal NO debe aplastarse a 208 (plate_photos[0]).
+    Y dos registros separados conservan la estimación de su foto respectiva."""
+    from agent import _sanitizar_ingredientes_contra_alucinacion_foto
+
+    plate_photos = [
+        {
+            "desc": "Bowl de frutas picadas con cubos de lechosa, piña y uvas rojas.",
+            "kcal": 208.0,
+            "attachment_id": "att-1",
+        },
+        {
+            "desc": "Plato de mangú de plátano verde, queso blanco frito y 2 huevos fritos.",
+            "kcal": 700.0,
+            "attachment_id": "att-2",
+        },
+    ]
+    human = HumanMessage(content="Me desayuné esto\nCon miel · 2 huevos · Manteca de cerdo")
+
+    # 1) Registro combinado en 1 llamada (~918 kcal): debe preservar 918 kcal
+    combined = {
+        "meal_name": "Bowl de frutas con miel y mangú con queso blanco frito y 2 huevos",
+        "calories": 918,
+        "protein": 29,
+        "carbs": 106,
+        "healthy_fats": 38,
+        "ingredients": ["lechosa", "piña", "uvas", "miel", "mangú de plátano verde", "queso blanco", "huevos", "manteca de cerdo"],
+    }
+    out_comb = _sanitizar_ingredientes_contra_alucinacion_foto(combined, plate_photos, [human])
+    assert out_comb["calories"] == 918
+
+    # 2) Registros separados por foto: Foto 2 (~700 kcal) NO debe aplastarse a Foto 1 (208 kcal)
+    only_second = {
+        "meal_name": "Mangú de plátano verde con queso blanco frito y 2 huevos",
+        "calories": 720,
+        "protein": 28,
+        "carbs": 70,
+        "healthy_fats": 36,
+        "ingredients": ["mangú de plátano verde", "queso blanco frito", "2 huevos fritos"],
+    }
+    out_second = _sanitizar_ingredientes_contra_alucinacion_foto(only_second, plate_photos, [human])
+    assert out_second["calories"] == 720
+
+    # 3) Sobreestimación alucinada sin extras ni porciones (~2000 kcal combinando ambas): debe ajustar a la SUMA (908), no a 208
+    overblown = {
+        "meal_name": "Bowl de frutas con mangú de plátano verde, queso blanco frito y 2 huevos",
+        "calories": 2000,
+        "protein": 60,
+        "carbs": 200,
+        "healthy_fats": 80,
+        "ingredients": ["lechosa", "piña", "mangú", "queso blanco", "huevos"],
+    }
+    out_over = _sanitizar_ingredientes_contra_alucinacion_foto(overblown, plate_photos, [HumanMessage(content="Me desayuné esto")])
+    assert out_over["calories"] == 908
