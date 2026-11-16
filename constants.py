@@ -3311,6 +3311,11 @@ _MEAL_NAME_DESCRIPTOR_TOKENS = frozenset({
     "vegetal", "vegetales", "mixto", "mixta", "criollo", "criolla", "casero", "casera",
     "light", "saludable", "tipico", "tipica", "especial", "sencillo", "sencilla",
 })
+_FRUIT_BOWL_LABEL_TOKENS = frozenset({"fruta", "frutas", "ensalada", "macedonia", "bowl", "picado", "picada"})
+_SWEET_FRUIT_TOKENS = frozenset({
+    "lechosa", "papaya", "pina", "uva", "uvas", "fresa", "fresas", "melon", "sandia",
+    "mango", "kiwi", "arandano", "arandanos", "guineo", "banana", "manzana", "fruta", "frutas",
+})
 
 
 def meal_name_backed_by_description(meal_name: str, description: str) -> bool:
@@ -3327,7 +3332,12 @@ def meal_name_backed_by_description(meal_name: str, description: str) -> bool:
     # bucle lo descartaba antes de llegar a «golpes».
     if any(t in DR_DISH_PROPER_NAMES for t in nombre_tokens):
         return True
+    desc_es_bowl_frutas = bool(
+        (desc_tokens & {"fruta", "frutas"}) or len(desc_tokens & _SWEET_FRUIT_TOKENS) >= 2
+    )
     for t in nombre_tokens:
+        if desc_es_bowl_frutas and t in _FRUIT_BOWL_LABEL_TOKENS:
+            continue
         variantes = _pantry_token_variants(t)
         if not any(variantes & _pantry_token_variants(d) for d in desc_tokens):
             return False

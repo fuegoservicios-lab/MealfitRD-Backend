@@ -13,6 +13,7 @@ import unicodedata
 from habitos_de_la_foto import (
     ADEREZOS_ENSALADA_POR_ID,
     EXTRAS_FRUTA_CATALOGO_POR_ID,
+    GRASAS_COCCION_POR_ID,
     RELLENOS_CATALOGO_POR_ID,
     _matches_tokens,
 )
@@ -680,6 +681,280 @@ def _crear_duda_ensalada(
     }
 
 
+_PATRON_GRASA_DUDA = re.compile(
+    r"\b(grasa|aceite|manteca|mantequilla|margarina|freiste|frieron|frio|cocin\w*)\b",
+    re.IGNORECASE,
+)
+_PATRON_MAJADO = re.compile(r"\b(mangu|pure(?:\s+de\s+\w+)?|yuca\s+majada)\b", re.IGNORECASE)
+_PATRON_FRITO_ITEM = re.compile(
+    r"\b(huevos?\s+frit[oa]s?|queso\s+(?:blanco\s+)?frit[oa]|salami\s+frit[oa]|"
+    r"platanos?(?:\s+(?:verde|maduro)s?)?\s+frit[oa]s?|tostones?|maduros?\s+frit[oa]s?|"
+    r"yuca\s+frita|batata\s+frita|chicharron\w*|pollo\s+frito|carne\s+frita|pescado\s+frito)\b",
+    re.IGNORECASE,
+)
+_GRASA_CATALOGO_OPCIONES: dict[str, dict[str, str]] = {
+    "aceite_vegetal": {"texto": "Aceite vegetal"},
+    "manteca_cerdo": {"texto": "Manteca de cerdo"},
+    "mantequilla": {"texto": "Mantequilla"},
+    "aceite_oliva": {"texto": "Aceite de oliva"},
+    "sin_grasa": {"texto": "Sin grasa / a la plancha"},
+}
+
+
+def _tipo_grasa_en_texto(texto_n: str) -> Optional[str]:
+    t = _norm(texto_n)
+    if not t:
+        return None
+    if "sin grasa" in t or "plancha" in t or "freidora" in t or "air fryer" in t or "sin aceite" in t:
+        return "sin_grasa"
+    if "manteca" in t:
+        return "manteca_cerdo"
+    if "mantequilla" in t and "mani" not in t:
+        return "mantequilla"
+    if "aceite de oliva" in t:
+        return "aceite_oliva"
+    if "aceite" in t:
+        return "aceite_vegetal"
+    return None
+
+
+def _duda_es_sobre_grasa_coccion(duda: Dict[str, Any]) -> bool:
+    preg_n = _norm(duda.get("pregunta") or "")
+    sobre_n = _norm(duda.get("sobre") or "")
+    if not preg_n or _duda_es_sobre_aderezo(duda):
+        return False
+    if _PATRON_BEBIDA_DUDA.search(f"{preg_n} {sobre_n}"):
+        return False
+    if any(w in preg_n.split() for w in ("sandwich", "pan", "tostada", "tostadas", "fruta", "frutas", "ensalada")):
+        return False
+    if _PATRON_GRASA_DUDA.search(preg_n):
+        return True
+    if "prepar" in preg_n:
+        ops = duda.get("opciones") or []
+        if any(_tipo_grasa_en_texto(o.get("texto") or "") is not None for o in ops if isinstance(o, dict)):
+            return True
+    return False
+
+
+def _aclaracion_menciona_grasa_coccion(aclaracion: Optional[str]) -> bool:
+    acl_n = _norm(aclaracion or "").replace("mantequilla de mani", " ")
+    if not acl_n:
+        return False
+    pistas = (
+        "manteca", "mantequilla", "aceite vegetal", "aceite de oliva",
+        "con aceite", "sin grasa", "sin aceite", "a la plancha", "freidora de aire", "air fryer",
+    )
+    return any(p in acl_n for p in pistas)
+
+
+def _ajuste_grasa_respecto_base(tipo_op: str, base_tipo: Optional[str]) -> Dict[str, Any]:
+    if tipo_op == "sin_grasa":
+        if base_tipo == "sin_grasa":
+            return {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
+        return {"calories": -75, "protein": 0, "carbs": 0, "healthy_fats": -8.5}
+    if base_tipo == "sin_grasa":
+        return {"calories": 80, "protein": 0, "carbs": 0, "healthy_fats": 9.0}
+    return {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
+
+
+def _enriquecer_duda_grasa(
+    duda: Dict[str, Any],
+    grasas_usuario: List[Dict[str, Any]],
+    es_majado: bool = False,
+) -> Dict[str, Any]:
+    """Conserva la opción supuesta intacta e inyecta hábitos del usuario y Manteca de cerdo si faltaban."""
+    ops = [dict(o) for o in (duda.get("opciones") or []) if isinstance(o, dict)]
+    if not ops:
+        return duda
+
+    sup_op = next((o for o in ops if o.get("supuesta")), ops[0])
+    base_tipo = _tipo_grasa_en_texto(sup_op.get("texto") or "")
+
+    presentes: set[str] = set()
+    for o in ops:
+        tg = _tipo_grasa_en_texto(o.get("texto") or "")
+        if tg:
+            presentes.add(tg)
+
+    deseadas: List[str] = []
+    for hab in grasas_usuario:
+        gid = hab.get("id")
+        if gid in _GRASA_CATALOGO_OPCIONES and gid not in deseadas:
+            deseadas.append(gid)
+    base_orden = (
+        ("mantequilla", "manteca_cerdo", "aceite_vegetal", "sin_grasa")
+        if es_majado
+        else ("aceite_vegetal", "manteca_cerdo", "mantequilla", "sin_grasa")
+    )
+    for gid in base_orden:
+        if gid not in deseadas:
+            deseadas.append(gid)
+
+    nuevas_ops: List[Dict[str, Any]] = []
+    hab_ids = {h.get("id") for h in grasas_usuario if h.get("id")}
+    for gid in deseadas:
+        if gid in presentes:
+            continue
+        meta = _GRASA_CATALOGO_OPCIONES[gid]
+        nuevas_ops.append({
+            "texto": meta["texto"],
+            "supuesta": False,
+            "ajuste": _ajuste_grasa_respecto_base(gid, base_tipo),
+        })
+        presentes.add(gid)
+
+    if not nuevas_ops:
+        return duda
+
+    resultado_ops = list(ops)
+    for nop in nuevas_ops:
+        if len(resultado_ops) < 5:
+            # Colocar las grasas añadidas antes de "Sin grasa" cuando ya es el último chip
+            if (
+                _tipo_grasa_en_texto(resultado_ops[-1].get("texto") or "") == "sin_grasa"
+                and _tipo_grasa_en_texto(nop["texto"]) != "sin_grasa"
+            ):
+                resultado_ops.insert(len(resultado_ops) - 1, nop)
+            else:
+                resultado_ops.append(nop)
+        elif _tipo_grasa_en_texto(nop["texto"]) in hab_ids:
+            idx_reemp = next(
+                (
+                    i
+                    for i in range(len(resultado_ops) - 1, -1, -1)
+                    if not resultado_ops[i].get("supuesta")
+                    and _tipo_grasa_en_texto(resultado_ops[i].get("texto") or "") not in hab_ids
+                ),
+                -1,
+            )
+            if idx_reemp >= 0:
+                resultado_ops[idx_reemp] = nop
+
+    out = dict(duda)
+    out["opciones"] = resultado_ops[:5]
+    return out
+
+
+def _detectar_frituras_sin_duda_grasa(
+    result: Dict[str, Any],
+    dudas: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Detecta frituras visibles (huevos/queso/salami/plátano frito) no cubiertas por otra duda de grasa."""
+    fritos: List[str] = []
+    vistos_tipos: set[str] = set()
+
+    def _agregar_frito(texto_raw: str) -> None:
+        t_n = _norm(texto_raw)
+        if any(s in t_n for s in ("hervid", "plancha", "freidora de aire", "air fryer", "hornead", "asar", "asad")):
+            return
+        for m in _PATRON_FRITO_ITEM.finditer(t_n):
+            frag = m.group(1)
+            clave = (
+                "huevo" if "huevo" in frag
+                else ("queso" if "queso" in frag
+                      else ("salami" if "salami" in frag
+                            else ("platano" if ("platano" in frag or "maduro" in frag or "toston" in frag) else frag)))
+            )
+            if clave not in vistos_tipos:
+                vistos_tipos.add(clave)
+                fritos.append(frag)
+
+    for it in result.get("items") or []:
+        if isinstance(it, dict) and it.get("name"):
+            _agregar_frito(str(it["name"]))
+    if not fritos:
+        _agregar_frito(f"{result.get('meal_name') or ''} {result.get('description') or ''}")
+    if not fritos:
+        return None
+
+    for d in dudas:
+        if not _duda_es_sobre_grasa_coccion(d):
+            continue
+        ctx = _norm(f"{d.get('sobre') or ''} {d.get('pregunta') or ''}")
+        solo_majado = (
+            bool(_PATRON_MAJADO.search(ctx))
+            and not _PATRON_FRITO_ITEM.search(ctx)
+            and not any(
+                k in ctx for k in ("frier", "freist", "frio", "frit", "huevo", "queso", "salami", "toston", "chichar")
+            )
+        )
+        if not solo_majado:
+            return None
+
+    etiquetas = []
+    for cl in vistos_tipos:
+        if cl == "huevo":
+            etiquetas.append("los huevos")
+        elif cl == "queso":
+            etiquetas.append("el queso frito")
+        elif cl == "salami":
+            etiquetas.append("el salami")
+        elif cl == "platano":
+            etiquetas.append("el plátano frito")
+    if not etiquetas:
+        etiquetas = [fritos[0]]
+    etiquetas_ord = []
+    for pref in ("los huevos", "el queso frito", "el salami", "el plátano frito"):
+        if pref in etiquetas:
+            etiquetas_ord.append(pref)
+    for extra in etiquetas:
+        if extra not in etiquetas_ord:
+            etiquetas_ord.append(extra)
+    frase = (
+        etiquetas_ord[0]
+        if len(etiquetas_ord) == 1
+        else (", ".join(etiquetas_ord[:-1]) + " y " + etiquetas_ord[-1])
+    )
+    return {"sobre": fritos[0][:60], "pregunta": f"¿Con qué grasa frieron {frase}?"[:160]}
+
+
+def _crear_duda_grasa_fritura(
+    info_frito: Dict[str, str],
+    grasas_usuario: List[Dict[str, Any]],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    desc_n = _norm(f"{result.get('meal_name') or ''} {result.get('description') or ''}").replace("mantequilla de mani", " ")
+    base_tipo = _tipo_grasa_en_texto(desc_n) or "aceite_vegetal"
+    if base_tipo == "sin_grasa":
+        base_tipo = "aceite_vegetal"
+
+    candidatos: List[str] = [base_tipo]
+    for hab in grasas_usuario:
+        gid = hab.get("id")
+        if gid in _GRASA_CATALOGO_OPCIONES and gid not in candidatos:
+            candidatos.append(gid)
+    for gid in ("aceite_vegetal", "manteca_cerdo", "mantequilla", "sin_grasa"):
+        if gid not in candidatos:
+            candidatos.append(gid)
+
+    opciones: List[Dict[str, Any]] = []
+    for gid in candidatos:
+        if gid == "sin_grasa":
+            continue
+        es_sup = (gid == base_tipo)
+        opciones.append({
+            "texto": _GRASA_CATALOGO_OPCIONES[gid]["texto"],
+            "supuesta": es_sup,
+            "ajuste": (
+                {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
+                if es_sup
+                else _ajuste_grasa_respecto_base(gid, base_tipo)
+            ),
+        })
+        if len(opciones) >= 4:
+            break
+    opciones.append({
+        "texto": _GRASA_CATALOGO_OPCIONES["sin_grasa"]["texto"],
+        "supuesta": False,
+        "ajuste": _ajuste_grasa_respecto_base("sin_grasa", base_tipo),
+    })
+    return {
+        "sobre": info_frito["sobre"],
+        "pregunta": info_frito["pregunta"],
+        "opciones": opciones[:5],
+    }
+
+
 def _prioridad_duda(duda: Dict[str, Any], info_cerrado: Optional[Dict[str, Any]]) -> int:
     preg_n = _norm(duda.get("pregunta") or "")
     if info_cerrado and _duda_es_sobre_relleno(duda, info_cerrado):
@@ -692,7 +967,7 @@ def _prioridad_duda(duda: Dict[str, Any], info_cerrado: Optional[Dict[str, Any]]
         return 1
     if re.search(r"\b(cuant\w*|huevo|claras|mitades|porcion|taza|piezas|lonjas)\b", preg_n):
         return 2
-    if re.search(r"\b(grasa|aceite|manteca|mantequilla|freiste|cocin|aderezo|vinagreta)\b", preg_n):
+    if re.search(r"\b(grasa|aceite|manteca|mantequilla|freiste|frieron|cocin|aderezo|vinagreta)\b", preg_n):
         return 3
     return 4
 
@@ -716,10 +991,12 @@ def refinar_dudas_del_plato(
     rellenos_usuario: List[Dict[str, Any]] = []
     extras_fruta_usuario: List[Dict[str, Any]] = []
     aderezos_usuario: List[Dict[str, Any]] = []
+    grasas_usuario: List[Dict[str, Any]] = []
     if isinstance(habitos, dict):
         rellenos_usuario = list(habitos.get("rellenos_pan") or [])
         extras_fruta_usuario = list(habitos.get("extras_fruta") or [])
         aderezos_usuario = list(habitos.get("aderezos_ensalada") or [])
+        grasas_usuario = list(habitos.get("grasas_coccion") or [])
 
     info_cerrado = _detectar_alimento_cerrado(result)
     info_pan = _detectar_pan_suelto_untable(result, rellenos_usuario) if not info_cerrado else None
@@ -761,6 +1038,19 @@ def refinar_dudas_del_plato(
     if info_ensalada and not _aclaracion_menciona_aderezo(aclaracion):
         if not any(_duda_es_sobre_aderezo(d) for d in dudas):
             dudas.append(_crear_duda_ensalada(info_ensalada, aderezos_usuario))
+
+    # 4. Grasas de cocción (majados / frituras): asegura Manteca de cerdo y hábitos del usuario,
+    #    y cubre frituras (ej. huevos/queso frito) cuando la única duda de grasa habló solo de mangú/puré.
+    for i, d in enumerate(dudas):
+        if _duda_es_sobre_grasa_coccion(d):
+            es_majado_d = bool(_PATRON_MAJADO.search(_norm(f"{d.get('sobre') or ''} {d.get('pregunta') or ''}")))
+            dudas[i] = _enriquecer_duda_grasa(d, grasas_usuario, es_majado=es_majado_d)
+
+    if not _aclaracion_menciona_grasa_coccion(aclaracion):
+        info_frito = _detectar_frituras_sin_duda_grasa(result, dudas)
+        if info_frito:
+            # En plato simple de un ítem sin otra duda, o en plato multi-ítem con espacio, agrega duda de fritura (prioridad 3).
+            dudas.append(_crear_duda_grasa_fritura(info_frito, grasas_usuario, result))
 
     # Deduplicar preguntas iguales y ordenar por impacto calórico
     vistas = set()

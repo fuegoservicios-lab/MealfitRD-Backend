@@ -501,3 +501,91 @@ def test_todas_las_fotos_unavailable_prohibe_inventar_y_bloquea_registro_no_iden
         "meal_type": "almuerzo",
     })
     assert "NO REGISTRADO" in out
+
+
+def test_habitos_grasa_coccion_y_duda_enriquecida_en_mangu_con_fritos():
+    """Regresión 15-nov (10:50 PM): si el usuario suele cocinar con manteca de cerdo y Vision
+    solo pregunta grasa del mangú con 3 chips sin Manteca de cerdo ni cubre queso/huevos fritos,
+    el refinador inyecta Manteca de cerdo en el mangú y añade duda de fritura sin perder conteos."""
+    habitos = hf.extraer_habitos_desde_registros([
+        {
+            "meal_name": "Tostadas con mantequilla de maní",
+            "ingredients": ["pan integral", "mantequilla de maní"],
+        },
+        {
+            "meal_name": "Mangú con 2 huevos y queso blanco fritos en manteca de cerdo",
+            "ingredients": ["mangú", "huevos fritos", "queso blanco frito", "manteca de cerdo"],
+        },
+    ])
+    ids_grasa = [g["id"] for g in habitos["grasas_coccion"]]
+    assert ids_grasa == ["manteca_cerdo"], habitos  # mantequilla de maní NO cuenta como mantequilla de cocción
+    assert "manteca de cerdo" in habitos["resumen_prompt"].lower()
+
+    raw_payload = {
+        "photo_kind": "plato",
+        "is_food": True,
+        "meal_name": "Mangú con huevo y queso frito",
+        "description": "Desayuno criollo servido con una porción de mangú de plátano verde, 2 huevos fritos y 2 lascas de queso frito.",
+        "calories": 720,
+        "protein": 28,
+        "carbs": 64,
+        "healthy_fats": 38,
+        "items": [
+            {"name": "mangú de plátano verde", "quantity": 1, "unit": "taza", "calories": 300, "protein": 4, "carbs": 58, "healthy_fats": 6},
+            {"name": "huevo frito", "quantity": 2, "unit": "unidad", "calories": 220, "protein": 12, "carbs": 2, "healthy_fats": 18},
+            {"name": "queso frito", "quantity": 2, "unit": "lasca", "calories": 200, "protein": 12, "carbs": 4, "healthy_fats": 14},
+        ],
+        "dudas": [
+            {
+                "sobre": "huevo frito",
+                "pregunta": "¿Cuántos huevos fritos hay servidos?",
+                "opciones": [
+                    {"texto": "2 huevos", "supuesta": True, "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}},
+                    {"texto": "3 huevos", "supuesta": False, "ajuste": {"calories": 90, "protein": 6, "carbs": 1, "healthy_fats": 7}},
+                ],
+            },
+            {
+                "sobre": "mangú de plátano verde",
+                "pregunta": "¿Con qué grasa preparaste el mangú?",
+                "opciones": [
+                    {"texto": "Mantequilla", "supuesta": True, "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}},
+                    {"texto": "Aceite", "supuesta": False, "ajuste": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}},
+                    {"texto": "Sin grasa", "supuesta": False, "ajuste": {"calories": -75, "protein": 0, "carbs": 0, "healthy_fats": -8.5}},
+                ],
+            },
+        ],
+    }
+
+    r = va._coerce_meal_scan(raw_payload, habitos_usuario=habitos)
+    preguntas = [d["pregunta"] for d in r["dudas"]]
+    # 1. Conteo de huevos se mantiene primero que las grasas
+    assert "huevos" in preguntas[0].lower()
+    # 2. La duda del mangú ahora incluye Manteca de cerdo sin perder Mantequilla (supuesta) ni Sin grasa
+    d_mangu = next(d for d in r["dudas"] if "mang" in d["pregunta"].lower())
+    ops_mangu = [o["texto"] for o in d_mangu["opciones"]]
+    assert "Manteca de cerdo" in ops_mangu, ops_mangu
+    assert any(o.get("supuesta") and o["texto"] == "Mantequilla" for o in d_mangu["opciones"])
+    assert "Sin grasa" in ops_mangu
+    # 3. Se inyecta duda de fritura cubriendo huevos y queso frito, con Manteca de cerdo y Sin grasa
+    d_frito = next(d for d in r["dudas"] if "frieron" in d["pregunta"].lower())
+    assert "huevos" in d_frito["pregunta"].lower() and "queso" in d_frito["pregunta"].lower()
+    ops_frito = [o["texto"] for o in d_frito["opciones"]]
+    assert "Manteca de cerdo" in ops_frito
+    assert "Aceite vegetal" in ops_frito
+
+
+def test_meal_name_backed_acepta_ensalada_o_bowl_de_frutas_cuando_hay_frutas():
+    from constants import meal_name_backed_by_description
+
+    assert meal_name_backed_by_description(
+        "Ensalada de frutas con lechosa, piña y uvas",
+        "Bowl de frutas picadas que contiene trozos de lechosa (papaya), trozos de piña fresca y uvas rojas.",
+    ) is True
+    assert meal_name_backed_by_description(
+        "Fruta picada: papaya, piña y uvas",
+        "Papaya picada (base); trozos de piña; uvas rojas enteras.",
+    ) is True
+    assert meal_name_backed_by_description(
+        "Ensalada de frutas con papaya y mango",
+        "Arroz blanco y carne molida guisada.",
+    ) is False

@@ -228,6 +228,41 @@ _CATALOGO_ADEREZOS_ENSALADA: tuple[dict[str, Any], ...] = (
 
 ADEREZOS_ENSALADA_POR_ID = {r["id"]: r for r in _CATALOGO_ADEREZOS_ENSALADA}
 
+_PATRON_GRASA_PLATO = re.compile(
+    r"\b(?:mangu|pure|frit[oa]s?|frieron|frio|plancha|freidora|air\s*fryer|huevos?|queso|salami|platanos?|tostones?|yuca|manteca|mantequilla|aceite)\b",
+    re.IGNORECASE,
+)
+
+_CATALOGO_GRASAS_COCCION: tuple[dict[str, Any], ...] = (
+    {
+        "id": "manteca_cerdo",
+        "texto": "Manteca de cerdo",
+        "tokens": ("manteca",),
+    },
+    {
+        "id": "mantequilla",
+        "texto": "Mantequilla",
+        "tokens": ("mantequilla",),
+    },
+    {
+        "id": "aceite_oliva",
+        "texto": "Aceite de oliva",
+        "tokens": ("aceite de oliva",),
+    },
+    {
+        "id": "aceite_vegetal",
+        "texto": "Aceite vegetal",
+        "tokens": ("aceite",),
+    },
+    {
+        "id": "sin_grasa",
+        "texto": "Sin grasa / a la plancha",
+        "tokens": ("sin grasa",),
+    },
+)
+
+GRASAS_COCCION_POR_ID = {r["id"]: r for r in _CATALOGO_GRASAS_COCCION}
+
 
 def _ascii(texto: str) -> str:
     t = unicodedata.normalize("NFKD", str(texto or "").lower())
@@ -268,8 +303,29 @@ def extraer_habitos_desde_registros(
     conteo_rellenos: Counter[str] = Counter()
     conteo_extras_fruta: Counter[str] = Counter()
     conteo_aderezos: Counter[str] = Counter()
+    conteo_grasas: Counter[str] = Counter()
     conteo_huevos: Counter[str] = Counter()
     conteo_pancakes: Counter[str] = Counter()
+
+    def _contar_grasa_en_texto(txt_ascii: str, peso: int) -> None:
+        txt_g = txt_ascii.replace("mantequilla de mani", " ")
+        matched_g = set()
+        for entry in _CATALOGO_GRASAS_COCCION:
+            gid = entry["id"]
+            if gid == "aceite_vegetal" and "aceite_oliva" in matched_g:
+                continue
+            if gid == "sin_grasa" and (
+                _matches_tokens(txt_g, ("sin grasa",))
+                or _matches_tokens(txt_g, ("freidora de aire",))
+                or _matches_tokens(txt_g, ("air fryer",))
+                or _matches_tokens(txt_g, ("a la plancha",))
+            ):
+                conteo_grasas[gid] += peso
+                matched_g.add(gid)
+                continue
+            if _matches_tokens(txt_g, entry["tokens"]):
+                conteo_grasas[gid] += peso
+                matched_g.add(gid)
 
     for m in meals or []:
         if not isinstance(m, dict):
@@ -308,6 +364,9 @@ def extraer_habitos_desde_registros(
                 if _matches_tokens(txt, entry["tokens"]):
                     conteo_aderezos[entry["id"]] += 1
 
+        if _PATRON_GRASA_PLATO.search(txt):
+            _contar_grasa_en_texto(txt, 1)
+
         for h in re.findall(r"\b([1-6])\s+huevos?(?:\s+(?:hervidos?|revueltos?|fritos?|enteros?))?\b", txt):
             conteo_huevos[f"{h} huevos"] += 1
 
@@ -336,6 +395,8 @@ def extraer_habitos_desde_registros(
                 if _matches_tokens(fact_txt, entry["tokens"]):
                     conteo_aderezos[entry["id"]] += 2
                     break
+        if any(k in fact_txt for k in ("manteca", "mantequilla", "aceite", "freidora", "air fryer", "plancha")):
+            _contar_grasa_en_texto(fact_txt, 2)
 
     rellenos_pan = [
         {
@@ -364,6 +425,15 @@ def extraer_habitos_desde_registros(
         for aid, count in conteo_aderezos.most_common(3)
         if aid in ADEREZOS_ENSALADA_POR_ID
     ]
+    grasas_coccion = [
+        {
+            "id": gid,
+            "texto": GRASAS_COCCION_POR_ID[gid]["texto"],
+            "count": count,
+        }
+        for gid, count in conteo_grasas.most_common(3)
+        if gid in GRASAS_COCCION_POR_ID
+    ]
 
     partes_resumen: List[str] = []
     if rellenos_pan:
@@ -375,6 +445,9 @@ def extraer_habitos_desde_registros(
     if aderezos_ensalada:
         lista_a = ", ".join(f"{_ascii(r['texto'])} ({r['count']}x)" for r in aderezos_ensalada[:2])
         partes_resumen.append(f"En ensaladas suele usar: {lista_a}.")
+    if grasas_coccion:
+        lista_g = ", ".join(f"{_ascii(r['texto'])} ({r['count']}x)" for r in grasas_coccion[:2])
+        partes_resumen.append(f"En frituras/majados suele usar: {lista_g}.")
     if conteo_huevos:
         top_h = conteo_huevos.most_common(1)[0][0]
         partes_resumen.append(f"Porcion frecuente de huevos: {top_h}.")
@@ -388,6 +461,7 @@ def extraer_habitos_desde_registros(
         "rellenos_pan": rellenos_pan,
         "extras_fruta": extras_fruta,
         "aderezos_ensalada": aderezos_ensalada,
+        "grasas_coccion": grasas_coccion,
     }
 
 
@@ -406,7 +480,7 @@ def invalidate_habitos_cache(user_id: Optional[str] = None) -> None:
 
 def obtener_habitos_foto(user_id: Optional[str]) -> Dict[str, Any]:
     """Obtiene los hábitos recientes del usuario para el escáner de fotos (fail-open)."""
-    vacio = {"resumen_prompt": "", "rellenos_pan": [], "extras_fruta": [], "aderezos_ensalada": []}
+    vacio = {"resumen_prompt": "", "rellenos_pan": [], "extras_fruta": [], "aderezos_ensalada": [], "grasas_coccion": []}
     if not user_id:
         return vacio
 
