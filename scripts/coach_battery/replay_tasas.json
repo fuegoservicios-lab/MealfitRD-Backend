@@ -1,0 +1,35 @@
+{
+  "nota": "Veredicto del replay de guardas por patrones (A-15, nivel N1) sobre los mensajes reales de agent_messages. Aquí solo van recuentos: los mensajes no se versionan. Se regenera con scripts/coach_battery/replay_guardas.py (gratis, solo lectura) y etiquetando a mano los disparos.",
+  "fecha": "2026-11-16",
+  "mensajes": 461,
+  "guardas": {
+    "queja": {
+      "disparos": 1, "aciertos": 1, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "Antes del arreglo del lote 1038: 0 disparos y 1 escape (la queja venía a mitad del mensaje, dictada por voz). Los otros 11 candidatos eran correcciones del usuario sobre su propio registro, no quejas del coach."
+    },
+    "solo_pregunta": {
+      "disparos": 1, "aciertos": 1, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "Una pregunta de valoración («¿cuánta me conviene…?»): bloquear el registro es lo correcto."
+    },
+    "nevera_no_es_gusto": {
+      "disparos": 0, "aciertos": 0, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "Ningún «se me acabó X» en el corpus: sin falsos positivos; el acierto lo cubre la batería (D2)."
+    },
+    "franja_de_la_foto": {
+      "disparos": 13, "aciertos": 13, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "Los 13 son rótulos reales de la foto («este fue mi almuerzo», «esta es la cena»)."
+    },
+    "intencion_dificil": {
+      "disparos": 20, "aciertos": 20, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "Antes del arreglo del lote 1038: 23 disparos con 3 falsos positivos por `plan\\w*` («a la plancha» ×2, «plántano» mal escrito). Los 20 que quedan son la petición de generar plan."
+    },
+    "sin_sentimiento": {
+      "disparos": 460, "aciertos": 460, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "El único mensaje con carga afectiva del corpus NO dispara (correcto). Búsqueda suelta de palabras afectivas sobre los 460: 0. Los mensajes reales son cortos (40 caracteres de media) y factuales."
+    },
+    "orden_al_modelo": {
+      "disparos": 0, "aciertos": 0, "falsos_positivos": 0, "escapes_conocidos": 0,
+      "nota": "Ningún mensaje de usuario parece una orden al modelo; sobre 279 descripciones reales de fotos tampoco (0 alteradas)."
+    }
+  }
+}

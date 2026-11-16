@@ -1428,6 +1428,10 @@ _USER_SCOPED_TABLES_USERID = (
     # Medido en el esquema el 28-sep: todas existen con `user_id` y ninguna bloquea a otra por FK.
     "ai_training_corpus", "chat_attachments", "device_push_tokens", "inventory_consumption_events",
     "plan_generation_runs", "plan_jobs", "user_brand_preferences", "user_taste_events",
+    # [P1-PLAN-LOTE-1038 · A-24] Las tablas del progreso por semanas y del informe para el médico (lote 1028): caen por
+    # el FK CASCADE del perfil, pero con `include_profile=False` (el «vaciar» del admin) sobrevivían — y el informe
+    # es dato de salud. Medido en el esquema el 16-nov: las tres existen con `user_id` uuid.
+    "user_health_reports", "user_week_summaries", "user_journey",
     # `meal_plans` al final: sus children (plan_chunk_queue, etc.) pueden
     # FK-cascade a él; borrarlas antes evita cualquier orden problemático.
     "meal_plans",

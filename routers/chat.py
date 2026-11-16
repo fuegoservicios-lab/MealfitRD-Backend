@@ -857,6 +857,8 @@ async def api_chat_client_metrics(
             raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
 
     from chat_phase_metrics import record_client_chat_perf
+    if isinstance(data, dict) and data.get("event") == "stream_cut":   # [P1-PLAN-LOTE-1038 · A-23] el stream se cortó: ¿lo rescató el cliente?
+        from coach_turno_repetido import registrar_corte_del_cliente as record_client_chat_perf
 
     result = await asyncio.to_thread(
         record_client_chat_perf,
@@ -897,6 +899,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # [P3-I18N-PROMPT-VISION-CLIENTE-ESPANOL · 2026-08-23] El contexto de la foto viene
         # ESTRUCTURADO; el servidor compone el bloque y lo pone en el system prompt.
         vision = data.get("vision") if isinstance(data.get("vision"), dict) else None
+        vision = __import__("contenido_externo").sanear_vision(vision)   # [P1-PLAN-LOTE-1038 · A-24] lo leído en la foto es dato, no orden
         raw_attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
         attachment_ids = []
         for item in raw_attachments[:4]:
@@ -939,6 +942,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Pasar user_id explícito.
         _db_user_id = _resolve_user_id_for_db(user_id, session_id)
         is_regeneration = bool(regenerate_message_id or regenerate_response_content)
+        _guardado: dict = {}   # [P1-PLAN-LOTE-1038 · A-23] `repetido`: ese client_message_id ya estaba guardado (reintento)
         _regenerate_target_id = None
         if is_regeneration:
             _regenerate_target_id = get_model_response_id_for_regeneration(
@@ -964,6 +968,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 session_id, prompt, _db_user_id, attachment_ids,
                 client_message_id=str(client_message_id),
                 vision_items=vision_items,
+                info=_guardado,
             )
         else:
             save_message(session_id, "user", prompt, user_id=_db_user_id)
@@ -1061,6 +1066,13 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             _gen_tok = _ACTIVE_TRACKER_VAR.set(_phase_tracker)
             _serie = __import__("coach_bordes_del_turno").entrar_en_serie(session_id)   # [P1-PLAN-LOTE-1037 · A-34] espera al turno anterior de ESTE chat
             try:
+                # [P1-PLAN-LOTE-1038 · A-23] reintento del MISMO mensaje: se repite la respuesta ya dada, no el turno
+                _rep = (__import__("coach_turno_repetido").resolver(session_id, client_message_id, getattr(_phase_tracker, "corr", None))
+                        if _guardado.get("repetido") else None)
+                if _rep is not None:
+                    _gen_outcome = "replayed"
+                    yield from _rep
+                    return
                 for chunk in chat_with_agent_stream(
                     session_id=session_id,
                     prompt=_prompt_para_el_modelo,

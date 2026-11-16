@@ -275,8 +275,11 @@ def save_message_with_attachments(
     attachment_ids: List[str],
     client_message_id: Optional[str] = None,
     vision_items: Optional[List[Dict[str, Any]]] = None,
+    info: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """INSERT idempotente del turno + claim de hasta 4 adjuntos propios."""
+    """INSERT idempotente del turno + claim de hasta 4 adjuntos propios.
+
+    [P1-PLAN-LOTE-1038 · A-23] `info["repetido"]` = True si ese `client_message_id` YA estaba guardado (un reintento)."""
     if not connection_pool:
         return ""
     ordered_ids = list(dict.fromkeys(str(value) for value in attachment_ids if value))[:4]
@@ -335,6 +338,8 @@ def save_message_with_attachments(
             fetch_one=True,
         )
         if existing:
+            if info is not None:
+                info["repetido"] = str(existing["id"]) != message_id
             return str(existing["id"])
     return message_id
 

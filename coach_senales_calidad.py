@@ -42,10 +42,18 @@ def _plano(t: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", t or "") if not unicodedata.combining(c)).lower()
 
 
+# [P1-PLAN-LOTE-1038 · A-15] La única queja real del replay (461 mensajes) no arrancaba el mensaje: venía tras un «ay, no,
+# por favor…» dictado por voz. Estas tres formas son inequívocas en cualquier punto del arranque del mensaje.
+_RE_QUEJA_DENTRO = re.compile(
+    r"\b(?:te\s+equivocaste|te\s+confundiste|(?:yo\s+)?no\s+me\s+(?:comi|tome)\s+eso|lo\s+(?:anotaste|registraste)\s+mal)\b"
+)
+
+
 def es_queja(texto: str) -> bool:
-    """¿El mensaje arranca diciendo que el coach se equivocó?"""
+    """¿El mensaje dice, al empezar, que el coach se equivocó?"""
     try:
-        return bool(_RE_QUEJA.search(_plano(texto)[:200]))
+        t = _plano(texto)[:200]
+        return bool(_RE_QUEJA.search(t) or _RE_QUEJA_DENTRO.search(t))
     except Exception:
         return False
 
