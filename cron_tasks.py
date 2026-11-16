@@ -8790,6 +8790,8 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"⏰ [P1-PLAN-LOTE-798] Cron purge_orphan_chat_attachments registrado cada {_CHAT_ATT_PURGE_INT} min."
         )
 
+    from retencion_fotos_chat import registrar as _reg_fotos_90d  # [P1-PLAN-LOTE-1041] fotos del chat a los 90 días
+    _reg_fotos_90d(scheduler, _add_job_jittered, _aggregator_misfire_grace_s())
     # [P1-PLAN-LOTE-841 · 2026-09-29] Purga diaria del rastro del equipo (`admin_access_log`) que pasa del plazo
     # (MEALFIT_ADMIN_LOG_RETENTION_DAYS, 730 por defecto; lo promete la Política de Privacidad §9). La purga y su SQL
     # viven en admin_acceso; aquí solo se registra.
