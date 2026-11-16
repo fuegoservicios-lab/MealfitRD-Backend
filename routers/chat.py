@@ -900,6 +900,10 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         # ESTRUCTURADO; el servidor compone el bloque y lo pone en el system prompt.
         vision = data.get("vision") if isinstance(data.get("vision"), dict) else None
         vision = __import__("contenido_externo").sanear_vision(vision)   # [P1-PLAN-LOTE-1038 · A-24] lo leído en la foto es dato, no orden
+        try:   # [P1-PLAN-LOTE-1040 · A-33] qué paquete de la app habla con el servidor (fail-open; nunca rompe el turno)
+            __import__("compat_paquete").registrar_paquete(data.get("bundle"))
+        except Exception:
+            pass
         raw_attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
         attachment_ids = []
         for item in raw_attachments[:4]:

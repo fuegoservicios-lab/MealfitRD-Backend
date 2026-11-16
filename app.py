@@ -3165,6 +3165,13 @@ def health_version():
                                 "uso_peticiones_pct": _rl.get("uso_peticiones_pct"), "hace_s": _rl.get("hace_s")}
     except Exception:
         pass
+    # [P1-PLAN-LOTE-1040 · A-33] los paquetes de la app que siguen hablando con el servidor (7 días) y el protocolo
+    paquetes = {}
+    try:
+        from compat_paquete import paquetes_vivos_cacheado as _paquetes_vivos
+        paquetes = _paquetes_vivos()
+    except Exception:
+        pass
 
     git_sha = os.environ.get("GIT_SHA") or "unknown"
     return {
@@ -3200,6 +3207,7 @@ def health_version():
         "fail_open_total": fail_open_total,
         "fail_open_critical": fail_open_critical,
         "openai_ratelimit": openai_ratelimit,
+        "paquetes": paquetes,
     }
 
 
