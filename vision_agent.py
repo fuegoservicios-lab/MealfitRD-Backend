@@ -1509,10 +1509,10 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
         # normalizar.
         import vision_salida_compacta as _vsc   # [P1-PLAN-LOTE-1046 · A-12] mismos datos, ~⅓ menos tokens (knob)
         _compacta = _vsc.activo()
-        _prompt = _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais, habitos_usuario=habitos_usuario)
         response = await _invoke_structured_vision(
             image_bytes,
-            _prompt + (_vsc.LEYENDA if _compacta else ""),
+            _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais, habitos_usuario=habitos_usuario)
+            + (_vsc.LEYENDA if _compacta else ""),
             _vsc.ResultadoCompacto if _compacta else _MealVisionResult,
         )
         _t_san = time.perf_counter()
