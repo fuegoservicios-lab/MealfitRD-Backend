@@ -124,7 +124,7 @@ def _message_text(content: Any) -> str:
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
+            if isinstance(item, dict) and item.get("type") in ("text", "input_text"):   # input_text: Responses
                 parts.append(str(item.get("text") or ""))
             elif isinstance(item, str):
                 parts.append(item)
@@ -134,7 +134,11 @@ def _message_text(content: Any) -> str:
 
 def _extract_system_and_tool_names(payload: dict) -> tuple[str, list[str]]:
     sys_parts: list[str] = []
-    for msg in payload.get("messages") or ():
+    # [P1-PLAN-LOTE-1043 · A-07 paso 3 / A-20] La API de Responses lleva la conversación en `input`, no en `messages`:
+    # sin esto, ningún turno por Responses recibía la clave de caché.
+    if payload.get("instructions"):
+        sys_parts.append(_message_text(payload.get("instructions")))
+    for msg in payload.get("messages") or payload.get("input") or ():
         if not isinstance(msg, dict):
             continue
         if msg.get("role") in ("system", "developer"):

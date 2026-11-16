@@ -4879,12 +4879,14 @@ def call_model(state: ChatState):
             voice_kwargs=_kwargs_de_razonamiento_modo_voz(state),
         )
     else:
+        import coach_luna_razona as _clr   # [P1-PLAN-LOTE-1043 · A-20] knob apagado por defecto
+        _luna_kw = _clr.kwargs_cliente(_chat_agent_model_name(_model_uid), modo_voz=bool((state or {}).get("modo_voz")))
         chat_llm = ChatGLM(
             model=_chat_agent_model_name(_model_uid),
             temperature=0.7,
             timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
             **_primary_retry_kwargs,
-            **_kwargs_de_razonamiento_modo_voz(state),
+            **(_luna_kw or _kwargs_de_razonamiento_modo_voz(state)),
         )
     if state.get("cache_v2") and not _hard_info.get("escalated"):
         # [P1-PLAN-LOTE-1015 · A-01] Catálogo FIJO (las 19, en su orden) y la restricción del turno por `tool_choice.allowed_tools`:
@@ -4893,7 +4895,8 @@ def call_model(state: ChatState):
         _perm = _perm_names(active_tools, agent_tools)
         llm_with_tools = chat_llm.bind_tools(list(agent_tools))
         if _perm:
-            llm_with_tools = llm_with_tools.bind(tool_choice=_tc_perm(_perm))
+            llm_with_tools = llm_with_tools.bind(tool_choice=(
+                _clr.tool_choice_responses(_perm) if _luna_kw else _tc_perm(_perm)))
     else:
         llm_with_tools = chat_llm.bind_tools(active_tools)
 
