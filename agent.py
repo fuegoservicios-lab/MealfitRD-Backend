@@ -11760,15 +11760,15 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-687 · 2026-09-28] …y va al FINAL, UNA vez para las dos ramas: a mitad del prompt (posición 25.595
         # de 36.550, con el diario, el plan y los días anteriores detrás) el modelo no la vio y contestó «No me llegó el
         # detalle de esa foto» a una foto de plato perfectamente analizada.
-        _ctx_foto = build_vision_context(vision, nevera_activa=_nevera_on)
-        system_prompt += _ctx_foto
+        _largo_antes_foto = len(system_prompt)
+        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
         # [P1-PLAN-LOTE-1039 · A-41] foto de plato: cuánto suelen pesar las piezas proteicas de ESTE usuario (referencia)
-        if "FOTO DE PLATO (PRIORIDAD MÁXIMA)" in _ctx_foto:
+        if "FOTO DE PLATO (PRIORIDAD MÁXIMA)" in system_prompt[_largo_antes_foto:]:
             try:
                 import macros_por_gramos as _mpg
                 system_prompt += _mpg.referencia_de_porciones(_mpg.porciones_habituales(user_id))
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("[P2-SILENT-DEGRADATION] porciones habituales: %s: %s", type(_exc).__name__, str(_exc)[:160])
         # [P1-PLAN-LOTE-686 · 2026-09-28] Modo voz: el recordatorio de las reglas V al FINAL, detrás de todos los bloques de
         # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
         if is_call_mode:
@@ -12304,13 +12304,14 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad del payload `done`.
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
+    # [P1-PLAN-LOTE-1040 · A-27] qué refrescar en pantalla, por lo que EJECUTÓ el turno (no por si el modelo escribió la marca)
+    try:
+        _ui_actions = __import__("acciones_de_ui").acciones_del_turno(list(getattr(_pt, "tools", []) or []), final_content)
+    except Exception as _exc:
+        _ui_actions = []
+        logger.debug("[P2-SILENT-DEGRADATION] ui_actions: %s: %s", type(_exc).__name__, str(_exc)[:160])
     final_content = _sanitize_chat_output_for_wire(final_content)
     try:
-        # [P1-PLAN-LOTE-1040 · A-27] qué refrescar en pantalla, por lo que EJECUTÓ el turno (no por si el modelo escribió la marca)
-        try:
-            _ui_actions = __import__("acciones_de_ui").acciones_del_turno(list(getattr(_pt, "tools", []) or []), final_content)
-        except Exception:
-            _ui_actions = []
         yield f"data: {json.dumps({'type': 'done', 'corr': _pt.corr, 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items, 'ajustes_de_app': ajustes_de_app, 'diary_corrected_meal_ids': diary_corrected_meal_ids, 'ui_actions': _ui_actions})}\n\n"
         _pt.mark_done(_stream_outcome, _chat_agent_model_name())   # [P1-PLAN-LOTE-1001] tras emitir el `done`
     finally:

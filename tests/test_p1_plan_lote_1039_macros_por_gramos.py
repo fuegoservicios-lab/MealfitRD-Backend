@@ -326,9 +326,11 @@ def test_la_referencia_es_una_referencia_no_una_regla():
 
 def test_solo_entra_en_los_turnos_con_foto_de_plato():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
-    i = src.index("_ctx_foto = build_vision_context(vision, nevera_activa=_nevera_on)")
-    tramo = src[i:i + 700]
-    assert 'if "FOTO DE PLATO (PRIORIDAD MÁXIMA)" in _ctx_foto:' in tramo
+    i = src.index("_largo_antes_foto = len(system_prompt)")
+    tramo = src[i:i + 800]
+    # la línea literal la fijan P3-I18N-PROMPT-VISION-CLIENTE y P1-NEVERA-OPCIONAL: una vez, tras las dos ramas
+    assert "system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)" in tramo
+    assert 'if "FOTO DE PLATO (PRIORIDAD MÁXIMA)" in system_prompt[_largo_antes_foto:]:' in tramo
     assert "referencia_de_porciones(_mpg.porciones_habituales(user_id))" in tramo
     from prompts.chat_agent import _PLATO_INSTRUCCION
     assert _PLATO_INSTRUCCION.startswith("FOTO DE PLATO (PRIORIDAD MÁXIMA)"), "el marcador que busca agent.py"
