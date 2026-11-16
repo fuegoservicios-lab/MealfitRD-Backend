@@ -86,7 +86,8 @@ def test_cableado():
     tools = (_RAIZ / "tools.py").read_text(encoding="utf-8")
     assert tools.count('__import__("coach_senales_calidad").registrar(user_id, "coach_corrigio", fila=_fila)') == 2
     db = (_RAIZ / "db_facts.py").read_text(encoding="utf-8")
-    assert 'def delete_consumed_meal(user_id: str, meal_id: str, via: Optional[str] = None) -> bool:' in db
+    # anotación sin `Optional`: test_live_diary_removed ejecuta la función en un namespace mínimo (5e445039)
+    assert 'def delete_consumed_meal(user_id: str, meal_id: str, via: "str | None" = None) -> bool:' in db
     assert '__import__("coach_senales_calidad").borrado_en_diario(user_id, rows[0])' in db
     assert 'delete_consumed_meal(verified_user_id, meal_id, via="diario")' in (_RAIZ / "routers" / "diary.py").read_text(encoding="utf-8")
     import diario_contexto
