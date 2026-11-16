@@ -261,4 +261,6 @@ def test_no_se_escanea_ningun_venv():
     assert rutas, "el blanket no encuentra ningún fichero"
     assert not [r for r in rutas if "venv" in r.lower() or r.startswith(".")], (
         "el blanket vuelve a entrar en un venv u oculto")
-    assert len(rutas) < 400, f"{len(rutas)} ficheros: ¿volvió a entrar algún árbol de terceros?"
+    # [P1-PLAN-LOTE-1041 · 2026-11-16] 400 → 450: el backend propio llegó a 400 módulos (retencion_fotos_chat.py);
+    # un árbol de terceros (venv, site-packages) son miles, así que el margen sigue cazándolo.
+    assert len(rutas) < 450, f"{len(rutas)} ficheros: ¿volvió a entrar algún árbol de terceros?"
