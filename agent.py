@@ -4472,12 +4472,28 @@ _BUDGET_CAP_TEXTOS = {
 }
 
 
-def _budget_exceeded_graceful_reply(form_data: Optional[dict]) -> str:
+def _budget_exceeded_graceful_reply(form_data: Optional[dict], libre_desde=None, tz_offset=None) -> str:
     locale = str((form_data or {}).get("locale") or "").strip().lower()
-    for prefijo in ("en", "pt", "fr", "it"):
-        if locale.startswith(prefijo):
-            return _BUDGET_CAP_TEXTOS[prefijo]
-    return _BUDGET_CAP_TEXTOS["es"]
+    idioma = next((p for p in ("en", "pt", "fr", "it") if locale.startswith(p)), "es")
+    base = _BUDGET_CAP_TEXTOS[idioma]
+    # [P1-PLAN-LOTE-1045 · D5] con la hora calculada, «en unas horas» pasa a ser la hora real (local del usuario)
+    from coach_tope_diario import frase_de_la_hora
+    frase = frase_de_la_hora(libre_desde, tz_offset, idioma)
+    if not frase:
+        return base
+    cola = _BUDGET_CAP_COLA_SIN_HORA[idioma]
+    if base.endswith(cola):
+        base = base[: -len(cola)] + "."
+    return f"{base} {frase}"
+
+
+_BUDGET_CAP_COLA_SIN_HORA = {
+    "es": ", y podrás volver a escribirle en unas horas.",
+    "en": ", and you'll be able to message the coach again in a few hours.",
+    "pt": ", e você poderá falar com o coach de novo em algumas horas.",
+    "fr": ", et vous pourrez réécrire au coach dans quelques heures.",
+    "it": " e potrai scrivere di nuovo al coach tra qualche ora.",
+}
 
 # [P1-CHAT-ORPHAN-TOOLCALL-SANITIZE · 2026-09-14] Un historial con un tool_call sin su
 # ToolMessage (o un ToolMessage sin el AIMessage que lo pidió) lo rechaza el proveedor
@@ -11195,7 +11211,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         def _sse_data(payload: dict) -> str:
             return f"data: {json.dumps(payload)}\n\n"
 
-        _b_reply = _sanitize_chat_output_for_wire(_budget_exceeded_graceful_reply(form_data))
+        _b_reply = _sanitize_chat_output_for_wire(_budget_exceeded_graceful_reply(form_data, _budget_info.get("libre_desde"), tz_offset))
         # [P1-PLAN-LOTE-1037 · A-34] `budget_cap`: este turno NO llamo al modelo; el router no lo cobra contra la cuota mensual
         _b_chunk_payload = {"type": "chunk", "text": _b_reply, "budget_cap": True}
         _b_done_payload = {

@@ -91,7 +91,10 @@ def user_exempt_from_chat_budget(user_id: Optional[str]) -> bool:
         from fail_open import fail_open
         fail_open("budget_exempt_admin_ids", exc)
     extra = _env_str("MEALFIT_CHAT_BUDGET_EXEMPT_USER_IDS", "")
-    return uid in {x.strip().lower() for x in extra.split(",") if x.strip()}
+    if uid in {x.strip().lower() for x in extra.split(",") if x.strip()}:
+        return True
+    from coach_tope_diario import es_cuenta_de_prueba   # [P1-PLAN-LOTE-1045 · D5] las cuentas de prueba, exentas
+    return es_cuenta_de_prueba(uid)
 
 
 def check_user_daily_chat_budget(
@@ -123,7 +126,7 @@ def check_user_daily_chat_budget(
             SELECT COALESCE(SUM(cost_usd_micros), 0)::bigint AS spent_micros
             FROM public.llm_usage_events
             WHERE user_id = %s
-              AND node LIKE 'chat%%'
+              AND (node LIKE 'chat%%' OR node = 'vision_scan')
               AND created_at >= NOW() - INTERVAL '24 hours'
             """,
             (str(user_id),),
@@ -137,12 +140,14 @@ def check_user_daily_chat_budget(
             spent_micros = 0
         spent_usd = round(spent_micros / 1_000_000.0, 6)
         if spent_usd >= limit:
+            from coach_tope_diario import libre_desde   # [P1-PLAN-LOTE-1045 · D5] el aviso dice la hora real
             return {
                 "status": "hard_100",
                 "allow_escalation": False,
                 "block_turn": True,
                 "spent_usd": spent_usd,
                 "limit_usd": limit,
+                "libre_desde": libre_desde(str(user_id), limit, execute_sql_query=execute_sql_query),
             }
         if spent_usd >= (0.80 * limit):
             return {
