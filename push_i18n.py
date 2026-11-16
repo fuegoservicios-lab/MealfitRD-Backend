@@ -64,6 +64,13 @@ _LOCALES = ("es-DO", "en-US", "pt-BR", "fr-FR", "it-IT")
 
 # ── TÍTULOS ────────────────────────────────────────────────────────────────────
 _TITULOS = {
+    # [P1-PLAN-LOTE-1038 · A-25] la alerta del sistema que le llega al dueño por push (`alertas_al_dueno.py`).
+    "Bioboros · alerta del sistema": {
+        "en-US": "Bioboros · system alert",
+        "pt-BR": "Bioboros · alerta do sistema",
+        "fr-FR": "Bioboros · alerte système",
+        "it-IT": "Bioboros · avviso di sistema",
+    },
     # [P1-PLAN-LOTE-228 · 2026-09-25] El fin de la generación con la app cerrada (`aviso_plan_listo.py`).
     "Tu plan está listo 🎉": {
         "en-US": "Your plan is ready 🎉",
