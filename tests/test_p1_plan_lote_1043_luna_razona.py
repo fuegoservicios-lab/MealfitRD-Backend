@@ -38,7 +38,7 @@ def test_allowed_tools_en_forma_de_responses():
 def test_agent_lo_usa_en_el_turno_normal():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert "_luna_kw = _clr.kwargs_cliente(_chat_agent_model_name(_model_uid)" in src
-    assert "**(_luna_kw or _kwargs_de_razonamiento_modo_voz(state))" in src
+    assert "**_luna_kw,   # [P1-PLAN-LOTE-1043]" in src   # aparte: la línea de la voz la fija el lote 686
     assert "_clr.tool_choice_responses(_perm) if _luna_kw else _tc_perm(_perm)" in src
 
 

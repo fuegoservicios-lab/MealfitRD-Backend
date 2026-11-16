@@ -4902,7 +4902,8 @@ def call_model(state: ChatState):
             temperature=0.7,
             timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
             **_primary_retry_kwargs,
-            **(_luna_kw or _kwargs_de_razonamiento_modo_voz(state)),
+            **_kwargs_de_razonamiento_modo_voz(state),
+            **_luna_kw,   # [P1-PLAN-LOTE-1043] {} en voz y con el knob apagado
         )
     if state.get("cache_v2") and not _hard_info.get("escalated"):
         # [P1-PLAN-LOTE-1015 · A-01] Catálogo FIJO (las 19, en su orden) y la restricción del turno por `tool_choice.allowed_tools`:
