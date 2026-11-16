@@ -15,7 +15,15 @@ from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] /
 # criterio de despacho por MODELO que `llm_provider.build_chat_llm` — un
 # modelo `gpt-*` real necesita `ChatOpenAI` PLANO, no `ChatGLM` (ver
 # comentario en `_dispatch_openai_compatible_vision`).
-from llm_provider import ChatGLM, is_openai_model, _openai_api_key, is_google_model, _google_api_key, GEMINI_OPENAI_BASE_URL
+from llm_provider import (
+    ChatGLM,
+    is_openai_model,
+    _openai_api_key,
+    is_google_model,
+    _google_api_key,
+    GEMINI_OPENAI_BASE_URL,
+    openai_model_only_default_temperature,
+)
 from langchain_openai import ChatOpenAI
 from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
@@ -1030,18 +1038,27 @@ def _resolve_vision_client(schema):
     explicit_key = (os.environ.get("VISION_API_KEY") or "").strip() or None
 
     if is_openai_model(model):
-        # ⚠️ Temperatura: `gpt-5.6-luna` (familia `gpt-5`, no-chat) rechaza
-        # `temperature` != 1 con HTTP 400 contra el API real, pero
-        # `langchain-openai` 1.3 la descarta en silencio para esos modelos
-        # (verificado leyendo `validate_temperature`) — NO-OP mudo con Luna,
-        # pero sí aplica a otros modelos OpenAI que la respetan (gpt-4o).
-        llm = ChatOpenAI(
-            model=model,
-            temperature=0.1,
-            base_url=base_url,
-            api_key=explicit_key or _openai_api_key(),
-            timeout=timeout,
-        )
+        # ⚠️ Temperatura: la familia `gpt-6` (y `gpt-5` en OpenAI) solo admite
+        # la temperatura por defecto (1); `langchain-openai` 1.3 filtra `gpt-5*`,
+        # pero NO `gpt-6*` (ver `llm_provider.openai_model_only_default_temperature`).
+        # Si `MEALFIT_VISION_BASE_URL` quedó apuntando a Google desde Gemini Vision,
+        # se ignora para evitar enviar la key/modelo OpenAI al endpoint de Gemini.
+        _m_low = str(model or "").strip().lower()
+        _openai_base = base_url if (base_url and "generativelanguage.googleapis.com" not in base_url.lower()) else None
+        _openai_kwargs: dict[str, Any] = {
+            "model": model,
+            "base_url": _openai_base,
+            "api_key": explicit_key or _openai_api_key(),
+            "timeout": timeout,
+        }
+        if not openai_model_only_default_temperature(model):
+            _openai_kwargs["temperature"] = 0.1
+        if "terra" in _m_low and _m_low.startswith("gpt-6"):
+            _openai_kwargs["use_responses_api"] = True
+        _effort = os.environ.get("MEALFIT_VISION_REASONING_EFFORT", "").strip().lower()
+        if _effort in ("minimal", "low", "medium", "high"):
+            _openai_kwargs["reasoning_effort"] = _effort
+        llm = ChatOpenAI(**_openai_kwargs)
     elif is_google_model(model):
         # [P1-VISION-GEMINI-FLASH · 2026-09-04] Gemini por su endpoint compatible con OpenAI:
         # cliente ChatOpenAI PLANO (sin `thinking` ni defaults de Z.ai), base URL por defecto

@@ -944,6 +944,10 @@ _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     # [P1-PLAN-LOTE-171 · 2026-09-23] GPT-6 Luna, la Luna por defecto desde hoy: $0.10 in / $0.01 cacheado /
     # $0.50 out (ficha oficial de OpenAI). Fila ANTES de enrutarle tráfico, por la regla de arriba.
     "gpt-6-luna":    {"input": 100_000,   "output": 500_000,    "cached": 10_000},
+    # [P1-VISION-GPT5-MINI · 2026-11-16] GPT-5 Mini (tarifa estándar OpenAI):
+    # $0.25/M entrada ($0.025/M caché), $2.00/M salida — usado en visión de platos.
+    "gpt-5-mini":    {"input": 250_000,   "output": 2_000_000,  "cached": 25_000},
+    "gpt-5.4-mini":  {"input": 750_000,   "output": 4_500_000,  "cached": 75_000},
     # [P1-PLAN-LOTE-1007 · G-13 · 2026-11-14] GPT-6.1 Terra (ficha oficial OpenAI):
     # $1.00/M entrada estándar ($0.05/M en caché), $5.00/M salida. Escalado clínico/difícil con tope $0.03/turno.
     "gpt-6.1-terra": {"input": 1_000_000, "output": 5_000_000,  "cached": 50_000},
