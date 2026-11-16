@@ -5023,6 +5023,8 @@ def call_model(state: ChatState):
             f"🔁 [P1-CHAT-PROVIDER-FALLBACK] principal {_cb_model!r} no disponible "
             f"({type(_primary_exc).__name__}) — turno con respaldo {_fallback_model!r}."
         )
+        if not __import__("coach_respaldo_tope").permitir(_fallback_model):   # [P1-PLAN-LOTE-1045 · D6] US$ 0,50/h
+            raise _primary_exc
         try:
             chat_llm = _build_chat_fallback_llm(_fallback_model)
             _fb_tools = (
