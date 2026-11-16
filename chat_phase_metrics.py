@@ -108,6 +108,7 @@ class ChatTurnPhaseTracker:
         self.model: Optional[str] = None
         self.llm_calls: list[dict[str, Any]] = []
         self.tools: list[dict[str, Any]] = []
+        self._firmas_de_tools: set = set()   # [P1-PLAN-LOTE-1038 · A-23] huellas (nombre+argumentos) ya ejecutadas en este turno
         self.nudges: list[str] = []
         # [P1-PLAN-LOTE-1012 · A-06 / A-03] primera señal visible, tiempo por bloque de contexto y brazo del canario.
         self.first_progress_ms: Optional[int] = None
@@ -203,7 +204,10 @@ class ChatTurnPhaseTracker:
         duration_ms: int,
         *,
         guard_blocked: bool = False,
+        firma: Optional[str] = None,
     ) -> None:
+        """`firma` (nombre + argumentos) NO se guarda: solo sirve para marcar `repeated` cuando el modelo repite en el
+        mismo turno una llamada idéntica [P1-PLAN-LOTE-1038 · A-23]. En la fila quedan el nombre y un booleano."""
         with self._lock:
             entry: dict[str, Any] = {
                 "name": str(name or "unknown")[:80],
@@ -211,6 +215,12 @@ class ChatTurnPhaseTracker:
             }
             if guard_blocked:
                 entry["guard_blocked"] = True
+            if firma:
+                import hashlib
+                huella = hashlib.sha256(str(firma).encode("utf-8", "replace")).hexdigest()[:16]
+                if huella in self._firmas_de_tools:
+                    entry["repeated"] = True
+                self._firmas_de_tools.add(huella)
             self.tools.append(entry)
 
     def record_nudge(self, nudge_name: str) -> None:

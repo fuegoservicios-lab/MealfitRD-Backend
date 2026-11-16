@@ -7325,6 +7325,7 @@ def execute_tools(state: ChatState):
                     _open_tool_name,
                     int((time.monotonic() - _open_tool_t0) * 1000),
                     guard_blocked=_src_guard_blocked,
+                    firma=__import__("coach_tool_loop")._firma({"name": tool_name, "args": tool_args}),   # [P1-PLAN-LOTE-1038 · A-23]
                 )
                 _open_tool_t0 = None
 
