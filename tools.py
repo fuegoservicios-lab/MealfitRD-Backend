@@ -6967,8 +6967,9 @@ def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: 
                f"{e['protein_g']:g} g de proteína, {e['carbs_g']:g} g de carbohidratos y {e['fats_g']:g} g de grasa")
         if r.get("porciones"):
             txt += f"; {int(r['porciones'])} porciones por envase"
-        if r.get("fuente"):
-            txt += f" (fuente: {r['fuente']})"
+        _fuente = __import__("contenido_externo").fuente_segura(r.get("fuente"))   # [P1-PLAN-LOTE-1038 · A-24] el título de una página no manda
+        if _fuente:
+            txt += f" (fuente: {_fuente})"
         return txt + (". (Para el asistente: guárdalo con guardar_suplemento fuente='web' y estas cifras en `etiqueta`, "
                       "con gramos_porcion y las porciones; dile en una frase que salieron de internet y que, si su "
                       "pote dice otra cosa, te mande la foto de la tabla.)")
