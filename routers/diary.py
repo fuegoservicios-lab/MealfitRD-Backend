@@ -373,6 +373,14 @@ _AGREGAR_INGREDIENTE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # [P1-PLAN-LOTE-720 · 2026-09-28] La ficha de un plato registrado (lectura, cero LLM): exenta de la cuota como el resto
 # del diario — abrir lo que ya comiste no puede quemar un crédito de planes ni dar 402.
 _MEAL_DETAIL_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+# [P1-PLAN-LOTE-1039 · A-41] −/+ de gramos en la ficha (cero LLM, catálogo): exento de la cuota; cada toque es una
+# petición, así que el tope es generoso.
+_AJUSTE_GRAMOS_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+
+
+class AjusteGramosRequest(BaseModel):
+    indice: int = Field(ge=0, le=60)
+    gramos: int = Field(ge=1, le=3000)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -2319,6 +2327,58 @@ def api_delete_consumed_meal(
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed/{meal_id}/gramos")
+def api_ajustar_gramos_de_una_pieza(
+    meal_id: str,
+    payload: AjusteGramosRequest,
+    verified_user_id: Optional[str] = Depends(_AJUSTE_GRAMOS_LIMITER),
+):
+    """[P1-PLAN-LOTE-1039 · A-41] La ficha: «pollo ≈120 g [−][+]». Cambia los gramos de UNA pieza simple y mueve los
+    totales lo que esa pieza aporta según el catálogo (`macros_por_gramos.ajustar_gramos`). Sin modelo.
+
+    [I2] lectura y escritura con `AND user_id = %s`; 404 igual para «no existe» y «es de otro». 409 si ese renglón no
+    es ajustable (plato compuesto, sin gramos, fuera del catálogo). La Nevera no se vuelve a descontar: el ajuste
+    corrige lo que se comió, no lo que salió de la despensa."""
+    try:
+        assert_valid_uuid(meal_id)
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        row = execute_sql_query(
+            "SELECT id, meal_name, calories, protein, carbs, healthy_fats, consumed_at, created_at, meal_type, "
+            "ingredients FROM consumed_meals WHERE id = %s AND user_id = %s",
+            (meal_id, verified_user_id), fetch_one=True)
+        if not row:
+            raise HTTPException(status_code=404, detail="Comida no encontrada.")
+        ings = row.get("ingredients")
+        if isinstance(ings, str):
+            try:
+                ings = json.loads(ings)
+            except Exception:
+                ings = None
+        from nutrition_db import IngredientNutritionDB
+        from macros_por_gramos import ajustar_gramos
+        _ndb = IngredientNutritionDB()
+        nuevo = ajustar_gramos({**row, "ingredients": ings}, payload.indice, payload.gramos, _ndb)
+        if not nuevo:
+            raise HTTPException(status_code=409, detail="Ese ingrediente no se puede ajustar por gramos.")
+        from db_facts import update_consumed_meal
+        ok = update_consumed_meal(
+            verified_user_id, meal_id,
+            calories=nuevo["calories"], protein=nuevo["protein"], carbs=nuevo["carbs"],
+            healthy_fats=nuevo["healthy_fats"], ingredients=nuevo["ingredients"],
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Comida no encontrada.")
+        from ficha_comida import ficha_de_comida
+        fila = {**row, **{k: nuevo[k] for k in ("calories", "protein", "carbs", "healthy_fats", "ingredients")}}
+        return {"success": True, "meal": ficha_de_comida(fila, _ndb)}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed/gramos: {type(e).__name__}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

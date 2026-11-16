@@ -11760,7 +11760,15 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-PLAN-LOTE-687 · 2026-09-28] …y va al FINAL, UNA vez para las dos ramas: a mitad del prompt (posición 25.595
         # de 36.550, con el diario, el plan y los días anteriores detrás) el modelo no la vio y contestó «No me llegó el
         # detalle de esa foto» a una foto de plato perfectamente analizada.
-        system_prompt += build_vision_context(vision, nevera_activa=_nevera_on)
+        _ctx_foto = build_vision_context(vision, nevera_activa=_nevera_on)
+        system_prompt += _ctx_foto
+        # [P1-PLAN-LOTE-1039 · A-41] foto de plato: cuánto suelen pesar las piezas proteicas de ESTE usuario (referencia)
+        if "FOTO DE PLATO (PRIORIDAD MÁXIMA)" in _ctx_foto:
+            try:
+                import macros_por_gramos as _mpg
+                system_prompt += _mpg.referencia_de_porciones(_mpg.porciones_habituales(user_id))
+            except Exception:
+                pass
         # [P1-PLAN-LOTE-686 · 2026-09-28] Modo voz: el recordatorio de las reglas V al FINAL, detrás de todos los bloques de
         # contexto con cifras (y antes del refuerzo de idioma, que sigue siendo lo último que lee).
         if is_call_mode:
