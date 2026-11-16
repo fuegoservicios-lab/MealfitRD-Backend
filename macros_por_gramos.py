@@ -295,3 +295,63 @@ def ajustar_gramos(row: dict, indice: int, gramos_nuevos: Any, db) -> Optional[d
         }
     except Exception:
         return None
+
+
+# ───────────────────────────────────────────────────────────── [A-41 · paso 2] porciones habituales como referencia
+# Replay 16-nov: la MISMA pieza del MISMO usuario salta >30 % entre registros consecutivos en 36 de 83 pares (CV p50
+# 27 %): «pechuga a la plancha» 170 g un día y 120 g al siguiente en un plato que se ve igual. En el turno con foto de
+# plato el coach recibe, como REFERENCIA y no como regla, cuánto suelen pesar sus piezas proteicas en sus registros.
+DIAS_PORCIONES = 21
+MAX_PIEZAS_REFERENCIA = 3
+PROTEINA_POR_GRAMO_MIN = 0.15     # solo piezas proteicas (carne, pescado, huevo, queso): las que deciden la proteína
+
+
+def porciones_habituales(user_id: Optional[str], db=None, filas: Optional[list] = None) -> list:
+    """[(nombre de fila, gramos medianos, veces)] de las piezas proteicas que el usuario registró ≥2 veces en 21 días."""
+    if not activo() or not user_id or user_id == "guest":
+        return []
+    try:
+        if filas is None:
+            from db_core import execute_sql_query
+            filas = execute_sql_query(
+                "SELECT ingredients FROM consumed_meals WHERE user_id = %s AND source = ANY(%s) "
+                "AND created_at > now() - make_interval(days => %s) ORDER BY created_at DESC LIMIT 60",
+                (user_id, list(("chat", "photo", "manual", "estimate")), DIAS_PORCIONES), fetch_all=True,
+            ) or []
+        db = db if db is not None else _db()
+        por_fila: dict = {}
+        for f in filas:
+            ings = f.get("ingredients") if isinstance(f, dict) else None
+            if isinstance(ings, str):
+                import json
+                try:
+                    ings = json.loads(ings)
+                except Exception:
+                    ings = None
+            r = resolver(ings, db) if isinstance(ings, list) else None
+            for comp in (r or {}).get("componentes", []):
+                mac = comp["macros"]
+                if mac and comp["gramos"] and float(mac.get("protein") or 0) / comp["gramos"] >= PROTEINA_POR_GRAMO_MIN:
+                    por_fila.setdefault(comp["fila"], []).append(float(comp["gramos"]))
+        out = []
+        for fila, gs in por_fila.items():
+            if len(gs) >= 2:
+                gs = sorted(gs)
+                mediana = gs[len(gs) // 2] if len(gs) % 2 else (gs[len(gs) // 2 - 1] + gs[len(gs) // 2]) / 2
+                out.append((fila, int(round(mediana / 5.0) * 5), len(gs)))
+        out.sort(key=lambda x: -x[2])
+        return out[:MAX_PIEZAS_REFERENCIA]
+    except Exception:
+        return []
+
+
+def referencia_de_porciones(porciones: list) -> str:
+    """El bloque para el turno con foto de plato, o "" sin porciones."""
+    if not porciones:
+        return ""
+    lista = ", ".join(f"{fila.lower()} ≈{g} g ({n} registros)" for fila, g, n in porciones)
+    return (
+        "\n\nREFERENCIA DE PORCIONES DE ESTE USUARIO (no es una regla): en sus registros recientes, " + lista + ". "
+        "Si en la foto esa pieza se ve de un tamaño parecido, usa ese gramaje en vez de estimar de cero; si se ve "
+        "claramente más grande o más pequeña, estima lo que ves."
+    )

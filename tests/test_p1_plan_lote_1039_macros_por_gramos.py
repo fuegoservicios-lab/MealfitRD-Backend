@@ -301,3 +301,34 @@ def test_el_endpoint_no_cobra_cuota_ni_llama_a_un_modelo():
     assert "Depends(_AJUSTE_GRAMOS_LIMITER)" in cuerpo
     for prohibido in ("verify_api_quota", "invoke(", "openai", "gemini"):
         assert prohibido not in cuerpo
+
+
+# ───────────────────────────────────────────────────────────── paso 2: porciones habituales como referencia
+def test_porciones_habituales_son_la_mediana_de_las_piezas_proteicas():
+    filas = [{"ingredients": CENA_15["ingredients"]}, {"ingredients": CENA_16["ingredients"]},
+             {"ingredients": ["pechuga de pollo a la plancha (≈160 g)", "puré de papa (210 g)"]}]
+    p = mpg.porciones_habituales("u-1", CatalogoFalso(), filas=filas)
+    assert ("Pechuga de pollo", 160, 3) in p and ("Carne de res", 160, 2) in p
+    assert all(f != "Papa" and f != "Zanahoria" for f, _, _ in p), "solo piezas proteicas"
+
+
+def test_una_sola_vez_no_es_habitual_y_el_invitado_no_tiene():
+    assert mpg.porciones_habituales("u-1", CatalogoFalso(), filas=[{"ingredients": CENA_15["ingredients"]}]) == []
+    assert mpg.porciones_habituales("guest", CatalogoFalso(), filas=[{"ingredients": CENA_15["ingredients"]}] * 3) == []
+
+
+def test_la_referencia_es_una_referencia_no_una_regla():
+    t = mpg.referencia_de_porciones([("Pechuga de pollo", 160, 3)])
+    assert "pechuga de pollo ≈160 g (3 registros)" in t and "no es una regla" in t
+    assert "si se ve claramente más grande o más pequeña, estima lo que ves" in t
+    assert mpg.referencia_de_porciones([]) == ""
+
+
+def test_solo_entra_en_los_turnos_con_foto_de_plato():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    i = src.index("_ctx_foto = build_vision_context(vision, nevera_activa=_nevera_on)")
+    tramo = src[i:i + 700]
+    assert 'if "FOTO DE PLATO (PRIORIDAD MÁXIMA)" in _ctx_foto:' in tramo
+    assert "referencia_de_porciones(_mpg.porciones_habituales(user_id))" in tramo
+    from prompts.chat_agent import _PLATO_INSTRUCCION
+    assert _PLATO_INSTRUCCION.startswith("FOTO DE PLATO (PRIORIDAD MÁXIMA)"), "el marcador que busca agent.py"
