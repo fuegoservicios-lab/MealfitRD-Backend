@@ -295,3 +295,14 @@ def test_el_endpoint_de_metricas_enruta_el_corte():
     cuerpo = fuente[i:fuente.index("@router.post(", i + 10)]
     assert 'data.get("event") == "stream_cut"' in cuerpo
     assert "registrar_corte_del_cliente as record_client_chat_perf" in cuerpo
+
+
+# ───────────────────────────────────────────────────────────── A-24: el borrado de cuenta arrastra las tablas nuevas
+def test_el_borrado_de_cuenta_incluye_progreso_e_informes():
+    """Con `include_profile=False` (el «vaciar» del admin) no hay CASCADE que las limpie: tienen que estar en la lista."""
+    import db_profiles
+    lista = db_profiles._USER_SCOPED_TABLES_USERID
+    for tabla in ("user_health_reports", "user_week_summaries", "user_journey"):
+        assert tabla in lista, f"{tabla} sobreviviría a «vaciar datos»"
+    assert lista[-1] == "meal_plans", "meal_plans sigue al final (sus hijas caen antes)"
+    assert len(lista) == len(set(lista))
