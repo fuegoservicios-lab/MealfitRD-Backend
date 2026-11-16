@@ -2263,6 +2263,13 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     logger.info(f"🍽️ [DIARY] slot='{_meal_type}' (pedido='{meal_type}') days_ago={_days_ago} "
                 f"kcal={calories} user={str(user_id)[:8]} · '{str(meal_name)[:40]}'")
 
+    # [P1-PLAN-LOTE-1039 · A-41] la proteína no puede quedar por debajo de la de las piezas que el propio modelo anotó con
+    # sus gramos (16-nov: 78 g para una cena con 150 g de res + 120 g de pollo). Ni etiqueta leída ni pote: esas son exactas.
+    _nota_gramos = ""
+    if food_facts is None and not _pote and ingredients:
+        calories, protein, carbs, healthy_fats, _nota_gramos = __import__("macros_por_gramos").al_registrar(
+            user_id, calories, protein, carbs, healthy_fats, ingredients)
+
     # The diary can contain several distinct foods/plates in the same meal slot.
     # Persistence only suppresses a recent retry of the same food and quantity.
     # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
@@ -2327,6 +2334,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # [P1-PLAN-LOTE-76 · 2026-09-17] qué comidas de ESE día siguen sin registrar (helper; la batería en seco lo comparte)
         msg += _nota_comidas_sin_registrar(user_id, _days_ago)
         msg += _nota_pote   # [P1-PLAN-LOTE-291]
+        msg += _nota_gramos   # [P1-PLAN-LOTE-1039 · A-41]
         # [P1-CLINICAL-ALLERGEN-WARNING · 2026-10-23]
         # Alerta al asistente si la comida registrada contiene un alérgeno declarado en el perfil
         try:
