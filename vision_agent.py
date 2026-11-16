@@ -1507,13 +1507,16 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes, aclaracion=None
         # Pydantic de `_MEAL_VISION_SCHEMA`, ver comentario en su definición)
         # — mismo par prompt/schema que `_coerce_meal_scan` fue escrito para
         # normalizar.
+        import vision_salida_compacta as _vsc   # [P1-PLAN-LOTE-1046 · A-12] mismos datos, ~⅓ menos tokens (knob)
+        _compacta = _vsc.activo()
+        _prompt = _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais, habitos_usuario=habitos_usuario)
         response = await _invoke_structured_vision(
             image_bytes,
-            _prompt_de_escaneo(aclaracion, base=_MEAL_VISION_PROMPT, pais=pais, habitos_usuario=habitos_usuario),
-            _MealVisionResult,
+            _prompt + (_vsc.LEYENDA if _compacta else ""),
+            _vsc.ResultadoCompacto if _compacta else _MealVisionResult,
         )
         _t_san = time.perf_counter()
-        data = response.model_dump() if response else {}
+        data = (_vsc.expandir(response) if _compacta else response.model_dump()) if response else {}
         out = _coerce_meal_scan(data, aclaracion=aclaracion, habitos_usuario=habitos_usuario)
         _merge_vision_meta(sanitize_ms=round((time.perf_counter() - _t_san) * 1000.0, 2))
         return out
