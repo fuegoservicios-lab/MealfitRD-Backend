@@ -902,6 +902,7 @@ _SUPPLEMENT_KEYWORDS: tuple[str, ...] = (
     "melatonina", "melatonin", "ashwagandha", "creapure", "capsula", "pastilla",
     "scoop", "gomita", "gomitas",
 )
+_FRANJAS_DE_COMIDA: frozenset = frozenset({"desayuno", "almuerzo", "cena", "merienda", "snack"})
 
 
 def _resolver_meal_type(meal_type) -> Optional[str]:
@@ -2521,9 +2522,12 @@ def _verificar_guard_suplemento_correccion(
     _orig_name = str(_fila.get("meal_name") or "").strip()
     _norm_orig_name = _norm_txt(_orig_name)
     _norm_new_name = _norm_txt(meal_name or "")
+    # [P1-PLAN-LOTE-1047] Una fila guardada en una franja de comida ES comida: «Yogur Ratio Protein» (merienda)
+    # contaba como suplemento por la palabra «protein» y el atún que se le sumó acabó en «No pude añadir».
     _es_suplemento_orig = (
         _orig_type == "suplemento"
-        or any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS)
+        or (_orig_type not in _FRANJAS_DE_COMIDA
+            and any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS))
     )
     if _es_suplemento_orig:
         _intenta_cambiar_a_comida = False
@@ -6406,7 +6410,7 @@ def _chat_plan_day_tool_enabled() -> bool:
 
 
 @tool
-def consultar_dia_del_plan(user_id: str, fecha: str, fuente: str = "plan") -> str:
+def consultar_dia_del_plan(user_id: str, fecha: str = "", fuente: str = "plan", buscar: str = "") -> str:
     """Consulta el detalle COMPLETO de una fecha concreta en el plan prescrito,
     en el diario real de consumo o en ambos.
 
@@ -6420,6 +6424,8 @@ def consultar_dia_del_plan(user_id: str, fecha: str, fuente: str = "plan") -> st
     - `fecha`: formato ISO 'YYYY-MM-DD' (resuelve 'ayer' o 'el domingo' usando HOY).
     - `fuente`: 'plan' (menú prescrito con gramos/receta, default) | 'diario'
       (comidas registradas realmente ese día con macros e ingredientes) | 'ambos'.
+    - `buscar`: un alimento ('yogur', 'atún Genova') para «¿cuándo comí…?» / «el último … que registré» SIN fecha:
+      devuelve sus últimos registros de los 60 días del diario en UNA llamada. Nunca recorras día por día.
 
     OJO: el plan es lo que el plan MANDABA ese día, NO prueba de que el usuario se
     lo comiera. Para lo que realmente comió, consulta con fuente='diario' o mira 'DIARIO'.
@@ -6429,7 +6435,21 @@ def consultar_dia_del_plan(user_id: str, fecha: str, fuente: str = "plan") -> st
     _f = (fuente or "plan").strip().lower()
     if _f not in ("plan", "diario", "ambos"):
         _f = "plan"
-    logger.info(f"📖 [TOOL EXECUTION] consultar_dia_del_plan user={user_id} fecha={fecha} fuente={_f}")
+    logger.info(f"📖 [TOOL EXECUTION] consultar_dia_del_plan user={user_id} fecha={fecha} fuente={_f}"
+                f"{' buscar=sí' if buscar else ''}")
+    if str(buscar or "").strip():
+        # [P1-PLAN-LOTE-1047] Búsqueda por alimento en el diario (sin el nombre en el log: dato de salud).
+        try:
+            from diario_buscar import buscar as _buscar_diario
+            from db_facts import _diary_rollover_hour
+            try:
+                _roll = _diary_rollover_hour() * 60
+            except Exception:
+                _roll = 240
+            return _buscar_diario(user_id, str(buscar), _tz_offset_para_usuario(user_id) + _roll)
+        except Exception as e:
+            logger.error(f"❌ [TOOL] consultar_dia_del_plan(buscar) falló: {e}")
+            return "No pude buscar en el diario ahora mismo."
     try:
         from chat_history_context import find_plan_day_for_date, _to_local_date
         from datetime import datetime as _dt, timedelta as _td

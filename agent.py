@@ -6725,6 +6725,18 @@ def execute_tools(state: ChatState):
                                    f"otra porción consumida → force=false")
                     tool_args["force"] = False
 
+                # [P1-PLAN-LOTE-1047] Un «No» a otra pregunta no es «no me gusta el yogur»; y los gustos previos no se pierden.
+                if tool_name == "update_form_field":
+                    from gustos_con_evidencia import revisar as _revisar_gustos
+                    _ok_g, _val_g = _revisar_gustos(
+                        str(tool_args.get("field") or ""), tool_args.get("new_value"),
+                        _extraer_ultimo_texto_usuario(messages), (state.get("form_data") or {}).get("dislikes"))
+                    if not _ok_g:
+                        logger.warning("🛡️ [LOTE-1047 GUSTOS] update_form_field(dislikes) sin evidencia: bloqueado")
+                        tool_messages.append(ToolMessage(content=_val_g, tool_call_id=tool_id))
+                        continue
+                    tool_args["new_value"] = _val_g
+
                 # [P1-PLAN-LOTE-1019 · J6] «¿esto está bien para mi cena o me paso?» es una pregunta, no un registro.
                 if tool_name == "log_consumed_meal":
                     from guarda_pregunta_no_es_registro import bloqueo_si_solo_pregunta

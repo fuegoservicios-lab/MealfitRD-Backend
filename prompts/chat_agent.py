@@ -440,7 +440,7 @@ _PLAN_DAY_TOOL_BULLET_ENABLED = (
     "- Usa `consultar_dia_del_plan` cuando el usuario pida el DETALLE de un día que ya pasó "
     "(cantidades, gramos, receta del plan o platos/ingredientes reales del diario de anteayer hacia atrás): "
     "el bloque 'DÍAS QUE YA PASARON' / diario resumido no trae ese detalle — no la llames si ya basta. "
-    "Pasa `fecha` en ISO 'YYYY-MM-DD' y `fuente` ('plan' | 'diario' | 'ambos')."
+    "Pasa `fecha` en ISO 'YYYY-MM-DD' y `fuente` ('plan' | 'diario' | 'ambos'); sin fecha, `buscar='yogur'`."
 )
 
 _PLAN_DAY_TOOL_BULLET_DISABLED = (
