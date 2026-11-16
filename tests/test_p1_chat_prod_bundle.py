@@ -117,7 +117,7 @@ def test_p1_1_stream_endpoint_has_dependency(chat_src: str) -> None:
     """[P1-CHAT-STREAM-RL] el decorator `/stream` invoca el limiter como
     `dependencies=[Depends(_CHAT_STREAM_LIMITER)]`."""
     pattern = re.compile(
-        r'@router\.post\(\s*"/stream"\s*,\s*dependencies=\[\s*Depends\(_CHAT_STREAM_LIMITER\)\s*\]\s*\)'
+        r'@router\.post\(\s*"/stream"\s*,\s*dependencies=\[\s*Depends\(_CHAT_STREAM_LIMITER\)\s*(?:,\s*Depends\(\w+\)\s*)*\]\s*\)'
     )
     assert pattern.search(chat_src), (
         "[P1-CHAT-STREAM-RL] `@router.post('/stream', dependencies=[Depends("
@@ -130,7 +130,7 @@ def test_p1_1_root_chat_endpoint_has_dependency(chat_src: str) -> None:
     """[P1-CHAT-STREAM-RL] el decorator `/` (root, non-stream) también
     invoca el limiter — mismo vector que /stream (LLM-bearing)."""
     pattern = re.compile(
-        r'@router\.post\(\s*""\s*,\s*dependencies=\[\s*Depends\(_CHAT_STREAM_LIMITER\)\s*\]\s*\)'
+        r'@router\.post\(\s*""\s*,\s*dependencies=\[\s*Depends\(_CHAT_STREAM_LIMITER\)\s*(?:,\s*Depends\(\w+\)\s*)*\]\s*\)'
     )
     assert pattern.search(chat_src), (
         "[P1-CHAT-STREAM-RL] `@router.post('', dependencies=[Depends("

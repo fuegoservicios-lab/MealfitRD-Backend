@@ -38,16 +38,21 @@ def _load_frontend_sibling_sources(frontend_repo_path):
 
 
 
+# [SALUDO-POR-MOMENTO · 2026-11-15, 99c3830e] La lógica del saludo salió de AgentPage a
+# `utils/saludoDelCoach.js::actualizarMensajePredeterminado` (con su vitest `saludoVivoDelMomento.test.jsx`).
 def test_welcome_never_clobbers_real_conversation():
-    """El guard del wipe: con CUALQUIER mensaje real, _setWelcomeIfAbsent no toca."""
+    """El guard del wipe: con CUALQUIER mensaje real, el saludo no borra la conversación."""
     i = _AP.find("_setWelcomeIfAbsent = useCallback")
     assert i != -1, "el helper del welcome desapareció"
-    win = _AP[i:i + 1800]
-    assert "prev.some(m => !m.isWelcome)" in win, \
-        "sin este guard, el fall-through borra la conversación del usuario"
-    # El guard debe RETORNAR prev (no regenerar) cuando hay conversación real.
-    j = win.find("prev.some(m => !m.isWelcome)")
-    assert "return prev" in win[j:j + 200]
+    assert "actualizarMensajePredeterminado({" in _AP[i:i + 400], "el helper ya no delega en la utilidad del saludo"
+    with open(os.path.join(_ROOT, "frontend", "src", "utils", "saludoDelCoach.js"), encoding="utf-8") as fh:
+        util = fh.read()
+    j = util.find("export function actualizarMensajePredeterminado(")
+    bloque = util[j:j + 3000]
+    k = bloque.find("if (info.hasRealPrefix) {")
+    assert k != -1, "sin este guard, el saludo puede pisar la conversación real"
+    rama = bloque[k:k + 500]
+    assert "return prev;" in rama and "return info.prefix;" in rama, "con conversación real se conserva (prev o su prefijo)"
 
 
 def test_send_removes_welcome_immediately_no_late_shift():

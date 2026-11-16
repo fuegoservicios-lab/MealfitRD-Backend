@@ -29,7 +29,8 @@ def test_a_tres_modos_y_transiciones_explicitas():
     assert "sentAnchorRef.current = { clientMessageId, placed: false };" in src
     assert "_setMode('anchored');" in src
     assert "if (distanceFromBottom > 120) _setMode('free');" in src
-    assert "} else if (distanceFromBottom <= 4) {" in src
+    # [e0525a57 · 2026-11-15] «al final» = a 48 px o menos (con 4 px el botón de bajar no se ocultaba al llegar)
+    assert "} else if (distanceFromBottom <= 48) {" in src
     assert "userScrolledUpRef.current = mode === 'free';" in src, "espejo para los call sites que aún leen userScrolledUpRef"
 
 

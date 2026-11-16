@@ -33,35 +33,17 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+# [SALUDO-POR-MOMENTO · 2026-11-15, 99c3830e] La lógica del saludo salió de AgentPage a
+# `utils/saludoDelCoach.js::actualizarMensajePredeterminado` (con su vitest `saludoVivoDelMomento.test.jsx`).
 def test_set_welcome_if_absent_helper_exists():
-    """[P1-AGENT-WELCOME-STABLE] Helper `_setWelcomeIfAbsent` debe existir
-    y usar el guard `prev[0]?.isWelcome` para preservar el welcome existente."""
+    """[P1-AGENT-WELCOME-STABLE] El re-fetch no regenera el saludo: dentro del mismo momento devuelve `prev` (misma
+    referencia → React no re-renderiza)."""
     src = _read(_AGENT_PAGE_JSX)
-    assert "_setWelcomeIfAbsent" in src, (
-        "Helper `_setWelcomeIfAbsent` ausente. Sin él, los callsites de "
-        "fetchSessionMessages regeneran welcome con hora actualizada en cada "
-        "re-fetch. Ver P1-AGENT-WELCOME-STABLE · 2026-05-20."
-    )
-    # Anchor: el helper usa setMessages(prev => ...) con guard isWelcome.
-    helper_match = re.search(
-        r"_setWelcomeIfAbsent\s*=\s*useCallback\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,",
-        src,
-        re.DOTALL,
-    )
-    assert helper_match, "`_setWelcomeIfAbsent = useCallback(...)` no encontrado."
-    body = helper_match.group(1)
-    # Guard: si ya hay welcome, retornar prev (misma referencia).
-    assert re.search(
-        r"prev\[\s*0\s*\]\??\.isWelcome",
-        body,
-    ), (
-        "Guard `prev[0]?.isWelcome` ausente. Sin él, el helper SIEMPRE genera "
-        "welcome nuevo → mismo bug del refresh visible."
-    )
-    # El return cuando hay welcome es `prev` (misma referencia → no-op de React).
-    assert re.search(r"return\s+prev\s*;", body), (
-        "El helper no retorna `prev` cuando hay welcome activo. Debe devolver "
-        "la misma referencia para que React skipee el rerender."
+    assert "_setWelcomeIfAbsent = useCallback" in src and "actualizarMensajePredeterminado({" in src
+    util = _read(_AGENT_PAGE_JSX.parent.parent / "utils" / "saludoDelCoach.js")
+    assert "const esUnicoSaludo = prev.length === 1 && Boolean(prev[0]?.isWelcome);" in util
+    assert re.search(r"if \(esUnicoSaludo && prev\[0\]\?\.content === nuevo\) \{\s*return prev;", util), (
+        "con el mismo saludo, el helper debe devolver `prev` (misma referencia)"
     )
 
 

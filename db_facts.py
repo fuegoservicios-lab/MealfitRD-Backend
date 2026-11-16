@@ -1160,7 +1160,7 @@ def update_consumed_meal(
         logger.error(f"Error corrigiendo comida consumida {meal_id}: {e}")
         return None
 
-def delete_consumed_meal(user_id: str, meal_id: str, via: Optional[str] = None) -> bool:
+def delete_consumed_meal(user_id: str, meal_id: str, via: "str | None" = None) -> bool:
     """Elimina una fila de `consumed_meals` mal registrada por el usuario.
 
     [P1-DIARY-EDITABLE · 2026-07-28] `consumed_meals` era append-only: una

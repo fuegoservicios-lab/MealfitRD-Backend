@@ -79,8 +79,10 @@ def test_el_diario_de_dias_anteriores_esta_completo():
     # protege no cambia: el componedor nace en el día que se mira.
     assert "<LogMealModal onClose={cerrarComponedor} onScan={pasarAlEscaner} initialDaysAgo={atras} userId={userId} />" in dh
     # más días (tope del endpoint) y la semana
-    assert "const DIAS_MAX = 90;" in dh and "t('Ver 2 semanas más')" in dh
-    assert "'Últimos 7 días: media de {kcal} kcal en {n} días con registro'" in dh
+    # [CALENDARIO-SOLO-MES · 2026-11-15, a3befe13] la pestaña «Semana» (y su «Ver 2 semanas más») salió: el calendario
+    # abre en el mes y la media es la del mes. Sigue en pie: hasta 90 días (tope del endpoint) y la media de los días.
+    assert "const DIAS_MAX = 90;" in dh and "t('Ver 2 semanas más')" not in dh
+    assert "'Este mes: media de {kcal} kcal en {n} días con registro'" in dh
     # se refresca cuando el diario cambia desde fuera
     assert "window.addEventListener('mealfit:refresh-inventory', refrescar);" in dh
     assert "window.addEventListener('mealfit:diary-changed', refrescar);" in dh
@@ -142,11 +144,11 @@ def test_el_coach_sabe_donde_se_ve_y_se_borra_otro_dia():
 def test_i18n_y_marcador():
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         d = json.loads(_front(f"src/i18n/locales/{loc}.json"))
-        for k in ("Tus macros y micros de hoy", "Micros", "Extras y snacks", "Ver 2 semanas más", "Registrar en este día",
+        for k in ("Tus macros y micros de hoy", "Micros", "Extras y snacks", "Registrar en este día",
                   "Solo se puede registrar hasta 7 días atrás."):
             # [P1-PLAN-LOTE-980] «Ninguna de estas comidas trae micros…» salió del UI en 0746cc70 (2026-10-12).
             assert d.get(k), f"{loc}: {k}"
-        assert d.get("Últimos 7 días: media de {kcal} kcal en {n} días con registro", {}).get("other"), loc
+        assert d.get("Este mes: media de {kcal} kcal en {n} días con registro", {}).get("other"), loc
         for viejo in ("Micros de hoy", "Tus macros de hoy", "Snacks"):
             assert viejo not in d, f"{loc}: huérfana {viejo}"
     m = re.search(r'_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-(\d+) · 2026-', (_BACKEND / "app.py").read_text(encoding="utf-8"))

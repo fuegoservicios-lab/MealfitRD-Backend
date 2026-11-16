@@ -54,32 +54,18 @@ def test_welcome_return_has_no_literal_time():
     )
 
 
+# [SALUDO-POR-MOMENTO · 2026-11-15, 99c3830e] La lógica del saludo salió de AgentPage a
+# `utils/saludoDelCoach.js::actualizarMensajePredeterminado` (con su vitest `saludoVivoDelMomento.test.jsx`).
+# El «saludo de madrugada todo el día» ya no se evita con un reloj de 30 min: el texto depende del MOMENTO del día
+# y, si cambió, se reemplaza in-place con `welcomeAt` nuevo.
 def test_set_welcome_helper_refreshes_after_30min():
-    """[P1-AGENT-WELCOME-NO-TIME] El helper `_setWelcomeIfAbsent` debe
-    regenerar el welcome si el actual es >=30min, NO mantenerlo eternamente.
-    Sin esto, el saludo "Buenas madrugadas" sigue al user durante todo
-    el día."""
-    src = _read(_AGENT_PAGE_JSX)
-    helper = re.search(
-        r"_setWelcomeIfAbsent\s*=\s*useCallback\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,",
-        src,
-        re.DOTALL,
-    )
-    assert helper, "_setWelcomeIfAbsent no encontrado"
-    body = helper.group(1)
-    assert "welcomeAt" in body, (
-        "Helper no consulta `welcomeAt` — no puede detectar staleness. Ver "
-        "P1-AGENT-WELCOME-NO-TIME · 2026-05-20."
-    )
-    # Debe haber una constante o cálculo de 30min en el módulo.
-    has_30min = bool(re.search(r"30\s*\*\s*60\s*\*\s*1000|_WELCOME_REFRESH_MS", src))
-    assert has_30min, (
-        "Constante de refresh 30min (30*60*1000 o _WELCOME_REFRESH_MS) ausente. "
-        "Ver P1-AGENT-WELCOME-NO-TIME."
-    )
-    # El helper debe comparar age vs el refresh threshold.
-    assert re.search(r"ageMs|Date\.now\(\)\s*-", body), (
-        "Helper no compara age del welcome — no detecta cuándo regenerar."
+    util = _read(_AGENT_PAGE_JSX.parent.parent / "utils" / "saludoDelCoach.js")
+    assert "export function momentoDelDia" in util or "momentoDelDia" in util, "el saludo ya no depende del momento"
+    j = util.find("export function actualizarMensajePredeterminado(")
+    assert j != -1
+    bloque = util[j:j + 3000]
+    assert "const nuevo = crearSaludo();" in bloque and "welcomeAt: ts," in bloque, (
+        "si el momento cambió, el saludo debe regenerarse con su `welcomeAt`"
     )
 
 

@@ -17,29 +17,23 @@ from pathlib import Path
 FRONT = Path(__file__).resolve().parent.parent.parent / "frontend" / "src" / "components" / "dashboard"
 
 
-def test_la_tira_se_desplaza_al_dia_seleccionado():
-    """[P1-DIARY-STRIP-SCROLL] Los 14 días no caben en el cajón.
+def test_el_cajon_abre_en_el_dia_de_hoy_no_en_el_mas_viejo():
+    """[P1-DIARY-STRIP-SCROLL] Lo que protegía este test: al abrir el diario se ve HOY (o el día tocado), nunca los días
+    más viejos.
 
-    Reportado: el owner abrió el diario buscando su cena de ayer y vio
-    "18 … 27" con todos los rieles vacíos. Era 31. Los días MÁS RECIENTES —los
-    únicos que alguien mira— quedaban fuera de pantalla a la derecha, y la
-    barra de scroll está oculta, así que el corte se leía como "no hay más".
-
-    Se ancla al día ACTIVO y no a `scrollWidth`: así la tira también sigue al
-    usuario cuando cambia de día con las flechas.
+    [CALENDARIO-SOLO-MES · 2026-11-15, a3befe13] La tira de 14 días salió por diseño: el cajón abre directo en el MES
+    del día con el que se abre. El riesgo original («hoy queda fuera de pantalla») se traslada a: abrir en un mes que no
+    es el de hoy, o en un día seleccionado que no es hoy.
     """
     src = (FRONT / "DiaryHistory.jsx").read_text(encoding="utf-8")
-    assert "activoRef" in src and "stripRef" in src, (
-        "faltan las refs de la tira y del día activo"
+    assert "stripRef" not in src, "la tira volvió: entonces vuelve también su desplazamiento al día activo (scrollTo)"
+    assert "setSelected(diaInicial || getBiologicalDateStr(new Date()))" in src, (
+        "al abrir, el día seleccionado debe ser el tocado o HOY"
     )
-    assert "scrollTo(" in src, (
-        "P1-DIARY-STRIP-SCROLL: la tira nunca se desplaza, así que abre "
-        "mostrando los días MÁS VIEJOS — hoy y ayer quedan fuera de pantalla"
+    assert re.search(r"const base = diaInicial \? desdeISO\(diaInicial\) : getBiologicalDate\(new Date\(\)\);", src), (
+        "el calendario debe abrir en el mes del día con el que se abre (hoy por defecto)"
     )
-    assert re.search(r"\[open,\s*selected,\s*dias\]", src), (
-        "el desplazamiento no depende de `selected`: no seguiría al usuario al "
-        "cambiar de día con las flechas"
-    )
+    assert re.search(r"\}, \[open, diaInicial\]\);", src), "se recalcula al ABRIR, no solo al montar"
 
 
 def test_el_borde_de_la_tira_avisa_de_que_hay_mas_dias():
