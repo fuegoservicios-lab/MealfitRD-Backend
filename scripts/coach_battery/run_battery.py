@@ -259,6 +259,24 @@ def _memory_with_history(session_id, user_id=None):
 agent.build_memory_context = _memory_with_history
 agent._session_created_at = lambda _sid: HIST["desde"]
 
+# [P1-PLAN-LOTE-1042 · A-19] Memoria ENTRE sesiones: `"hechos": ["El usuario entrena…"]` en el caso simula lo que el
+# extractor guardó en `user_facts` en otra conversación (la batería no puede escribirlo: las escrituras van bloqueadas).
+# Llega por los dos caminos reales: la búsqueda vectorial del turno y el bloque de rutina y gustos.
+HECHOS = {"rows": None}
+_orig_search_user_facts = agent.search_user_facts
+import db_facts as _db_facts_bat
+_orig_get_all_user_facts = _db_facts_bat.get_all_user_facts
+
+
+def _hechos_simulados():
+    return [{"fact": h, "id": f"h{i}", "metadata": {}} for i, h in enumerate(HECHOS["rows"] or [])]
+
+
+agent.search_user_facts = lambda *a, **k: (_hechos_simulados() if HECHOS["rows"] is not None
+                                           else _orig_search_user_facts(*a, **k))
+_db_facts_bat.get_all_user_facts = lambda *a, **k: (_hechos_simulados() if HECHOS["rows"] is not None
+                                                     else _orig_get_all_user_facts(*a, **k))
+
 # ───────────────────────── 3. Tools: registro + dry-run ─────────────────────────
 TOOL_LOG: list[dict] = []
 FAKE_DIARY: dict[str, dict] = {}
@@ -757,6 +775,11 @@ def main() -> int:
             if isinstance(_row, dict) and _row.get("id"):
                 FAKE_DIARY[str(_row["id"])] = dict(_row, days_ago=0)
         HIST["rows"], HIST["desde"] = case.get("historial"), case.get("sesion_desde")   # [P1-PLAN-LOTE-168]
+        HECHOS["rows"] = case.get("hechos")   # [P1-PLAN-LOTE-1042] None = la memoria real de producción
+        try:
+            __import__("rutina_del_coach")._RUTINA_CACHE.clear()   # la caché es por usuario: no arrastrar hechos
+        except Exception:
+            pass
         sid = str(uuid.uuid4())  # la columna es uuid; la sesión no existe en la base (lectura vacía)
         turns = []
         for i, prompt in enumerate(case["turns"]):
