@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 _RE_HARD_INTENT = re.compile(
     r"\b(alergi\w*|celia\w*|diabet\w*|renal\w*|embaraz\w*|lactanc\w*|hipertens\w*|bariatr\w*|"
     r"tiroid\w*|medicament\w*|interacc\w*|sintom\w*|reacci[oó]n\w*|sustitu\w*|reemplaz\w*|"
-    r"puedo\s+comer|me\s+hace\s+da[nñ]o|peligr\w*|prohib\w*|plan\w*)\b",
+    # [P1-PLAN-LOTE-1038 · A-15] era `plan\w*`: en el replay de 461 mensajes reales casó 23 veces y NINGUNA era un turno
+    # difícil («a la plancha», «plántano», «planta»…). Ahora solo la palabra «plan» / «planes».
+    r"puedo\s+comer|me\s+hace\s+da[nñ]o|peligr\w*|prohib\w*|plan(?:es)?)\b",
     re.IGNORECASE,
 )
 
