@@ -10296,10 +10296,20 @@ def _build_today_remaining_context(current_plan, consumed_today: list, target_ca
                     else:
                         names = ", ".join(str(m.get("meal")) for m in remaining_meals)
                         kcal_left = round(remaining) if remaining > 0 else 0
-                        out += (
-                            f"\n📋 Hoy te quedan {len(remaining_meals)} comida(s) del plan "
-                            f"({names}) y ~{kcal_left} kcal estimadas."
-                        )
+                        planned_kcal = round(sum(
+                            float(m.get("cals") or m.get("calories") or 0)
+                            for m in remaining_meals
+                        ))
+                        if planned_kcal > 0:
+                            out += (
+                                f"\n📋 Hoy te quedan {len(remaining_meals)} comida(s) del plan "
+                                f"({names}, ~{planned_kcal} kcal del plan; presupuesto restante hoy: ~{kcal_left} kcal)."
+                            )
+                        else:
+                            out += (
+                                f"\n📋 Hoy te quedan {len(remaining_meals)} comida(s) del plan "
+                                f"({names}) y ~{kcal_left} kcal estimadas."
+                            )
                 elif eaten_indices:
                     out += "\n📋 Hoy ya no te quedan más comidas del plan por registrar."
         except Exception as e:

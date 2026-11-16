@@ -879,11 +879,11 @@ _MEAL_TYPE_SYNONYMS = {
     # pt-BR
     "cafe da manha": "desayuno", "desjejum": "desayuno", "almoco": "almuerzo", "jantar": "cena",
     "ceia": "cena", "lanche": "snack", "lanche da tarde": "merienda",
-    "suplementos": "suplemento", "complemento": "complemento", "complementos": "complemento",
+    "complemento": "complemento",
     # fr-FR (en Francia «déjeuner» es el almuerzo)
     "petit dejeuner": "desayuno", "petit dej": "desayuno", "dejeuner": "almuerzo",
     "diner": "cena", "souper": "cena", "gouter": "merienda", "collation": "snack", "en cas": "snack",
-    "complement": "complemento", "complements": "complemento", "boisson": "complemento",
+    "boisson": "complemento",
     # it-IT («cena» ya es canónica)
     "colazione": "desayuno", "pranzo": "almuerzo", "merenda": "merienda", "spuntino": "snack",
     "integratore": "suplemento", "integratori": "suplemento", "bevanda": "complemento",

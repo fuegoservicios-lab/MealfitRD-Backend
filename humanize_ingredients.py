@@ -719,7 +719,7 @@ _DISPLAY_PLURAL = {v: k for k, v in _DISPLAY_SINGULAR.items()}
 _DISPLAY_PLURAL.update({
     "huevo": "huevos", "cebolla": "cebollas", "tomate": "tomates", "zanahoria": "zanahorias",
     "papa": "papas", "kiwi": "kiwis", "limon": "limones", "limón": "limones",
-    "guineo": "guineos", "manzana": "manzanas", "fresa": "fresas", "pepino": "pepinos",
+    "manzana": "manzanas", "fresa": "fresas", "pepino": "pepinos",
     # [P3-DISPLAY-GRAMMAR · 2026-07-05] (review visual #6: "2½ tomate", "1 chuletas",
     # "1 Lechosa mediano") + alimentos contables frecuentes del catálogo.
     "chuleta": "chuletas", "tortilla": "tortillas", "lechosa": "lechosas", "batata": "batatas",
@@ -742,7 +742,7 @@ _DISPLAY_PLURAL.update({
     # [P2-COUNTFRUIT-GRAMMAR · 2026-07-06] (review #14: "1 ciruelas (50 g)") frutas CONTABLES
     # que el singularizador de "1 <plural>" no cubría (solo tenía unidades). Concordancia
     # bidireccional: "1 ciruelas"→"1 ciruela", "2 ciruela"→"2 ciruelas".
-    "ciruela": "ciruelas", "uva": "uvas", "durazno": "duraznos", "mandarina": "mandarinas",
+    "ciruela": "ciruelas", "uva": "uvas", "durazno": "duraznos",
     "chinola": "chinolas", "guineo": "guineos", "melocoton": "melocotones", "higo": "higos",
 })
 # [P2-COUNTFRUIT-GRAMMAR · 2026-07-06] las frutas contables también al singularizador "1 <plural>"

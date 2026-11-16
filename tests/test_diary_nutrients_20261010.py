@@ -60,3 +60,32 @@ def test_empty_day_and_legacy_evidence():
     old = resumen_micros([{'micros': {'values': {'fiber_g': 0}}}])
     assert old['micros']['fiber_g'] == 0
     assert old['micros_coverage']['by_nutrient']['fiber_g']['status'] == 'partial'
+
+
+def test_parenthesized_qty_unit_and_compound_head_before_con():
+    from nutrition_db import _split_qty_unit_name
+
+    assert _split_qty_unit_name('aceite vegetal (≈1 cucharada)') == (1.0, 'cucharada', 'aceite vegetal')
+    assert _split_qty_unit_name('mantequilla (1 cucharadita)') == (1.0, 'cucharadita', 'mantequilla')
+
+    db = IngredientNutritionDB(rows=[
+        {'name': 'Zanahoria', 'aliases': ['zanahoria', 'zanahorias'], 'kcal_per_100g': 44.2, 'carbs_g_per_100g': 10.0},
+        {'name': 'Aceite de oliva', 'aliases': ['aceite de oliva'], 'kcal_per_100g': 900.0, 'fats_g_per_100g': 100.0},
+        {'name': 'Aceite vegetal', 'aliases': ['aceite vegetal'], 'kcal_per_100g': 884.0, 'fats_g_per_100g': 100.0, 'density_g_per_cup': 218.0},
+        {'name': 'Arroz con leche', 'aliases': ['arroz con leche'], 'kcal_per_100g': 118.0},
+        {'name': 'Arroz blanco', 'aliases': ['arroz'], 'kcal_per_100g': 360.0},
+        {'name': 'Leche', 'aliases': ['leche'], 'kcal_per_100g': 61.0},
+        {'name': 'Pollo', 'aliases': ['pollo'], 'kcal_per_100g': 165.0, 'protein_g_per_100g': 31.0},
+    ])
+
+    carrots = db.lookup('zanahorias baby cocidas con aceite de oliva (≈120 g; 1 cucharadita aceite)')
+    assert carrots is not None and carrots.name == 'Zanahoria'
+    carrots_macros = db.macros_from_ingredient_string('zanahorias baby cocidas con aceite de oliva (≈120 g; 1 cucharadita aceite)')
+    assert carrots_macros is not None and carrots_macros['kcal'] < 100.0
+
+    oil_g = db.grams_from_ingredient_string('aceite vegetal (≈1 cucharada)')
+    assert oil_g is not None and 12.0 <= oil_g <= 15.0
+
+    assert db.lookup('Arroz con leche').name == 'Arroz con leche'
+    assert db.lookup('ensalada con pollo').name == 'Pollo'
+

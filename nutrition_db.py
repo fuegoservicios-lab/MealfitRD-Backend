@@ -132,6 +132,10 @@ _GRAM_HINT_RE = re.compile(r"\([^)]*?(\d+(?:[.,]\d+)?)\s*(g|gr|gramos|ml|mililit
 # Hint SOLO en gramos (no ml). El peso explícito en g es la conversión más confiable del LLM → se
 # prefiere SIEMPRE sobre un hint en ml en el mismo paréntesis ("(60 ml leche, 200g)" → 200g, no densidad).
 _GRAM_ONLY_HINT_RE = re.compile(r"\([^)]*?(\d+(?:[.,]\d+)?)\s*(g|gr|gramos)\b[^)]*\)", re.I)
+_PAREN_QTY_UNIT_RE = re.compile(
+    r"\(\s*(?:[≈~]|aprox\.?\s*)*(\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?)\s*(?:de\s+)?([a-záéíóúñ]+)\b[^)]*\)",
+    re.I,
+)
 # Cantidad líder al inicio del string: "0.5", "1/2", "150", "1,5".
 _LEAD_QTY_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?)\s*")
 _UNIT_TOKEN_RE = re.compile(r"^\s*([a-záéíóúñ]+)\b", re.I)
@@ -294,6 +298,21 @@ def _split_qty_unit_name(s: str):
             name0 = _GRAM_HINT_RE.sub("", rest0).strip()
             if name0:  # "Cdta de miel" → 1 cdta de miel
                 return 1.0, mu0.group(1).lower(), name0
+        mp = _PAREN_QTY_UNIT_RE.search(raw)
+        if mp:
+            u_cand = mp.group(2)
+            _pf0 = piece_fraction(u_cand)
+            if _pf0 or canonicalize_unit(u_cand):
+                qty0 = _frac_to_float(mp.group(1)) or 0.0
+                if _pf0:
+                    qty0 *= _pf0
+                    unit0 = "unidad"
+                else:
+                    unit0 = u_cand.lower()
+                rest_p = (raw[:mp.start()] + " " + raw[mp.end():]).strip()
+                name_p = _GRAM_HINT_RE.sub("", rest_p).strip()
+                if qty0 > 0 and name_p:
+                    return qty0, unit0, name_p
         return 0.0, "unidad", _strip_qty_prefix(s)
     qty = _frac_to_float(mq.group(1)) or 0.0
     rest = raw[mq.end():]
@@ -543,6 +562,13 @@ class NutritionInfo:
     micronutrient_provenance: Optional[dict] = None
 
 
+_SECONDARY_CONNECTOR_RE = re.compile(r"\s+(?:con|en\s+salsa|banad[oa]s?\s+en)\s+", re.I)
+_BARE_CONTAINER_HEADS = frozenset({
+    "ensalada", "ensaladas", "bowl", "plato", "sopa", "sopas", "caldo", "caldos",
+    "crema", "batida", "batido", "jugo", "licuado", "taza", "vaso", "porcion", "racion",
+})
+
+
 class IngredientNutritionDB:
     def __init__(self, rows: Optional[list] = None):
         self._injected = rows is not None
@@ -634,6 +660,29 @@ class IngredientNutritionDB:
         for alias_stripped, row in self._aliases:
             if n_stripped == alias_stripped:
                 return row
+        # Prioridad cabeza-antes-de-conector: en líneas compuestas como
+        # «zanahorias baby cocidas con aceite de oliva», «aceite de oliva» no debe
+        # ganar por longitud a la cabeza «zanahorias» salvo si el catálogo tiene
+        # un alias compuesto explícito (p. ej. «arroz con leche», «huevos rellenos con mayonesa»).
+        if _SECONDARY_CONNECTOR_RE.search(n_stripped):
+            for _alias_stripped, _pat, row in self._alias_patterns:
+                if _SECONDARY_CONNECTOR_RE.search(_alias_stripped) and _pat.search(n_stripped):
+                    return row
+            head_stripped = _SECONDARY_CONNECTOR_RE.split(n_stripped, maxsplit=1)[0].strip()
+            if head_stripped and head_stripped not in _BARE_CONTAINER_HEADS:
+                for alias_stripped, row in self._aliases:
+                    if head_stripped == alias_stripped:
+                        return row
+                _head_desc_row = None
+                for _alias_stripped, _pat, row in self._alias_patterns:
+                    if _pat.search(head_stripped):
+                        if _alias_stripped in _DESCRIPTOR_ALIASES:
+                            if _head_desc_row is None:
+                                _head_desc_row = row
+                            continue
+                        return row
+                if _head_desc_row is not None:
+                    return _head_desc_row
         # Tier 2: alias como palabra dentro del texto (word-boundary)
         # [P1-PLAN-LOTE-174 · 2026-09-23] Un alias que es SÓLO un descriptor («maduro», alias de «Plátano maduro») gana por
         # largo a «mango» (6 > 5) y «mango maduro» / «guineo maduro» salían con los macros del plátano (137 vs 67 kcal por
