@@ -44,7 +44,9 @@ def test_la_apertura_se_anticipa_solo_en_nativo_y_con_cerrojo():
 def test_adjuntar_no_cierra_el_teclado_en_nativo():
     ap = _front("src/pages/AgentPage.jsx")
     assert "if (abierto && !isNativeApp()) chatInputRef.current?.blur();" in ap
-    assert "anchorRect={attachmentAnchorRect}" in ap
+    # [lote 1050] con teclado abierto el menú es un panel dentro del cuadro (no flotante medido sobre el «+»).
+    assert "open={showAttachmentSource && Boolean(attachmentAnchorRect)}" in ap
+    assert "open={showAttachmentSource && !attachmentAnchorRect}" in ap
     hoja = _front("src/components/agent/AttachmentSourceSheet.jsx")
     assert "if (!esMenu) firstActionRef.current?.focus({ preventScroll: true });" in hoja
     assert "const noRobarFoco = (event) => { if (esMenu) event.preventDefault(); };" in hoja

@@ -166,6 +166,7 @@ direcciones, también contra las rutas reales de la app).
 | POST | /api/i18n/textos | routers/user_data.py | api_traducir_textos | suave |
 | POST | /api/plans/guest-display | routers/plans.py | api_guest_display | suave |
 | PATCH | /api/profile | routers/user_data.py | api_patch_profile | suave |
+| POST | /api/reports/health/{user_id} | routers/reports.py | api_crear_informe | suave |
 
 Notas: `/api/chat/message` no llama a la IA por sí mismo, pero un mensaje de rol `user` clasifica la respuesta a un aviso
 pendiente (`handle_nudge_response` → IA); no tiene llamadores en el frontend. `/retry-chunk`, `/regenerate-simplified` y

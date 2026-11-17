@@ -153,7 +153,9 @@ _CERCO = {
     "etiqueta_web.py": "tool del coach (main, lote 767): dentro del turno del chat (428)",
     "fact_extractor.py": "async_extract_and_save_facts y la cola (permite_ia)",
     "graph_orchestrator.py": "el pipeline del plan: endpoints de planes (428) y la recogida (SQL)",
-    "ingrediente_corregido.py": "/api/diary/scan/ingrediente (428)",
+    "informe_redaccion.py": "informe para el médico (lote 1058): /api/reports/health (suave: sin permiso sale data_only) "
+                            "y la tool del coach dentro del turno del chat (428)",
+    "ingrediente_corregido.py":"/api/diary/scan/ingrediente (428)",
     "llm_provider.py": "definición de los clientes",
     "memory_manager.py": "resumen del chat: tras un turno o una generación (428)",
     "plan_display_i18n.py": "enrich_plan_display (permite_ia + claim de plan_jobs); invitado: /guest-display (suave)",
