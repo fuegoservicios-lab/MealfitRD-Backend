@@ -597,14 +597,10 @@ def _stub_consultar_progreso(**kw):
     """[P1-PLAN-LOTE-1059] En seco: datos fijos (no lee Neon ni sincroniza `user_week_summaries`).
     [P1-PLAN-LOTE-1034] Las MISMAS cifras que el bloque 🏆 fijo (`_leer_progreso_fijo`): antes decía S8 5/7 y S10 1/7,
     el coach creía a la herramienta y W1/W2 caían por el arnés, no por el coach."""
-    return ("S7 (2026-10-25): sin registros
-"
-            "S8 (2026-11-01): sin registros
-"
-            "S9 (2026-11-08): 3/7 en meta, 7 con registro, 1★
-"
-            "S10 (2026-11-15): 2/7 en meta, 3 con registro, 0★ (en curso; falta 1 día en meta para la 1.ª estrella)
-"
+    return ("S7 (2026-10-25): sin registros\n"
+            "S8 (2026-11-01): sin registros\n"
+            "S9 (2026-11-08): 3/7 en meta, 7 con registro, 1★\n"
+            "S10 (2026-11-15): 2/7 en meta, 3 con registro, 0★ (en curso; falta 1 día en meta para la 1.ª estrella)\n"
             "Total: 1★ en 10 semanas; racha 2 (mejor 3); rango bronce. Mejor semana: S9 (3/7, 1★).")
 
 
