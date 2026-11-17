@@ -1723,7 +1723,13 @@ def admin_chat_insights(request: Request, hours: int = 168, limit: int = 20):
             _senales = _senales_resumen(window_h)
         except Exception as _se:
             _senales = {"error": type(_se).__name__}
-        return {"success": True, **insights, "fail_open": _fo_snapshot(), "senales_calidad": _senales}
+        try:   # [P1-PLAN-LOTE-1058 · plan 1036] informes para el médico: solo recuentos, nunca contenido
+            from informe_servicio import resumen_para_admin as _informes_resumen
+            _informes = _informes_resumen(window_h)
+        except Exception as _ie:
+            _informes = {"error": type(_ie).__name__}
+        return {"success": True, **insights, "fail_open": _fo_snapshot(), "senales_calidad": _senales,
+                "informes_medicos": _informes}
     except Exception as e:
         logger.warning(f"[G-16/G-29 CHAT-INSIGHTS] query falló: {e}")
         raise HTTPException(status_code=503, detail="DB query falló (best-effort).")

@@ -3956,6 +3956,11 @@ _ACCOUNT_EXPORT_TABLES = (
     # [P1-PLAN-LOTE-837 · 2026-09-29] El historial de cambios de sus ajustes (qué, antes, después, quién y cuándo): es
     # información sobre la persona y la Política §5 dice que el soporte ve cuándo los cambió.
     ("ajustes_cambios", "user_id", 5000),
+    # [P1-PLAN-LOTE-1058 · plan 1036] El día 1, los resúmenes por semana y los informes para el médico son datos de la
+    # persona (el informe, con su resumen de salud): entran en su exportación. El borrado ya los arrastra (FK CASCADE).
+    ("user_journey", "user_id", 1),
+    ("user_week_summaries", "user_id", 600),
+    ("user_health_reports", "user_id", 500),
 )
 
 # Columnas internas sin valor para el usuario y costosas de serializar

@@ -148,3 +148,53 @@ def borrar(user_id: str, informe_id: str) -> bool:
         (informe_id, user_id), returning=True,
     ) or []
     return bool(filas)
+
+
+# [P1-PLAN-LOTE-1058 · plan 1036] Retención: los informes pasan de `MEALFIT_HEALTH_REPORTS_RETENTION_DAYS` (365) ⇒ fuera.
+def dias_de_retencion() -> int:
+    try:
+        from knobs import _env_int
+        return max(30, min(int(_env_int("MEALFIT_HEALTH_REPORTS_RETENTION_DAYS", 365)), 3650))
+    except Exception:  # noqa: BLE001
+        return 365
+
+
+def purgar_informes_antiguos() -> int:
+    """Cron diario; nunca lanza (un fallo se reintenta mañana). Solo cuenta lo borrado: nada del contenido."""
+    from db_core import execute_sql_write
+    dias = dias_de_retencion()
+    try:
+        r = execute_sql_write(
+            "DELETE FROM public.user_health_reports WHERE created_at < now() - make_interval(days => %s) RETURNING id",
+            (dias,), returning=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ [LOTE-1058] no se pudo purgar informes antiguos: {type(e).__name__}")
+        return 0
+    n = len(r) if isinstance(r, list) else 0
+    if n:
+        logger.info(f"[LOTE-1058] informes para el médico: {n} con más de {dias} días purgados.")
+    return n
+
+
+def resumen_para_admin(horas: int = 168) -> dict:
+    """[plan 1036] Recuentos para /admin/chat-insights: cuántos, de qué estado, origen y coste medio. NUNCA contenido."""
+    from db_core import execute_sql_query
+    h = max(1, min(int(horas or 168), 720))
+    filas = execute_sql_query(
+        "SELECT status, origin, count(*)::int AS n, COALESCE(avg(cost_usd_micros), 0)::int AS coste_medio "
+        "FROM user_health_reports WHERE created_at > now() - make_interval(hours => %s) GROUP BY 1, 2",
+        (h,), fetch_all=True,
+    ) or []
+    out = {"total": 0, "por_estado": {}, "por_origen": {}, "coste_medio_usd": 0.0}
+    coste, con_coste = 0, 0
+    for f in filas:
+        n = int(f.get("n") or 0)
+        out["total"] += n
+        out["por_estado"][f.get("status")] = out["por_estado"].get(f.get("status"), 0) + n
+        out["por_origen"][f.get("origin")] = out["por_origen"].get(f.get("origin"), 0) + n
+        if f.get("status") == "ready":
+            coste += int(f.get("coste_medio") or 0) * n
+            con_coste += n
+    out["coste_medio_usd"] = round(coste / con_coste / 1_000_000, 4) if con_coste else 0.0
+    return out
