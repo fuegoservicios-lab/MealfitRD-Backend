@@ -1370,7 +1370,11 @@ def _aviso_sigue_vigente(
     if slot == "almuerzo":
         if consumed_set & {"almuerzo", "cena"}:
             return False
-        return rollover_h <= local_hour < 19.0
+        # [P1-PLAN-LOTE-1069 · 2026-11-17] Hasta las 16:00, no las 19:00: el dueño abrió el chat a las 18:14 sin haber
+        # comido y lo primero que vio fue «Para almorzar, ¿te provoca…?» (el aviso de las 12:30). La franja del
+        # almuerzo de la app acaba a las 15:00 (`franjaDeLaHora`); una hora de margen cubre el almuerzo tardío y abrir
+        # tarde el aviso. Pasada, el aviso se poda y la app pone el saludo de la hora.
+        return rollover_h <= local_hour < 16.0
 
     if slot == "merienda":
         if "cena" in consumed_set:

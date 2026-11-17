@@ -1094,7 +1094,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1058 · 2026-11-17] Informe para el médico (plan lotes 1032-1034): `informe_medico.py` (datos deterministas), `informe_redaccion.py` (gpt-6.1-terra verificado, canario `informe_medico`, sin respaldo), `informe_servicio.py` + `routers/reports.py` (3/día), herramienta `generar_informe_para_medico` y pantalla «informe».
 # [P1-PLAN-LOTE-1059 · 2026-11-17] El juego de las semanas en el servidor (plan 1029-1031 y 1035): `progreso_semanas.py` (resumen, día 1 que solo va hacia atrás, semanas cerradas en `user_week_summaries`, eventos de una vez en `app_kv_store`) + `routers/progress.py`; el coach lo sabe (`coach_progreso.py`, bloque 🏆 volátil por canario `progreso_coach`, regla R5, herramienta `consultar_progreso`); la redacción del informe ya sale en canario (`activa`, no `== "on"`).
 # [P1-PLAN-LOTE-1064 · 2026-11-17] «Cambiar plato» en frase normal también en los avisos y el prompt (decisión de diseño del dueño: el botón dejó de ser «Cambiar Plato»).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1064 · 2026-11-17"
+# [P1-PLAN-LOTE-1069 · 2026-11-17] el aviso del almuerzo sin respuesta caduca a las 16:00 (a las 18:14 aún decía «Para almorzar…»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1069 · 2026-11-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
