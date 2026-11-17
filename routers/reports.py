@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-_CREAR_LIMITER = RateLimiter(max_calls=6, period_seconds=60)
-_LEER_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+_CREAR_LIMITER = RateLimiter(max_calls=4, period_seconds=61)   # par propio: Redis comparte la ventana por par (lote 945)
+_LEER_LIMITER = RateLimiter(max_calls=40, period_seconds=61)
 
 MENSAJE_TOPE = "Ya generaste 3 informes hoy. Podrás generar otro mañana."
 
