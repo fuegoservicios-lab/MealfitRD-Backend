@@ -328,3 +328,46 @@ def test_el_selector_la_permite_por_palabra_completa():
         assert rx.search(si), si
     for no in ("voy a comer", "medicamento nuevo", "medicion de cintura", "reportero"):
         assert not rx.search(no), no
+
+
+# ─────────────────────────────────────────────────────────────── privacidad y retención (plan 1036)
+def test_exportacion_trae_las_tres_tablas_y_el_borrado_las_arrastra():
+    src = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
+    bloque = re.search(r"_ACCOUNT_EXPORT_TABLES\s*=\s*\((.*?)\n\)", src, re.S).group(1)
+    for t in ("user_journey", "user_week_summaries", "user_health_reports"):
+        assert f'("{t}", "user_id",' in bloque, t
+    mig = Path(__file__).resolve().parents[1].joinpath("migrations", "p1_plan_lote_1028_progreso_semanas_informe_2026_11_15.sql")
+    sql = mig.read_text(encoding="utf-8").lower()
+    assert sql.count("on delete cascade") >= 3
+
+
+def test_purga_de_informes(monkeypatch):
+    import informe_servicio as svc
+    import db_core
+    visto = {}
+
+    def _w(q, params=None, returning=False, **k):
+        visto["q"], visto["p"] = q, params
+        return [{"id": 1}, {"id": 2}]
+    monkeypatch.setattr(db_core, "execute_sql_write", _w)
+    monkeypatch.delenv("MEALFIT_HEALTH_REPORTS_RETENTION_DAYS", raising=False)
+    assert svc.purgar_informes_antiguos() == 2
+    assert "user_health_reports" in visto["q"] and visto["p"] == (365,)
+
+    def _falla(*a, **k):
+        raise RuntimeError("db")
+    monkeypatch.setattr(db_core, "execute_sql_write", _falla)
+    assert svc.purgar_informes_antiguos() == 0
+    cron = Path(__file__).resolve().parents[1].joinpath("cron_tasks.py").read_text(encoding="utf-8")
+    assert 'id="purge_health_reports"' in cron
+
+
+def test_resumen_admin_solo_cuenta(monkeypatch):
+    import informe_servicio as svc
+    import db_core
+    monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: [
+        {"status": "ready", "origin": "app", "n": 2, "coste_medio": 8000},
+        {"status": "data_only", "origin": "coach", "n": 1, "coste_medio": 0}])
+    r = svc.resumen_para_admin(24)
+    assert r == {"total": 3, "por_estado": {"ready": 2, "data_only": 1}, "por_origen": {"app": 2, "coach": 1},
+                 "coste_medio_usd": 0.008}
