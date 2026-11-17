@@ -11005,6 +11005,9 @@ class _ChatContextPrefetcher:
         self._futures["pantry"] = self._sub("pantry", 
             ex, _build_pantry_context, uid, nevera_on=self.nevera_on,
         )
+        self._futures["rutina"] = self._sub(
+            "rutina", ex, lambda: __import__("rutina_del_coach")._cargar_historial_usuario(uid),
+        )
         return self
 
     def resolve_memory(self) -> dict:

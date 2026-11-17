@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_S = 300.0
 _CACHE_MAX_USERS = 512
 _RUTINA_CACHE: Dict[str, tuple[float, tuple[list[dict], list[dict]]]] = {}
+_RUTINA_COMPUTED_CACHE: Dict[str, tuple[float, tuple, Dict[str, Any]]] = {}
 _CACHE_LOCK = threading.Lock()
 
 _SLOTS_ORDEN = ("desayuno", "almuerzo", "cena", "merienda")
@@ -101,8 +102,10 @@ def invalidate_rutina_cache(user_id: Optional[str] = None) -> None:
     with _CACHE_LOCK:
         if user_id:
             _RUTINA_CACHE.pop(str(user_id), None)
+            _RUTINA_COMPUTED_CACHE.pop(str(user_id), None)
         else:
             _RUTINA_CACHE.clear()
+            _RUTINA_COMPUTED_CACHE.clear()
 
 
 def _ascii(texto: Any) -> str:
@@ -403,11 +406,27 @@ def obtener_rutina_usuario(
     if not activo() or not user_id or str(user_id) == "guest":
         return {}
     try:
-        meals, facts = _cargar_historial_usuario(str(user_id))
+        uid = str(user_id)
+        hoy_sig = tuple(
+            (str(m.get("id") or ""), str(m.get("meal_name") or ""), float(m.get("calories") or 0.0))
+            for m in (consumed_today or []) if isinstance(m, dict)
+        )
+        ahora = time.monotonic()
+        with _CACHE_LOCK:
+            comp = _RUTINA_COMPUTED_CACHE.get(uid)
+            if comp and (ahora - comp[0]) < _CACHE_TTL_S and comp[1] == hoy_sig:
+                return comp[2]
+        meals, facts = _cargar_historial_usuario(uid)
         meals = _combinar_con_diario_hoy(meals, consumed_today)
         if not meals and not facts:
             return {}
-        return extraer_rutina_desde_registros(meals, facts)
+        res = extraer_rutina_desde_registros(meals, facts)
+        with _CACHE_LOCK:
+            if len(_RUTINA_COMPUTED_CACHE) >= _CACHE_MAX_USERS:
+                oldest = min(_RUTINA_COMPUTED_CACHE, key=lambda k: _RUTINA_COMPUTED_CACHE[k][0])
+                _RUTINA_COMPUTED_CACHE.pop(oldest, None)
+            _RUTINA_COMPUTED_CACHE[uid] = (time.monotonic(), hoy_sig, res)
+        return res
     except Exception as err:
         logger.debug(f"[rutina_del_coach] obtener_rutina_usuario omitido: {err!r}")
         return {}
