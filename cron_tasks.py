@@ -8825,12 +8825,7 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info("⏰ [P1-PLAN-LOTE-837] Cron purge_ajustes_cambios registrado cada 24 h.")
 
-    # [P1-PLAN-LOTE-1058 · plan 1036] Retención de los informes para el médico (365 días por defecto).
-    if not scheduler.get_job("purge_health_reports"):
-        from informe_servicio import purgar_informes_antiguos as _purgar_informes
-        _add_job_jittered(scheduler, _purgar_informes, "interval", hours=24, id="purge_health_reports",
-                          max_instances=1, coalesce=True, replace_existing=True,
-                          misfire_grace_time=_aggregator_misfire_grace_s())
+    __import__("crons_informe_y_progreso").registrar(scheduler, _add_job_jittered, _aggregator_misfire_grace_s())  # [1058/1059]
 
 
 def _pantry_refresh_horizon_hours_for_plan(total_days_requested: int | None) -> int:

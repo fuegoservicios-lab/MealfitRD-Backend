@@ -307,7 +307,8 @@ def test_el_router_esta_registrado_en_app():
 def test_la_herramienta_va_al_final_y_abre_la_pantalla(monkeypatch):
     import tools
     import ajustes_de_la_app as aj
-    assert tools.agent_tools[-1].name == "generar_informe_para_medico"
+    nombres = [x.name for x in tools.agent_tools]   # [1059] consultar_progreso va detrás (orden = prefijo cacheado)
+    assert nombres[-2:] == ["generar_informe_para_medico", "consultar_progreso"]
     assert aj._PANTALLA_SIN["informe"] == "informe" and aj._PANTALLA_SIN["reporte"] == "informe"
     import informe_servicio as svc
     monkeypatch.setattr(svc, "crear_informe", lambda uid, **k: {"id": "abc", "status": "data_only", "data": {"periodo": {"dias": 30}}})
@@ -358,8 +359,10 @@ def test_purga_de_informes(monkeypatch):
         raise RuntimeError("db")
     monkeypatch.setattr(db_core, "execute_sql_write", _falla)
     assert svc.purgar_informes_antiguos() == 0
-    cron = Path(__file__).resolve().parents[1].joinpath("cron_tasks.py").read_text(encoding="utf-8")
-    assert 'id="purge_health_reports"' in cron
+    base = Path(__file__).resolve().parents[1]   # [1059] el registro vive en su módulo (cron_tasks.py tiene tope)
+    assert '__import__("crons_informe_y_progreso").registrar(' in base.joinpath("cron_tasks.py").read_text(encoding="utf-8")
+    import crons_informe_y_progreso as cr
+    assert ("purge_health_reports", 24, "informe_servicio", "purgar_informes_antiguos") in cr.JOBS
 
 
 def test_resumen_admin_solo_cuenta(monkeypatch):
@@ -368,6 +371,18 @@ def test_resumen_admin_solo_cuenta(monkeypatch):
     monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: [
         {"status": "ready", "origin": "app", "n": 2, "coste_medio": 8000},
         {"status": "data_only", "origin": "coach", "n": 1, "coste_medio": 0}])
+    monkeypatch.setattr(svc, "_compartidos_en", lambda dias: 4)   # [1059] cuántos PDF se compartieron
     r = svc.resumen_para_admin(24)
     assert r == {"total": 3, "por_estado": {"ready": 2, "data_only": 1}, "por_origen": {"app": 2, "coach": 1},
-                 "coste_medio_usd": 0.008}
+                 "coste_medio_usd": 0.008, "compartidos": 4}
+
+
+def test_redaccion_activa_en_canario_para_la_cuenta_del_canario(monkeypatch):
+    """[lote 1059] El brazo del canario vale «canary», no «on»: la cuenta del canario TIENE redacción."""
+    import informe_servicio as svc
+    monkeypatch.setenv("MEALFIT_CHAT_CANARY_INFORME_MEDICO", "canary")
+    monkeypatch.setenv("MEALFIT_CHAT_CANARY_USER_IDS", "11111111-1111-1111-1111-111111111111")
+    assert svc.redaccion_activa("11111111-1111-1111-1111-111111111111") is True
+    assert svc.redaccion_activa("22222222-2222-2222-2222-222222222222") is False
+    monkeypatch.setenv("MEALFIT_CHAT_CANARY_INFORME_MEDICO", "off")
+    assert svc.redaccion_activa("11111111-1111-1111-1111-111111111111") is False

@@ -53,8 +53,10 @@ def _locale_de(user_id: str, locale: Optional[str]) -> str:
 
 def redaccion_activa(user_id: str) -> bool:
     try:
-        from coach_canario import brazo
-        return brazo(user_id, "informe_medico") == "on"
+        # [lote 1059] `activa`, no `brazo(...) == "on"`: en canario el brazo vale "canary" y la cuenta del canario
+        # se quedaba sin redacción.
+        from coach_canario import activa
+        return activa(user_id, "informe_medico")
     except Exception:  # noqa: BLE001
         return False
 
@@ -177,6 +179,35 @@ def purgar_informes_antiguos() -> int:
     return n
 
 
+_CLAVE_COMPARTIDOS = "informes_compartidos"
+
+
+def anotar_compartido(user_id: str, informe_id: str) -> bool:
+    """[lote 1059 · plan 1036.5] La persona compartió el PDF de SU informe: suma 1 al día (solo el recuento)."""
+    from db_core import execute_sql_query, execute_sql_write
+    suyo = execute_sql_query("SELECT 1 AS ok FROM user_health_reports WHERE id = %s AND user_id = %s",
+                             (informe_id, user_id), fetch_one=True)
+    if not suyo:
+        return False
+    hoy = datetime.now(timezone.utc).date().isoformat()
+    execute_sql_write(
+        "INSERT INTO app_kv_store (key, value, updated_at) VALUES (%s, jsonb_build_object(%s::text, 1), NOW()) "
+        "ON CONFLICT (key) DO UPDATE SET value = jsonb_set(app_kv_store.value, ARRAY[%s::text], "
+        "to_jsonb(COALESCE((app_kv_store.value->>%s)::int, 0) + 1)), updated_at = NOW()",
+        (_CLAVE_COMPARTIDOS, hoy, hoy, hoy),
+    )
+    return True
+
+
+def _compartidos_en(dias: int) -> int:
+    from db_core import execute_sql_query
+    f = execute_sql_query("SELECT value FROM app_kv_store WHERE key = %s", (_CLAVE_COMPARTIDOS,), fetch_one=True) or {}
+    v = f.get("value")
+    v = json.loads(v) if isinstance(v, str) else (v or {})
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).date().isoformat()
+    return sum(int(n or 0) for d, n in (v or {}).items() if str(d) >= desde)
+
+
 def resumen_para_admin(horas: int = 168) -> dict:
     """[plan 1036] Recuentos para /admin/chat-insights: cuántos, de qué estado, origen y coste medio. NUNCA contenido."""
     from db_core import execute_sql_query
@@ -197,4 +228,8 @@ def resumen_para_admin(horas: int = 168) -> dict:
             coste += int(f.get("coste_medio") or 0) * n
             con_coste += n
     out["coste_medio_usd"] = round(coste / con_coste / 1_000_000, 4) if con_coste else 0.0
+    try:
+        out["compartidos"] = _compartidos_en(max(1, h // 24))
+    except Exception:  # noqa: BLE001
+        out["compartidos"] = None
     return out

@@ -1728,8 +1728,13 @@ def admin_chat_insights(request: Request, hours: int = 168, limit: int = 20):
             _informes = _informes_resumen(window_h)
         except Exception as _ie:
             _informes = {"error": type(_ie).__name__}
+        try:   # [P1-PLAN-LOTE-1059 · plan 1036.5] cuánto habla el coach del progreso (debe ser poco)
+            from coach_progreso import medicion_para_admin as _progreso_medicion
+            _progreso = _progreso_medicion(window_h)
+        except Exception as _pe:
+            _progreso = {"error": type(_pe).__name__}
         return {"success": True, **insights, "fail_open": _fo_snapshot(), "senales_calidad": _senales,
-                "informes_medicos": _informes}
+                "informes_medicos": _informes, "progreso_coach": _progreso}
     except Exception as e:
         logger.warning(f"[G-16/G-29 CHAT-INSIGHTS] query falló: {e}")
         raise HTTPException(status_code=503, detail="DB query falló (best-effort).")

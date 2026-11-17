@@ -2445,6 +2445,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                     f"los tiene registrados y ofrécele agregarlos "
                     f"(modify_pantry_inventory)."
                 )
+        # [P1-PLAN-LOTE-1059 · plan 1031] si este registro le dio una estrella de la semana, que el coach lo diga una vez
+        msg += __import__("coach_progreso").nota_tras_registrar(user_id)
         return msg
     else:
         return "Hubo un error al intentar registrar la comida consumida. Por favor, intenta de nuevo."
@@ -7049,9 +7051,8 @@ def abrir_pantalla_de_la_app(user_id: str, pantalla: str, seccion: str = None) -
 # el coach no lo redacta en el chat ni diagnostica. Orden de `agent_tools`: al FINAL (es parte del prefijo cacheado).
 @tool
 def generar_informe_para_medico(user_id: str, dias: int = 30) -> str:
-    """Prepara el «Informe para tu médico» (resumen de lo que registró, para su médico o nutricionista) y lo abre en
-    la app. Úsala si va al médico o pide algo para su médico, un reporte o un «diagnóstico». dias: 14, 30 o 90.
-    NO lo redactes tú en el chat, no des cifras que no te dé y NUNCA diagnostiques."""
+    """Prepara el «Informe para tu médico» y lo abre en la app. Úsala si pide algo para su médico o un
+    «diagnóstico». dias: 14, 30 o 90. No lo redactes ni diagnostiques."""
     if not user_id or str(user_id) == "guest":
         return "El informe necesita una cuenta: dile que inicie sesión para poder prepararlo."
     try:
@@ -7069,7 +7070,33 @@ def generar_informe_para_medico(user_id: str, dias: int = 30) -> str:
     return ajustes_de_la_app._con_marcador(texto, {"pantalla": "informe", "informe_id": inf.get("id")})
 
 
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app, generar_informe_para_medico]
+# [P1-PLAN-LOTE-1059 · plan 1031] Las semanas del juego (Semana N, estrellas, racha), SOLO lectura y cifras del
+# servidor (`progreso_semanas`). El bloque 🏆 del turno ya trae la semana en curso: esto es para semanas anteriores.
+@tool
+def consultar_progreso(user_id: str, semanas: int = 8) -> str:
+    """Sus semanas de Progreso (estrellas). Solo lectura. semanas: 1-26"""
+    if not user_id or str(user_id) == "guest":
+        return "El progreso por semanas necesita una cuenta con registros."
+    try:
+        import progreso_semanas as ps
+        n = max(1, min(int(semanas or 8), ps.SEMANAS_MAX_COACH))
+        res = ps.resumen(str(user_id), None, con_semanas=True, con_eventos=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[LOTE-1059] consultar_progreso falló ({type(exc).__name__})")
+        return "No pude leer su progreso ahora."
+    if not res:
+        return "Aún no tiene registros: su Semana 1 empieza el día que anote su primera comida."
+    filas = [f"S{s['numero']} ({s['empieza']}): {s['dias_en_meta']}/7 en meta, {s['dias_registrados']} con registro, "
+             f"{s['estrellas']}★{'' if s['cerrada'] else ' (en curso)'}" for s in res["semanas"][-n:]]
+    mb, tot = res.get("mejor_semana"), res["total"]
+    pie = (f"Total: {tot['estrellas']}★ en {tot['semanas']} semanas; racha {res['racha']} (mejor {res['mejor_racha']}); "
+           f"rango {res['rango']['clave']}.")
+    if mb:
+        pie += f" Mejor semana: S{mb['numero']} ({mb['dias_en_meta']}/7, {mb['estrellas']}★)."
+    return "\n".join(filas + [pie])
+
+
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app, generar_informe_para_medico, consultar_progreso]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

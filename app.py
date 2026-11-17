@@ -1092,7 +1092,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1011 · 2026-11-14] (G-16/26/27/28/29) `query_chat_ops_insights` + `/admin/chat-insights` (feedback negativo, turnos >15 s y nudges internos/proactivos), paridad voz↔texto (`coach_live` ↔ `chat_agent`) e idempotencia ante reintentos (`log_consumed_meal` dedup/force, `mark_shopping_list_purchased`, `client_message_id`) (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
 # [P1-PLAN-LOTE-1057 · 2026-11-17] Regla D del coach: si lo anotado deja el día >10 % sobre su meta de kcal, cierra con UNA idea amable para la próxima comida o mañana, sin culpa ni saltarse comidas (tope del manual 13_700).
 # [P1-PLAN-LOTE-1058 · 2026-11-17] Informe para el médico (plan lotes 1032-1034): `informe_medico.py` (datos deterministas), `informe_redaccion.py` (gpt-6.1-terra verificado, canario `informe_medico`, sin respaldo), `informe_servicio.py` + `routers/reports.py` (3/día), herramienta `generar_informe_para_medico` y pantalla «informe».
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1058 · 2026-11-17"
+# [P1-PLAN-LOTE-1059 · 2026-11-17] El juego de las semanas en el servidor (plan 1029-1031 y 1035): `progreso_semanas.py` (resumen, día 1 que solo va hacia atrás, semanas cerradas en `user_week_summaries`, eventos de una vez en `app_kv_store`) + `routers/progress.py`; el coach lo sabe (`coach_progreso.py`, bloque 🏆 volátil por canario `progreso_coach`, regla R5, herramienta `consultar_progreso`); la redacción del informe ya sale en canario (`activa`, no `== "on"`).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1059 · 2026-11-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2798,6 +2799,9 @@ app.include_router(help_chat_router)
 # [P1-PLAN-LOTE-1032 · 2026-11-17] Informe para el médico (datos + redacción verificada): /api/reports/health.
 from routers.reports import router as reports_router  # noqa: E402
 app.include_router(reports_router)
+# [P1-PLAN-LOTE-1059 · 2026-11-17] El juego de las semanas, en el servidor (plan 1029/1035): /api/progress.
+from routers.progress import router as progress_router  # noqa: E402
+app.include_router(progress_router)
 from routers.consents import router as consents_router  # noqa: E402
 import consentimientos as _consentimientos  # noqa: E402
 app.include_router(consents_router)

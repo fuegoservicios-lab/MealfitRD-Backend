@@ -187,7 +187,8 @@ def test_coach_lean_dedup_y_poda_extras_sin_perdida_y_presupuesto_24k(monkeypatc
     # anadio ~60 tokens al manual compacto y dejo el tope en 13_626 sin pasar por el gate. La meta G-03 (24k) no cambia.
     # [P1-PLAN-LOTE-1057] 13_650 -> 13_700: la regla D gana una frase (día >10 % sobre la meta ⇒ una idea amable para
     # la próxima comida o mañana, sin culpa ni saltarse comidas), pedida por el dueño el 17-nov: +49 tokens (13_686).
-    assert len(enc.encode(lean)) <= 13_700
+    # [P1-PLAN-LOTE-1059] 13_700 -> 13_800: la regla R5 (progreso solo del bloque 🏆) suma ~89 tokens (plan: ≤ 90).
+    assert len(enc.encode(lean)) <= 13_800
     assert total_tok <= 24_000, f"Excede meta G-03: {total_tok}"
 
 
@@ -223,5 +224,5 @@ def test_rule_coverage_54_de_54_intacta():
     from scripts.coach_battery.rule_coverage import build_coverage_matrix
 
     rep = build_coverage_matrix()
-    assert rep["covered_rules"] == rep["total_rules"] == 54, rep
+    assert rep["covered_rules"] == rep["total_rules"] == 55, rep   # [P1-PLAN-LOTE-1059] + R5 (W1-W4)
     assert rep["uncovered_rules"] == []

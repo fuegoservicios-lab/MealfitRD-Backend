@@ -102,6 +102,24 @@ def api_leer_informe(
     return inf
 
 
+@router.post("/health/{user_id}/{informe_id}/shared")
+def api_informe_compartido(
+    user_id: str,
+    informe_id: str,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    _rl: None = Depends(_LEER_LIMITER),
+):
+    """[P1-PLAN-LOTE-1059 · plan 1036.5] La app avisa de que se compartió el PDF: solo se cuenta (nada del contenido)."""
+    _propio(user_id, verified_user_id)
+    assert_valid_uuid(informe_id)
+    from informe_servicio import anotar_compartido
+    try:
+        return {"ok": bool(anotar_compartido(user_id, informe_id))}
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[LOTE-1059] compartido no anotado: {type(e).__name__}")
+        return {"ok": False}
+
+
 @router.delete("/health/{user_id}/{informe_id}")
 def api_borrar_informe(
     user_id: str,

@@ -30,6 +30,7 @@ _LECTORES = {
     "terra": lambda: _env_str("MEALFIT_CHAT_CANARY_TERRA", "canary", MODOS),             # A-07: turnos difíciles
     "contexto_rapido": lambda: _env_str("MEALFIT_CHAT_CANARY_CONTEXTO_RAPIDO", "canary", MODOS),  # A-11 (lote 1020)
     "informe_medico": lambda: _env_str("MEALFIT_CHAT_CANARY_INFORME_MEDICO", "canary", MODOS),  # lote 1033: redacción con terra
+    "progreso_coach": lambda: _env_str("MEALFIT_CHAT_CANARY_PROGRESO_COACH", "canary", MODOS),  # lote 1059 (plan 1031): bloque 🏆
 }
 
 FUNCIONES = tuple(_LECTORES)

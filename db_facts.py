@@ -1061,6 +1061,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             mark_nudge_logged_from_diary(user_id, meal_type)
         except Exception:
             pass
+        # [P1-PLAN-LOTE-1059 · plan 1029] día 1 del viaje + semana tocada (nunca lanza: la comida ya está guardada)
+        __import__("progreso_semanas").tras_escribir_el_diario(user_id, now, es_registro=True)
         if not consumed_at_override:
             try:
                 from diary_targets import snapshot_current_targets_for_user
@@ -1152,9 +1154,11 @@ def update_consumed_meal(
         params.extend([meal_id, user_id])
         query = (
             f"UPDATE consumed_meals SET {', '.join(set_parts)} "
-            "WHERE id = %s AND user_id = %s RETURNING id"
+            "WHERE id = %s AND user_id = %s RETURNING id, consumed_at"
         )
         rows = execute_sql_write(query, tuple(params), returning=True)
+        if rows:  # [P1-PLAN-LOTE-1059] la semana de la comida corregida se recalcula en la próxima lectura
+            __import__("progreso_semanas").tras_escribir_el_diario(user_id, rows[0].get("consumed_at"))
         return str(rows[0]["id"]) if rows else None
     except Exception as e:
         logger.error(f"Error corrigiendo comida consumida {meal_id}: {e}")
@@ -1184,6 +1188,7 @@ def delete_consumed_meal(user_id: str, meal_id: str, via: "str | None" = None) -
             returning=True,
         )
         if rows:
+            __import__("progreso_semanas").tras_escribir_el_diario(user_id, rows[0].get("consumed_at"))  # [lote 1059]
             # [P1-PLAN-LOTE-1027 · A-16] borrado a mano de una comida que anotó el coach (el del coach pasa por el
             # mismo DELETE y su señal la pone la herramienta; aquí solo se cuenta el del diario: via="diario")
             if via == "diario":

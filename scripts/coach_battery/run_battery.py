@@ -345,7 +345,44 @@ def _stub_log_consumed_meal(**kw):
             f"usuario; guárdalo en tu contexto para poder corregir (`correct_consumed_meal`) o borrar "
             f"ESTA fila exacta si el usuario te dice más adelante en esta conversación que quedó mal "
             f"registrada.]")
+    # [P1-PLAN-LOTE-1059] la nota de estrella que añade la tool real (con el progreso en seco de abajo)
+    PROGRESO["registrado"] = True
+    __import__("progreso_semanas").invalidar(str(kw.get("user_id") or CTX.get("uid")))
+    msg += __import__("coach_progreso").nota_tras_registrar(str(kw.get("user_id") or CTX.get("uid")))
     return msg
+
+
+# [P1-PLAN-LOTE-1059] El juego de semanas, en seco. El `resumen` real sincroniza semanas cerradas y eventos (escrituras
+# que la guarda bloquea y marcaría como contaminación), así que lee días fijos. Un caso puede traer
+# `"progreso": {"en_meta_antes": n, "kcal_hoy_tras_registrar": k}`; sin él: Semana 10, día 3, 2 de 7 en meta.
+import progreso_semanas as _ps   # noqa: E402
+
+PROGRESO: dict = {"caso": None, "registrado": False}
+
+
+def _leer_progreso_fijo(user_id, tz_offset=None):
+    from datetime import date as _date, timedelta as _td
+    cfg = (PROGRESO.get("caso") or {})
+    en_meta = int(cfg.get("en_meta_antes", 2))
+    hoy = _date(2026, 11, 17)
+    dias = {}
+    # S9 (8-14 nov): 3 en meta (1★). S10: `en_meta` días en meta desde el domingo 15; hoy, lo que haya.
+    for i in range(7):
+        dias[(_date(2026, 11, 8) + _td(days=i)).isoformat()] = {"calories": 2000 if i < 3 else 1200, "protein": 100,
+                                                                "meals_count": 3}
+    for i in range(en_meta):
+        dias[(_date(2026, 11, 15) + _td(days=i)).isoformat()] = {"calories": 2000, "protein": 110, "meals_count": 3}
+    kcal_hoy = int(cfg.get("kcal_hoy_tras_registrar", 0)) if PROGRESO.get("registrado") else 600
+    if kcal_hoy:
+        dias[hoy.isoformat()] = {"calories": kcal_hoy, "protein": 80, "meals_count": 2}
+    return _ps.armar_resumen(hoy=hoy, dia_1=_date(2026, 9, 15), dias=dias, metas_por_dia={},
+                             meta_de_hoy={"calories": 2000}, objetivo_del_perfil="maintain")
+
+
+_ps._leer = _leer_progreso_fijo
+_ps._sincronizar_semanas = lambda user_id, semanas: 0
+_ps._estado_kv = lambda user_id: {"emitidos": {}, "vistos": []}
+_ps._guardar_kv = lambda user_id, valor: None
 
 
 _orig_leer_fila_diario = tools._leer_fila_diario
@@ -556,6 +593,15 @@ def _stub_generar_informe_para_medico(**kw):
                             {"pantalla": "informe", "informe_id": "00000000-0000-4000-8000-000000000000"})
 
 
+def _stub_consultar_progreso(**kw):
+    """[P1-PLAN-LOTE-1059] En seco: datos fijos (no lee Neon ni sincroniza `user_week_summaries`)."""
+    return ("S7 (2026-10-25): 2/7 en meta, 6 con registro, 0★\n"
+            "S8 (2026-11-01): 5/7 en meta, 7 con registro, 2★\n"
+            "S9 (2026-11-08): 3/7 en meta, 6 con registro, 1★\n"
+            "S10 (2026-11-15): 1/7 en meta, 2 con registro, 0★ (en curso)\n"
+            "Total: 3★ en 10 semanas; racha 1 (mejor 4); rango bronce. Mejor semana: S8 (5/7, 2★).")
+
+
 _STUBS = {
     "buscar_etiqueta_en_internet": _stub_buscar_etiqueta_en_internet,   # [P1-PLAN-LOTE-767] búsquedas de pago
     "guardar_suplemento": _stub_guardar_suplemento,   # [P1-PLAN-LOTE-765] escribía en la Alacena real
@@ -567,6 +613,7 @@ _STUBS = {
     "update_form_field": _stub_update_form_field,
     "cambiar_ajuste_de_la_app": _stub_cambiar_ajuste,   # [P1-PLAN-LOTE-1013]
     "generar_informe_para_medico": _stub_generar_informe_para_medico,   # [P1-PLAN-LOTE-1034]
+    "consultar_progreso": _stub_consultar_progreso,   # [P1-PLAN-LOTE-1059]
 }
 
 
@@ -721,9 +768,10 @@ def run_turn(sid: str, persona: dict, prompt: str, vision) -> dict:
 
 def _select_cases(all_cases: list[dict], *, preset: str, only_raw: str) -> list[dict]:
     only = {x.strip() for x in (only_raw or "").split(",") if x.strip()}
-    if preset == "short":
+    if preset in ("short", "progreso"):
         by_id = {c["id"]: c for c in all_cases}
-        base = [by_id[cid] for cid in _evaluador.SHORT_PRESET_IDS if cid in by_id]
+        ids = _evaluador.SHORT_PRESET_IDS if preset == "short" else _evaluador.PROGRESO_PRESET_IDS
+        base = [by_id[cid] for cid in ids if cid in by_id]
     else:
         base = list(all_cases)
     if only:
@@ -744,7 +792,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", required=True)
     ap.add_argument("--only", default="")
-    ap.add_argument("--preset", choices=("all", "short"), default="all")
+    ap.add_argument("--preset", choices=("all", "short", "progreso"), default="all")
     ap.add_argument("--budget-usd", type=float, default=2.0)
     ap.add_argument("--record-ledger", action="store_true")
     ap.add_argument("--ledger-path", default="")
@@ -794,6 +842,9 @@ def main() -> int:
             __import__("rutina_del_coach")._RUTINA_CACHE.clear()   # la caché es por usuario: no arrastrar hechos
         except Exception:
             pass
+        PROGRESO["caso"], PROGRESO["registrado"] = case.get("progreso"), False   # [P1-PLAN-LOTE-1059]
+        _ps.invalidar(str(CTX["uid"]))
+        __import__("coach_progreso")._ANTES.clear()
         sid = str(uuid.uuid4())  # la columna es uuid; la sesión no existe en la base (lectura vacía)
         turns = []
         for i, prompt in enumerate(case["turns"]):

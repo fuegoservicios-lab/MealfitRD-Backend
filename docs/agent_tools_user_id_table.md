@@ -10,7 +10,7 @@ El nodo LangGraph `execute_tools` ([`backend/agent.py`](../agent.py)) force-over
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer.
 
-## Las 20 tools cubiertas
+## Las 21 tools cubiertas
 
 | # | Tool | Mutación cross-user que el override impide |
 |---|---|---|
@@ -34,6 +34,7 @@ Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s
 | 18 | `abrir_pantalla_de_la_app` | ninguna: no lee ni escribe datos, solo dice a la pantalla de quien habla qué abrir. Lleva `user_id` por el contrato común del override (P1-PLAN-LOTE-900 - 2026-09-29) |
 | 19 | `analizar_suplemento` | Lectura del pote de suplementos exclusivamente del usuario autenticado; no escribe ni registra tomas. |
 | 20 | `generar_informe_para_medico` | escritura cross-user: crea una fila en `user_health_reports` de OTRO usuario con un resumen de su diario, perfil clínico, agua y peso (datos de salud) y gasta su cupo de 3 informes al día y, si la redacción está activa, una llamada a IA a su nombre (P1-PLAN-LOTE-1034 - 2026-11-17) |
+| 21 | `consultar_progreso` | leak cross-user de SOLO LECTURA: las semanas del juego de OTRO usuario (días en meta, estrellas, kcal media por semana, racha) y la sincronización de SUS semanas cerradas en `user_week_summaries` (P1-PLAN-LOTE-1059 - 2026-11-17) |
 
 ### Retiradas temporalmente del set activo (P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12)
 

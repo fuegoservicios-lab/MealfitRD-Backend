@@ -386,14 +386,7 @@ def test_role_alert_on_error_bubble(message_bubble_src: str):
 
 
 def test_message_actions_hidden_on_error_bubble(message_bubble_src: str):
-    """`MessageActions` (thumbs up/down/regenerate/copy) NO debe renderizarse
-    en bubbles de error — esas acciones no aplican a un mensaje de error."""
-    # El render de MessageActions debe estar gated por `!isErrorBubble`
-    pattern = re.compile(
-        r"!msg\.isStreaming\s*&&\s*!isErrorBubble[\s\S]*?<MessageActions",
-    )
-    assert pattern.search(message_bubble_src), (
-        "P1-CHAT-ERROR-DIFF regresión: <MessageActions> ya no está gated "
-        "por `!isErrorBubble`. Esto haría aparecer thumbs/regenerate en "
-        "bubbles de error, lo cual es confuso UX."
-    )
+    """[P1-PLAN-LOTE-1061 · 2026-11-17] La fila de acciones (thumbs up/down/regenerate/copy) ya no existe en NINGUNA
+    burbuja (el dueño: «quitar todo, para mejor experiencia»), así que tampoco en las de error."""
+    assert "<MessageActions" not in message_bubble_src
+    assert "msg-actions" not in message_bubble_src

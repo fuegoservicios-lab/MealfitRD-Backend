@@ -4843,6 +4843,10 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     # [P1-PLAN-LOTE-1034] el informe para el médico, por PALABRA COMPLETA (el gap A-17: las subcadenas dan falsos positivos)
     if re.search(r"\b(?:informes?|reportes?|reports?|medic[oa]s?|doctor[a]?|nutricionista|diagnostic[oa]s?|consulta)\b", last_user_text):
         needed.add("generar_informe_para_medico")
+    # [P1-PLAN-LOTE-1059 · plan 1031] el progreso por semanas, también por PALABRA COMPLETA («voy a comer» no cuenta)
+    if re.search(r"\b(?:progreso|progress|semanas?|weeks?|rachas?|streak|estrellas?|stars?|como voy|how am i doing)\b",
+                 last_user_text):
+        needed.add("consultar_progreso")
     if any(_sin_acentos(k) in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil", "peso", "pese", "libras", "kilos", "kg", "lb")):
         needed.update({"update_form_field"})
     if any(_sin_acentos(k) in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):
@@ -11011,6 +11015,9 @@ class _ChatContextPrefetcher:
         self._futures["rutina"] = self._sub(
             "rutina", ex, lambda: __import__("rutina_del_coach")._cargar_historial_usuario(uid),
         )
+        self._futures["progreso"] = self._sub(   # [P1-PLAN-LOTE-1059] llena la caché del bloque 🏆 en paralelo
+            "progreso", ex, lambda: __import__("coach_progreso").precargar(uid, self.tz_offset),
+        )
         return self
 
     def resolve_memory(self) -> dict:
@@ -11800,6 +11807,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
                 plan_id=(plan_record or {}).get("id"),
             )
+            # [P1-PLAN-LOTE-1059 · plan 1031] 🏆 semana, estrellas y racha (cifras del servidor; zona volátil, canario)
+            system_prompt += __import__("coach_progreso").bloque_para_chat(user_id, tz_offset)
 
         # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] Mismo refuerzo final que el path
         # no-stream (la divergencia entre ambos ya costó bugs — P1-CHAT-PAST-DAYS,
