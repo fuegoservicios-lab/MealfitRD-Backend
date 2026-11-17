@@ -201,8 +201,8 @@ def test_dashboard_banner_uses_amber_not_red():
     assert "#FFFBEB" in snippet or "#FEF3C7" in snippet or "#FCD34D" in snippet, (
         "Banner debe usar paleta amber (#FFFBEB/#FEF3C7/#FCD34D), no red."
     )
-    # El copy debe mencionar "Cambiar Plato" como acción remediadora
-    assert "Cambiar Plato" in snippet, (
-        "Banner debe mencionar 'Cambiar Plato' como acción remediadora — "
+    # El copy debe mencionar "Cambiar plato" como acción remediadora
+    assert "Cambiar plato" in snippet, (
+        "Banner debe mencionar 'Cambiar plato' como acción remediadora — "
         "el usuario necesita saber qué hacer cuando el plan está degradado."
     )

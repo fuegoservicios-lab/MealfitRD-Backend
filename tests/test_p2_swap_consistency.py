@@ -1,7 +1,7 @@
 """[P2-SWAP-CONSISTENCY · 2026-05-22] Test parser-based + funcional del
 bundle de coherencia del modal "¿Por qué quieres cambiar?".
 
-Cierra 4 inconsistencias detectadas en el audit del flujo Cambiar Plato:
+Cierra 4 inconsistencias detectadas en el audit del flujo Cambiar plato:
 
   1. Branch ``similar`` redundante en el elif chain de ``agent.py::swap_meal``
      (el anti-mode-collapse de _pick_by_inverse_freq + el filtro

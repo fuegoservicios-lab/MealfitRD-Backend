@@ -209,7 +209,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # visión real y nombre de plato de reemplazo legible. Método y antes/después: docs/coach_bateria_2026_09_15.md.
 # [P1-PLAN-LOTE-54 · 2026-09-15] El panel «solicitaste / aplicamos / por qué» dice cuándo el plan pasa del tiempo de
 # cocina pedido: el revisor ya medía `prep_time_over_budget` (6 a 10 comidas por plan en las 5 pruebas del dueño con
-# «Nada», de hasta 70 min) y el panel sólo leía el modo. Cuenta como un ajuste, con la cifra real y «Cambiar Plato».
+# «Nada», de hasta 70 min) y el panel sólo leía el modo. Cuenta como un ajuste, con la cifra real y «Cambiar plato».
 # [P1-PLAN-LOTE-56 · 2026-09-15] Cierre de lo abierto tras la batería del coach: topes de longitud por tipo de
 # pregunta (charla 80, queja 80, riesgo 90, receta 150), la purga de cuenta ANONIMIZA el gasto de IA en vez de
 # borrarlo, el tope de 2.500 kcal por plato baja también las macros (prueba REAL de visión en el VPS, 14 fotos,
@@ -1093,7 +1093,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1057 · 2026-11-17] Regla D del coach: si lo anotado deja el día >10 % sobre su meta de kcal, cierra con UNA idea amable para la próxima comida o mañana, sin culpa ni saltarse comidas (tope del manual 13_700).
 # [P1-PLAN-LOTE-1058 · 2026-11-17] Informe para el médico (plan lotes 1032-1034): `informe_medico.py` (datos deterministas), `informe_redaccion.py` (gpt-6.1-terra verificado, canario `informe_medico`, sin respaldo), `informe_servicio.py` + `routers/reports.py` (3/día), herramienta `generar_informe_para_medico` y pantalla «informe».
 # [P1-PLAN-LOTE-1059 · 2026-11-17] El juego de las semanas en el servidor (plan 1029-1031 y 1035): `progreso_semanas.py` (resumen, día 1 que solo va hacia atrás, semanas cerradas en `user_week_summaries`, eventos de una vez en `app_kv_store`) + `routers/progress.py`; el coach lo sabe (`coach_progreso.py`, bloque 🏆 volátil por canario `progreso_coach`, regla R5, herramienta `consultar_progreso`); la redacción del informe ya sale en canario (`activa`, no `== "on"`).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1059 · 2026-11-17"
+# [P1-PLAN-LOTE-1064 · 2026-11-17] «Cambiar plato» en frase normal también en los avisos y el prompt (decisión de diseño del dueño: el botón dejó de ser «Cambiar Plato»).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1064 · 2026-11-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

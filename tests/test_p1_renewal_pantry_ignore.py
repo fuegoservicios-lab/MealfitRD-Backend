@@ -9,7 +9,7 @@ idéntico los 3 días). El skip previo (P1-PANTRY-GUARD-REGEN-SKIP) dependía de
 FIX: `_run_pantry_validation_for_initial_chunk` salta el guard por default (knob
 MEALFIT_INITIAL_CHUNK_PANTRY_GUARD=False) — la generación de plan COMPLETO es variety-first y su lista
 de compras DEFINE qué comprar, no se amarra a la nevera previa. Los flujos pantry-aware reales
-(Cambiar Plato /swap-meal, día completo /regenerate-day) son endpoints SEPARADOS. Anchor:
+(Cambiar plato /swap-meal, día completo /regenerate-day) son endpoints SEPARADOS. Anchor:
 P1-RENEWAL-PANTRY-IGNORE.
 """
 import os

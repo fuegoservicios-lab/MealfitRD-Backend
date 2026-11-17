@@ -3,7 +3,7 @@ mandando al usuario en pausa a una pantalla y a un plan que su modo no tiene.
 
 H15 · EL BULLET DE LAS TOOLS APAGADAS
     Con `MEALFIT_CHAT_PLAN_TOOLS_ENABLED` en OFF (el default), el prompt le dice
-    al modelo: «dile que use los botones de la página Plan — 'Cambiar Plato' en
+    al modelo: «dile que use los botones de la página Plan — 'Cambiar plato' en
     cada comida, o 'Actualizar platos'». En modo contador esa página no está en
     la nav (se rotula «Hoy») y esos botones no existen: se manda al usuario a
     buscar controles inexistentes, y de paso se le insinúa que su plan sigue
@@ -54,7 +54,7 @@ def test_en_pausa_el_bullet_no_manda_a_la_pagina_plan(prompts, monkeypatch):
             "Plan» con el plan en pausa. En modo contador esa entrada de nav se "
             "rotula «Hoy» y los botones de plato no existen."
         )
-        assert "Cambiar Plato" not in texto and "Actualizar platos" not in texto
+        assert "Cambiar plato" not in texto and "Actualizar platos" not in texto
 
 
 def test_en_pausa_el_bullet_ofrece_la_puerta_que_si_existe(prompts, monkeypatch):

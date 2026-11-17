@@ -33036,7 +33036,7 @@ __PLAN_MODE_GATE__
                             # semanas) y la variedad inter-chunk solo iba prompt-steered. Detecta platos del
                             # chunk nuevo repetidos en el MISMO slot de días previos → report plan-level +
                             # chip `_cross_week_repeat` per-meal (advisory, jamás gate — el chunk ya está
-                            # generado; la palanca es "Cambiar Plato"). Mismo write del merge. Best-effort.
+                            # generado; la palanca es "Cambiar plato"). Mismo write del merge. Best-effort.
                             try:
                                 from graph_orchestrator import (compute_cross_week_repeat_report as _xwr_ck,
                                                                 CROSS_WEEK_REPEAT_CHECK_ENABLED as _xwc_on,

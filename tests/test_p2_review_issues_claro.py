@@ -4,7 +4,7 @@ dicen QUÉ plato mirar.
 Medido: en 30 días la ÚNICA familia entregada fue «COMIDA FUERA DE HORARIO» y no estaba en el
 mapa de P2-REVIEW-ISSUES-HUMANIZE, así que el toast mostraba el párrafo técnico entero (captura
 del dueño). Ahora: «Día 2, almuerzo: el plato es más de otro momento del día. Si no te convence,
-cámbialo con «Cambiar Plato».». El raw sigue en `_review_issues_raw`.
+cámbialo con «Cambiar plato».». El raw sigue en `_review_issues_raw`.
 
 Tooltip-anchor: P2-REVIEW-ISSUES-CLARO | _REVIEW_ISSUE_DAY_SLOT_RE
 """
@@ -20,7 +20,7 @@ RAW = ("COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día 2, 
 def test_fuera_de_horario_short_with_day_and_slot():
     out = go._humanize_review_issue(RAW)
     assert out.startswith("Día 2, almuerzo: ")
-    assert "Cambiar Plato" in out
+    assert "Cambiar plato" in out
     assert len(out) < 140, out
     assert "coherencia cultural" not in out and "locrio" not in out
 

@@ -113,7 +113,7 @@ def test_el_nombre_de_un_boton_no_dispara_el_nudge_del_diario():
 
 
 def test_una_comida_de_verdad_sigue_disparando_aunque_haya_un_boton():
-    texto = "Listo, tu cena quedó registrada con 520 kcal; si quieres, usa 'Cambiar Plato'."
+    texto = "Listo, tu cena quedó registrada con 520 kcal; si quieres, usa 'Cambiar plato'."
     assert A.route_tools({"messages": _turno_escritura("log_water_glass", texto)}) == "nudge_diary_tool"
 
 

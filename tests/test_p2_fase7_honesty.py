@@ -77,4 +77,4 @@ def test_frontend_map_tiene_copy_honesto():
     # Copy accionable (no solo 'no aprobado'): el de max_attempts debe guiar al usuario.
     idx = js.find("max_attempts:")
     assert idx > -1
-    assert "Cambiar Plato" in js[idx: idx + 200], "El copy de max_attempts debe ser accionable."
+    assert "Cambiar plato" in js[idx: idx + 200], "El copy de max_attempts debe ser accionable."

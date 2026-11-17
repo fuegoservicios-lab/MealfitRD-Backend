@@ -659,7 +659,7 @@ def allocate_macros_per_slot(
 # ============================================================
 # [P1-SWAP-MACROS · 2026-05-22] Validador post-gen de macros del meal
 # generado por LLM en swap/modify vs los targets del slot original.
-# Cierra el gap del audit "Cambiar Plato": pre-fix el prompt solo inyectaba
+# Cierra el gap del audit "Cambiar plato": pre-fix el prompt solo inyectaba
 # `target_calories` como hint soft, sin re-validación → drift arbitrario
 # permitido (ej. target 350kcal/15g protein → LLM emite 450kcal/8g sin queja).
 # ============================================================
@@ -816,7 +816,7 @@ def validate_meal_macros_against_targets(
 # sobre la salida LLM del swap/modify. Cierra el gap user-facing dejado
 # documentado en el bundle P1-SWAP-MACROS — la escalación coherence
 # inline (P1-SWAP-COHERENCE-ESCALATE) cubre el surface #2 (plan-gen
-# swap-to-best) PERO el "Cambiar Plato" del UI usa surface #4
+# swap-to-best) PERO el "Cambiar plato" del UI usa surface #4
 # (/recalculate-shopping-list) que es síncrono y NO bloquea. Este check
 # corre ANTES del retorno de swap_meal/execute_modify_single_meal, así
 # que un cap_swallowed_modifier severo (receta dice "el pollo" pero

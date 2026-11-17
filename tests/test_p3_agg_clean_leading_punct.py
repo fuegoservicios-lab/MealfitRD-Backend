@@ -17,7 +17,7 @@ El LLM emitió "lonjas/pedazos" como contracción de "lonjas o pedazos".
 y se almacenó en ``aggregated_shopping_list`` como
 ``"½ lb de /pedazos de queso"``.
 
-Modo de fallo recurrente: cuando el user hacía "Cambiar Plato" en
+Modo de fallo recurrente: cuando el user hacía "Cambiar plato" en
 cualquier slot, el LLM veía la pantry list con el item corrupto
 ``/pedazos de queso`` y trataba de usar ``queso`` en su receta. El
 pantry guard hace exact-match contra ``/pedazos de queso`` y NO

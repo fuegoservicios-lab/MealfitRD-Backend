@@ -1,11 +1,11 @@
 """[P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta + consentimiento".
 
 Decisión del owner: tras la compra inicial, los cambios de plato ("Actualizar
-platos"/Cambiar Plato/regenerate-day) cocinan SOLO de la Nevera FÍSICA real por
+platos"/Cambiar plato/regenerate-day) cocinan SOLO de la Nevera FÍSICA real por
 default; si no hay alternativa nevera-only, el sistema PREGUNTA (nombre + cantidad
 + precio estimado) en vez de introducir el ingrediente en silencio.
 
-Caso real que lo motivó: un swap (Cambiar Plato) metió catibías de YUCA — 75g de
+Caso real que lo motivó: un swap (Cambiar plato) metió catibías de YUCA — 75g de
 un día YA ARCHIVADO del plan, jamás registrada en `user_inventory` — sin preguntar.
 La lista de compras "renació" con 1 ítem y el botón "Ya compré la lista" reapareció
 sin que el usuario hubiera consentido comprar nada.

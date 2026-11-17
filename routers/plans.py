@@ -8501,7 +8501,7 @@ def api_fix_sodium_day(
                     "nutrients": _worst_high,
                     "message": (
                         f"El aviso de este día es por {', '.join(_nutrient_names)}, no por sodio "
-                        "— este arreglo no aplica. Usa Cambiar Plato en ese día si quieres "
+                        "— este arreglo no aplica. Usa Cambiar plato en ese día si quieres "
                         "ajustarlo."
                     ),
                 }
@@ -9247,7 +9247,7 @@ def api_regenerate_day(
         # N veces?) — costo/latencia sin beneficio real. El comportamiento actual (conservar el
         # plato original cuando el slot no converge nevera-only, ver `except ValueError` abajo)
         # YA es seguro: nada entra a la lista sin consentimiento. El usuario que quiera ese
-        # plato específico puede usar "Cambiar Plato" sobre ÉL, que SÍ ofrece el consentimiento
+        # plato específico puede usar "Cambiar plato" sobre ÉL, que SÍ ofrece el consentimiento
         # (`swap_meal_with_consent` vía `/swap-meal`).
         from agent import swap_meal, LLMRateLimitedError, LLMCircuitBreakerOpen
         from nutrition_db import IngredientNutritionDB

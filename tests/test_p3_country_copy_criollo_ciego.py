@@ -8,7 +8,7 @@ pantalla sin ninguna condición de país.
 
   2. «Algunos platos compuestos (ej. sancocho, mangú)…» — el aviso de `composite_dish_unresolved`
      ilustraba el problema del usuario con dos platos que fuera de RD no ha comido nunca. El
-     aviso funciona sin ellos: lo accionable es «usa Cambiar Plato», no el nombre del guiso.
+     aviso funciona sin ellos: lo accionable es «usa Cambiar plato», no el nombre del guiso.
 
 Las otras dos apariciones medidas de léxico dominicano en pantalla SÍ aciertan y quedan fuera
 de este guard a propósito: `QCountry.jsx` describe el catálogo dominicano DENTRO de la tarjeta
@@ -44,7 +44,7 @@ _LEXICO_DO = ("criollo", "criolla", "sancocho", "mangú", "mangu")
 _NUEVAS = (
     "Afinando los sabores…",
     "Algunos platos compuestos no se pudieron desglosar en ingredientes con precisión, "
-    "así que sus macros y su lista de compras son aproximados. Usa Cambiar Plato si "
+    "así que sus macros y su lista de compras son aproximados. Usa Cambiar plato si "
     "necesitas más exactitud.",
 )
 _VIEJAS = (

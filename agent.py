@@ -502,7 +502,7 @@ def _prep_time_context_for_chat(plan) -> str:
             f"cocinar y {len(issues)} comida(s) de su plan lo pasan (declaran entre {mins[0]} y "
             f"{mins[-1]} min). Si pregunta por eso, la verdad es esta: todavía tenemos pocos platos de "
             "ese tiempo en el catálogo. Reconócelo sin inventar otra causa y ofrécele cambiar esas "
-            "comidas con el botón 'Cambiar Plato' de la página Plan."
+            "comidas con el botón 'Cambiar plato' de la página Plan."
         )
     except Exception as e:
         logger.debug(f"[P1-PLAN-LOTE-53] tiempo de cocina ilegible: {e!r}")
@@ -7119,7 +7119,7 @@ def execute_tools(state: ChatState):
                         allow_pantry_expansion=_allow_exp
                     )
                     # [P1-CHAT-MODIFY-EXPAND-FALLBACK · 2026-07-12] Paridad con el
-                    # botón "Cambiar Plato": si el intento PANTRY-STRICT no
+                    # botón "Cambiar plato": si el intento PANTRY-STRICT no
                     # convergió (sin `modified_meal`), reintenta UNA vez con
                     # expansión de despensa — equivale a que el usuario acepte
                     # comprar 1-2 ingredientes extra. Vivo: "actualiza el

@@ -59,10 +59,10 @@ def test_dashboard_scopes_overlay_to_active_tab():
 
 
 def test_v2_spin_and_daybutton_scoped():
-    """[v2] El giro del ícono de 'Cambiar Plato' y el spinner/label del botón del día
+    """[v2] El giro del ícono de 'Cambiar plato' y el spinner/label del botón del día
     también se escopan (quedaban girando en los otros tabs como residual visual)."""
     assert _DASH.count("dayRegenIndex == null || dayRegenIndex === activeDayIndex") >= 4, (
-        "4 gates: overlay per-card + spin del ícono Cambiar Plato + spinner del botón "
+        "4 gates: overlay per-card + spin del ícono Cambiar plato + spinner del botón "
         "del día + label 'Actualizando…'"
     )
 

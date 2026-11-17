@@ -1,5 +1,5 @@
 """[P1-SWAP-PROD-HARDEN · 2026-05-22] Test umbrella del bundle 3-en-1
-que cerró el audit production-readiness del flujo "Cambiar Plato":
+que cerró el audit production-readiness del flujo "Cambiar plato":
 
   - **GAP-1 (P1-SWAP-EMPTY-PANTRY-FALLBACK):** `agent.py::swap_meal` lee
     `aggregated_shopping_list` del plan_data como fallback cuando la

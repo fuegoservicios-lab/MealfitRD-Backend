@@ -98,7 +98,7 @@ def test_el_tiempo_de_cocina_llega_resumido_y_con_la_respuesta_honesta():
     ], "slice_hash": "abc"}}
     txt = A._prep_time_context_for_chat(plan)
     assert "10 min" in txt and "2 comida(s)" in txt and "entre 30 y 65 min" in txt
-    assert "pocos platos" in txt and "Cambiar Plato" in txt
+    assert "pocos platos" in txt and "Cambiar plato" in txt
     assert A._prep_time_context_for_chat({}) == "" and A._prep_time_context_for_chat(None) == ""
     # El reporte crudo (hashes incluidos) ya no viaja en el JSON del plan.
     assert "_fidelity_report" not in A._prune_plan_for_chat(plan)

@@ -989,7 +989,7 @@ PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEM
 # (`/api/plans/analyze[/stream]`): una renovación genera un menú NUEVO, y la lista de compras del
 # plan ES LA QUE DEFINE qué comprar — NO se amarra a la nevera previa. Por eso el guard estricto de
 # nevera NO debe correr en este endpoint por default (matchea la intención documentada "Renovar Ciclo
-# ignora nevera"; los flujos pantry-aware reales —Cambiar Plato `/swap-meal`, día completo
+# ignora nevera"; los flujos pantry-aware reales —Cambiar plato `/swap-meal`, día completo
 # `/regenerate-day`— son endpoints SEPARADOS que NO pasan por `_run_pantry_validation_for_initial_chunk`).
 #
 # Por qué el default es OFF (skip): el skip previo (P1-PANTRY-GUARD-REGEN-SKIP) dependía de que el

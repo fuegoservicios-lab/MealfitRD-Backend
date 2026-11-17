@@ -41,7 +41,7 @@ def test_prompts_redirect_to_buttons(monkeypatch):
     for builder in (build_tools_instructions, build_tools_instructions_stream):
         out = builder("11111111-1111-1111-1111-111111111111")
         assert "NO PUEDES modificar el plan" in out, "redirección explícita"
-        assert "Cambiar Plato" in out and "Actualizar platos" in out, \
+        assert "Cambiar plato" in out and "Actualizar platos" in out, \
             "guía al usuario a los botones de la página Plan"
         assert "Usa `modify_single_meal`" not in out
         assert "Usa `regenerate_full_day`" not in out

@@ -1,4 +1,4 @@
-"""[P1-SWAP-MACROS · 2026-05-22] Tests del bundle Cambiar Plato production-ready.
+"""[P1-SWAP-MACROS · 2026-05-22] Tests del bundle Cambiar plato production-ready.
 
 Cierra los 3 gaps identificados en el audit del flow `/swap-meal`:
 
@@ -381,7 +381,7 @@ def test_coherence_surfaces_table_documents_escalation():
 # =====================================================================
 # Section G — Recipe-ingredients coherence per-meal (P1-SWAP-RECIPE-COHERENCE)
 # Cierra la limitación dejada documentada en el bundle inicial — el
-# user-facing "Cambiar Plato" ahora valida coherencia receta↔ingredientes
+# user-facing "Cambiar plato" ahora valida coherencia receta↔ingredientes
 # ANTES de retornar el meal, gateando retry tenacity.
 # =====================================================================
 

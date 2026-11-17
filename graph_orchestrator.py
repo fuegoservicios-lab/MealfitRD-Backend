@@ -23760,22 +23760,22 @@ _REVIEW_ISSUE_HUMANIZE_MAP = (
     ("coherencia recetas lista",
      "Algunas cantidades de la lista de compras pueden variar respecto a las recetas — revísalas antes de comprar."),
     ("repeticion detectada",
-     "Algunos platos se parecen a los de tus planes recientes — usa «Cambiar Plato» si quieres más variedad."),
+     "Algunos platos se parecen a los de tus planes recientes — usa «Cambiar plato» si quieres más variedad."),
     ("misma proteina repetida el mismo dia",
      "Un día repite la misma proteína en más de una comida — puedes cambiar uno de esos platos."),
     ("fruta repetida el mismo dia",
      "Un día repite la misma fruta en más de una comida — puedes cambiar uno de esos platos."),
     ("plato-base repetido",
-     "Hay preparaciones parecidas repetidas — usa «Cambiar Plato» si quieres más variedad."),
+     "Hay preparaciones parecidas repetidas — usa «Cambiar plato» si quieres más variedad."),
     ("mismo plato entre dias",
-     "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
+     "Un mismo plato se repite en varios días — usa «Cambiar plato» si quieres más variedad."),
     ("omitio multiples proteinas", "Algún plato no siguió al 100% la estructura planificada."),
     ("omitio proteinas", "Algún plato no siguió al 100% la estructura planificada."),
     # [P2-REVIEW-ISSUES-CLARO · 2026-09-02] Medido: la única familia entregada en 30 días era
     # «COMIDA FUERA DE HORARIO» y NO estaba en el mapa, así que el usuario recibía el párrafo
     # técnico entero (captura del dueño). Copy corto, con el día y el horario delante.
-    ("comida fuera de horario", "el plato es más de otro momento del día. Si no te convence, cámbialo con «Cambiar Plato»."),
-    ("mismo plato repetido entre dias", "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
+    ("comida fuera de horario", "el plato es más de otro momento del día. Si no te convence, cámbialo con «Cambiar plato»."),
+    ("mismo plato repetido entre dias", "Un mismo plato se repite en varios días — usa «Cambiar plato» si quieres más variedad."),
     ("deficit de proteina", "Algún día queda por debajo de tu meta de proteína — puedes cambiar un plato por uno con más proteína."),
     ("techo renal de proteina", "Un día supera el techo de proteína indicado para tu condición — cambia un plato por uno más ligero."),
     ("sodio excesivo", "Algún día pasa el sodio recomendado — revisa embutidos, quesos curados y sal añadida."),
@@ -24164,7 +24164,7 @@ def compute_dish_quality_report(plan: dict) -> dict:
 # (CPU-only, bajo el mismo lock/write del chunk): detecta platos del chunk NUEVO cuyo nombre
 # normalizado ya existe en el MISMO slot de días previos, persiste el report (telemetría plan-level)
 # y marca `_cross_week_repeat` en el meal (chip advisory — NUNCA gate: el chunk ya está generado y
-# re-generarlo en el merge costaría tokens; la palanca correctiva es "Cambiar Plato").
+# re-generarlo en el merge costaría tokens; la palanca correctiva es "Cambiar plato").
 CROSS_WEEK_REPEAT_CHECK_ENABLED = _env_bool("MEALFIT_CROSS_WEEK_REPEAT_CHECK", True)
 CROSS_WEEK_REPEAT_WARN_RATIO = max(0.05, min(1.0, _env_float("MEALFIT_CROSS_WEEK_REPEAT_WARN_RATIO", 0.34)))
 
@@ -44677,7 +44677,7 @@ def _mark_plan_result_quality_degraded(state: PlanState, reason: str, severity: 
 # timeout/CB/error), el plan se entregaba como `review_passed=True` SIN banner — el reviewer médico
 # aprueba (lente ortogonal a slot-coherence/monotonía) y el flag de degradación nunca se seteaba.
 # Con el knob ON marcamos `_quality_degraded` (minor) para que el usuario sepa que puede haber
-# repetición y use Cambiar Plato. Rollback: MEALFIT_MARKER_UNRESOLVED_HONESTY=false.
+# repetición y use Cambiar plato. Rollback: MEALFIT_MARKER_UNRESOLVED_HONESTY=false.
 _FINAL_ATTEMPT_GATE_ADVISORY_FLAGS = (   # P1-SLOT-INCOHERENCE-GATE · P1-STAPLE-REPEAT-GATE · P2-DISH-QUALITY-GATE
     "_slot_incoherence_advisory_final", "_staple_repeat_advisory_final", "_dish_quality_advisory_final")
 
