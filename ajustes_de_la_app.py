@@ -77,6 +77,7 @@ PANTALLAS = {
     "recetas": ("recetas",),
     "historial": ("historial", "dias_anteriores", "historia"),
     "configuracion": ("configuracion", "ajustes", "settings", "preferencias"),
+    "informe": ("informe", "informe_medico", "informes", "reporte", "report"),   # [P1-PLAN-LOTE-1034]
 }
 _PANTALLA_SIN = {s: canon for canon, sins in PANTALLAS.items() for s in sins}
 SECCIONES = {"general": "profile", "cuenta": "profile", "notificaciones": "profile", "apariencia": "profile",
@@ -317,7 +318,7 @@ def abrir_pantalla(pantalla: str, seccion: Optional[str] = None) -> str:
 
 _NOMBRE_PANTALLA = {"inicio": "el inicio", "progreso": "tu progreso", "agente": "el chat del coach",
                     "nevera": "tu Nevera", "recetas": "las recetas", "historial": "tu historial",
-                    "configuracion": "la configuración"}
+                    "configuracion": "la configuración", "informe": "el informe para tu médico"}
 _NOMBRE_SECCION = {"profile": "General", "health": "Alergias y dieta", "preferences": "Capacidades",
                    "privacy": "Privacidad", "superpers": "Súper personalización", "clinical": "Perfil clínico",
                    "plan": "Plan y objetivo", "subscription": "Suscripción"}

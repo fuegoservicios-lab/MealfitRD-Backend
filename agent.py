@@ -4840,6 +4840,9 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
         needed.update({"suggest_foods_for_nutrient"})
     if any(_sin_acentos(k) in last_user_text for k in ("alergia", "medico", "clinico", "enfermedad", "diagnost", "intoleranc")):
         needed.update({"check_clinical_profile"})
+    # [P1-PLAN-LOTE-1034] el informe para el médico, por PALABRA COMPLETA (el gap A-17: las subcadenas dan falsos positivos)
+    if re.search(r"\b(?:informes?|reportes?|reports?|medic[oa]s?|doctor[a]?|nutricionista|diagnostic[oa]s?|consulta)\b", last_user_text):
+        needed.add("generar_informe_para_medico")
     if any(_sin_acentos(k) in last_user_text for k in ("cambiar peso", "nuevo peso", "mi meta", "actualizar peso", "mi perfil", "peso", "pese", "libras", "kilos", "kg", "lb")):
         needed.update({"update_form_field"})
     if any(_sin_acentos(k) in last_user_text for k in ("etiqueta", "internet", "busca en google", "investiga")):

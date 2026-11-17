@@ -1091,7 +1091,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1010 · 2026-11-14] (G-10/11/12/14/18/19/21/30) Semáforo aislado del coach (`16`), barrido de checkpoints superados (`keep=2`, `batch=500`) + GC `pipeline_metrics`, caché de contexto de usuario 30 s (`_CHAT_USER_CTX_CACHE`) con `context_build_ms` y tope diario de gasto US$ 0,25 + alertas horarias 1 h / 3x.
 # [P1-PLAN-LOTE-1011 · 2026-11-14] (G-16/26/27/28/29) `query_chat_ops_insights` + `/admin/chat-insights` (feedback negativo, turnos >15 s y nudges internos/proactivos), paridad voz↔texto (`coach_live` ↔ `chat_agent`) e idempotencia ante reintentos (`log_consumed_meal` dedup/force, `mark_shopping_list_purchased`, `client_message_id`) (CLAUDE.md · P3-1 / test_p3_1_last_known_pfix_freshness).
 # [P1-PLAN-LOTE-1057 · 2026-11-17] Regla D del coach: si lo anotado deja el día >10 % sobre su meta de kcal, cierra con UNA idea amable para la próxima comida o mañana, sin culpa ni saltarse comidas (tope del manual 13_700).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1057 · 2026-11-17"
+# [P1-PLAN-LOTE-1058 · 2026-11-17] Informe para el médico (plan lotes 1032-1034): `informe_medico.py` (datos deterministas), `informe_redaccion.py` (gpt-6.1-terra verificado, canario `informe_medico`, sin respaldo), `informe_servicio.py` + `routers/reports.py` (3/día), herramienta `generar_informe_para_medico` y pantalla «informe».
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1058 · 2026-11-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2794,6 +2795,9 @@ from routers.help_chat import router as help_chat_router
 app.include_router(help_chat_router)
 # [P1-PLAN-LOTE-843 · 2026-09-29] Permiso para la IA de terceros (App Review 5.1.2(i), RGPD 9(2)(a)/49(1)(a)):
 # /api/consents y el manejador que da al 428 `ai_consent_required` su cuerpo plano. SSOT: consentimientos.py.
+# [P1-PLAN-LOTE-1032 · 2026-11-17] Informe para el médico (datos + redacción verificada): /api/reports/health.
+from routers.reports import router as reports_router  # noqa: E402
+app.include_router(reports_router)
 from routers.consents import router as consents_router  # noqa: E402
 import consentimientos as _consentimientos  # noqa: E402
 app.include_router(consents_router)
