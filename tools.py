@@ -7044,7 +7044,32 @@ def abrir_pantalla_de_la_app(user_id: str, pantalla: str, seccion: str = None) -
     return ajustes_de_la_app.abrir_pantalla(pantalla, seccion)
 
 
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app]
+# [P1-PLAN-LOTE-1034 · 2026-11-17] El coach ofrece el informe para el médico (el dueño: «debe darme algo para mi
+# médico»). Crea el informe con los DATOS del servidor (y la redacción verificada si está activa) y abre su pantalla:
+# el coach no lo redacta en el chat ni diagnostica. Orden de `agent_tools`: al FINAL (es parte del prefijo cacheado).
+@tool
+def generar_informe_para_medico(user_id: str, dias: int = 30) -> str:
+    """Prepara el «Informe para tu médico» (resumen de lo que registró, para su médico o nutricionista) y lo abre en
+    la app. Úsala si va al médico o pide algo para su médico, un reporte o un «diagnóstico». dias: 14, 30 o 90.
+    NO lo redactes tú en el chat, no des cifras que no te dé y NUNCA diagnostiques."""
+    if not user_id or str(user_id) == "guest":
+        return "El informe necesita una cuenta: dile que inicie sesión para poder prepararlo."
+    try:
+        import ajustes_de_la_app
+        from informe_servicio import TopeDiario, crear_informe
+        inf = crear_informe(str(user_id), dias=dias, origin="coach")
+    except TopeDiario:
+        return "Hoy ya preparó 3 informes (el máximo diario): puede abrir el último en la pantalla de informes."
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[LOTE-1034] informe desde el coach falló ({type(exc).__name__})")
+        return "No pude preparar el informe ahora. (Para el asistente: dile que lo intente desde la pantalla del informe.)"
+    d = inf["data"]["periodo"]["dias"]
+    texto = f"Hecho: informe de {d} días listo"
+    texto += "." if inf["status"] == "ready" else " (solo con sus datos, sin resumen redactado)."
+    return ajustes_de_la_app._con_marcador(texto, {"pantalla": "informe", "informe_id": inf.get("id")})
+
+
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app, generar_informe_para_medico]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

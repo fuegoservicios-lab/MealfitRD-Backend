@@ -543,6 +543,19 @@ def _stub_buscar_etiqueta_en_internet(**kw):
         _ew.buscar = real
 
 
+def _stub_generar_informe_para_medico(**kw):
+    """[P1-PLAN-LOTE-1034] En seco: no crea filas en `user_health_reports` ni llama a la IA del redactor; devuelve el
+    mismo texto de éxito con el marcador de pantalla que la herramienta real."""
+    import ajustes_de_la_app as aj
+    try:
+        d = int(kw.get("dias") or 30)
+    except (TypeError, ValueError):
+        d = 30
+    d = d if d in (14, 30, 90) else 30
+    return aj._con_marcador(f"Hecho: informe de {d} días listo (solo con sus datos, sin resumen redactado).",
+                            {"pantalla": "informe", "informe_id": "00000000-0000-4000-8000-000000000000"})
+
+
 _STUBS = {
     "buscar_etiqueta_en_internet": _stub_buscar_etiqueta_en_internet,   # [P1-PLAN-LOTE-767] búsquedas de pago
     "guardar_suplemento": _stub_guardar_suplemento,   # [P1-PLAN-LOTE-765] escribía en la Alacena real
@@ -553,6 +566,7 @@ _STUBS = {
     "log_water_glass": _stub_log_water_glass,
     "update_form_field": _stub_update_form_field,
     "cambiar_ajuste_de_la_app": _stub_cambiar_ajuste,   # [P1-PLAN-LOTE-1013]
+    "generar_informe_para_medico": _stub_generar_informe_para_medico,   # [P1-PLAN-LOTE-1034]
 }
 
 
