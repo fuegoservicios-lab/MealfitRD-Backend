@@ -185,7 +185,9 @@ def test_coach_lean_dedup_y_poda_extras_sin_perdida_y_presupuesto_24k(monkeypatc
     total_tok = len(enc.encode(lean)) + len(enc.encode(core_schemas)) + 3600  # + resto/ayer/resumen/historial típico
     # [P1-PLAN-LOTE-1037] 13_600 -> 13_650: el commit 51d9ae96 (porciones caseras al pedir los pasos de una sugerencia)
     # anadio ~60 tokens al manual compacto y dejo el tope en 13_626 sin pasar por el gate. La meta G-03 (24k) no cambia.
-    assert len(enc.encode(lean)) <= 13_650
+    # [P1-PLAN-LOTE-1057] 13_650 -> 13_700: la regla D gana una frase (día >10 % sobre la meta ⇒ una idea amable para
+    # la próxima comida o mañana, sin culpa ni saltarse comidas), pedida por el dueño el 17-nov: +49 tokens (13_686).
+    assert len(enc.encode(lean)) <= 13_700
     assert total_tok <= 24_000, f"Excede meta G-03: {total_tok}"
 
 
