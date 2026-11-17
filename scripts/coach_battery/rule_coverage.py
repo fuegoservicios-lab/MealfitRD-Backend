@@ -59,6 +59,7 @@ RULE_TO_BATTERY_CASES: dict[str, list[str]] = {
     "P1-DIRECT-SLOT-NAME-QUERY": ["C1", "C6"],
     "BB-071": ["B1", "M1", "P2"],
     "P1-PLAN-LOTE-1059": ["W1", "W2", "W3", "W4"],   # regla R5: progreso solo del bloque 🏆
+    "P1-PLAN-LOTE-1034": ["I1", "I2"],   # regla R6: el informe se ofrece, no se redacta ni se diagnostica
     "P1-CLEAN-MACRO-PREFIX": ["B1", "M1"],
     "P1-COMPOSITE-PLATE-VEHICLE-CONSOLIDATION": ["M1", "B1", "P2"],
     "P0-CHAT-ALLERGY-SSOT": ["F1", "F2", "F7"],

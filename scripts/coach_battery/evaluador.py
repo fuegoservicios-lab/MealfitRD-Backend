@@ -42,6 +42,8 @@ SHORT_PRESET_IDS: tuple[str, ...] = (
 # [P1-PLAN-LOTE-1059 · plan 1031] P-1..P-4: el coach y el progreso por semanas (bloque 🏆, consultar_progreso, nota de
 # estrella tras registrar, y que NO hable de estrellas en un turno sin relación).
 PROGRESO_PRESET_IDS: tuple[str, ...] = ("W1", "W2", "W3", "W4")
+# [P1-PLAN-LOTE-1034] I-1/I-2: el informe para el médico (la herramienta se ofrece; el coach no diagnostica).
+INFORME_PRESET_IDS: tuple[str, ...] = ("I1", "I2")
 
 DEFAULT_LEDGER_PATH = Path(__file__).resolve().parent / "ledger.jsonl"
 

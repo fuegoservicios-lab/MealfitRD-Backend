@@ -768,9 +768,10 @@ def run_turn(sid: str, persona: dict, prompt: str, vision) -> dict:
 
 def _select_cases(all_cases: list[dict], *, preset: str, only_raw: str) -> list[dict]:
     only = {x.strip() for x in (only_raw or "").split(",") if x.strip()}
-    if preset in ("short", "progreso"):
+    if preset in ("short", "progreso", "informe"):
         by_id = {c["id"]: c for c in all_cases}
-        ids = _evaluador.SHORT_PRESET_IDS if preset == "short" else _evaluador.PROGRESO_PRESET_IDS
+        ids = {"short": _evaluador.SHORT_PRESET_IDS, "progreso": _evaluador.PROGRESO_PRESET_IDS,
+               "informe": _evaluador.INFORME_PRESET_IDS}[preset]   # [P1-PLAN-LOTE-1034]
         base = [by_id[cid] for cid in ids if cid in by_id]
     else:
         base = list(all_cases)
@@ -792,7 +793,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", required=True)
     ap.add_argument("--only", default="")
-    ap.add_argument("--preset", choices=("all", "short", "progreso"), default="all")
+    ap.add_argument("--preset", choices=("all", "short", "progreso", "informe"), default="all")
     ap.add_argument("--budget-usd", type=float, default=2.0)
     ap.add_argument("--record-ledger", action="store_true")
     ap.add_argument("--ledger-path", default="")
