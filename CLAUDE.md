@@ -258,6 +258,10 @@ Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catá
 
 ---
 
+## Estilo visual de la app
+
+Antes de maquetar: [`docs/diseno/ESTILO.md`](docs/diseno/ESTILO.md) (botón `components/ui/Button`, iconos lucide). Guardas `lote1063`-`lote1067` (trinquete que solo baja).
+
 ## Anti-patrones de frontend prohibidos
 
 [P3-NEW-A · 2026-05-11] El cliente (React/Vite) NO debe escribir directo a tablas user-scoped de Supabase via `supabase.from(...).update|delete|upsert(...)`. Cada uno de esos callsites produce el mismo modo de fallo: **lost-update** contra escritores backend legítimos (`_chunk_worker`, crons, otros endpoints). RLS protege IDOR pero NO previene lost-update — ambos escritores son el mismo `user_id`.

@@ -77,7 +77,8 @@ def test_launch_pill_is_breakable():
 
 def test_primary_cta_keeps_fill_in_dark():
     body = _block(':global(html[data-theme="dark"]) .planButtonPrimary')
-    assert "linear-gradient" in body, (
+    # [P1-PLAN-LOTE-1065] Decisión del dueño 17-nov: el principal es índigo SÓLIDO (antes un degradado).
+    assert "var(--primary-fill)" in body, (
         "el CTA de la tarjeta destacada debe conservar su relleno en oscuro; "
         "sin este override la regla genérica `.planButton` del tema lo apaga"
     )

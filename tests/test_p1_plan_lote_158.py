@@ -97,4 +97,6 @@ def test_cada_control_conserva_su_radio():
     """El velo es una sombra: toma la forma del elemento. Mismo guard que el 151."""
     assert re.search(r"\.turnOnGhost\s*\{[^}]*border-radius:",
                      _leer("src/components/dashboard/DashboardTracking.module.css"))
-    assert "borderRadius: '0.8rem'" in _leer("src/components/common/ConfirmDialog.jsx")
+    # [P1-PLAN-LOTE-1067] El diálogo usa el botón común: su radio vive en Button.module.css.
+    assert "<Button" in _leer("src/components/common/ConfirmDialog.jsx")
+    assert re.search(r"\.btn\s*\{[^}]*border-radius:", _leer("src/components/ui/Button.module.css"))
