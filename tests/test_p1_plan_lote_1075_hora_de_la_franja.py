@@ -53,6 +53,14 @@ def test_de_madrugada_es_el_dia_biologico_de_ayer():
     assert (loc.date().isoformat(), loc.hour) == ("2026-11-17", 13)
 
 
+def test_la_merienda_tras_la_cena_conserva_su_hora_real():
+    # 18-nov, 00:25: «Merendé esto» con la cena ya anotada → picoteo de noche, NO a las 16:30
+    assert consumed_at_de_franja_pasada("merienda", _utc(2026, 11, 18, 0, 25), RD, ya_ceno=True) is None
+    assert consumed_at_de_franja_pasada("merienda", _utc(2026, 11, 17, 22, 25), RD, ya_ceno=False) is not None
+    # el almuerzo atrasado sí se mueve aunque ya haya cenado (se está poniendo al día)
+    assert consumed_at_de_franja_pasada("almuerzo", _utc(2026, 11, 17, 22, 40), RD, ya_ceno=True) is not None
+
+
 def test_sin_huso_no_inventa():
     assert consumed_at_de_franja_pasada("almuerzo", _utc(2026, 11, 17, 22, 0), None) is None
 
@@ -60,9 +68,10 @@ def test_sin_huso_no_inventa():
 def test_la_herramienta_solo_mueve_la_franja_que_nombro_el_usuario_y_hoy():
     src = (Path(__file__).resolve().parents[1] / "tools.py").read_text(encoding="utf-8")
     i = src.index("[P1-PLAN-LOTE-1075]")
-    bloque = src[i:i + 1600]
+    bloque = src[i:i + 2400]
     assert "if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna:" in bloque
     assert "consumed_at_override=_hora_guardada" in bloque
+    assert "ya_ceno=_ya_ceno" in bloque
 
 
 def test_el_informe_no_usa_horas_estimadas_para_los_horarios():

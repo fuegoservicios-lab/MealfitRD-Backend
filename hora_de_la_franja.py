@@ -16,6 +16,9 @@ margen, la hora guardada es la representativa de esa franja en el día biológic
 Esa hora es una ESTIMACIÓN: `consumed_at` ≠ `created_at`, y por eso la app no la enseña como hora (`horaFiable`) y el
 informe no la usa para los horarios (`informe_medico`, `hora_fiable`). Lo que sí arregla: el día, el orden del diario y
 la franja.
+
+[18-nov] La MERIENDA no se mueve si la cena ya está anotada: «Merendé esto» a las 00:25 tras cenar es un picoteo de
+noche, no la merienda de la tarde (el primer día lo movió a las 16:30: dos filas del dueño, corregidas a mano).
 """
 from __future__ import annotations
 
@@ -31,12 +34,17 @@ _FRANJAS = {
 CORTE_BIOLOGICO_H = 4
 
 
-def consumed_at_de_franja_pasada(meal_type: Optional[str], ahora_utc: datetime, tz_offset_min: Optional[int]) -> Optional[str]:
+def consumed_at_de_franja_pasada(meal_type: Optional[str], ahora_utc: datetime, tz_offset_min: Optional[int],
+                                 ya_ceno: bool = False) -> Optional[str]:
     """ISO UTC de la hora representativa de la franja, o None si no aplica.
 
-    `tz_offset_min` es «UTC − local» en minutos (RD = 240), como `db_facts.user_tz_offset_min`."""
-    franja = _FRANJAS.get(str(meal_type or "").strip().lower())
+    `tz_offset_min` es «UTC − local» en minutos (RD = 240), como `db_facts.user_tz_offset_min`. `ya_ceno`: la cena de
+    hoy ya está anotada (una merienda después de cenar es de noche y se queda con su hora real)."""
+    tipo = str(meal_type or "").strip().lower()
+    franja = _FRANJAS.get(tipo)
     if franja is None or tz_offset_min is None:
+        return None
+    if tipo == "merienda" and ya_ceno:
         return None
     if ahora_utc.tzinfo is None:
         ahora_utc = ahora_utc.replace(tzinfo=timezone.utc)
