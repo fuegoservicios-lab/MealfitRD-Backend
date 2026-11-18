@@ -112,3 +112,100 @@ def ajustar(row: dict, indice: Any, gramos_nuevos: Any, db: Any) -> Optional[dic
         }
     except Exception:
         return None
+
+
+# ───────────────────────────────────────────────────────────── [P1-PLAN-LOTE-1098] cantidades sin gramos
+# «1 taza de arroz», «2 unidad de huevo», «Leche (≈1 vaso)»: 1 de cada 5 renglones reales no trae gramos (replay
+# 18-nov en el servidor: 768 renglones de 30 días, 163 sin gramos, ~100 con número y unidad que el catálogo resuelve).
+# Se corrige el NÚMERO de su unidad. Solo si ese número es de verdad la cantidad: al duplicarlo, el catálogo da el doble
+# de energía (si no, el número era otra cosa —«leche 2 %»— y no se toca).
+CANTIDAD_MIN, CANTIDAD_MAX = 0.25, 30.0
+_RE_NUM_UNIDAD = re.compile(r"(\d+(?:[.,]\d+)?|\d+/\d+)\s*([a-záéíóúñ]+)?", re.I)
+
+
+def _fmt(v: float) -> str:
+    return str(int(v)) if float(v).is_integer() else f"{v:g}"
+
+
+def cantidad_de(texto: str) -> Optional[dict]:
+    """{valor, unidad, inicio, fin} del número de la cantidad (el del paréntesis si lo hay, si no el primero), o None si
+    el renglón trae gramos (eso lo corrige `editables`)."""
+    if not isinstance(texto, str) or not texto.strip():
+        return None
+    c = componente(texto)
+    if c and c.get("gramos"):
+        return None
+    m_paren = re.search(r"\(([^)]*)\)", texto)
+    base = m_paren.start(1) if m_paren else 0
+    zona = m_paren.group(1) if m_paren else texto
+    m = _RE_NUM_UNIDAD.search(zona)
+    if not m:
+        return None
+    crudo = m.group(1)
+    try:
+        if "/" in crudo:
+            a, b = crudo.split("/")
+            valor = float(a) / float(b)
+        else:
+            valor = float(crudo.replace(",", "."))
+    except (ValueError, ZeroDivisionError):
+        return None
+    if not (CANTIDAD_MIN <= valor <= CANTIDAD_MAX):
+        return None
+    return {"valor": valor, "unidad": (m.group(2) or "").lower(), "inicio": base + m.start(1), "fin": base + m.end(1)}
+
+
+def con_cantidad(texto: str, valor: float) -> str:
+    q = cantidad_de(texto)
+    if not q:
+        return texto
+    return texto[:q["inicio"]] + _fmt(valor) + texto[q["fin"]:]
+
+
+def cantidades(textos: list, db: Any) -> dict:
+    """{índice: {valor, unidad}} de los renglones sin gramos cuya cantidad se puede corregir."""
+    out = {}
+    for i, texto in enumerate(textos):
+        try:
+            q = cantidad_de(texto)
+            if not q:
+                continue
+            uno = macros_de_renglon(texto, db)
+            dos = macros_de_renglon(con_cantidad(texto, q["valor"] * 2), db)
+            if not uno or not dos or not (float(uno.get("kcal") or 0) > 0):
+                continue
+            razon = float(dos.get("kcal") or 0) / float(uno["kcal"])
+            if 1.6 <= razon <= 2.4:
+                out[i] = {"valor": q["valor"], "unidad": q["unidad"]}
+        except Exception:
+            continue
+    return out
+
+
+def ajustar_cantidad(row: dict, indice: Any, valor_nuevo: Any, db: Any) -> Optional[dict]:
+    """Como `ajustar`, para la cantidad de un renglón sin gramos: los totales se mueven la diferencia del renglón."""
+    try:
+        textos = [x for x in (row.get("ingredients") or []) if isinstance(x, str) and x.strip()]
+        indice = int(indice)
+        if not (0 <= indice < len(textos)) or indice not in cantidades(textos, db):
+            return None
+        v = round(min(CANTIDAD_MAX, max(CANTIDAD_MIN, float(valor_nuevo))) * 4) / 4   # de cuarto en cuarto
+        viejo = textos[indice]
+        nuevo_txt = con_cantidad(viejo, v)
+        antes = macros_de_renglon(viejo, db)
+        despues = macros_de_renglon(nuevo_txt, db)
+        if not antes or not despues:
+            return None
+        delta = {k: float(despues.get(k) or 0) - float(antes.get(k) or 0) for k in ("kcal", "protein", "carbs", "fats")}
+        nuevos = list(textos)
+        nuevos[indice] = nuevo_txt
+        return {
+            "calories": max(0, round(float(row.get("calories") or 0) + delta["kcal"])),
+            "protein": max(0, round(float(row.get("protein") or 0) + delta["protein"])),
+            "carbs": max(0, round(float(row.get("carbs") or 0) + delta["carbs"])),
+            "healthy_fats": max(0, round(float(row.get("healthy_fats") or 0) + delta["fats"])),
+            "ingredients": nuevos,
+            "cantidad": v,
+        }
+    except Exception:
+        return None

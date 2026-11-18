@@ -380,7 +380,9 @@ _AJUSTE_GRAMOS_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
 
 class AjusteGramosRequest(BaseModel):
     indice: int = Field(ge=0, le=60)
-    gramos: int = Field(ge=1, le=3000)
+    gramos: Optional[int] = Field(default=None, ge=1, le=3000)
+    # [P1-PLAN-LOTE-1098] la cantidad de un renglón SIN gramos («1 taza», «2 unidad»): una u otra
+    cantidad: Optional[float] = Field(default=None, ge=0.25, le=30)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -2361,8 +2363,14 @@ def api_ajustar_gramos_de_una_pieza(
                 ings = None
         from nutrition_db import IngredientNutritionDB
         from gramos_editables import ajustar as ajustar_gramos   # [P1-PLAN-LOTE-1096] cualquier renglón con gramos
+        from gramos_editables import ajustar_cantidad              # [P1-PLAN-LOTE-1098] y la cantidad sin gramos
         _ndb = IngredientNutritionDB()
-        nuevo = ajustar_gramos({**row, "ingredients": ings}, payload.indice, payload.gramos, _ndb)
+        if payload.cantidad is not None:
+            nuevo = ajustar_cantidad({**row, "ingredients": ings}, payload.indice, payload.cantidad, _ndb)
+        elif payload.gramos is not None:
+            nuevo = ajustar_gramos({**row, "ingredients": ings}, payload.indice, payload.gramos, _ndb)
+        else:
+            raise HTTPException(status_code=422, detail="Falta la cantidad.")
         if not nuevo:
             raise HTTPException(status_code=409, detail="Ese ingrediente no se puede ajustar por gramos.")
         from db_facts import update_consumed_meal

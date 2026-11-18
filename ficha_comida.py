@@ -116,6 +116,11 @@ def desglose_de_ingredientes(ingredients: Any, kcal_comida: Any, db: Any) -> dic
             from gramos_editables import editables
             for i, g in editables(textos, db).items():
                 lineas[i]["ajustable_g"] = g
+            # [P1-PLAN-LOTE-1098] y los renglones sin gramos, por su cantidad («1 taza», «2 unidad»)
+            from gramos_editables import cantidades
+            for i, q in cantidades(textos, db).items():
+                if "ajustable_g" not in lineas[i]:
+                    lineas[i]["cantidad"] = q
         except Exception:
             pass
     return {"lineas": lineas, "con_kcal": con_kcal}
