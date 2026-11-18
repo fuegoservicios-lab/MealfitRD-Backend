@@ -80,3 +80,46 @@ def nota_proteina_cumplida(metas: Optional[dict], filas) -> str:
                 "esto ya cumpliste tu proteína de hoy»); no le insistas más en proteína hoy.")
     except Exception:  # noqa: BLE001
         return ""
+
+
+# [P1-PLAN-LOTE-1080 · 2026-11-18] Dos cierres que contradecían lo que el usuario ve (cuenta de prueba, 17-nov):
+# 1. a las 12:47 anotó desayuno y almuerzo en un mensaje y el coach, tras anotarlos, cerró con «No me mandaste el
+#    desayuno de hoy; si lo comiste, mándame una foto»: el bloque «COMIDAS DE HOY» se calcula ANTES del registro y le
+#    daba esa frase hecha. La nota tras el registro dice ahora qué franjas ya pasadas quedaron anotadas.
+# 2. cerró en 1380 de 1300 kcal (+6 %) y le dijo «superaste tu meta» con consejo para mañana, mientras la app pinta
+#    «meta cumplida» de 90 a 110 %. Hasta +10 % se dice en positivo: cerró en su meta.
+TOLERANCIA_META = 0.10
+
+
+def nota_comidas_al_dia(tipos_del_dia, hora_local: Optional[float]) -> str:
+    """Texto «Para el asistente» con las franjas cuya hora ya pasó y que ya están anotadas, o "". Nunca lanza."""
+    try:
+        from coach_day_context import FIN_DE_FRANJA, franjas_anotadas
+        if hora_local is None:
+            return ""
+        h = float(hora_local) % 24
+        if h < 4.5:
+            return ""
+        anotadas = franjas_anotadas([{"meal_type": t} for t in (tipos_del_dia or [])])
+        ya = [f for f in ("desayuno", "almuerzo", "merienda") if f in anotadas and h >= FIN_DE_FRANJA[f]]
+        if not ya:
+            return ""
+        lista = " y ".join(ya) if len(ya) <= 2 else ", ".join(ya[:-1]) + " y " + ya[-1]
+        return (f" COMIDAS YA ANOTADAS tras este registro [P1-PLAN-LOTE-1080]: {lista}. El bloque «COMIDAS DE HOY» se "
+                "calculó ANTES de este registro: de estas NO digas «No me mandaste…» ni le pidas su foto.")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def nota_kcal_en_meta(metas: Optional[dict], consumido: Optional[dict]) -> str:
+    """Si se pasó de su meta de kcal por ≤10 %, la orden de decirlo en positivo; si no (o sin datos), "". Nunca lanza."""
+    try:
+        meta = float((metas or {}).get("kcal") or 0)
+        lleva = float((consumido or {}).get("kcal") or 0)
+        if meta <= 0 or lleva <= meta or lleva > meta * (1 + TOLERANCIA_META):
+            return ""
+        return (f" CERRÓ EN SU META [P1-PLAN-LOTE-1080]: ~{int(round(lleva))} de ~{int(round(meta))} kcal, solo "
+                f"~{int(round(lleva - meta))} por encima (dentro del ±10 % que su app marca como meta cumplida). Dilo "
+                "en positivo («quedaste en tu meta de hoy»), sin «superaste» ni «te pasaste» y sin consejos para mañana.")
+    except Exception:  # noqa: BLE001
+        return ""

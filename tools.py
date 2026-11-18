@@ -1977,13 +1977,18 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
                     # [P1-PLAN-LOTE-983 · 2026-11-11] Caso vivo del dueño: con +225 kcal lo dijo, con +865 calló. El dato
                     # le llegaba («kcal: YA SE PASÓ por ~865»); nada le pedía decirlo. tooltip-anchor: P1-PLAN-LOTE-983
                     if "kcal: YA SE PASÓ" in _m:
-                        _margen += (" YA PASÓ SU META DE KCAL DE HOY: díselo SIEMPRE en una frase con la cifra de "
-                                    "cuánto se pasó (sin regañar, sin culpa y sin proponer compensarlo mañana).")
+                        # [P1-PLAN-LOTE-1080] hasta +10 % cerró EN su meta (la app la pinta cumplida): en positivo
+                        _margen += (__import__("cierre_del_dia").nota_kcal_en_meta(_metas, _c)
+                                    or (" YA PASÓ SU META DE KCAL DE HOY: díselo SIEMPRE en una frase con la cifra de "
+                                        "cuánto se pasó (sin regañar, sin culpa y sin proponer compensarlo mañana)."))
                 # [P1-PLAN-LOTE-1076] con la cena anotada, la proteína muy corta se dice una vez, con una idea para mañana
                 _margen += __import__("cierre_del_dia").nota_proteina_corta(
                     _metas, _c, [r.get("meal_type") for r in _rows if isinstance(r, dict)], _hora_local_float(user_id))
                 # [P1-PLAN-LOTE-1079] y su gemelo positivo: el registro que cruza la meta de proteína se celebra
                 _margen += __import__("cierre_del_dia").nota_proteina_cumplida(_metas, _rows)
+                # [P1-PLAN-LOTE-1080] las franjas ya pasadas que este registro dejó anotadas: sin «No me mandaste…»
+                _margen += __import__("cierre_del_dia").nota_comidas_al_dia(
+                    [r.get("meal_type") for r in _rows if isinstance(r, dict)], _hora_local_float(user_id))
             except Exception as _mg_err:
                 logger.warning(f"[P1-PLAN-LOTE-226] margen tras el registro no calculado: {_mg_err!r}")
             return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "
