@@ -11797,6 +11797,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
             # [P1-PLAN-LOTE-1077] «Lo mismo» a secas (respuesta a la duda de una foto) = su último registro de hoy.
             system_prompt += __import__("lo_mismo_de_antes").bloque_para_chat(user_id, prompt, tz_offset)
+            # [P1-PLAN-LOTE-1079] «yogurt sissys» = Siggi's: la marca mal escrita se reconoce (no se estima genérico).
+            system_prompt += __import__("marca_parecida").bloque_para_chat(prompt)
             # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
             system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
             # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito

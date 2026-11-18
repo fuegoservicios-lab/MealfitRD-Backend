@@ -1982,6 +1982,8 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
                 # [P1-PLAN-LOTE-1076] con la cena anotada, la proteína muy corta se dice una vez, con una idea para mañana
                 _margen += __import__("cierre_del_dia").nota_proteina_corta(
                     _metas, _c, [r.get("meal_type") for r in _rows if isinstance(r, dict)], _hora_local_float(user_id))
+                # [P1-PLAN-LOTE-1079] y su gemelo positivo: el registro que cruza la meta de proteína se celebra
+                _margen += __import__("cierre_del_dia").nota_proteina_cumplida(_metas, _rows)
             except Exception as _mg_err:
                 logger.warning(f"[P1-PLAN-LOTE-226] margen tras el registro no calculado: {_mg_err!r}")
             return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "

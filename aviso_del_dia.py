@@ -100,6 +100,10 @@ def bloque_del_dia(consumed, health, comida=None) -> str:
                 f"- Calorías: {kcal} de {meta_kcal} "
                 + (f"(le quedan {quedan})." if quedan >= 0 else f"(ya pasó su meta por {-quedan}).")
             )
+            # [P1-PLAN-LOTE-1079] la cena con mucho margen: el plato del tamaño de lo que queda (no ~500 kcal)
+            _cena = __import__("cena_a_la_medida").regla(comida, quedan, (health or {}).get("mainGoal") if isinstance(health, dict) else None)
+            if _cena:
+                lineas.append(_cena)
             if meta_prot and meta_kcal > 0:
                 falta = meta_prot - prot
                 lineas.append(

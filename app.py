@@ -1099,7 +1099,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1075 · 2026-11-17] comida de una franja ya pasada, anotada tarde, se guarda en su franja (hora_de_la_franja).
 # [P1-PLAN-LOTE-1076 · 2026-11-17] de noche la cena se pregunta en pasado y, con la cena anotada, la proteína muy corta se dice una vez (cierre_del_dia).
 # [P1-PLAN-LOTE-1077 · 2026-11-18] «Lo mismo» sin día, respondiendo a la duda de una foto, es su último registro de hoy (lo_mismo_de_antes).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1077 · 2026-11-18"
+# [P1-PLAN-LOTE-1079 · 2026-11-18] cena a la medida de lo que queda, proteína cumplida una vez, marca mal escrita reconocida.
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1079 · 2026-11-18"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
