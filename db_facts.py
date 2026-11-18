@@ -1069,6 +1069,14 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 snapshot_current_targets_for_user(user_id, overwrite_today=False)
             except Exception:
                 pass
+        # [P1-PLAN-LOTE-1085] los micros de la comida, calculados ya (en un hilo: el registro no espera), para que abrir
+        # ese día en el diario no los calcule en la petición
+        if ingredients:
+            try:
+                import threading as _th
+                _th.Thread(target=__import__("micros_memo").calentar, args=(list(ingredients),), daemon=True).start()
+            except Exception:
+                pass
         return str(_rows[0]["id"]) if _rows else True
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")

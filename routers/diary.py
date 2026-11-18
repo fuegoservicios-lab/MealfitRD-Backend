@@ -1997,7 +1997,8 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
             for m in meals:
                 nutrition = m.pop("nutrition", None)
                 ingredients = m.pop("ingredients", None)
-                m["micros"] = micros_from_snapshot(nutrition) or micros_de_ingredientes(ingredients, _ndb)
+                # [P1-PLAN-LOTE-1085] recordados por la huella de los ingredientes: 0,4-3,4 s por día → milisegundos
+                m["micros"] = micros_from_snapshot(nutrition) or __import__("micros_memo").micros_de_ingredientes_memo(ingredients, _ndb)
                 # [P1-DIARY-MICROS-PLAUSIBLE · 2026-09-23] renglones que pesan más energía que la comida ⇒ sin micros
                 m["micros"] = micros_plausibles(m["micros"], m.get("calories"))
             _resumen = resumen_micros(meals)

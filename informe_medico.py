@@ -531,7 +531,7 @@ def _micros_por_dia(por_dia_meals: dict[str, list[dict]], perfil: dict) -> tuple
         for d, meals in por_dia_meals.items():
             ms = []
             for m in meals:
-                mi = micros_from_snapshot(m.get("nutrition")) or micros_de_ingredientes(m.get("ingredients"), ndb)
+                mi = micros_from_snapshot(m.get("nutrition")) or __import__("micros_memo").micros_de_ingredientes_memo(m.get("ingredients"), ndb)  # [P1-PLAN-LOTE-1085]
                 ms.append({"micros": micros_plausibles(mi, m.get("calories"))})
             res = resumen_micros(ms)
             by = (res.get("micros_coverage") or {}).get("by_nutrient") or {}
