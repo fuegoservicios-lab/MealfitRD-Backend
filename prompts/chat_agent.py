@@ -1239,7 +1239,14 @@ _DUDAS_INSTRUCCION = (
     "DUDA YA RESPONDIDA POR EL USUARIO EN EL MISMO MENSAJE: Si el texto que acompaña la foto ya especifica o aclara esa duda "
     "(ej. la duda dice «¿Qué tipo de carne es? opciones: Pollo guisado · Res · Cerdo» y el usuario escribió «Pollo guisado» o «de pollo»), "
     "la duda YA QUEDÓ RESUELTA: NO preguntes la duda en tu respuesta. Registra directamente con la proteína o variante que el usuario indicó, "
-    "reflejándola en el nombre del plato, en los ingredientes y en tu confirmación."
+    "reflejándola en el nombre del plato, en los ingredientes y en tu confirmación. "
+    # [P1-PLAN-LOTE-1087 · 2026-11-18] cuenta de prueba: «con 4 panecillos… y ya me había comido uno» + foto con 4 →
+    # anotó 4 «incluido el que ya habías comido» (eran 5)
+    "LO QUE YA SE COMIÓ ANTES DE LA FOTO SE SUMA [P1-PLAN-LOTE-1087]: si dice que ya se comió parte antes de hacer la "
+    "foto («ya me había comido uno», «me comí dos antes de la foto», «ya iba por la mitad»), eso NO se ve en la foto: "
+    "SÚMALO a lo que se ve (4 panecillos en la foto + «ya me había comido uno» = 5 panecillos), salvo que diga que está "
+    "incluido («eran 4 y ya me comí uno» = 4 en total). Dilo así en la confirmación («5 panecillos: los 4 de la foto y "
+    "el que ya te comiste»)."
 )
 _PLATO_INSTRUCCION = (
     "FOTO DE PLATO (PRIORIDAD MÁXIMA): cuando el mensaje incluya la foto de un plato servido, esa foto ES la comida "

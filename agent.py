@@ -10856,6 +10856,8 @@ def _build_final_content_from_messages(messages: list) -> str:
     def _es_deliberacion(_p: str) -> bool:
         return _chat_hold_pretool_text() and len((_p or "").strip()) > _delib_max
 
+    # [P1-PLAN-LOTE-1086] un bloque anterior que dice casi lo mismo que uno posterior se va (manda el posterior)
+    parts = __import__("turno_casi_repetido").quitar_casi_repetidos(parts)
     if FILLER_STRIP_ENABLED and len(parts) > 1:
         _keep = [p for i, p in enumerate(parts)
                  # El ÚLTIMO bloque nunca se toca: es la respuesta del turno.
@@ -10871,7 +10873,8 @@ def _build_final_content_from_messages(messages: list) -> str:
                             f"mensaje final del turno")
             parts = _keep
 
-    out = "\n\n".join(parts)
+    # [P1-PLAN-LOTE-1086] y si una sola pasada trae la respuesta DOS veces (18-nov: «… lo anoto.  oqo?\nAnoté…»), una
+    out = __import__("turno_casi_repetido").quitar_repeticion_entera("\n\n".join(parts))
     # [P1-CHAT-NEVER-EMPTY · 2026-07-30] Si la reconstrucción no sacó NADA, degradar al último
     # mensaje en vez de devolver "".
     #
