@@ -1096,7 +1096,8 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1064 · 2026-11-17] «Cambiar plato» en frase normal también en los avisos y el prompt (decisión de diseño del dueño: el botón dejó de ser «Cambiar Plato»).
 # [P1-PLAN-LOTE-1069 · 2026-11-17] el aviso del almuerzo sin respuesta caduca a las 16:00 (a las 18:14 aún decía «Para almorzar…»).
 # [P1-PLAN-LOTE-1070 · 2026-11-17] con el día en blanco, el aviso del almuerzo y la cena pide un plato completo (aviso_del_dia).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1070 · 2026-11-17"
+# [P1-PLAN-LOTE-1075 · 2026-11-17] comida de una franja ya pasada, anotada tarde, se guarda en su franja (hora_de_la_franja).
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1075 · 2026-11-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y

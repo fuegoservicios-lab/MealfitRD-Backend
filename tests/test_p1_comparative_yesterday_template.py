@@ -97,9 +97,13 @@ def test_execute_tools_forces_days_ago_zero_for_comparative_template():
 
         # Verificar que el override determinista forzó days_ago=0 (consumed_at_override es None)
         call_kwargs = mock_db_log.call_args[1]
-        assert call_kwargs["consumed_at_override"] is None, (
-            f"Esperado consumed_at_override=None (hoy), pero se recibió {call_kwargs['consumed_at_override']}"
-        )
+        # [P1-PLAN-LOTE-1075] Hoy = sin hora guardada, o (si la franja nombrada ya pasó) la hora de su franja de HOY.
+        # Lo que importa aquí: NO es la hora de hace 24 h (days_ago=1).
+        _ov = call_kwargs["consumed_at_override"]
+        if _ov is not None:
+            from datetime import datetime as _dt, timezone as _tzz
+            _delta_h = (_dt.now(_tzz.utc) - _dt.fromisoformat(_ov)).total_seconds() / 3600
+            assert 0 <= _delta_h < 20, f"Esperado hoy, pero se recibió {_ov} ({_delta_h:.1f} h atrás)"
 
         # Verificar que la respuesta de la tool NO contiene aviso de 'fecha de AYER'
         tmsg = out["messages"][0]

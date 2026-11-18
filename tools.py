@@ -2281,11 +2281,21 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     except (TypeError, ValueError) as error:
         return f"NO REGISTRADO: {error}. Aclara etiqueta y porción antes de registrar."
     has_ingredients = bool(ingredients)
+    _hora_guardada = _consumed_at if _days_ago > 0 else None
+    # [P1-PLAN-LOTE-1075] «Almorcé esto» a las 22:23: la franja que el USUARIO nombró ya pasó → se guarda en su franja
+    # (hora representativa, marcada como estimada al no coincidir con created_at). Solo con la franja dicha por él.
+    if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna:
+        try:
+            from hora_de_la_franja import consumed_at_de_franja_pasada
+            from db_facts import user_tz_offset_min as _uoff
+            _hora_guardada = consumed_at_de_franja_pasada(_meal_type, datetime.now(_tz.utc), _uoff(user_id)) or _hora_guardada
+        except Exception as exc:  # noqa: BLE001
+            __import__("fail_open").fail_open("hora_de_la_franja", exc)
     result = db_log_consumed_meal(
         user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients,
         meal_type=_meal_type,
         mark_inventory_synced=has_ingredients,
-        consumed_at_override=(_consumed_at if _days_ago > 0 else None),
+        consumed_at_override=_hora_guardada,
         nutrition=_nutrition,
         allow_repeat=force,
         source="chat",   # [P1-PLAN-LOTE-720] la ficha del plato dice «Anotada por el coach»

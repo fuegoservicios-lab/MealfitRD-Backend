@@ -67,6 +67,17 @@ def estado_del_dia(kcal: float, meta: float, objetivo: Any) -> str:
 
 
 # ─────────────────────────────────────────────────────────────── utilidades puras
+def hora_fiable(consumed_at: Any, created_at: Any, tolerancia_min: float = 20.0) -> bool:
+    """[P1-PLAN-LOTE-1075] ¿La hora de la comida es REAL? Lo es si se anotó al comer (`consumed_at` ≈ `created_at`);
+    una anotada tarde lleva la hora estimada de su franja y no sirve para los horarios. Sin `created_at`: fiable (filas
+    antiguas). Misma regla que `horaFiable` del diario en la app."""
+    if not isinstance(consumed_at, datetime) or not isinstance(created_at, datetime):
+        return True
+    a = consumed_at if consumed_at.tzinfo else consumed_at.replace(tzinfo=timezone.utc)
+    b = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+    return abs((a - b).total_seconds()) <= tolerancia_min * 60
+
+
 def _r(x: float, nd: int = 0):
     v = round(float(x), nd)
     return int(v) if nd == 0 else v
@@ -327,17 +338,24 @@ def armar_datos(
         por_dia: dict[str, list[dict]] = defaultdict(list)
         for c in reales:
             por_dia[c["dia"]].append(c)
-        primeras = [min(x["hora_local"] for x in v) for v in por_dia.values()]
-        ultimas = [max(x["hora_local"] for x in v) for v in por_dia.values()]
-        cenas = [c for c in reales if str(c.get("meal_type") or "").lower() == "cena"]
+        # [P1-PLAN-LOTE-1075] Los HORARIOS solo con horas fiables: una comida anotada tarde guarda una hora estimada de
+        # su franja (`hora_de_la_franja`), y «primera comida a las 22:23» sería falso. Sin horas fiables, sin horarios.
+        fiables: dict[str, list[dict]] = defaultdict(list)
+        for c in reales:
+            if c.get("hora_fiable", True):
+                fiables[c["dia"]].append(c)
+        primeras = [min(x["hora_local"] for x in v) for v in fiables.values()]
+        ultimas = [max(x["hora_local"] for x in v) for v in fiables.values()]
+        cenas = [c for c in reales if str(c.get("meal_type") or "").lower() == "cena" and c.get("hora_fiable", True)]
         pat: dict[str, Any] = {
             "comidas_por_dia": _r(len(reales) / len(por_dia), 1),
             "pct_dias_con_desayuno": _r(100 * sum(1 for v in por_dia.values()
                                                   if any(str(x.get("meal_type")).lower() == "desayuno" for x in v))
                                         / len(por_dia)),
-            "hora_primera_comida": _hora(statistics.median(primeras)),
-            "hora_ultima_comida": _hora(statistics.median(ultimas)),
         }
+        if primeras:
+            pat["hora_primera_comida"] = _hora(statistics.median(primeras))
+            pat["hora_ultima_comida"] = _hora(statistics.median(ultimas))
         if cenas:
             pat["pct_cenas_despues_de_las_22"] = _r(100 * sum(1 for c in cenas if 22 <= c["hora_local"] or c["hora_local"] < 4)
                                                      / len(cenas))
@@ -410,7 +428,7 @@ def construir_datos(user_id: str, dias: Any = PERIODO_POR_DEFECTO, tz_offset: Op
 
     filas = execute_sql_query(
         """
-        SELECT (consumed_at - make_interval(mins => %s))::date AS dia, consumed_at, meal_type, meal_name,
+        SELECT (consumed_at - make_interval(mins => %s))::date AS dia, consumed_at, created_at, meal_type, meal_name,
                calories, protein, carbs, healthy_fats, ingredients, nutrition
         FROM consumed_meals
         WHERE user_id = %s
@@ -440,7 +458,7 @@ def construir_datos(user_id: str, dias: Any = PERIODO_POR_DEFECTO, tz_offset: Op
             hora = 12.0
         ings = r.get("ingredients") if isinstance(r.get("ingredients"), list) else []
         comidas.append({"dia": d, "hora_local": hora, "meal_type": r.get("meal_type"), "ingredients": ings,
-                        "meal_name": r.get("meal_name")})
+                        "meal_name": r.get("meal_name"), "hora_fiable": hora_fiable(ca, r.get("created_at"))})
         por_dia_meals[d].append({"calories": r.get("calories"), "ingredients": ings, "nutrition": r.get("nutrition")})
 
     metas = {}
