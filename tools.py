@@ -1885,6 +1885,10 @@ def _nota_comidas_sin_registrar(user_id: str, days_ago: int, rows_extra=None, ah
                     _frase = (f"«ya casi es hora de {_VERBO_HORA_DE.get(_prox, 'comer')}: cuando {_CUANDO_COMAS.get(_prox, 'comas')}, "
                               f"cuéntame qué comiste y lo anoto»" if _casi else
                               f"«cuando {_CUANDO_COMAS.get(_prox, 'comas')}, cuéntame qué comiste y lo anoto»")
+                    # [P1-PLAN-LOTE-1076] De noche la cena puede haber pasado ya (el dueño anotaba el día entero a las
+                    # 22:23 y recibió «cuando cenes, cuéntame» dos veces): desde las 21:00 se pregunta en pasado.
+                    if _prox == "cena" and (float(_ahora) >= 21.0 or float(_ahora) < 4.0):
+                        _frase = "«¿y la cena? Si ya cenaste, cuéntame qué fue y lo anoto»"
                     if _pasadas:
                         _omision_ej = (
                             "o si estuvo en ayunas / no comió esa comida, ej: «¿qué comiste en el desayuno, o estuviste en ayunas?»"
@@ -1975,6 +1979,9 @@ def _nota_total_del_dia(user_id: str, days_ago: int, rows_extra=None) -> str:
                     if "kcal: YA SE PASÓ" in _m:
                         _margen += (" YA PASÓ SU META DE KCAL DE HOY: díselo SIEMPRE en una frase con la cifra de "
                                     "cuánto se pasó (sin regañar, sin culpa y sin proponer compensarlo mañana).")
+                # [P1-PLAN-LOTE-1076] con la cena anotada, la proteína muy corta se dice una vez, con una idea para mañana
+                _margen += __import__("cierre_del_dia").nota_proteina_corta(
+                    _metas, _c, [r.get("meal_type") for r in _rows if isinstance(r, dict)], _hora_local_float(user_id))
             except Exception as _mg_err:
                 logger.warning(f"[P1-PLAN-LOTE-226] margen tras el registro no calculado: {_mg_err!r}")
             return (f" (Para el asistente: TOTAL REAL DE HOY en su diario, ya con este registro: {_suma} — es lo que "

@@ -268,7 +268,7 @@ def estado_de_las_comidas(consumed_today, hora: Optional[float], schedule_type=N
                                   "a esta hora no le toca ninguna comida: no le pidas «¿qué quieres anotar hoy?» ni invites a comer; si solo charla o cierra el día, responde breve sin repetir sus totales")
             + " — nunca «cuando almuerces» si el almuerzo ya pasó, y NUNCA copies el cierre de tu respuesta anterior: "
             "mira la hora de ESTE mensaje.")
-    if ahora == "cena" and h >= 22.5:
+    if ahora == "cena" and h >= 21.0:   # [P1-PLAN-LOTE-1076] antes 22.5: a las 22:23 aún decía «cuando cenes»
         out += (" Como ya es tarde en la noche, no cierres con «cuando cenes» ni «¿te propongo algo para la cena?»: "
                 "si preguntas por la cena, pregunta qué cenó para anotarlo.")
     if pasadas:
