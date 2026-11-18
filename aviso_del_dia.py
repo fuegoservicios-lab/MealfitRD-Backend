@@ -35,12 +35,42 @@ def _metas(health) -> tuple[int, int] | None:
         return None
 
 
-def bloque_del_dia(consumed, health) -> str:
-    """El bloque «lo que lleva hoy» para el prompt del aviso. Nunca lanza: sin datos, lo dice."""
+# [P1-PLAN-LOTE-1070 · 2026-11-17] El dueño, sin haber anotado nada en el día, recibió a las 19:00 «Una arepita mediana
+# con media taza de habichuelas y aguacate… para cenar y sumar proteína» (~450 kcal, ~13 g de proteína). Sin
+# registros el bloque solo decía «Todavía no registró nada hoy»: ni su meta ni que una comida principal no puede ser
+# ligera si el día va en blanco. Ahora lleva la meta y, en almuerzo y cena, esa pauta.
+_PRINCIPALES_SIN_NADA = ("almuerzo", "cena")
+
+
+def _regla_de_dia_en_blanco(comida, metas) -> list[str]:
+    c = str(comida or "").strip().lower()
+    if c not in _PRINCIPALES_SIN_NADA:
+        return []
+    prot = f"{max(30, min(45, round(metas[1] * 0.3)))} g" if metas and metas[1] else "30-40 g"
+    return [
+        "- DÍA EN BLANCO: puede que no haya comido nada hoy (o que no lo anotara). NO propongas algo ligero ni una "
+        f"porción pequeña: propón un plato COMPLETO con ~{prot} de proteína (pescado, res, pollo, huevos, atún, pavo, "
+        "yogur…) y su carbohidrato. Sin querer recuperar el día entero en una comida, sin regañar y sin preguntar si "
+        "se le olvidó anotar.",
+    ]
+
+
+_REGLA_PROTEINA = ("- Di que algo «suma proteína» o «aporta proteína» SOLO si el plato lleva una fuente clara (pescado, "
+                   "res, pollo, huevos, atún, pavo, queso, yogur, whey); arepa, habichuelas o aguacate solas no lo son.")
+
+
+def bloque_del_dia(consumed, health, comida=None) -> str:
+    """El bloque «lo que lleva hoy» para el prompt del aviso. Nunca lanza: sin datos, lo dice.
+
+    `comida` (opcional): la comida del aviso («Almuerzo», «Cena»…), para la pauta del día en blanco."""
     comidas = [m for m in (consumed or []) if isinstance(m, dict)]
     lineas = ["", "Lo que lleva hoy (datos reales; úsalos solo si ayudan a lo que le dices, no los recites todos):"]
     if not comidas:
         lineas.append("- Todavía no registró nada hoy.")
+        metas = _metas(health)
+        if metas:
+            lineas.append(f"- Su meta de hoy: {metas[0]} kcal" + (f" y {metas[1]} g de proteína." if metas[1] else "."))
+        lineas += _regla_de_dia_en_blanco(comida, metas)
     else:
         partes = []
         alimentos_detallados = []
@@ -99,4 +129,5 @@ def bloque_del_dia(consumed, health) -> str:
                     "- REGLA DE PRESUPUESTO: Margen calórico prácticamente agotado (>= 95%). "
                     "PROHIBIDO sugerir platos calóricos; enfócate en cierre de jornada, hidratación sin calorías o descanso."
                 )
+    lineas.append(_REGLA_PROTEINA)
     return "\n".join(lineas) + "\n"

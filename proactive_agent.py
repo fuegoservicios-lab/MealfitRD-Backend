@@ -1630,7 +1630,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 # "Resumen del día" arriba — ver esa nota para el contrato completo.
                 # [P1-PLAN-LOTE-413] lo que lleva HOY (qué registró y, con perfil suficiente, calorías/proteína contra su
                 # meta): sin esto el aviso no sabía nada del día y sonaba a plantilla
-                prompt += bloque_del_dia(consumed, health)
+                prompt += bloque_del_dia(consumed, health, meal_to_check)   # [P1-PLAN-LOTE-1070] + la comida
                 prompt += _nevera_aviso   # [P1-PLAN-LOTE-960]
                 prompt += __import__("combinacion_del_aviso").REGLA   # [P1-PLAN-LOTE-984] nada de «avena con pavo»
                 _es_espanol = not _nudge_locale or str(_nudge_locale).lower().startswith("es")

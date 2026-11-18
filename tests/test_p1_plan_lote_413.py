@@ -62,4 +62,4 @@ def test_el_prompt_pide_sonar_humano_y_no_repetir_el_objetivo():
 def test_el_bucle_anade_el_bloque_del_dia():
     src = (_BACKEND / "proactive_agent.py").read_text(encoding="utf-8")
     i = src.index("prompt = PROACTIVE_PROMPT.format(")
-    assert "prompt += bloque_del_dia(consumed, health)" in src[i:i + 1500]
+    assert "prompt += bloque_del_dia(consumed, health" in src[i:i + 1500]   # [P1-PLAN-LOTE-1070] + la comida
