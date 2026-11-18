@@ -11795,6 +11795,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             system_prompt += __import__("rutina_del_coach").para_chat(user_id, form_data, plan_vigente, _diario_de_hoy)
             # [P1-PLAN-LOTE-988] «dos paquetes de las de ayer»: el registro buscado y la cuenta hecha, sin preguntar.
             system_prompt += __import__("referencia_a_registro").bloque_para_chat(user_id, prompt, tz_offset)
+            # [P1-PLAN-LOTE-1077] «Lo mismo» a secas (respuesta a la duda de una foto) = su último registro de hoy.
+            system_prompt += __import__("lo_mismo_de_antes").bloque_para_chat(user_id, prompt, tz_offset)
             # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
             system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date, tz_offset=tz_offset)
             # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
