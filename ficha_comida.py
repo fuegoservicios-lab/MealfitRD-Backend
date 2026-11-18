@@ -83,12 +83,10 @@ def desglose_de_ingredientes(ingredients: Any, kcal_comida: Any, db: Any) -> dic
 
     resueltos = []
     if db is not None and hasattr(db, "macros_from_ingredient_string"):
+        # [P1-PLAN-LOTE-1096] el renglón como lo corrige la ficha (la manteca, como grasa y no como carne de cerdo)
+        from gramos_editables import macros_de_renglon
         for texto in textos:
-            try:
-                m = db.macros_from_ingredient_string(texto)
-            except Exception:
-                m = None
-            resueltos.append(m if isinstance(m, dict) and m.get("kcal") is not None else None)
+            resueltos.append(macros_de_renglon(texto, db))
     else:
         resueltos = [None] * len(textos)
 
@@ -111,11 +109,12 @@ def desglose_de_ingredientes(ingredients: Any, kcal_comida: Any, db: Any) -> dic
             except (TypeError, ValueError):
                 pass
         lineas.append(linea)
-    # [P1-PLAN-LOTE-1039 · A-41] los renglones cuyos gramos se pueden ajustar con −/+ (piezas simples con gramos)
+    # [P1-PLAN-LOTE-1039 · A-41] los renglones cuyos gramos se pueden ajustar con −/+; [P1-PLAN-LOTE-1096] todos los
+    # que tienen gramos y resuelven en el catálogo, no solo las piezas simples del suelo de proteína
     if db is not None and hasattr(db, "macros_from_ingredient_string"):
         try:
-            from macros_por_gramos import ajustables
-            for i, g in ajustables(textos, db).items():
+            from gramos_editables import editables
+            for i, g in editables(textos, db).items():
                 lineas[i]["ajustable_g"] = g
         except Exception:
             pass

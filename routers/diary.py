@@ -2360,7 +2360,7 @@ def api_ajustar_gramos_de_una_pieza(
             except Exception:
                 ings = None
         from nutrition_db import IngredientNutritionDB
-        from macros_por_gramos import ajustar_gramos
+        from gramos_editables import ajustar as ajustar_gramos   # [P1-PLAN-LOTE-1096] cualquier renglón con gramos
         _ndb = IngredientNutritionDB()
         nuevo = ajustar_gramos({**row, "ingredients": ings}, payload.indice, payload.gramos, _ndb)
         if not nuevo:
