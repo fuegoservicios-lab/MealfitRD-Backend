@@ -2501,6 +2501,14 @@ async def lifespan(app: FastAPI):
             _check_model_drift()
         except Exception as _drift_e:
             logger.warning(f"[G-06 MODEL_DRIFT] startup check no-op: {_drift_e}")
+        # Auto-limpieza de alertas de planes ya reemplazados/borrados o descartados por diseño.
+        try:
+            from admin_avisos import auto_resolver_obsoletas as _auto_resolver_avisos
+            _cerradas = _auto_resolver_avisos()
+            if _cerradas:
+                logger.info(f"[ADMIN-AVISOS] Auto-resueltas {_cerradas} alertas obsoletas al arrancar.")
+        except Exception as _avisos_e:
+            logger.debug(f"[ADMIN-AVISOS] auto-limpieza de arranque no-op: {_avisos_e}")
         # [P2-NEW-F · 2026-05-08] Registrar listener ANTES de start() para no
         # perder los primeros eventos. Mask combinado MISSED|ERROR. Si la
         # telemetría está desactivada por knob, el listener corto-circuita

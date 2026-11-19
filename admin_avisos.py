@@ -497,3 +497,45 @@ def marcar_revisados(huellas: list) -> int:
         "AND left(encode(sha256(convert_to(alert_key, 'UTF8')), 'hex'), 16) = ANY(%s::text[]) RETURNING 1 AS ok",
         (limpias,), returning=True)
     return len(filas or [])
+
+
+def auto_resolver_obsoletas() -> int:
+    """Cierra en BD alertas de planes ya borrados/reemplazados o descartados por diseño (best-effort)."""
+    import admin_metricas as am
+    try:
+        abiertas = am._todos(
+            "SELECT alert_key, metadata->>'user_id' AS uid, metadata->>'plan_id' AS pid, "
+            "metadata->>'escalation_reason' AS razon FROM public.system_alerts "
+            "WHERE resolved_at IS NULL LIMIT 1000"
+        )
+    except Exception:
+        return 0
+    abiertas = [r for r in (abiertas if isinstance(abiertas, list) else []) if isinstance(r, dict)]
+    if not abiertas:
+        return 0
+    ids = [_ids_de(r) for r in abiertas]
+    planes = _planes(sorted({p for _, p in ids if p}))
+    claves_cerrar = []
+    for r, (_, pid) in zip(abiertas, ids):
+        clave = r.get("alert_key")
+        if not clave:
+            continue
+        tipo = am._tipo_alerta(clave)
+        if str(r.get("razon") or "") in _DESCARTE_POR_DISENO:
+            claves_cerrar.append(clave)
+        elif tipo in _TIPOS_DE_PLAN and pid and planes.get(pid) is not True:
+            claves_cerrar.append(clave)
+    if not claves_cerrar:
+        return 0
+    try:
+        filas = am.execute_sql_write(
+            "UPDATE public.system_alerts SET resolved_at = now(), "
+            "metadata = COALESCE(metadata, '{}'::jsonb) "
+            "|| jsonb_build_object('auto_resolved_reason', 'plan_replaced_or_obsolete') "
+            "WHERE resolved_at IS NULL AND alert_key = ANY(%s::text[]) RETURNING 1 AS ok",
+            (sorted(set(claves_cerrar)),),
+            returning=True,
+        )
+        return len(filas or [])
+    except Exception:
+        return 0

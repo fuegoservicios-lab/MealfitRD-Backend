@@ -194,6 +194,27 @@ def detect_and_record_model_drift_on_startup() -> dict[str, Any]:
             current.get("coach_fallback_model"),
             current.get("vision_model"),
         )
+        if previous is not None:
+            try:
+                open_row = execute_sql_query(
+                    "SELECT 1 AS open FROM system_alerts WHERE alert_key = %s AND resolved_at IS NULL LIMIT 1",
+                    (_ALERT_KEY_MODEL_DRIFT,),
+                    fetch_one=True,
+                )
+                if isinstance(open_row, dict) and open_row.get("open"):
+                    execute_sql_write(
+                        """
+                        UPDATE system_alerts
+                        SET resolved_at = %s,
+                            metadata = COALESCE(metadata, '{}'::jsonb)
+                                || jsonb_build_object('auto_resolved_reason', 'models_stable_on_restart')
+                        WHERE alert_key = %s AND resolved_at IS NULL
+                        """,
+                        (now_utc, _ALERT_KEY_MODEL_DRIFT),
+                    )
+                    logger.info("✅ [G-06] Alerta %s auto-resuelta (modelos estables).", _ALERT_KEY_MODEL_DRIFT)
+            except Exception as resolve_exc:
+                logger.debug("[G-06] auto-resolve de %s falló: %s", _ALERT_KEY_MODEL_DRIFT, type(resolve_exc).__name__)
 
     payload = {
         **current,

@@ -21613,7 +21613,26 @@ def _alert_high_synthesized_lesson_ratio() -> None:
     total = int(stats.get("total_chunks") or 0)
 
     if total < int(CHUNK_LESSON_SYNTH_MIN_SAMPLES):
-        # Tráfico insuficiente para evaluar; salimos en silencio.
+        # Tráfico insuficiente para evaluar ratio; si la ventana entera pasó con 0 eventos
+        # sintetizados y hay una alerta vieja abierta, se auto-resuelve para no quedar pegada.
+        if synthesized == 0:
+            try:
+                execute_sql_write(
+                    """
+                    UPDATE system_alerts
+                    SET resolved_at = NOW(),
+                        metadata = COALESCE(metadata, '{}'::jsonb)
+                            || jsonb_build_object('auto_resolved_reason', 'quiet_window_zero_synthesized')
+                    WHERE alert_key = 'chunk_lesson_synth_ratio_high'
+                      AND resolved_at IS NULL
+                      AND triggered_at < NOW() - make_interval(hours => %s)
+                    """,
+                    (int(CHUNK_LESSON_SYNTH_WINDOW_HOURS),),
+                )
+            except Exception as _quiet_resolve_err:
+                logger.debug(
+                    f"[SYNTH-QUIET-RESOLVE] auto-resolve falló (best-effort): {_quiet_resolve_err}"
+                )
         return
 
     ratio = (synthesized / total) if total > 0 else 0.0

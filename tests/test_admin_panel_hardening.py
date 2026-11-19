@@ -162,3 +162,51 @@ def test_avisos_catalogo_y_gramatica_fechas_hoy():
     rango = admin_avisos._rango_fechas(pasado, ahora, ahora)
     assert "y el hoy" not in rango
     assert "y hoy," in rango
+
+
+def test_auto_resolve_model_drift_y_avisos_obsoletos(monkeypatch):
+    import model_visibility as mv
+    import cron_tasks
+
+    # 1) model_effective_changed se auto-resuelve cuando modelos son estables y hay alerta abierta
+    writes = []
+    snap = {"coach_model": "gpt-6-luna", "coach_fallback_model": "gemini-4-hydrogen", "vision_model": "gemini-4-hydrogen", "vision_provider": "gemini"}
+
+    def fake_query(sql, params=None, fetch_one=False):
+        if "app_kv_store" in sql:
+            return {"value": snap}
+        if "system_alerts" in sql:
+            return {"open": 1}
+        return None
+
+    monkeypatch.setattr(mv, "get_effective_models_snapshot", lambda: snap)
+    monkeypatch.setattr("db_core.connection_pool", object())
+    monkeypatch.setattr("db_core.execute_sql_query", fake_query)
+    monkeypatch.setattr("db_core.execute_sql_write", lambda sql, params=None: writes.append((sql, params)) or 1)
+    res = mv.detect_and_record_model_drift_on_startup()
+    assert res["drift_detected"] is False
+    assert any("UPDATE system_alerts" in s and "models_stable_on_restart" in s for s, _ in writes)
+
+    # 2) chunk_lesson_synth_ratio_high se auto-resuelve en ventana tranquila (0 sintetizados)
+    cron_writes = []
+    monkeypatch.setattr(cron_tasks, "execute_sql_query", lambda *a, **kw: {"synthesized_events": 0, "total_chunks": 1})
+    monkeypatch.setattr(cron_tasks, "execute_sql_write", lambda sql, params=None: cron_writes.append((sql, params)))
+    cron_tasks._alert_high_synthesized_lesson_ratio()
+    assert any("quiet_window_zero_synthesized" in s for s, _ in cron_writes)
+
+    # 3) auto_resolver_obsoletas cierra planes reemplazados y descartes, pero NO planes actuales
+    pid_viejo = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    pid_actual = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    monkeypatch.setattr(am, "_todos", lambda *a, **kw: [
+        {"alert_key": f"plan_quality_degraded:11111111-1111-1111-1111-111111111111:{pid_viejo}", "uid": None, "pid": pid_viejo, "razon": None},
+        {"alert_key": f"pipeline_emergency_fallback_p1_5:11111111-1111-1111-1111-111111111111:{pid_actual}", "uid": None, "pid": pid_actual, "razon": None},
+        {"alert_key": "dead_lettered_chunk:cccccccc-cccc-cccc-cccc-cccccccccccc", "uid": None, "pid": None, "razon": "execute_after_beyond_plan_window"},
+    ])
+    monkeypatch.setattr(admin_avisos, "_planes", lambda pids: {pid_viejo: False, pid_actual: True})
+    cerradas_params = []
+    monkeypatch.setattr(am, "execute_sql_write", lambda sql, params=None, returning=False: cerradas_params.append(params) or [{"ok": 1}, {"ok": 1}])
+    n = admin_avisos.auto_resolver_obsoletas()
+    assert n == 2
+    assert f"plan_quality_degraded:11111111-1111-1111-1111-111111111111:{pid_viejo}" in cerradas_params[0][0]
+    assert "dead_lettered_chunk:cccccccc-cccc-cccc-cccc-cccccccccccc" in cerradas_params[0][0]
+    assert f"pipeline_emergency_fallback_p1_5:11111111-1111-1111-1111-111111111111:{pid_actual}" not in cerradas_params[0][0]
