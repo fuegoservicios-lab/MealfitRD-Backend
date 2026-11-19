@@ -54,23 +54,129 @@ _DESCARTE_POR_DISENO = frozenset({"execute_after_beyond_plan_window"})
 
 _ACCION = {
     "plan_quality_degraded": "Ábrelo en «Cuentas» y comprueba que los platos encajan con su perfil.",
+    "pipeline_emergency_fallback_p1_5": "Ábrelo en «Cuentas» para comprobar el plan de respaldo o regenerar uno nuevo.",
+    "pipeline_crash_fallback": "Ábrelo en «Cuentas» para comprobar el plan de respaldo o regenerar uno nuevo.",
     "dream_contradiction": "Mira en «Cuentas» cuál de los dos datos es el bueno; si toca una alergia, corrígelo.",
     "review_login_used": "Si no fue Apple revisando la app, cambia el código de App Review (MEALFIT_REVIEW_LOGIN_CODE).",
+    "review_login_failed_burst": "Comprueba si hubo intentos de fuerza bruta sobre el acceso de App Review.",
+    "review_login_account_privileged": "Quita los permisos elevados de la cuenta de revisión de Apple de inmediato.",
+    "review_login_account_missing": "Verifica que la cuenta fija de App Review exista antes de enviar una nueva build.",
     "review_failed_delivered_rate_high": "Mira qué rechazó la revisión clínica en los planes recientes.",
     "registry_dishes_unused": "Revisa por qué el generador casi no elige platos del catálogo.",
     "dead_lettered_chunk": "Regenera el plan de esa cuenta o pídele que lo renueve.",
     "plan_stranded_partial": "Regenera el plan de esa cuenta o pídele que lo renueve.",
     "country_beta_first_plan": "Revisa que ese primer plan salió bien.",
     "llm_provider_balance_exhausted": "Recarga la cuenta del proveedor.",
+    "model_effective_changed": "Si el cambio de modelo fue intencional en un despliegue, márcalo como revisado; si no, revisa las variables MEALFIT_*_MODEL en el servidor.",
+    "chunk_lesson_synth_ratio_high": "Revisa los logs del worker de chunks; si ya bajó tras el despliegue, se cierra solo o puedes marcarlo revisado.",
+    "chat_cost_spike_3x": "Revisa el gasto por cuenta en «Cuentas» y los límites de uso del coach.",
+    "chat_fallback_hourly_burst": "Comprueba el estado del proveedor principal del coach (Gemini) en los logs.",
+    "chat_negative_feedback_high": "Abre las conversaciones con pulgar abajo en «Cuentas» para ver qué falló.",
+    "chat_reliability_degraded": "Revisa los errores recientes del coach en Sentry o en los logs del servidor.",
+    "llm_clinical_reviewer_downgraded": "Verifica el proveedor del revisor clínico; estuvo usando un modelo de respaldo.",
+    "billing_price_tampering": "Revisa el webhook de pagos y bloquea la cuenta si hubo manipulación.",
+    "billing_old_sub_cancel_failed": "Cancela manualmente la suscripción anterior en PayPal para evitar doble cobro.",
+    "hot_table_bloat": "Programa un mantenimiento VACUUM ANALYZE sobre las tablas con más escrituras.",
+    "rate_limiter_bucket_saturation": "Comprueba si hay un pico legítimo de tráfico o un cliente haciendo demasiadas peticiones.",
 }
 # Títulos y textos que faltaban en `admin_metricas._ALERTA` (salían como «Aviso técnico: …» con su código).
 _TEXTOS = {
     "review_login_used": ("Se usó el acceso de App Review",
                           "Alguien entró en la cuenta de demostración con el código fijo para Apple."),
+    "review_login_account_missing": ("Falta la cuenta de App Review",
+                                     "El código de acceso para Apple está activo pero su cuenta no existe en la base."),
+    "review_login_account_privileged": ("Cuenta de App Review con permisos extra",
+                                        "La cuenta de revisión tiene privilegios de administración que no debería tener."),
+    "review_login_failed_burst": ("Varios fallos en el acceso de App Review",
+                                  "Se detectaron múltiples intentos fallidos con el código de revisión."),
     "plan_stranded_partial": ("Plan a medias sin días", "Un plan se quedó sin ningún día generado."),
     "chunk_pantry_snapshots_stale": ("Nevera desactualizada en la cola",
                                      "Bloques en cola con una foto vieja de la Nevera."),
     "chunk_overdue": ("Bloques de plan atrasados", "Debían haber empezado y no lo hicieron."),
+    "model_effective_changed": ("Cambió el modelo de IA activo al arrancar",
+                                "Los modelos configurados para el coach o el escáner cambiaron respecto al arranque anterior del servidor."),
+    "chunk_lesson_synth_ratio_high": ("Aprendizaje continuo con datos de respaldo",
+                                      "Demasiados bloques recientes usaron lecciones sintetizadas de baja confianza en vez de métricas completas."),
+    "chunk_synthesis_overload": ("Sobrecarga al sintetizar lecciones de planes",
+                                 "La cola de aprendizaje entre bloques acumuló demasiados fallos seguidos."),
+    "chunk_dual_processing_detected": ("Bloque procesado dos veces a la vez",
+                                       "Dos workers intentaron generar el mismo bloque simultáneamente."),
+    "chunk_lag_excessive": ("Retraso alto en la cola de bloques",
+                            "Los bloques de plan están tardando más de lo esperado en procesarse."),
+    "chunk_paused_indefinitely": ("Bloques pausados sin reanudarse",
+                                  "Hay bloques de plan pausados que superaron el tiempo normal de espera."),
+    "chunks_tz_unresolved_stuck": ("Bloques atascados sin zona horaria",
+                                   "Bloques en cola que no pudieron calcular la hora local de su cuenta."),
+    "chat_cost_spike_3x": ("Pico inusual de gasto en el coach",
+                           "El costo horario del coach superó el triple de su promedio habitual."),
+    "chat_fallback_hourly_burst": ("El coach usó su modelo de respaldo varias veces",
+                                   "El modelo principal del coach falló repetidamente en la última hora."),
+    "chat_negative_feedback_high": ("Subieron los pulgares abajo en el coach",
+                                    "La proporción de respuestas mal valoradas del coach superó el umbral."),
+    "chat_reliability_degraded": ("Fiabilidad del coach por debajo de lo normal",
+                                  "Aumentaron los errores o respuestas incompletas del coach."),
+    "chat_checkpoint_pool_split_missing": ("Pool de memoria del coach sin separar",
+                                           "El coach está compartiendo pool de conexiones con otras consultas."),
+    "llm_clinical_reviewer_downgraded": ("Revisor clínico en modelo de respaldo",
+                                         "La revisión clínica tuvo que usar un modelo alternativo por fallo del principal."),
+    "billing_price_tampering": ("Diferencia sospechosa en monto de pago",
+                                "Un cobro llegó con un precio distinto al configurado para el plan."),
+    "billing_old_sub_cancel_failed": ("No se canceló la suscripción anterior al cambiar de plan",
+                                      "Una cuenta mejoró de plan pero la suscripción previa siguió activa."),
+    "billing_cancel_access_end_unknown": ("Cancelación sin fecha de fin confirmada",
+                                          "Se canceló una suscripción pero no se pudo leer hasta cuándo mantiene acceso."),
+    "billing_orphan_subscription_recovered": ("Pago huérfano recuperado automáticamente",
+                                              "Un cobro sin cuenta asociada fue emparejado y aplicado correctamente."),
+    "billing_profile_not_found_on_upgrade": ("Perfil no encontrado al aplicar una mejora",
+                                             "Llegó un evento de suscripción para un usuario sin perfil creado."),
+    "account_delete_partial": ("Borrado de cuenta incompleto",
+                               "Al eliminar una cuenta quedaron registros residuales por limpiar."),
+    "atomic_pool_fallback_active": ("Pool de conexiones en modo de respaldo",
+                                    "La base de datos está operando con el pool alternativo por fallos del principal."),
+    "bg_task_timeout": ("Una tarea en segundo plano agotó su tiempo",
+                        "Un proceso asíncrono tardó más del límite y fue cancelado."),
+    "chronic_deferrals": ("Bloques aplazados demasiadas veces",
+                          "Un bloque fue pospuesto repetidamente sin llegar a completarse."),
+    "clinical_band_drift": ("Desvío en bandas clínicas de planes",
+                            "Los planes recientes se alejaron más de lo esperado de los objetivos calóricos o proteicos."),
+    "country_plan_regime_changed": ("Cambió el régimen de planes de un país",
+                                    "Se modificó el comportamiento de disponibilidad para un mercado."),
+    "country_profile_constraint_violation": ("Plato fuera de las reglas del perfil cultural",
+                                             "Un plan generó platos que no cumplían todas las restricciones de su cocina."),
+    "deferrals_flush_backlog": ("Cola acumulada de aplazamientos",
+                                "Hay demasiados aplazamientos pendientes de registrar en base de datos."),
+    "dreaming_backlog_high": ("Cola alta de consolidación de memoria",
+                              "El proceso nocturno de memoria del coach tiene cuentas acumuladas por procesar."),
+    "hot_table_bloat": ("Tablas con acumulación de espacio muerto",
+                        "Algunas tablas con muchas escrituras necesitan mantenimiento para mantener velocidad."),
+    "lesson_telemetry_flush_backlog": ("Telemetría de aprendizaje retrasada",
+                                       "Métricas de bloques pendientes de volcarse a la base de datos."),
+    "memory_summary_failures": ("Fallos al resumir conversaciones del coach",
+                                "Varias sesiones no pudieron compactar su historial de memoria."),
+    "pdf_stale_inventory_fallback_burst": ("PDFs generados con despensa desactualizada",
+                                           "Varios planes exportados usaron una copia previa del inventario."),
+    "plan_jobs_dead": ("Trabajos secundarios de plan fallidos",
+                       "Tareas de traducción o lista de compras agotaron sus reintentos."),
+    "plan_paused_with_live_queue": ("Plan pausado con bloques activos en cola",
+                                    "Un plan en pausa todavía tenía bloques programados para ejecutarse."),
+    "plan_rolling_abandoned": ("Plan continuo abandonado",
+                               "Un plan multi-semana dejó de generar nuevos bloques tras fallos repetidos."),
+    "post_swap_critical_divergence": ("Diferencia entre plato cambiado y lista de compras",
+                                      "Tras cambiar una comida, la lista de compras no quedó totalmente alineada."),
+    "rate_limiter_bucket_saturation": ("Límite de peticiones saturado",
+                                       "Varios usuarios o clientes alcanzaron el tope de velocidad de la API."),
+    "reservation_reconciliation_exhausted": ("Conciliación de cuotas agotada",
+                                             "No se pudo cuadrar automáticamente una reserva de créditos de IA."),
+    "resolution_coverage_drift": ("Bajó la cobertura de resolución de alimentos",
+                                  "Más ingredientes de lo habitual no se emparejaron con el catálogo nutricional."),
+    "scheduler_cascade_missed": ("Varias tareas programadas se saltaron su turno",
+                                 "El planificador acumuló varios retrasos consecutivos."),
+    "shopping_coherence_guard_unevaluable": ("Lista de compras sin verificación de coherencia",
+                                             "No se pudo comprobar si todos los ingredientes del plan estaban en la lista."),
+    "shopping_list_replace_partial_rollback": ("Reemplazo parcial en lista de compras",
+                                               "Al actualizar una lista de compras hubo que revertir parte del cambio."),
+    "skeleton_short_repair": ("Esqueleto de plan reparado automáticamente",
+                              "Un plan nació con menos días de los pedidos y el sistema lo completó."),
 }
 # El descarte por diseño tiene su propio título: «abandonado / falló todos sus reintentos» era falso (0 intentos).
 _TEXTO_DESCARTE = ("Bloques descartados al final del plan",
@@ -123,14 +229,22 @@ def _momento(primera, ultima, ahora=None) -> str | None:
     if _local(primera).date() == _local(ultima).date():
         f = fecha(ultima, ahora)
         return f"Detectado {f}" if f.startswith(("hoy", "ayer")) else f"Detectado el {f} · {hace(ultima, ahora)}"
-    return f"Detectados del {fecha(primera, ahora)} al {fecha(ultima, ahora)} · el último {hace(ultima, ahora)}"
+    f1 = fecha(primera, ahora)
+    f2 = fecha(ultima, ahora)
+    pref1 = "de" if f1.startswith(("hoy", "ayer")) else "del"
+    pref2 = "a" if f2.startswith(("hoy", "ayer")) else "al"
+    return f"Detectados {pref1} {f1} {pref2} {f2} · el último {hace(ultima, ahora)}"
 
 
 def _rango_fechas(desde, hasta, ahora=None) -> str:
     if _local(desde).date() == _local(hasta).date():
         f = fecha(desde, ahora)
         return f if f.startswith(("hoy", "ayer")) else f"el {f}"
-    return f"entre el {fecha(desde, ahora)} y el {fecha(hasta, ahora)}"
+    f1 = fecha(desde, ahora)
+    f2 = fecha(hasta, ahora)
+    p1 = f1 if f1.startswith(("hoy", "ayer")) else f"el {f1}"
+    p2 = f2 if f2.startswith(("hoy", "ayer")) else f"el {f2}"
+    return f"entre {p1} y {p2}"
 
 
 def _uuid(v) -> str | None:

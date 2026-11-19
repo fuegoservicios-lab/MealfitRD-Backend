@@ -144,3 +144,21 @@ def test_registrar_acceso_serializa_uuid_sin_romper(monkeypatch):
     monkeypatch.setattr(admin_acceso, "execute_sql_write", lambda q, p: escritos.append(p))
     admin_acceso.registrar_acceso("adm", "test", "u1", {"id": uuid.uuid4(), "at": dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc)})
     assert len(escritos) == 1
+
+
+def test_avisos_catalogo_y_gramatica_fechas_hoy():
+    for clave in ("model_effective_changed", "chunk_lesson_synth_ratio_high", "pipeline_emergency_fallback_p1_5"):
+        titulo, detalle = admin_avisos._textos(clave)
+        assert not titulo.startswith("Aviso técnico:")
+        assert detalle != "Sin descripción todavía."
+        assert clave in admin_avisos._ACCION
+
+    ahora = dt.datetime(2026, 11, 19, 17, 5, tzinfo=dt.timezone.utc)
+    pasado = dt.datetime(2026, 10, 19, 14, 0, tzinfo=dt.timezone.utc)
+    momento = admin_avisos._momento(pasado, ahora, ahora)
+    assert " al hoy" not in momento
+    assert "a hoy," in momento
+
+    rango = admin_avisos._rango_fechas(pasado, ahora, ahora)
+    assert "y el hoy" not in rango
+    assert "y hoy," in rango
