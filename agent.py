@@ -4828,8 +4828,9 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     }
     needed = set(_CORE_NAMES)
 
-    if any(_sin_acentos(k) in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno")):
-        needed.update({"analizar_suplemento", "guardar_suplemento"})
+    if any(_sin_acentos(k) in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno", "omega", "colageno", "magnesio", "tableta", "gomita")):
+        # [P1-PLAN-LOTE-1103] y la búsqueda de su tabla: «es mío, me metí dos cápsulas» con la foto del pote no la tenía
+        needed.update({"analizar_suplemento", "guardar_suplemento", "buscar_etiqueta_en_internet"})
     if any(_sin_acentos(k) in last_user_text for k in ("comprar", "supermercado", "compra", "lista", "colmado", "bravo", "sirena", "nacional", "precio")):
         needed.update({"check_shopping_list", "mark_shopping_list_purchased"})
     if any(_sin_acentos(k) in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel", "bota", "bote", "daño", "acabo", "gast", "compre", "quedan", "falta")):

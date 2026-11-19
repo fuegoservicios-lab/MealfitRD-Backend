@@ -7005,14 +7005,23 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
 
 
 @tool
-def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: str = None) -> str:
-    """Busca tabla nutricional por porción en internet (UNA vez por producto, antes de pedir foto trasera) si falta la tabla. Luego guarda con `guardar_suplemento(..., fuente='web')`.
-    - marca, producto, sabor (opcional si aplica).
+def buscar_etiqueta_en_internet(user_id: str, marca: str, producto: str, sabor: str = None,
+                                vitaminas: bool = False) -> str:
+    """Busca su tabla en internet (UNA vez por producto, antes de pedir foto) si falta; luego guardar_suplemento(fuente='web'). vitaminas=true: su Supplement Facts.
     """
     # [P1-PLAN-LOTE-767 · 2026-09-29] tooltip-anchor: P1-PLAN-LOTE-767-BUSCAR (motor: etiqueta_web.py)
     if not user_id or str(user_id).strip().lower().startswith("guest"):
         return ("Para buscar etiquetas en internet hace falta iniciar sesión. (Para el asistente: pídele la foto de la "
                 "tabla nutricional; no digas que buscaste.)")
+    if vitaminas:   # [P1-PLAN-LOTE-1103] la tabla Supplement Facts (vitaminas y minerales), en segundo plano
+        try:
+            import etiqueta_web_vitaminas as _ewv
+            _nombre = str(producto or "").strip()[:120]
+            return _ewv.texto_para_el_coach(_ewv.lanzar(user_id, _nombre, marca, producto), _nombre)
+        except Exception:
+            logger.exception("❌ [P1-PLAN-LOTE-1103] la búsqueda de la tabla de vitaminas falló")
+            return ("Ahora no pude buscar en internet. (Para el asistente: guárdalo SIN etiqueta y pídele UNA foto de "
+                    "la tabla Supplement Facts; no digas que buscaste.)")
     try:
         import etiqueta_web
         r = etiqueta_web.buscar(user_id, marca, producto, sabor)
