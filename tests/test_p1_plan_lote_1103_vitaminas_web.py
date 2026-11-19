@@ -93,7 +93,7 @@ def test_completa_el_pote_solo_si_no_tiene_tabla(monkeypatch):
     h = v.leer_tabla(_respuesta())
     monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": None})
     assert v.completar_pote("u1", "Multi+ Phyto", h) is True
-    assert escrituras and escrituras[0][1:] == ("p1", "u1")
+    assert escrituras and escrituras[0][-2:] == ("p1", "u1")
     legible = {"table_readable": True, "nutrients": [{"name": "Vitamina C", "amount": 90}]}
     monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": {"supplement_facts": legible}})
     assert v.completar_pote("u1", "Multi+ Phyto", h) is False, "una tabla de foto LEGIBLE nunca se pisa"

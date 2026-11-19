@@ -111,7 +111,8 @@ def test_el_deploy_valida_antes_de_aplicar_y_restaura_si_falla() -> None:
     for pieza, porque in [
         ("nginx -t", "sin validación, una config mala tumba los DOS dominios"),
         ("/var/backups/nginx", "sin backup no hay a dónde volver"),
-        ("ALPN protocol", "sin comprobar ALPN, 'recargado' no significa 'h2 activo'"),
+        ("openssl s_client -connect bioboros.com:443 -servername bioboros.com -alpn h2", "sin comprobar ALPN, 'recargado' no significa 'h2 activo'"),
+        ("grep -i ALPN", "sin comillas anidadas por ssh desde PowerShell; también muestra «No ALPN negotiated» (19-nov)"),
     ]:
         assert pieza in dep, f"Falta `{pieza}` en el deploy de infra: {porque}."
 

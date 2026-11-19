@@ -246,10 +246,16 @@ def completar_pote(user_id: str, nombre: str, hallazgo: dict) -> bool:
     etiqueta = suplementos.etiqueta_valida(etiqueta_de(hallazgo))
     if not etiqueta:
         return False
+    # [P1-PLAN-LOTE-1111] las porciones del envase también salen de internet («30 servings»): si el pote no las tenía
+    # (0), se ponen, y así descuenta cada toma y avisa antes de que se acabe. Si ya las tenía, mandan las suyas.
+    _porc = hallazgo.get("porciones")
+    _porc = float(_porc) if isinstance(_porc, (int, float)) and 1 <= _porc <= 1000 else None
     execute_sql_write(
-        "UPDATE user_inventory SET serving_label = %s::jsonb, label_source = 'web', updated_at = now() "
-        "WHERE id = %s AND user_id = %s AND kind = 'supplement'",
-        (json.dumps(etiqueta), pote["id"], user_id),
+        # [SUPLEMENTOS-OK: completa la tabla y, si faltaban, las porciones del pote]
+        "UPDATE user_inventory SET serving_label = %s::jsonb, label_source = 'web', "
+        "quantity = CASE WHEN %s::float8 IS NOT NULL AND COALESCE(quantity, 0) <= 0 THEN %s::float8 ELSE quantity END, "
+        "updated_at = now() WHERE id = %s AND user_id = %s AND kind = 'supplement'",
+        (json.dumps(etiqueta), _porc, _porc, pote["id"], user_id),
     )
     return True
 
