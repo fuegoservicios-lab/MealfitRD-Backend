@@ -639,6 +639,10 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
                 _hp["weight"] = _vp
                 if _up:
                     _hp["weightUnit"] = _up
+                try:   # [P1-PLAN-LOTE-1105] al historial (sin él no hay tendencia ni aviso que sepa cuándo se pesó)
+                    __import__("aviso_peso").anotar_en_historial(_hp, _vp, _up or _hp.get("weightUnit"))
+                except Exception:
+                    logger.exception("[P1-PLAN-LOTE-1105] no se anotó el pesaje en el historial")
             else:
                 _hp[field] = _new_field_value
             return None
@@ -681,6 +685,11 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
             _mostrar = f"{_resultado.get('weight')} {_resultado.get('weightUnit') or ''}".strip()
         else:
             _mostrar = _new_field_value
+        if field == "weight" and isinstance(_resultado, dict):   # [P1-PLAN-LOTE-1105] la tendencia, en una frase
+            _tend = __import__("aviso_peso").tendencia(_resultado)
+            if _tend:
+                return (f"¡Éxito! El campo '{field}' ha sido actualizado a '{_mostrar}'. (Para el asistente: tendencia "
+                        f"{_tend}; díselo en UNA frase según su objetivo, sin juzgar.)")
         return f"¡Éxito! El campo '{field}' ha sido actualizado a '{_mostrar}'."
 
     return f"No pude actualizar '{field}'."

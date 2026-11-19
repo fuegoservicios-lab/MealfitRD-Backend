@@ -155,11 +155,26 @@ def cantidad_de(texto: str) -> Optional[dict]:
     return {"valor": valor, "unidad": (m.group(2) or "").lower(), "inicio": base + m.start(1), "fin": base + m.end(1)}
 
 
+# [P1-PLAN-LOTE-1104] «Jugo (2 vasos, ≈500 ml)»: el «≈N ml» acompaña a la cantidad. Sin escalarlo, «4 vasos, ≈500 ml»
+# le daba al catálogo los mismos 500 ml (la misma energía) y el renglón no se podía corregir.
+_RE_APROX = re.compile(r"(≈\s*)(\d+(?:[.,]\d+)?)(\s*(?:ml|g|oz|l)\b)", re.I)
+
+
 def con_cantidad(texto: str, valor: float) -> str:
     q = cantidad_de(texto)
     if not q:
         return texto
-    return texto[:q["inicio"]] + _fmt(valor) + texto[q["fin"]:]
+    nuevo = texto[:q["inicio"]] + _fmt(valor) + texto[q["fin"]:]
+    factor = float(valor) / q["valor"] if q["valor"] else 1.0
+    if factor == 1.0:
+        return nuevo
+    desde = q["inicio"] + len(_fmt(valor))
+    resto = nuevo[desde:]
+    cierre = resto.find(")")
+    zona = resto if cierre < 0 else resto[:cierre]
+    zona = _RE_APROX.sub(lambda m: m.group(1) + _fmt(round(float(m.group(2).replace(",", ".")) * factor))
+                         + m.group(3), zona, count=1)
+    return nuevo[:desde] + zona + (resto[cierre:] if cierre >= 0 else "")
 
 
 def cantidades(textos: list, db: Any) -> dict:
