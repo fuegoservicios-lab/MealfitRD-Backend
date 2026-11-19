@@ -965,15 +965,36 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 # que se va a insertar), para no tomar el café de hoy por un doble toque del de ayer.
                 # [P1-ANTI-CLONE · 2026-10-29] Si los macros e ingredientes son idénticos dentro de la ventana,
                 # es un doble-submit/clon aunque el LLM haya variado ligeramente el nombre (ej. 'Desayuno con ...').
-                _dup = execute_sql_query(
-                    "SELECT id FROM consumed_meals WHERE user_id = %s "
-                    "AND calories = %s AND protein = %s AND carbs = %s AND healthy_fats = %s "
-                    "AND ingredients = %s AND created_at > NOW() - make_interval(secs => %s) "
-                    "AND consumed_at BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours' LIMIT 1",
-                    (user_id, calories, protein, carbs, healthy_fats,
-                     Jsonb(ingredients if ingredients is not None else []), _dedup_win, now, now),
-                    fetch_one=True,
+                # [P1-SUPP-MULTI-DEDUP · 2026-11-19] Excepción crítica: dos suplementos distintos sin calorías
+                # (ej. Creatina 0 kcal + Multivitamínico 0 kcal, ambos sin ingredientes) comparten (0,0,0,0,[])
+                # y NO son un doble-tap. Para suplementos o registros 0-kcal sin ingredientes, exigimos también
+                # coincidencia de `meal_name` para evitar tragarnos el segundo suplemento del mismo turno.
+                _ings_norm = ingredients if ingredients is not None else []
+                _exigir_nombre_dedup = (
+                    str(meal_type or "").strip().lower() == "suplemento"
+                    or (calories == 0 and protein == 0 and carbs == 0 and healthy_fats == 0 and len(_ings_norm) == 0)
                 )
+                if _exigir_nombre_dedup:
+                    _dup = execute_sql_query(
+                        "SELECT id FROM consumed_meals WHERE user_id = %s "
+                        "AND LOWER(TRIM(meal_name)) = LOWER(TRIM(%s)) "
+                        "AND calories = %s AND protein = %s AND carbs = %s AND healthy_fats = %s "
+                        "AND ingredients = %s AND created_at > NOW() - make_interval(secs => %s) "
+                        "AND consumed_at BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours' LIMIT 1",
+                        (user_id, meal_name, calories, protein, carbs, healthy_fats,
+                         Jsonb(_ings_norm), _dedup_win, now, now),
+                        fetch_one=True,
+                    )
+                else:
+                    _dup = execute_sql_query(
+                        "SELECT id FROM consumed_meals WHERE user_id = %s "
+                        "AND calories = %s AND protein = %s AND carbs = %s AND healthy_fats = %s "
+                        "AND ingredients = %s AND created_at > NOW() - make_interval(secs => %s) "
+                        "AND consumed_at BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours' LIMIT 1",
+                        (user_id, calories, protein, carbs, healthy_fats,
+                         Jsonb(_ings_norm), _dedup_win, now, now),
+                        fetch_one=True,
+                    )
                 if _dup:
                     logger.info(
                         f"[P2-CONSUMED-DEDUP] skip doble-tap/clon: '{meal_name}' ({meal_type}) "

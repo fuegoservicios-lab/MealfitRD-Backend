@@ -2628,20 +2628,20 @@ def _verificar_guard_suplemento_correccion(
 @tool
 def correct_consumed_meal(
     user_id: str,
-    meal_id: str = None,
-    meal_name: str = None,
-    calories: int = None,
-    protein: int = None,
-    carbs: int = None,
-    healthy_fats: int = None,
-    meal_type: str = None,
-    days_ago: int = None,
-    ingredients: list[str] = None,
+    meal_id: Optional[str] = None,
+    meal_name: Optional[str] = None,
+    calories: Optional[int] = None,
+    protein: Optional[int] = None,
+    carbs: Optional[int] = None,
+    healthy_fats: Optional[int] = None,
+    meal_type: Optional[str] = None,
+    days_ago: Optional[int] = None,
+    ingredients: Optional[list[str]] = None,
     force: bool = False,
-    food_facts: FoodLabel = None,
-    label_servings: float = None,
+    food_facts: Optional[FoodLabel] = None,
+    label_servings: Optional[float] = None,
     delete: bool = False,
-    nutrition: dict = None,
+    nutrition: Optional[dict] = None,
 ) -> str:
     """
     Corrige EN SITIO o ELIMINA una comida que YA está en el diario del usuario

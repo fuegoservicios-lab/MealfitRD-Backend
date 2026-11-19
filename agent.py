@@ -5491,8 +5491,6 @@ def _es_segundo_plato_distinto_del_turno(
 
     if not prev_names:
         return False
-    if new_type and new_type in prev_types:
-        return False
 
     prev_tokens: set[str] = set()
     for pname in prev_names:
@@ -5500,13 +5498,44 @@ def _es_segundo_plato_distinto_del_turno(
     if not prev_tokens:
         return False
 
-    # [BB-046] El nuevo plato debe aportar alimentos presentes en el texto del usuario
-    # que no estaban en el primero, usando coincidencia morfológica para jerga ('chofa' -> 'chofán').
+    # [P1-SUPP-MULTI-DEDUP · 2026-11-19] Un usuario puede tomar varios suplementos distintos en un mismo
+    # mensaje (ej. "Me tomé la creatina y las multivitaminas"). Ambos caen en la misma franja ('suplemento'
+    # o pre-reclasificación con suplemento=True / <50 kcal). Permitirlos cuando el nombre es genuinamente
+    # distinto y aparece reflejado en el mensaje del usuario; seguir bloqueando clones del mismo suplemento.
+    _SUPP_KWS = (
+        "creatina", "creatine", "multi", "vitamina", "vitamin", "mineral", "magnesio", "magnesium",
+        "colageno", "collagen", "omega", "bcaa", "glutamina", "suplemento", "supplement", "zinc",
+        "capsula", "capsule", "pastilla", "phyto", "electrolit", "probiot", "ashwagandha",
+    )
+    _norm_new_name = new_name.lower()
+    _new_kcal = tool_args.get("calories")
+    _es_supp_nuevo = (
+        new_type in ("suplemento", "supplement", "suplementos", "supplements")
+        or bool(tool_args.get("suplemento"))
+        or (
+            (_new_kcal is None or (isinstance(_new_kcal, (int, float)) and _new_kcal < 100))
+            and any(k in _norm_new_name for k in _SUPP_KWS)
+        )
+    )
     exclusivos_nuevos = new_tokens - prev_tokens
     exclusivos_previos = prev_tokens - new_tokens
     nuevo_en_usuario = _tokens_coinciden(exclusivos_nuevos, user_tokens)
     previo_en_usuario = _tokens_coinciden(exclusivos_previos, user_tokens)
 
+    if _es_supp_nuevo and _norm_new_name not in {p.lower() for p in prev_names}:
+        _solapados = new_tokens & prev_tokens
+        if (
+            nuevo_en_usuario
+            and not _tokens_coinciden(_solapados, user_tokens)
+            and len(_solapados) <= max(1, min(len(new_tokens), len(prev_tokens)) // 2)
+        ):
+            return True
+
+    if new_type and new_type in prev_types:
+        return False
+
+    # [BB-046] El nuevo plato debe aportar alimentos presentes en el texto del usuario
+    # que no estaban en el primero, usando coincidencia morfológica para jerga ('chofa' -> 'chofán').
     if nuevo_en_usuario and previo_en_usuario:
         return True
 
