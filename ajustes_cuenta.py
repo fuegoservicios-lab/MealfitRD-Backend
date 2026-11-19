@@ -859,7 +859,8 @@ def fila_csv(ajustes) -> list:
             salida.append("")
             continue
         texto = _texto(item.get("valor")) if item.get("estado") == "valor" else str(item.get("estado") or "")
-        salida.append("'" + texto if texto[:1] in ("=", "+", "-", "@", "\t", "\r") else texto)
+        peligroso = texto[:1] in ("=", "+", "-", "@", "\t", "\r", "\n") or texto.lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@")
+        salida.append("'" + texto if peligroso else texto)
     return salida
 
 

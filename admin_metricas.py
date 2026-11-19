@@ -55,10 +55,6 @@ _ETIQUETA_ESTADO_PLAN = {
     "failed": "Fallidos", "abandoned": "Abandonados", "degraded_pending_engagement": "Degradados (esperan uso)",
     "expired_pending_pantry": "Caducados (esperan la Nevera)", "sin estado": "Sin estado", "otro": "Otro estado",
 }
-_ETIQUETA_COLA = {
-    "pending": "Pendientes", "processing": "Procesándose", "completed": "Completados", "failed": "Fallidos",
-    "cancelled": "Cancelados", "pending_user_action": "Esperan al usuario", "otro": "Otro",
-}
 _ETIQUETA_FUNCION = {
     "day_generator": "Generación de días", "vision_scan": "Escáner de fotos", "planner": "Planificador",
     "reviewer": "Revisor clínico", "chat_call_model": "Coach (chat)", "plan_display_i18n": "Traducción del plan",
@@ -344,6 +340,10 @@ def _base_completa(ctx: _Ctx, desde) -> bool:
 
 
 def _sin_base(desde) -> str:
+    if isinstance(desde, datetime):
+        dt = desde.replace(tzinfo=timezone.utc) if desde.tzinfo is None else desde
+        local = dt.astimezone(ZoneInfo(_ZONA))
+        return f"Sin comparación: hay datos desde el {local.day} {_MES[local.month]}"
     return f"Sin comparación: hay datos desde el {desde.day} {_MES[desde.month]}"
 
 
@@ -700,8 +700,10 @@ def bloque_escaner(ctx: _Ctx) -> dict:
     primero = _uno("SELECT MIN(created_at) AS desde FROM public.pipeline_metrics WHERE node = 'vision_scan_resultado'")
     desde = primero.get("desde")
     notas = ["Sin tus cuentas."]
-    if desde is not None and desde > datetime.now(timezone.utc) - timedelta(days=dias):
-        notas.append(f"Se registra desde el {desde:%d-%m-%Y}.")
+    if isinstance(desde, datetime):
+        desde_utc = desde.replace(tzinfo=timezone.utc) if desde.tzinfo is None else desde
+        if desde_utc > datetime.now(timezone.utc) - timedelta(days=dias):
+            notas.append(f"Se registra desde el {desde_utc.astimezone(ZoneInfo(_ZONA)):%d-%m-%Y}.")
 
     # [P1-PLAN-LOTE-637] con pocas fotos, los porcentajes son ruido: se dicen los conteos y el tiempo, y se avisa
     if n_v < _MUESTRA_ESCANER:
@@ -764,21 +766,34 @@ def bloque_gasto(ctx: _Ctx) -> dict:
     return {"id": "gasto", "seccion": "Costes", "titulo": f"Gasto por función ({dias} días): {_usd(total_micros)}",
             "tipo": "tabla", "columnas": ["Función", "Llamadas", "Coste"],
             "filas": [[nombre, _entero(llamadas), _usd(micros)] for nombre, llamadas, micros in filas],
-            "barras": [round(micros / total_micros, 4) if total_micros else 0.0 for _, _, micros in filas]}
+            "barras": [min(1.0, round(micros / total_micros, 4)) if total_micros else 0.0 for _, _, micros in filas]}
 
 
 def bloque_analizador(_ctx: _Ctx) -> dict:
+    import json
     corridas = _todos("SELECT ran_at, model, n, ok, notes, metrics FROM public.analyzer_benchmark_runs "
                       "ORDER BY ran_at DESC LIMIT 10")
     filas = []
     for r in corridas:
-        m = r.get("metrics") or {}
+        if not isinstance(r, dict):
+            continue
+        m_raw = r.get("metrics")
+        if isinstance(m_raw, str):
+            try:
+                m_raw = json.loads(m_raw)
+            except Exception:
+                m_raw = {}
+        m = m_raw if isinstance(m_raw, dict) else {}
         # [P1-PLAN-LOTE-620] qué se midió (la nota de la corrida o, sin ella, el modelo) y si la corrida no vale
         corrida = _texto_de_nota(r.get("notes")) or _texto_de_nota(r.get("model")) or "—"
         if not m.get("valida"):
             corrida += " (no válida)"
-        filas.append([r["ran_at"].strftime("%Y-%m-%d %H:%M"), corrida,
-                      _pct((m.get("kcal") or {}).get("mediana")), _pct((m.get("proteina_g") or {}).get("mediana")),
+        ran_at = r.get("ran_at")
+        fecha_txt = ran_at.strftime("%Y-%m-%d %H:%M") if isinstance(ran_at, datetime) else (str(ran_at)[:16] if ran_at else "—")
+        kcal_m = m.get("kcal") if isinstance(m.get("kcal"), dict) else {}
+        prot_m = m.get("proteina_g") if isinstance(m.get("proteina_g"), dict) else {}
+        filas.append([fecha_txt, corrida,
+                      _pct(kcal_m.get("mediana")), _pct(prot_m.get("mediana")),
                       _pct(m.get("recall_componentes"))])
     return {"id": "analizador", "seccion": "Calidad del escáner", "titulo": "Banco del analizador", "tipo": "tabla",
             "columnas": ["Fecha (UTC)", "Corrida", "kcal", "Proteína", "Componentes"], "filas": filas,

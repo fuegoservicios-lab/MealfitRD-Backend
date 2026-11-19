@@ -126,10 +126,11 @@ def _momento(primera, ultima, ahora=None) -> str | None:
     return f"Detectados del {fecha(primera, ahora)} al {fecha(ultima, ahora)} · el último {hace(ultima, ahora)}"
 
 
-def _rango_fechas(desde, hasta) -> str:
+def _rango_fechas(desde, hasta, ahora=None) -> str:
     if _local(desde).date() == _local(hasta).date():
-        return f"el {fecha(desde)}"
-    return f"entre el {fecha(desde)} y el {fecha(hasta)}"
+        f = fecha(desde, ahora)
+        return f if f.startswith(("hoy", "ayer")) else f"el {f}"
+    return f"entre el {fecha(desde, ahora)} y el {fecha(hasta, ahora)}"
 
 
 def _uuid(v) -> str | None:
@@ -137,11 +138,22 @@ def _uuid(v) -> str | None:
     return v if _UUID.match(v) else None
 
 
+# Alertas cuya clave pone `plan_id` en el primer segmento (`<tipo>:<plan_id>...`), no `user_id`.
+_CLAVE_CON_PLAN_PRIMERO = frozenset({
+    "dead_lettered_chunk", "plan_stranded_partial", "chunk_overdue", "plan_chunk_zombie", "plan_data_corrupted",
+})
+
+
 def _ids_de(r: dict) -> tuple:
     """(usuario, plan) de una alerta: de su metadata o, si falta, de los segmentos de su clave."""
     partes = str(r.get("alert_key") or "").split(":")
-    uid = _uuid(r.get("uid")) or next((_uuid(p) for p in partes[1:2] if _uuid(p)), None)
-    pid = _uuid(r.get("pid"))
+    tipo = partes[0].strip().lower() if partes else ""
+    if tipo in _CLAVE_CON_PLAN_PRIMERO:
+        uid = _uuid(r.get("uid"))
+        pid = _uuid(r.get("pid")) or (_uuid(partes[1]) if len(partes) > 1 else None)
+    else:
+        uid = _uuid(r.get("uid")) or (_uuid(partes[1]) if len(partes) > 1 else None)
+        pid = _uuid(r.get("pid")) or (_uuid(partes[2]) if len(partes) > 2 else None)
     return uid, pid
 
 
@@ -196,8 +208,11 @@ def _clasificar(tipo: str, nivel: str, razon, plan_actual, inactiva_desde, cuand
     if str(razon or "") in _DESCARTE_POR_DISENO:
         return "historial", "info", "abierto", "descarte"
     if tipo in _TIPOS_SIN_ESPERA:
-        viejo = isinstance(cuando, datetime) and cuando < (ahora or datetime.now(timezone.utc)) - timedelta(
-            days=_INACTIVO_DIAS)
+        ref = ahora or datetime.now(timezone.utc)
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        dt_cuando = cuando.replace(tzinfo=timezone.utc) if isinstance(cuando, datetime) and cuando.tzinfo is None else cuando
+        viejo = isinstance(dt_cuando, datetime) and dt_cuando < ref - timedelta(days=_INACTIVO_DIAS)
         return ("historial", "info", "abierto", None) if viejo else ("revision", "aviso", "abierto", None)
     if tipo not in _TIPOS_SISTEMA and inactiva_desde is not None:
         return "espera", "info", "abierto", None
@@ -288,7 +303,7 @@ def items(ctx, ahora: datetime | None = None) -> list:
             uno = g["n"] == 1
             detalle += (f" No hace falta actuar: {'su' if uno else 'la'} última actividad "
                         f"{'fue' if uno else 'de esas cuentas fue'} "
-                        f"{_rango_fechas(min(g['inactivas']), max(g['inactivas']))}; se retoma si "
+                        f"{_rango_fechas(min(g['inactivas']), max(g['inactivas']), ahora)}; se retoma si "
                         f"{'vuelve' if uno else 'vuelven'}.")
         if g["tuyas"] == g["n"]:
             detalle += " Es de una de tus cuentas." if g["n"] == 1 else " Son de tus cuentas."
@@ -305,13 +320,12 @@ def items(ctx, ahora: datetime | None = None) -> list:
 
     # Bloques atrasados: los de cuentas vivas son un problema; los de cuentas inactivas, esperan.
     if atrasados:
-        en_espera, desde = 0, None
+        en_espera = 0
         for r in por_cuenta:
             uid = _uuid(r.get("uid"))
             ina = None if (uid and uid in fuera) else _inactiva(uid, senales, ahora)
             if ina is not None:
                 en_espera += int(r.get("n") or 0)
-                desde = ina if desde is None or ina > desde else desde
         en_espera = min(en_espera, atrasados)
         vivos = atrasados - en_espera
         if vivos:

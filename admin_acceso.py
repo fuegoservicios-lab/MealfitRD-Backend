@@ -46,7 +46,7 @@ def registrar_acceso(admin_user_id: str, accion: str, objetivo: Optional[str] = 
     """Una fila en admin_access_log. Si no puede escribirla, LANZA: quien llama no responde sin rastro."""
     execute_sql_write(
         "INSERT INTO public.admin_access_log (admin_user_id, action, target, detail) VALUES (%s, %s, %s, %s::jsonb)",
-        (admin_user_id, str(accion)[:64], objetivo, json.dumps(detalle or {}, ensure_ascii=False)),
+        (admin_user_id, str(accion)[:64], objetivo, json.dumps(detalle or {}, ensure_ascii=False, default=str)),
     )
 
 
@@ -59,15 +59,16 @@ def dias_de_rastro() -> int:
 
 def purgar_rastro_antiguo() -> int:
     """Borra el rastro con más de `dias_de_rastro()` días. Cron diario; nunca lanza (un fallo se reintenta mañana)."""
+    dias = dias_de_rastro()
     try:
         r = execute_sql_write(
             "DELETE FROM public.admin_access_log WHERE at < now() - make_interval(days => %s) RETURNING id",
-            (dias_de_rastro(),), returning=True,
+            (dias,), returning=True,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ [P1-PLAN-LOTE-841] no se pudo purgar el rastro del equipo: {e!r}")
         return 0
     n = len(r) if isinstance(r, list) else 0
     if n:
-        logger.info(f"[P1-PLAN-LOTE-841] rastro del equipo: {n} filas con más de {dias_de_rastro()} días purgadas.")
+        logger.info(f"[P1-PLAN-LOTE-841] rastro del equipo: {n} filas con más de {dias} días purgadas.")
     return n

@@ -9,6 +9,7 @@ nunca: los regalos viven en `account_grants` y `regalos_cuenta` los superpone al
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -21,6 +22,7 @@ from db import execute_sql_query, execute_sql_transaction, execute_sql_write, ge
 logger = logging.getLogger(__name__)
 
 _ZONA_RD = ZoneInfo("America/Santo_Domingo")
+_RE_FECHA_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_CREDITOS = 1000
 MAX_DIAS_CORTESIA = 366
 _HISTORIAL = 50
@@ -66,8 +68,12 @@ def _topes(tier) -> tuple:
 def _estado(r, ahora) -> str:
     if r.get("revoked_at"):
         return "revertido"
-    if r.get("ends_at") and r["ends_at"] <= ahora:
-        return "caducado"
+    ends_at = r.get("ends_at")
+    if isinstance(ends_at, datetime):
+        if ends_at.tzinfo is None:
+            ends_at = ends_at.replace(tzinfo=timezone.utc)
+        if ends_at <= ahora:
+            return "caducado"
     return "vigente"
 
 
@@ -94,7 +100,11 @@ def ficha(user_id):
         "FROM public.account_grants WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
         (user_id, _HISTORIAL), fetch_all=True) or []
     ahora = datetime.now(timezone.utc)
-    from ios_free import allowance, enabled
+    from ios_free import allowance, enabled, using
+    # Aislamos el consumo web en scope="web" para que un acceso al panel desde Capacitor (ios_free) no contamine los medidores web.
+    with using("web"):
+        usados_plan = int(get_monthly_api_usage(user_id) or 0)
+        usados_coach = int(get_monthly_api_usage(user_id, kind="coach") or 0)
     return {
         **({"ios_gratis": allowance(user_id)} if enabled() else {}),
         "user_id": p["id"], "email": p.get("email"), "nombre": p.get("full_name"), "alta": rc.iso(p.get("created_at")),
@@ -103,9 +113,9 @@ def ficha(user_id):
                         "paypal": bool(p.get("tiene_paypal"))},
         "cortesia": ({"plan": cortesia["plan"], "hasta": rc.iso(cortesia["hasta"])}
                      if cortesia and efectivo == cortesia["plan"] and efectivo != pagado else None),
-        "creditos": {"usados": int(get_monthly_api_usage(user_id) or 0), "plan": tope_plan, "regalo": extra_g,
+        "creditos": {"usados": usados_plan, "plan": tope_plan, "regalo": extra_g,
                      "tope": tope_plan + extra_g},
-        "coach": {"usados": int(get_monthly_api_usage(user_id, kind="coach") or 0), "plan": tope_coach,
+        "coach": {"usados": usados_coach, "plan": tope_coach,
                   "regalo": extra_c, "tope": tope_coach + extra_c},
         "regalos": [{"id": r["id"], "tipo": r.get("kind"), "usage_scope": r.get("usage_scope", "web"), "detalle": ("iPhone · Gratis · " if r.get("usage_scope") == "ios_free" else "") + _detalle(r), "desde": rc.iso(r.get("starts_at")),
                      "hasta": rc.iso(r.get("ends_at")), "motivo": r.get("reason"), "estado": _estado(r, ahora),
@@ -182,7 +192,9 @@ def _fallo_al_guardar(admin_id, accion, user_id, grant_id, e) -> ErrorRegalo:
     logger.error(f"🛑 [P1-PLAN-LOTE-774] {accion} no guardado para {user_id}: {e!r}")
     _anotar_fallo(admin_id, accion, user_id, {"grant_id": grant_id, "error": type(e).__name__})
     if type(e).__name__ == "UniqueViolation":
-        return ErrorRegalo(409, "Se acaba de dar otra cortesía a esta cuenta; recarga la ficha.")
+        if accion == "dar_cortesia":
+            return ErrorRegalo(409, "Se acaba de dar otra cortesía a esta cuenta; recarga la ficha.")
+        return ErrorRegalo(409, "Ese cambio ya se registró; recarga la ficha.")
     return ErrorRegalo(500, "No se pudo guardar el regalo.")
 
 
@@ -209,6 +221,8 @@ def regalar_creditos(admin_id, user_id, medidor, modo, cantidad, hasta, motivo) 
         if cantidad < 1:
             raise ErrorRegalo(409, "Ya tiene disponible todo el cupo de su plan: no hay nada que recargar.")
     elif modo == "sumar":
+        if isinstance(cantidad, bool):
+            raise ErrorRegalo(422, "Cantidad inválida.")
         try:
             cantidad = int(cantidad)
         except (TypeError, ValueError):
@@ -249,8 +263,11 @@ def dar_cortesia(admin_id, user_id, plan, hasta, motivo) -> dict:
         raise ErrorRegalo(409, f"Ya paga {_NOMBRE_PLAN.get(pagado, pagado)}: la cortesía tiene que ser un plan mejor.")
     fin = None
     if hasta:
+        hasta_s = str(hasta).strip()
+        if not _RE_FECHA_ISO.fullmatch(hasta_s):
+            raise ErrorRegalo(422, "Fecha inválida.")
         try:
-            dia = date.fromisoformat(str(hasta)[:10])
+            dia = date.fromisoformat(hasta_s)
         except ValueError:
             raise ErrorRegalo(422, "Fecha inválida.") from None
         hoy = datetime.now(_ZONA_RD).date()

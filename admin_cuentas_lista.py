@@ -79,7 +79,7 @@ _ACTIVIDAD = ("ultima", "comidas_total", "comidas_30d", "planes", "mensajes_coac
 # El CSV: la fila del contrato aplanada, en su orden (después van las columnas de `ajustes_cuenta.columnas_csv`).
 COLUMNAS_FILA = ("user_id", "email", "nombre", "alta", "plan_pagado", "plan_efectivo", "es_admin", "prueba.estado",
                  "prueba.desde", *(f"actividad.{k}" for k in _ACTIVIDAD), "modo", "idioma", "pais")
-_INICIO_DE_FORMULA = ("=", "+", "-", "@", "\t", "\r")
+_INICIO_DE_FORMULA = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 _TREINTA_DIAS = "now() - interval '30 days'"
 # Los hilos de la fila `p` (lista y ficha): el SSOT con `p.id` en sus tres parámetros.
@@ -328,7 +328,8 @@ def _celda(v) -> str:
         texto = f"{v:.2f}"
     else:
         texto = str(v)
-    return "'" + texto if texto[:1] in _INICIO_DE_FORMULA else texto
+    peligroso = texto[:1] in _INICIO_DE_FORMULA or texto.lstrip(" \t\r\n")[:1] in ("=", "+", "-", "@")
+    return "'" + texto if peligroso else texto
 
 
 def exportar_csv(buscar="", orden: str = "actividad", filtro: str = "todas") -> tuple:

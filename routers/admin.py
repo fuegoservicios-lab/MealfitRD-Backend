@@ -71,8 +71,12 @@ _AVISOS_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 def api_admin_avisos_revisado(body: _Revisados, admin_id: str = Depends(require_admin)):
     """[P1-PLAN-LOTE-993] «Marcar como revisado»: cierra esas alertas. Si la condición sigue, su productor la reabre."""
     import admin_avisos
-    cerradas = admin_avisos.marcar_revisados(body.huellas)
-    _anotar_vista(admin_id, "marcar_avisos_revisados", None, {"pedidas": len(body.huellas), "cerradas": cerradas})
+    # Fail-closed: el rastro se anota ANTES de modificar `system_alerts`.
+    _anotar_vista(admin_id, "marcar_avisos_revisados", None, {"pedidas": len(body.huellas)})
+    try:
+        cerradas = admin_avisos.marcar_revisados(body.huellas)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_completar("marcar los avisos", e) from e
     return {"ok": True, "cerradas": cerradas}
 
 
@@ -96,7 +100,7 @@ class _Cortesia(BaseModel):
 
 class _RecargaIOS(BaseModel):
     request_id: uuid.UUID
-    motivo: str = Field(min_length=3, max_length=300)
+    motivo: str = Field(min_length=3, max_length=400)
 
 
 class _Revocar(BaseModel):
@@ -116,6 +120,8 @@ def _hecho(user_id: str, resultado: dict) -> dict:
     # duplicar el regalo): `cuenta: None` y el panel la vuelve a pedir.
     try:
         cuenta = ac.ficha(user_id)
+        if cuenta and cp.activo():
+            cuenta = acl.ampliar_ficha(cuenta)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ [P1-PLAN-LOTE-774] cambio guardado pero la ficha de {user_id} no se pudo releer: {e!r}")
         cuenta = None
@@ -270,8 +276,15 @@ def api_admin_exportar_cuentas(buscar: str = Query(default="", max_length=acl.MA
     _anotar_vista(admin_id, "exportar_cuentas", None,
                   {"con_busqueda": acl.patron_de_busqueda(buscar) is not None, "filtro": filtro, "n": n})
     nombre = f"cuentas-{datetime.now(timezone.utc):%Y%m%d}.csv"
-    return Response(content=texto.encode("utf-8"), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="{nombre}"', "Cache-Control": "no-store"})
+    return Response(
+        content=texto.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/cuentas/{user_id}/prueba", dependencies=[
@@ -428,7 +441,8 @@ def api_admin_prueba_adjunto(user_id: uuid.UUID, attachment_id: uuid.UUID, admin
         raise HTTPException(status_code=404, detail="No existe esa foto en esta cuenta.")
     contenido, tipo = r
     return Response(content=contenido, media_type=tipo, headers={
-        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"})
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "inline", "Content-Security-Policy": "default-src 'none'; sandbox"})
 
 
 @router.get("/cuentas/{user_id}/prueba/actividad", dependencies=_DETALLE_DE_PRUEBA)
