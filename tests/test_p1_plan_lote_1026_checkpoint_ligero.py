@@ -102,6 +102,6 @@ def test_builder_falso_o_apagado_compila_como_siempre(monkeypatch):
 def test_cableado():
     s = (Path(__file__).resolve().parent.parent / "agent.py").read_text(encoding="utf-8")
     assert s.count('"sys_prompt": __import__("coach_checkpoint_ligero").preparar(config, system_prompt),') == 1
-    assert s.count('__import__("coach_checkpoint_ligero").prompt_del_turno(state)') == 2
+    assert s.count('__import__("coach_checkpoint_ligero").prompt_del_turno(state)') == 3  # [1102] + el guard de lo comido antes de la foto
     assert 'state.get("sys_prompt"' not in s
     assert s.count("_grafo_para_turno(chat_builder, ") == 2 and "chat_builder.compile(" not in s

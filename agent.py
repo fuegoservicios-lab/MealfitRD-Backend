@@ -6260,17 +6260,28 @@ def _invoke_tool_with_chat_context(
     tool_name: str,
     tool_args: dict,
     messages: list,
+    sys_prompt: str = "",
 ) -> str:
     """Invoca un tool propagando los mensajes recientes del chat via ContextVar."""
     from packaged_food_portions import guard as guard_packaged_portion
     import tools as _tools
+
+    # [P1-PLAN-LOTE-1102] «ya me había comido uno» antes de la foto: también sus kcal y macros, no solo el nombre
+    _ya_comido = __import__("ya_comido_antes")
+    _args_modelo = tool_args
+    tool_args = _ya_comido.ajustar_args(tool_name, tool_args, messages, sys_prompt)
+    _nota_ya_comido = _ya_comido.nota_para_el_coach(_args_modelo, tool_args)
+    _no_deshacer = _ya_comido.correccion_que_deshace(tool_name, tool_args, messages, sys_prompt)
+    if _no_deshacer:
+        return _no_deshacer
 
     guard_res = guard_packaged_portion(tool_name, tool_args, messages)
     if guard_res:
         return guard_res
     tok = _tools._CURRENT_CHAT_MESSAGES.set(messages or [])
     try:
-        return t.invoke(tool_args)
+        _res = t.invoke(tool_args)
+        return f"{_res}{_nota_ya_comido}" if _nota_ya_comido and isinstance(_res, str) else _res
     finally:
         _tools._CURRENT_CHAT_MESSAGES.reset(tok)
 
@@ -7239,7 +7250,7 @@ def execute_tools(state: ChatState):
                 else:
                     for t in agent_tools:
                         if t.name == tool_name:
-                            tool_result = _invoke_tool_with_chat_context(t, tool_name, tool_args, messages)
+                            tool_result = _invoke_tool_with_chat_context(t, tool_name, tool_args, messages, __import__("coach_checkpoint_ligero").prompt_del_turno(state))
                             # [P1-PLAN-LOTE-900] El cambio para la pantalla sale del resultado: el modelo no ve el JSON.
                             if isinstance(tool_result, str) and "<<AJUSTE_APP_JSON:" in tool_result:
                                 from ajustes_de_la_app import extraer_marcador

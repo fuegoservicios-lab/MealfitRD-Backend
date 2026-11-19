@@ -1245,8 +1245,9 @@ _DUDAS_INSTRUCCION = (
     "LO QUE YA SE COMIÓ ANTES DE LA FOTO SE SUMA [P1-PLAN-LOTE-1087]: si dice que ya se comió parte antes de hacer la "
     "foto («ya me había comido uno», «me comí dos antes de la foto», «ya iba por la mitad»), eso NO se ve en la foto: "
     "SÚMALO a lo que se ve (4 panecillos en la foto + «ya me había comido uno» = 5 panecillos), salvo que diga que está "
-    "incluido («eran 4 y ya me comí uno» = 4 en total). Dilo así en la confirmación («5 panecillos: los 4 de la foto y "
-    "el que ya te comiste»)."
+    "incluido («eran 4 y ya me comí uno» = 4 en total). Y SUBE las kcal y los macros en la MISMA proporción: la "
+    "estimación de la foto es solo de lo que se ve (4 → 5 = ×1,25: 560 → 700 kcal) [P1-PLAN-LOTE-1102]. Dilo así en "
+    "la confirmación («5 panecillos: los 4 de la foto y el que ya te comiste»)."
 )
 _PLATO_INSTRUCCION = (
     "FOTO DE PLATO (PRIORIDAD MÁXIMA): cuando el mensaje incluya la foto de un plato servido, esa foto ES la comida "
