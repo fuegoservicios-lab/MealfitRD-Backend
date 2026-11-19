@@ -239,23 +239,38 @@ def completar_pote(user_id: str, nombre: str, hallazgo: dict) -> bool:
             actual = json.loads(actual)
         except ValueError:
             actual = None
-    _f = actual.get("supplement_facts") if isinstance(actual, dict) else None
-    if isinstance(_f, dict) and _f.get("table_readable") and any(
-            isinstance(n, dict) and n.get("amount") is not None for n in (_f.get("nutrients") or [])):
-        return False      # [P1-PLAN-LOTE-1109] una tabla de foto LEGIBLE no se pisa; una ilegible sí se completa
-    etiqueta = suplementos.etiqueta_valida(etiqueta_de(hallazgo))
-    if not etiqueta:
-        return False
     # [P1-PLAN-LOTE-1111] las porciones del envase también salen de internet («30 servings»): si el pote no las tenía
     # (0), se ponen, y así descuenta cada toma y avisa antes de que se acabe. Si ya las tenía, mandan las suyas.
     _porc = hallazgo.get("porciones")
-    _porc = float(_porc) if isinstance(_porc, (int, float)) and 1 <= _porc <= 1000 else None
+    _porc = float(_porc) if isinstance(_porc, (int, float)) and not isinstance(_porc, bool) and 1 <= _porc <= 1000 else None
+    _sin_porciones = float(pote.get("quantity") or 0) <= 0
+    _f = actual.get("supplement_facts") if isinstance(actual, dict) else None
+    if pote.get("label_source") != "web" and isinstance(_f, dict) and _f.get("table_readable") and any(
+            isinstance(n, dict) and n.get("amount") is not None for n in (_f.get("nutrients") or [])):
+        # [P1-PLAN-LOTE-1109] una tabla de foto LEGIBLE no se pisa; una ilegible sí se completa. Sus porciones, si
+        # faltaban, sí (la foto de la tabla casi nunca trae «servings per container»).
+        if _porc and _sin_porciones:
+            execute_sql_write(
+                # [SUPLEMENTOS-OK: pone las porciones del envase que le faltaban al pote]
+                "UPDATE user_inventory SET quantity = %s, updated_at = now() "
+                "WHERE id = %s AND user_id = %s AND kind = 'supplement' AND COALESCE(quantity, 0) <= 0",
+                (_porc, pote["id"], user_id),
+            )
+            return True
+        return False
+    etiqueta = suplementos.etiqueta_valida(etiqueta_de(hallazgo))
+    if not etiqueta:
+        return False
+    # una porción de la etiqueta de varias cápsulas (4 Capsules) no es «1 cápsula»: el pote cuenta porciones
+    _upp = (hallazgo.get("supplement_facts") or {}).get("units_per_serving")
+    _unidad = "porción" if isinstance(_upp, (int, float)) and _upp > 1 else None
     execute_sql_write(
         # [SUPLEMENTOS-OK: completa la tabla y, si faltaban, las porciones del pote]
         "UPDATE user_inventory SET serving_label = %s::jsonb, label_source = 'web', "
         "quantity = CASE WHEN %s::float8 IS NOT NULL AND COALESCE(quantity, 0) <= 0 THEN %s::float8 ELSE quantity END, "
+        "serving_unit = COALESCE(%s, serving_unit), "
         "updated_at = now() WHERE id = %s AND user_id = %s AND kind = 'supplement'",
-        (json.dumps(etiqueta), _porc, _porc, pote["id"], user_id),
+        (json.dumps(etiqueta), _porc, _porc, _unidad, pote["id"], user_id),
     )
     return True
 

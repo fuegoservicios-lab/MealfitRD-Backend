@@ -95,7 +95,7 @@ def test_completa_el_pote_solo_si_no_tiene_tabla(monkeypatch):
     assert v.completar_pote("u1", "Multi+ Phyto", h) is True
     assert escrituras and escrituras[0][-2:] == ("p1", "u1")
     legible = {"table_readable": True, "nutrients": [{"name": "Vitamina C", "amount": 90}]}
-    monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": {"supplement_facts": legible}})
+    monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "quantity": 30, "serving_label": {"supplement_facts": legible}})
     assert v.completar_pote("u1", "Multi+ Phyto", h) is False, "una tabla de foto LEGIBLE nunca se pisa"
     # [P1-PLAN-LOTE-1109] la del Multi+ Phyto del dueño (19-nov): foto ilegible -> la de internet sí la completa
     ilegible = {"table_readable": False, "nutrients": []}
