@@ -579,4 +579,19 @@ def auto_resolver_obsoletas() -> int:
                 total_cerradas += len(filas or [])
         except Exception:
             pass
+    # Si `registry_dishes_unused` está abierta pero el knob `MEALFIT_RECIPE_LIBRARY_SELECT` está apagado, ciérrala.
+    if any(r.get("alert_key") == "registry_dishes_unused" for r in abiertas):
+        try:
+            from recipe_library import library_select_enabled as _lib_sel
+            if not _lib_sel():
+                filas = am.execute_sql_write(
+                    "UPDATE public.system_alerts SET resolved_at = now(), "
+                    "metadata = COALESCE(metadata, '{}'::jsonb) "
+                    "|| jsonb_build_object('auto_resolved_reason', 'recipe_library_select_disabled') "
+                    "WHERE alert_key = 'registry_dishes_unused' AND resolved_at IS NULL RETURNING 1 AS ok",
+                    returning=True,
+                )
+                total_cerradas += len(filas or [])
+        except Exception:
+            pass
     return total_cerradas
