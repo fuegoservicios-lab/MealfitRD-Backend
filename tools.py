@@ -2355,6 +2355,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         try:
             import suplementos as _sup
             _quedan = _sup.descontar(user_id, _pote.get("id"), porciones or 1)
+            __import__("aviso_suplemento").anotar_toma(_pote.get("id"), porciones or 1)   # [P1-PLAN-LOTE-1109] su ritmo real
             if _quedan <= 3:
                 _u = _pote.get("serving_unit") or "porciones"
                 _nota_pote = (f" (Para el asistente: del pote te quedan ~{int(_quedan)} {_u}; díselo en una frase por si "

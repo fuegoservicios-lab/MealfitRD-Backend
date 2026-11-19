@@ -8195,6 +8195,12 @@ def _intentar_fusionar_alimento_en_comida_existente(
             )
             return None
     
+    # [P1-PLAN-LOTE-1110] el mismo alimento registrado dos veces en el turno no se suma otra vez (batida ×2, 19-nov)
+    import fusion_sin_duplicar as _fsd
+    if _fsd.ya_esta_en_la_fila(orig, tool_args, messages):
+        logger.info(f"🔁 [P1-PLAN-LOTE-1110] ya estaba en la fila {orig.get('id')}: no se suma otra vez")
+        return _fsd.sin_cambios(user_id, orig, target_slot)
+
     orig_id = str(orig.get("id"))
     orig_name = str(orig.get("meal_name") or "").strip()
     new_name = str(tool_args.get("meal_name") or "").strip()

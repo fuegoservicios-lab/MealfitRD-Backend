@@ -94,8 +94,13 @@ def test_completa_el_pote_solo_si_no_tiene_tabla(monkeypatch):
     monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": None})
     assert v.completar_pote("u1", "Multi+ Phyto", h) is True
     assert escrituras and escrituras[0][1:] == ("p1", "u1")
-    monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": {"supplement_facts": {"x": 1}}})
-    assert v.completar_pote("u1", "Multi+ Phyto", h) is False, "una tabla de foto nunca se pisa"
+    legible = {"table_readable": True, "nutrients": [{"name": "Vitamina C", "amount": 90}]}
+    monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": {"supplement_facts": legible}})
+    assert v.completar_pote("u1", "Multi+ Phyto", h) is False, "una tabla de foto LEGIBLE nunca se pisa"
+    # [P1-PLAN-LOTE-1109] la del Multi+ Phyto del dueño (19-nov): foto ilegible -> la de internet sí la completa
+    ilegible = {"table_readable": False, "nutrients": []}
+    monkeypatch.setattr(suplementos, "buscar", lambda u, n: {"id": "p1", "serving_label": {"supplement_facts": ilegible}})
+    assert v.completar_pote("u1", "Multi+ Phyto", h) is True
     monkeypatch.setattr(suplementos, "buscar", lambda u, n: None)
     assert v.completar_pote("u1", "Multi+ Phyto", h) is False
 

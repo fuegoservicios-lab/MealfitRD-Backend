@@ -239,8 +239,10 @@ def completar_pote(user_id: str, nombre: str, hallazgo: dict) -> bool:
             actual = json.loads(actual)
         except ValueError:
             actual = None
-    if isinstance(actual, dict) and actual.get("supplement_facts"):
-        return False
+    _f = actual.get("supplement_facts") if isinstance(actual, dict) else None
+    if isinstance(_f, dict) and _f.get("table_readable") and any(
+            isinstance(n, dict) and n.get("amount") is not None for n in (_f.get("nutrients") or [])):
+        return False      # [P1-PLAN-LOTE-1109] una tabla de foto LEGIBLE no se pisa; una ilegible sí se completa
     etiqueta = suplementos.etiqueta_valida(etiqueta_de(hallazgo))
     if not etiqueta:
         return False

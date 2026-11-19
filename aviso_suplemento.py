@@ -13,8 +13,8 @@ no esté hablando con el coach.
   `aviso_suplemento:{id}` guarda con cuántas porciones se avisó; si sube, se rellenó y vuelve a contar).
 - Push + mensaje del coach en el chat del día. Sin modelo. Logs sin nombres ni cifras.
 
-Límite conocido: las vitaminas sin calorías no se anotan como toma (`_SUPPLEMENT_LABEL_INSTRUCTION`: «sin crear una
-comida de 0 kcal»), así que un multivitamínico no descuenta y no entra aquí (decisión pendiente del dueño).
+[P1-PLAN-LOTE-1109] El dueño decidió que las vitaminas SÍ se anotan (0 kcal, `meal_type='suplemento'`) y descuentan;
+cada toma guarda sus porciones (`anotar_toma`), así 2 de 4 cápsulas cuentan 0,5 y no 1.
 """
 from __future__ import annotations
 
@@ -53,11 +53,51 @@ _T = {
 }
 
 
-def dias_restantes(porciones: float, tomas_en_ventana: int) -> Optional[float]:
-    """Puro: días que quedan a su ritmo, o None si no hay ritmo (menos de 3 tomas en 14 días)."""
+def dias_restantes(porciones: float, tomas_en_ventana: int, porciones_tomadas: Optional[float] = None) -> Optional[float]:
+    """Puro: días que quedan a su ritmo, o None si no hay ritmo (menos de 3 tomas en 14 días). Con
+    `porciones_tomadas` (lo que de verdad se descontó: 2 de 4 cápsulas = 0,5) el ritmo es ese; sin él, 1 por toma."""
     if tomas_en_ventana < TOMAS_MIN or not porciones or porciones <= 0:
         return None
-    return float(porciones) / (tomas_en_ventana / float(VENTANA_DIAS))
+    gastado = float(porciones_tomadas) if porciones_tomadas and porciones_tomadas > 0 else float(tomas_en_ventana)
+    return float(porciones) / (gastado / float(VENTANA_DIAS))
+
+
+# ── [P1-PLAN-LOTE-1109] las porciones de cada toma (la fila del diario no las guarda) ────────────────────────────────
+_TOPE_TOMAS = 60
+
+
+def tomas_en_ventana(registro: Optional[list], ahora: datetime) -> tuple[int, float]:
+    """Puro: (cuántas tomas, cuántas porciones) del registro `[[iso, porciones], …]` en los últimos 14 días."""
+    desde = ahora - timedelta(days=VENTANA_DIAS)
+    n, suma = 0, 0.0
+    for it in registro or []:
+        try:
+            t = datetime.fromisoformat(str(it[0]))
+            t = t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+            if t >= desde:
+                n, suma = n + 1, suma + max(0.0, float(it[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return n, suma
+
+
+def anotar_toma(pote_id, porciones, ahora: Optional[datetime] = None) -> None:
+    """Guarda la toma con sus porciones (`app_kv_store` `suplemento_tomas:{id}`, las 60 últimas). Nunca rompe."""
+    try:
+        from db_core import execute_sql_query, execute_sql_write
+        clave = f"suplemento_tomas:{pote_id}"
+        fila = execute_sql_query("SELECT value FROM app_kv_store WHERE key = %s", (clave,), fetch_one=True) or {}
+        reg = fila.get("value")
+        reg = json.loads(reg) if isinstance(reg, str) else (reg or [])
+        reg = (list(reg) if isinstance(reg, list) else []) + [
+            [(ahora or datetime.now(timezone.utc)).isoformat(), float(porciones or 1)]]
+        execute_sql_write(
+            "INSERT INTO app_kv_store (key, value, updated_at) VALUES (%s, %s::jsonb, NOW()) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+            (clave, json.dumps(reg[-_TOPE_TOMAS:])),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[LOTE-1109] toma sin anotar: {type(exc).__name__}")
 
 
 def toca(dias: Optional[float], porciones: float, estado: Optional[dict]) -> bool:
@@ -116,7 +156,14 @@ def enviar_avisos_de_suplemento(ahora_utc: Optional[datetime] = None) -> int:
                 (uid, "%" + nombre[:40] + "%", ahora - timedelta(days=VENTANA_DIAS)), fetch_one=True,
             ) or {}
             porciones = float(p.get("porciones") or 0)
-            dias = dias_restantes(porciones, int(fila.get("n") or 0))
+            reg = execute_sql_query("SELECT value FROM app_kv_store WHERE key = %s",
+                                    (f"suplemento_tomas:{p['id']}",), fetch_one=True) or {}
+            reg = reg.get("value")
+            n_reg, gastado = tomas_en_ventana(json.loads(reg) if isinstance(reg, str) else reg, ahora)
+            if n_reg >= TOMAS_MIN:      # [P1-PLAN-LOTE-1109] con su registro, las porciones reales de cada toma
+                dias = dias_restantes(porciones, n_reg, gastado)
+            else:
+                dias = dias_restantes(porciones, int(fila.get("n") or 0))
             clave = f"aviso_suplemento:{p['id']}"
             ya = execute_sql_query("SELECT value FROM app_kv_store WHERE key = %s", (clave,), fetch_one=True) or {}
             estado = ya.get("value")
