@@ -226,6 +226,15 @@ def etiqueta_de(hallazgo: dict) -> dict:
     return e
 
 
+_UNIDADES_SUELTAS = ("capsul", "cápsul", "tablet", "pastilla", "softgel", "gomita", "gummy", "perla", "comprimid")
+
+
+def _es_unidad_suelta(u) -> bool:
+    """¿La unidad del pote es UNA cápsula/tableta/gomita (no una porción ni un scoop)?"""
+    u = str(u or "").strip().lower()
+    return any(u.startswith(p) for p in _UNIDADES_SUELTAS)
+
+
 def completar_pote(user_id: str, nombre: str, hallazgo: dict) -> bool:
     """Escribe la tabla en el pote `nombre` de su Alacena si sigue SIN tabla de vitaminas (una foto nunca se pisa)."""
     import suplementos
@@ -243,6 +252,12 @@ def completar_pote(user_id: str, nombre: str, hallazgo: dict) -> bool:
     # (0), se ponen, y así descuenta cada toma y avisa antes de que se acabe. Si ya las tenía, mandan las suyas.
     _porc = hallazgo.get("porciones")
     _porc = float(_porc) if isinstance(_porc, (int, float)) and not isinstance(_porc, bool) and 1 <= _porc <= 1000 else None
+    # el pote cuenta en SU unidad (cápsula): 30 porciones de 4 cápsulas son 120 (como descuenta cada toma y
+    # `dosis_habitual`, que da 4 = las cápsulas de una toma)
+    _upp = (hallazgo.get("supplement_facts") or {}).get("units_per_serving")
+    if (_porc and isinstance(_upp, (int, float)) and not isinstance(_upp, bool) and 1 < _upp <= 20
+            and _es_unidad_suelta(pote.get("serving_unit"))):
+        _porc = _porc * float(_upp)
     _sin_porciones = float(pote.get("quantity") or 0) <= 0
     _f = actual.get("supplement_facts") if isinstance(actual, dict) else None
     if pote.get("label_source") != "web" and isinstance(_f, dict) and _f.get("table_readable") and any(
@@ -261,16 +276,12 @@ def completar_pote(user_id: str, nombre: str, hallazgo: dict) -> bool:
     etiqueta = suplementos.etiqueta_valida(etiqueta_de(hallazgo))
     if not etiqueta:
         return False
-    # una porción de la etiqueta de varias cápsulas (4 Capsules) no es «1 cápsula»: el pote cuenta porciones
-    _upp = (hallazgo.get("supplement_facts") or {}).get("units_per_serving")
-    _unidad = "porción" if isinstance(_upp, (int, float)) and _upp > 1 else None
     execute_sql_write(
         # [SUPLEMENTOS-OK: completa la tabla y, si faltaban, las porciones del pote]
         "UPDATE user_inventory SET serving_label = %s::jsonb, label_source = 'web', "
         "quantity = CASE WHEN %s::float8 IS NOT NULL AND COALESCE(quantity, 0) <= 0 THEN %s::float8 ELSE quantity END, "
-        "serving_unit = COALESCE(%s, serving_unit), "
         "updated_at = now() WHERE id = %s AND user_id = %s AND kind = 'supplement'",
-        (json.dumps(etiqueta), _porc, _porc, _unidad, pote["id"], user_id),
+        (json.dumps(etiqueta), _porc, _porc, pote["id"], user_id),
     )
     return True
 

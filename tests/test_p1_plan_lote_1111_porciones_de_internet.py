@@ -36,11 +36,13 @@ def test_sin_porciones_o_absurdas_no_se_toca_la_cantidad(monkeypatch):
         assert p[1:3] == (None, None)
 
 
-def test_una_porcion_de_4_capsulas_cuenta_porciones_no_capsulas(monkeypatch):
-    _, p = _completar(monkeypatch, HALLAZGO)
-    assert p[3] == "porción"
-    _, p = _completar(monkeypatch, {**HALLAZGO, "supplement_facts": {**HALLAZGO["supplement_facts"], "units_per_serving": 1}})
-    assert p[3] is None, "1 cápsula por porción: se queda su unidad"
+def test_el_pote_de_capsulas_cuenta_capsulas(monkeypatch):
+    # 30 porciones de 4 cápsulas = 120 cápsulas: el pote cuenta en SU unidad, como cada toma y `dosis_habitual` (4)
+    w = _con_pote(monkeypatch, {"id": "p1", "quantity": 0, "serving_unit": "capsula", "serving_label": None})
+    assert v.completar_pote("u1", "x", HALLAZGO) is True and w[0][1][1] == 120.0
+    w = _con_pote(monkeypatch, {"id": "p1", "quantity": 0, "serving_unit": "scoop", "serving_label": None})
+    assert v.completar_pote("u1", "x", HALLAZGO) is True and w[0][1][1] == 30.0, "un scoop ES la porción"
+    assert v._es_unidad_suelta("Cápsulas") and v._es_unidad_suelta("tableta") and not v._es_unidad_suelta("porción")
 
 
 def _con_pote(monkeypatch, pote):
