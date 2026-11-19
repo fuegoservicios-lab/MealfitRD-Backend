@@ -161,3 +161,13 @@ def test_p3_scheduler_worker_compiles_cleanly():
     src = (_BACKEND / "scheduler_worker.py").read_text(encoding="utf-8")
     ast.parse(src)
     assert "MEALFIT_RUN_SCHEDULER_IN_WEB" in (_BACKEND / "app.py").read_text(encoding="utf-8")
+
+
+def test_p1_con_gramos_escala_unidad_secundaria_en_parentesis():
+    from macros_por_gramos import _con_gramos
+
+    assert _con_gramos("Huevos enteros (≈100 g; 2 unidades)", 150) == "Huevos enteros (≈150 g; 3 unidades)"
+    assert _con_gramos("Huevos enteros (≈100 g; 2 unidades)", 50) == "Huevos enteros (≈50 g; 1 unidad)"
+    assert _con_gramos("Salami frito (≈40 g; 2 ruedas)", 60) == "Salami frito (≈60 g; 3 ruedas)"
+    assert _con_gramos("Mangú de plátano verde (≈250 g)", 300) == "Mangú de plátano verde (≈300 g)"
+

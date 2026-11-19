@@ -256,11 +256,60 @@ def ajustables(ingredients: Any, db) -> dict:
     return out
 
 
+_RE_SECUNDARIA_PAREN = re.compile(
+    r"([;,]\s*)(\d+(?:[.,]\d+)?)(\s*)(unidades?|uds?\.?|piezas?|huevos?|ruedas?|rodajas?|rebanadas?|lonjas?|tazas?|cucharadas?|cdas?\.?|cucharaditas?|cdtas?\.?|vasos?|porciones?)\b",
+    re.I,
+)
+_SINGULAR_MAP = {
+    "unidades": "unidad",
+    "piezas": "pieza",
+    "huevos": "huevo",
+    "ruedas": "rueda",
+    "rodajas": "rodaja",
+    "rebanadas": "rebanada",
+    "lonjas": "lonja",
+    "tazas": "taza",
+    "cucharadas": "cucharada",
+    "cucharaditas": "cucharadita",
+    "vasos": "vaso",
+    "porciones": "porción",
+}
+_PLURAL_MAP = {v: k for k, v in _SINGULAR_MAP.items()}
+
+
+def _fmt_sec(v: float) -> str:
+    r = round(v * 4) / 4
+    if r <= 0:
+        r = 0.25
+    return str(int(r)) if float(r).is_integer() else f"{r:g}"
+
+
 def _con_gramos(texto: str, gramos: int) -> str:
-    """El renglón con sus gramos cambiados: el número dentro del paréntesis («(≈170 g)») o el de delante («75 g de…»)."""
+    """El renglón con sus gramos cambiados: el número dentro del paréntesis («(≈170 g)») o el de delante («75 g de…»).
+    Si el paréntesis también trae una unidad natural secundaria («(≈100 g; 2 unidades)»), la escala proporcionalmente."""
     m = _RE_PAREN.search(texto)
     if m:
-        dentro = _RE_GRAMOS_EDITABLE.sub(lambda g: f"{gramos}{g.group(2)}", m.group(1), count=1)
+        dentro_orig = m.group(1)
+        m_g = _RE_GRAMOS_EDITABLE.search(dentro_orig)
+        old_g = float(m_g.group(1).replace(",", ".")) if m_g else 0.0
+        dentro = _RE_GRAMOS_EDITABLE.sub(lambda g: f"{gramos}{g.group(2)}", dentro_orig, count=1)
+        if old_g > 0 and gramos != old_g:
+            factor = float(gramos) / old_g
+            def _escala_sec(sm):
+                viejo_v = float(sm.group(2).replace(",", "."))
+                nuevo_v = round((viejo_v * factor) * 4) / 4
+                if nuevo_v <= 0:
+                    nuevo_v = 0.25
+                u_raw = sm.group(4)
+                u_low = u_raw.lower()
+                if abs(nuevo_v - 1.0) < 1e-6 and u_low in _SINGULAR_MAP:
+                    u_out = _SINGULAR_MAP[u_low]
+                elif abs(nuevo_v - 1.0) >= 1e-6 and u_low in _PLURAL_MAP:
+                    u_out = _PLURAL_MAP[u_low]
+                else:
+                    u_out = u_raw
+                return f"{sm.group(1)}{_fmt_sec(nuevo_v)}{sm.group(3)}{u_out}"
+            dentro = _RE_SECUNDARIA_PAREN.sub(_escala_sec, dentro, count=1)
         return texto[:m.start(1)] + dentro + texto[m.end(1):]
     return _RE_GRAMOS_EDITABLE.sub(lambda g: f"{gramos}{g.group(2)}", texto, count=1)
 
