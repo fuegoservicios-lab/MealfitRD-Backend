@@ -493,12 +493,13 @@ async def api_supermarket_list(
             # La condicion honesta no es "pidio mucho" sino "esto es todo": una
             # consulta SIN limite. De paso ahorra las otras dos (el `count(*)` es
             # `len(rows)` y las categorias salen de las mismas filas).
+            gen_al_empezar_cache = _catalog_generation()
             try:
                 todas = await asyncio.to_thread(_fetch_todas_activas)
             except Exception as exc:
                 logger.error(f"❌ [P2-SUPERMARKET-LIST-CACHE] carga completa falló: {exc}")
                 raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
-            _publish_list_rows(todas, _catalog_generation())
+            _publish_list_rows(todas, gen_al_empezar_cache)
             cacheadas = todas
         return _respuesta_listado(
             _paginar(cacheadas, limit, offset), len(cacheadas),
@@ -932,9 +933,9 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
             f"""
             INSERT INTO public.supermarket_products
                 (food_name, brand, presentation, portion_label, duration_label,
-                 price_rd, notes, category, master_food_name, image_url,
+                 price_rd, size_grams, notes, category, master_food_name, image_url,
                  description, is_verified, active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (lower(food_name), lower(coalesce(brand,'')), lower(coalesce(presentation,'')))
             DO NOTHING
             RETURNING {_SELECT_COLS}
@@ -942,7 +943,7 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
             (
                 _clean(body.food_name), _clean(body.brand), _clean(body.presentation),
                 _clean(body.portion_label), _clean(body.duration_label), body.price_rd,
-                _clean(body.notes), _clean(body.category), _clean(body.master_food_name),
+                body.size_grams, _clean(body.notes), _clean(body.category), _clean(body.master_food_name),
                 _clean(body.image_url), _clean(body.description),
                 body.is_verified, body.active,
             ),
@@ -954,6 +955,7 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
     except Exception as exc:
         logger.error(f"❌ [P1-SUPERMARKET-DB] create falló: {exc}")
         raise HTTPException(status_code=500, detail="No se pudo crear el producto.")
+    _invalidate_catalog_cache()
     if not rows:
         raise HTTPException(
             status_code=409,
@@ -1014,6 +1016,7 @@ async def api_supermarket_update(request: Request, product_id: str, body: Superm
         raise HTTPException(status_code=500, detail="No se pudo actualizar el producto.")
     if not rows:
         raise HTTPException(status_code=404, detail="Producto no encontrado.")
+    _invalidate_catalog_cache()
     return {"product": rows[0]}
 
 
@@ -1041,6 +1044,7 @@ async def api_supermarket_delete(request: Request, product_id: str):
     except Exception as exc:
         logger.error(f"❌ [P1-SUPERMARKET-DB] delete falló: {exc}")
         raise HTTPException(status_code=500, detail="No se pudo eliminar el producto.")
+    _invalidate_catalog_cache()
     if not rows:
         raise HTTPException(status_code=404, detail="Producto no encontrado.")
     return {"deleted": True, "id": rows[0]["id"]}

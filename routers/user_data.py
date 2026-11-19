@@ -748,6 +748,7 @@ def api_traducir_textos(data: dict = Body(...), verified_user_id: Optional[str] 
 
     [P1-PLAN-LOTE-843] Lo que se traduce es lo que el coach recuerda de la persona y sus suplementos: sin permiso
     para la IA, `{textos: null}` (se ve el original) sin llamar al modelo."""
+    _require_user(verified_user_id)
     textos = data.get("textos")
     if not isinstance(textos, list) or not textos or len(textos) > _TEXTOS_I18N_MAX:
         raise HTTPException(status_code=400, detail=f"textos: lista de 1 a {_TEXTOS_I18N_MAX} cadenas")

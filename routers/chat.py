@@ -370,6 +370,8 @@ def api_get_chat_sessions(
         sessions.sort(key=lambda x: x.get("last_activity") or x.get("created_at") or "1970-01-01T00:00:00", reverse=True)
             
         return {"sessions": sessions, "has_more": has_more}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions GET: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
@@ -385,6 +387,8 @@ def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Dep
                 raise HTTPException(status_code=403, detail="Prohibido.")
             delete_user_agent_sessions(user_id)
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
@@ -404,8 +408,10 @@ def api_rename_chat_session(session_id: str, data: RenameSessionReq, verified_us
         if session_owner and session_owner != "guest":
             if not verified_user_id or verified_user_id != session_owner:
                 raise HTTPException(status_code=403, detail="Prohibido.")
-        update_session_title(session_id, data.title)
+        update_session_title(session_id, data.title[:200])
         return {"success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/session PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))

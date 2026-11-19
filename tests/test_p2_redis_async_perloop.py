@@ -31,7 +31,7 @@ def test_get_redis_async_caches_per_loop(monkeypatch):
     created = []
 
     class _FakeRedisAsync:
-        def from_url(self, url, decode_responses=True):
+        def from_url(self, url, decode_responses=True, **_timeouts):   # [P1-PERF-AUDIT] socket_timeout/_connect
             c = object()
             created.append(c)
             return c

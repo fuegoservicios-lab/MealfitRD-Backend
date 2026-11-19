@@ -3,6 +3,7 @@ import calendar
 import os
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -79,6 +80,8 @@ _PAYPAL_WEBHOOK_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 # cancela una vez. `/status` admite 30/min: la tarjeta lo pide al abrirse y tras cada acción.
 _SUBSCRIPTION_CANCEL_LIMITER = RateLimiter(max_calls=5, period_seconds=60)
 _SUBSCRIPTION_STATUS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_SUBSCRIPTION_VERIFY_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+_PAYPAL_SUB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
 
 # [P1-PLAN-LOTE-714 · 2026-09-28] `/status` es una LECTURA para pintar una tarjeta: si PayPal tarda, se responde con
 # el perfil y `paypal_status: null` en vez de colgar la pantalla los 15 s de `_HTTPX_TIMEOUT_S` (que sigue siendo el
@@ -1223,7 +1226,11 @@ async def api_subscription_status(
 
 
 @router.post("/verify")
-async def api_verify_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+async def api_verify_subscription(
+    data: dict = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_SUBSCRIPTION_VERIFY_LIMITER),
+):
     try:
         user_id = data.get("user_id")
         subscription_id = data.get("subscriptionID")
@@ -1235,6 +1242,10 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
 
         if not user_id or not subscription_id or not client_hint_tier:
             raise HTTPException(status_code=400, detail="Missing parameters")
+
+        subscription_id = str(subscription_id).strip()
+        if not _PAYPAL_SUB_ID_RE.fullmatch(subscription_id):
+            raise HTTPException(status_code=400, detail="Identificador de suscripción inválido.")
 
         if not verified_user_id or verified_user_id != user_id:
             logger.warning(f"Intento no autorizado de verificar suscripcion: req_user={user_id}, auth_user={verified_user_id}")
@@ -1297,6 +1308,17 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
 
                 if status != "ACTIVE":
                     raise HTTPException(status_code=400, detail=f"Suscripción no válida. Estado actual: {status}")
+
+                # [P0-AUDIT-BILLING-OWNERSHIP · 2026-11-18] Verificar que la suscripción
+                # pertenece al usuario autenticado (cuando PayPal devuelve custom_id) y
+                # que no está ya asignada a otra cuenta (cierra secuestro/compartición).
+                sub_custom_id = str(sub_data.get("custom_id") or "").strip()
+                if sub_custom_id and sub_custom_id != str(user_id):
+                    logger.warning(
+                        f"🔒 [P0-BILLING-OWNERSHIP] custom_id mismatch en /verify: "
+                        f"req_user={user_id}, sub_custom_id={sub_custom_id}, sub={subscription_id}"
+                    )
+                    raise HTTPException(status_code=403, detail="Esta suscripción pertenece a otra cuenta.")
 
                 verified_plan_id = sub_data.get("plan_id")
         else:
@@ -1440,31 +1462,53 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         # nadie la borraba al volver a suscribirse, así que Configuración pintaba como «Próximo cobro» (o «Acceso
         # hasta») la fecha de la suscripción ANTERIOR. Una sub recién activada no tiene fin.
         # tooltip-anchor: P1-PLAN-LOTE-714-END-DATE-CLEAR
+        # [P0-AUDIT-BILLING-OWNERSHIP · 2026-11-18] Rechazar si otra cuenta ya posee este
+        # paypal_subscription_id (defensa complementaria al índice UNIQUE en user_profiles).
+        other_owner = await _run_sync_db_in_thread(
+            lambda: execute_sql_query(
+                "SELECT id FROM public.user_profiles "
+                "WHERE paypal_subscription_id = %s AND id <> %s LIMIT 1",
+                (subscription_id, user_id),
+                fetch_one=True,
+            )
+        )
+        if other_owner:
+            logger.warning(
+                f"🔒 [P0-BILLING-OWNERSHIP] subscription_id={subscription_id} ya asignada a otra cuenta "
+                f"(solicitada por user_id={user_id})"
+            )
+            raise HTTPException(status_code=409, detail="Esta suscripción ya está asociada a otra cuenta.")
+
         update_payload = {
             "plan_tier": tier_to_assign,
             "paypal_subscription_id": subscription_id,
             "subscription_status": "ACTIVE",
         }
-        updated_rows = await _run_sync_db_in_thread(
-            lambda: execute_sql_write(
-                """
-                UPDATE public.user_profiles
-                   SET plan_tier = %s,
-                       paypal_subscription_id = %s,
-                       subscription_status = %s,
-                       subscription_end_date = NULL
-                 WHERE id = %s
-                RETURNING id
-                """,
-                (
-                    update_payload["plan_tier"],
-                    update_payload["paypal_subscription_id"],
-                    update_payload["subscription_status"],
-                    user_id,
-                ),
-                returning=True,
+        try:
+            updated_rows = await _run_sync_db_in_thread(
+                lambda: execute_sql_write(
+                    """
+                    UPDATE public.user_profiles
+                       SET plan_tier = %s,
+                           paypal_subscription_id = %s,
+                           subscription_status = %s,
+                           subscription_end_date = NULL
+                     WHERE id = %s
+                    RETURNING id
+                    """,
+                    (
+                        update_payload["plan_tier"],
+                        update_payload["paypal_subscription_id"],
+                        update_payload["subscription_status"],
+                        user_id,
+                    ),
+                    returning=True,
+                )
             )
-        )
+        except Exception as _upd_err:
+            if type(_upd_err).__name__ == "UniqueViolation":
+                raise HTTPException(status_code=409, detail="Esta suscripción ya está asociada a otra cuenta.")
+            raise
 
         # [P1-PROD-AUDIT-3 · 2026-05-30] Verificar que el UPDATE tocó una fila.
         # PayPal YA validó/cobró en este punto; si `WHERE id = user_id` matcheó 0
@@ -1969,7 +2013,10 @@ async def api_webhook_paypal(
                 "MEALFIT_ALLOW_WEBHOOK_UNSIGNED=1 + sandbox. NO en producción."
             )
                 
-        payload_dict = json.loads(body.decode('utf-8'))
+        try:
+            payload_dict = json.loads(body.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="Invalid JSON payload.")
 
         # [P1-PLAN-LOTE-714] El token de la verificación de firma se reutiliza más abajo (GET de la sub para saber
         # hasta cuándo pagó, o para verificar el monto de un huérfano). Sin credenciales (solo dev) no hay token.
@@ -2011,6 +2058,13 @@ async def api_webhook_paypal(
                     json=verify_payload
                 )
                 
+                if verify_resp.status_code >= 500 or verify_resp.status_code == 429:
+                    logger.error(
+                        f"⚠️ [P0-WEBHOOK-VERIFY-5XX] PayPal verify-webhook-signature respondió "
+                        f"status={verify_resp.status_code} (transitorio) — devolviendo 503 para retry."
+                    )
+                    raise HTTPException(status_code=503, detail="PayPal verification transient failure; retry.")
+
                 if verify_resp.status_code != 200 or verify_resp.json().get("verification_status") != "SUCCESS":
                     logger.warning(f"🔒 Bloqueado: Firma del Webhook PayPal inválida: {verify_resp.text}")
                     return {"success": False, "message": "Signature mismatch"}

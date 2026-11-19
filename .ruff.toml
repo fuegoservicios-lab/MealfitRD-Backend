@@ -1,0 +1,14 @@
+# Configuración focalizada de Ruff (solo bugs reales y errores de sintaxis, sin ruido cosmético).
+target-version = "py311"
+exclude = [
+    ".venv",
+    "venv",
+    "venv-test",
+    "test_venv",
+    "scratch",
+    "tests",
+    "migrations",
+]
+
+[lint]
+select = ["E9", "F63", "F7", "F82", "B006", "B007", "B011", "B018"]

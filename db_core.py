@@ -20,8 +20,10 @@ from knobs import _env_int as _knob_env_int
 # ninguna dependencia nueva, solo la hace explícita donde se necesita.
 try:
     import psycopg as _psycopg
+    from psycopg.rows import dict_row as _dict_row
 except ImportError:  # pragma: no cover - psycopg siempre instalado en runtime real
     _psycopg = None
+    _dict_row = None
 
 
 
@@ -421,11 +423,8 @@ def execute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: boo
         # Fallback de seguridad si el pool no estuviera disponible (aunque no debería)
         raise RuntimeError("db connection_pool is not available.")
 
-    import psycopg
-    from psycopg.rows import dict_row
-
     with connection_pool.connection() as conn:
-        with conn.cursor(row_factory=dict_row) as cursor:
+        with conn.cursor(row_factory=_dict_row) as cursor:
             cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
             if fetch_one:
                 return cursor.fetchone()
@@ -451,12 +450,6 @@ def execute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: boo
                 pass
             return []
 
-# [P-TYPING-1] Overloads: `returning=True` devuelve `list[dict]` (filas RETURNING);
-# sin `returning` devuelve `bool`. Type-only, runtime intacto.
-@overload
-def execute_sql_write(query: str, params: Optional[tuple] = ..., *, returning: Literal[True], lock_timeout_ms: Optional[int] = ...) -> List[Dict[str, Any]]: ...
-@overload
-def execute_sql_write(query: str, params: Optional[tuple] = ..., returning: Literal[False] = ..., lock_timeout_ms: Optional[int] = ...) -> bool: ...
 # [P1-TEST-ALERT-POLLUTION · 2026-07-25] La suite de tests corre contra la MISMA base Neon que
 # producción (no hay staging), y ~9 módulos escriben `system_alerts` con SQL directo. Resultado
 # medido: una noche de corridas dejó 3 incidentes FALSOS abiertos en el tablero —
@@ -796,6 +789,12 @@ def _install_write_guard_on_async_connection(conn) -> None:
     conn.cursor = _guarded_cursor
 
 
+# [P-TYPING-1] Overloads contiguos a la implementación (PEP 484): `returning=True`
+# devuelve `list[dict]` (filas RETURNING); sin `returning` devuelve `bool`.
+@overload
+def execute_sql_write(query: str, params: Optional[tuple] = ..., *, returning: Literal[True], lock_timeout_ms: Optional[int] = ...) -> List[Dict[str, Any]]: ...
+@overload
+def execute_sql_write(query: str, params: Optional[tuple] = ..., returning: Literal[False] = ..., lock_timeout_ms: Optional[int] = ...) -> bool: ...
 def execute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False, lock_timeout_ms: Optional[int] = None) -> Union[List[Dict[str, Any]], bool]:
     """Ejecuta una transacción INSERT/UPDATE/DELETE.
 
@@ -831,9 +830,6 @@ def execute_sql_write(query: str, params: Optional[tuple] = None, returning: boo
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")
 
-    import psycopg
-    from psycopg.rows import dict_row
-
     with connection_pool.connection() as conn:
         if lock_timeout_ms is not None and int(lock_timeout_ms) > 0:
             # [P1-3] Wrap explícito en transacción para que `SET LOCAL`
@@ -841,7 +837,7 @@ def execute_sql_write(query: str, params: Optional[tuple] = None, returning: boo
             # el SET LOCAL inmediatamente y luego lo "perdería" en el
             # siguiente comando.
             with conn.transaction():
-                with conn.cursor(row_factory=dict_row) as cursor:
+                with conn.cursor(row_factory=_dict_row) as cursor:
                     try:
                         cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
                     except Exception as set_err:
@@ -851,21 +847,17 @@ def execute_sql_write(query: str, params: Optional[tuple] = None, returning: boo
                     cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
                     if returning:
                         return cursor.fetchall()
-                    try:
+                    if cursor.description is not None:
                         cursor.fetchall()
-                    except psycopg.ProgrammingError:
-                        pass
                     return True
         else:
-            with conn.cursor(row_factory=dict_row) as cursor:
+            with conn.cursor(row_factory=_dict_row) as cursor:
                 cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
                 if returning:
                     return cursor.fetchall()
 
-                try:
+                if cursor.description is not None:
                     cursor.fetchall()
-                except psycopg.ProgrammingError:
-                    pass
                 return True
 
 def execute_sql_transaction(queries_with_params: List[Tuple[str, tuple]]):
@@ -873,18 +865,13 @@ def execute_sql_transaction(queries_with_params: List[Tuple[str, tuple]]):
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")
     
-    import psycopg
-    from psycopg.rows import dict_row
-    
     with connection_pool.connection() as conn:
         with conn.transaction():
-            with conn.cursor(row_factory=dict_row) as cursor:
+            with conn.cursor(row_factory=_dict_row) as cursor:
                 for query, params in queries_with_params:
                     cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
-                    try:
+                    if cursor.description is not None:
                         cursor.fetchall()
-                    except psycopg.ProgrammingError:
-                        pass
         return True
 
 async def aexecute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: bool = False, fetch_all: bool = False):
@@ -892,26 +879,19 @@ async def aexecute_sql_query(query: str, params: Optional[tuple] = None, fetch_o
     if 'async_connection_pool' not in globals() or not async_connection_pool:
         raise RuntimeError("db async_connection_pool is not available.")
     
-    from psycopg.rows import dict_row
-    import psycopg
-    
     async with async_connection_pool.connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cursor:
+        async with conn.cursor(row_factory=_dict_row) as cursor:
             await cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
             if fetch_one:
                 res = await cursor.fetchone()
-                try:
+                if cursor.description is not None:
                     await cursor.fetchall()  # Drenar resultados restantes para liberar la conexión
-                except psycopg.ProgrammingError:
-                    pass
                 return res
             if fetch_all:
                 return await cursor.fetchall()
             
-            try:
+            if cursor.description is not None:
                 await cursor.fetchall() # Drenar siempre
-            except psycopg.ProgrammingError:
-                pass
             return []
 
 async def aexecute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False):
@@ -919,19 +899,12 @@ async def aexecute_sql_write(query: str, params: Optional[tuple] = None, returni
     if 'async_connection_pool' not in globals() or not async_connection_pool:
         raise RuntimeError("db async_connection_pool is not available.")
     
-    from psycopg.rows import dict_row
-    import psycopg
-    
     async with async_connection_pool.connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cursor:
+        async with conn.cursor(row_factory=_dict_row) as cursor:
             await cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
             if returning:
                 return await cursor.fetchall()
                 
-            # Aunque no retorne nada (e.g. INSERT sin RETURNING), debemos asegurar
-            # que el cursor consume cualquier mensaje final (CommandComplete)
-            try:
+            if cursor.description is not None:
                 await cursor.fetchall()
-            except psycopg.ProgrammingError:
-                pass # The cursor has no results (expected for some queries)
             return True

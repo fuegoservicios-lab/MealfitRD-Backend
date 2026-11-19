@@ -3,6 +3,33 @@ import unicodedata
 import difflib
 from constants import strip_accents, _QUANTITY_PATTERN
 
+_STOPWORDS_RE = re.compile(r'\b(con|de|y|al|a|la|el|en|las|los|del|para|por|tipo|estilo)\b')
+_WHITESPACE_RE = re.compile(r'\s+')
+
+
+def _contar_grupo_regex(items, synonyms_map, history_normalized):
+    """Compila UNA sola regex de alternancia por grupo en vez de O(items × syns) scans."""
+    out = {it: 0 for it in items}
+    if not items or not history_normalized:
+        return out
+    syn_to_items = {}
+    for it in items:
+        for syn in synonyms_map.get(it.lower(), [it.lower()]):
+            norm = strip_accents(syn.lower()).strip()
+            if norm:
+                syn_to_items.setdefault(norm, []).append(it)
+    if not syn_to_items:
+        return out
+    # Ordenar por longitud descendente para evitar que un prefijo robe un compuesto.
+    alts = sorted(syn_to_items.keys(), key=len, reverse=True)
+    pat = re.compile(r'\b(?:' + '|'.join(re.escape(a) for a in alts) + r')\b')
+    for m in pat.finditer(history_normalized):
+        tok = m.group(0)
+        for it in syn_to_items.get(tok, ()):
+            out[it] += 1
+    return out
+
+
 def _calcular_frecuencias_regex_cpu_bound(
     history_normalized, 
     filtered_proteins, protein_synonyms, 
@@ -11,46 +38,12 @@ def _calcular_frecuencias_regex_cpu_bound(
     filtered_fruits, fruit_synonyms
 ):
     """
-    Tarea CPU-Bound: Ejecuta Regex de fuerza bruta sobre todo el historial del usuario invitado
-    en busca de todas las combinaciones de sinónimos de ingredientes.
+    Tarea CPU-Bound: cuenta frecuencias de sinónimos sobre el historial en 1 pasada por grupo.
     """
-    protein_freq = {}
-    carb_freq = {}
-    veggie_freq = {}
-    fruit_freq = {}
-
-    for p in filtered_proteins:
-        syns = protein_synonyms.get(p.lower(), [p.lower()])
-        count = 0
-        for syn in syns:
-            syn_normalized = strip_accents(syn.lower())
-            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-        protein_freq[p] = count
-            
-    for c in filtered_carbs:
-        syns = carb_synonyms.get(c.lower(), [c.lower()])
-        count = 0
-        for syn in syns:
-            syn_normalized = strip_accents(syn.lower())
-            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-        carb_freq[c] = count
-        
-    for v in filtered_veggies:
-        syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
-        count = 0
-        for syn in syns:
-            syn_normalized = strip_accents(syn.lower())
-            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-        veggie_freq[v] = count
-    
-    for f in filtered_fruits:
-        syns = fruit_synonyms.get(f.lower(), [f.lower()])
-        count = 0
-        for syn in syns:
-            syn_normalized = strip_accents(syn.lower())
-            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-        fruit_freq[f] = count
-        
+    protein_freq = _contar_grupo_regex(filtered_proteins, protein_synonyms, history_normalized)
+    carb_freq = _contar_grupo_regex(filtered_carbs, carb_synonyms, history_normalized)
+    veggie_freq = _contar_grupo_regex(filtered_veggies, veggie_fat_synonyms, history_normalized)
+    fruit_freq = _contar_grupo_regex(filtered_fruits, fruit_synonyms, history_normalized)
     return protein_freq, carb_freq, veggie_freq, fruit_freq
 
 
@@ -64,8 +57,8 @@ def _normalize_meal_name(s: str) -> str:
     s = s.lower()
     # Stripear cantidades/unidades del inicio (ej: "200g", "1/2 lb de")
     s = _QUANTITY_PATTERN.sub('', s).strip()
-    s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los|del|para|por|tipo|estilo)\b', '', s)
-    return re.sub(r'\s+', ' ', s).strip()
+    s = _STOPWORDS_RE.sub('', s)
+    return _WHITESPACE_RE.sub(' ', s).strip()
 
 def _validar_repeticiones_cpu_bound(recent_meal_names, days_plan):
     """

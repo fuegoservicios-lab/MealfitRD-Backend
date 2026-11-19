@@ -2155,7 +2155,7 @@ def get_recent_plans(user_id: str, days: int = 14) -> list:
         from datetime import datetime, timezone, timedelta
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         rows = execute_sql_query(
-            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND created_at >= %s ORDER BY created_at DESC",
+            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND created_at >= %s ORDER BY created_at DESC LIMIT 100",
             (user_id, cutoff_date), fetch_all=True
         )
         if rows:
@@ -2171,10 +2171,12 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
     if not connection_pool: return []
     try:
         rows = execute_sql_query(
-            # [P1-PLAN-LOTE-49 · 2026-09-14] Sin la fila vacía del plan que se está generando: se crea antes de generar y
-            # ocupaba uno de los huecos («contra 24 platos recientes» eran 2 planes, no 3; plan a059d7bb).
+            # [P1-PLAN-LOTE-49 · 2026-09-14] Sin la fila vacía del plan que se está generando.
+            # [P1-PERF-AUDIT-2026-11-18] Solo traer plan_data cuando meal_names está vacío (evita transferir
+            # 5 blobs JSONB completos en cada llamada del fast-path).
             # tooltip-anchor: P1-PLAN-LOTE-49-PLANES-CON-DIAS
-            "SELECT plan_data, meal_names FROM meal_plans WHERE user_id = %s AND "
+            "SELECT CASE WHEN meal_names IS NULL OR array_length(meal_names, 1) IS NULL THEN plan_data ELSE NULL END AS plan_data,"
+            " meal_names FROM meal_plans WHERE user_id = %s AND "
             "(CASE WHEN jsonb_typeof(plan_data->'days') = 'array' THEN jsonb_array_length(plan_data->'days') ELSE 0 END"
             " + CASE WHEN jsonb_typeof(plan_data->'_archived_days') = 'array'"
             " THEN jsonb_array_length(plan_data->'_archived_days') ELSE 0 END) > 0"
@@ -2247,7 +2249,8 @@ def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
     if not connection_pool or not user_id: return []
     try:
         rows = execute_sql_query(
-            "SELECT plan_data, ingredients FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            "SELECT CASE WHEN ingredients IS NULL OR array_length(ingredients, 1) IS NULL THEN plan_data ELSE NULL END AS plan_data,"
+            " ingredients FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
             (user_id, limit), fetch_all=True
         )
         all_ingredients = []

@@ -2419,7 +2419,15 @@ async def lifespan(app: FastAPI):
     # los dos loops continuos (hard-floor + APScheduler). Sólo el leader los
     # ejecuta; en deploy multi-worker accidental los demás workers sirven HTTP
     # sin duplicar crons. Fail-open (ver helper). La conn se cierra en shutdown.
-    _is_scheduler_leader, _leader_conn = _acquire_scheduler_leader_lock()
+    # [P1-PERF-AUDIT-2026-11-18] Knob para desacoplar APScheduler a `mealfit-scheduler.service`.
+    # Default True (100% retrocompatible con `--workers 1`). Con `MEALFIT_RUN_SCHEDULER_IN_WEB=false`,
+    # el proceso web no adquiere leader lock ni registra los 83 crons (libera el GIL para `--workers 2+`).
+    _run_scheduler_in_web = _env_bool("MEALFIT_RUN_SCHEDULER_IN_WEB", True)
+    if _run_scheduler_in_web:
+        _is_scheduler_leader, _leader_conn = _acquire_scheduler_leader_lock()
+    else:
+        _is_scheduler_leader, _leader_conn = False, None
+        logger.info("⏰ [SCHEDULER-SPLIT] MEALFIT_RUN_SCHEDULER_IN_WEB=false — crons delegados a scheduler_worker.py.")
     app.state.is_scheduler_leader = _is_scheduler_leader
     app.state.scheduler_leader_conn = _leader_conn
 

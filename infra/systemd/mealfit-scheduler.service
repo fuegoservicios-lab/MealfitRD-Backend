@@ -1,0 +1,21 @@
+[Unit]
+Description=MealfitRD Dedicated APScheduler Cron Worker
+After=network-online.target redis-server.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/mealfit/backend
+ExecStart=/home/ubuntu/miniforge3/envs/mealfit/bin/python scheduler_worker.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mealfit-scheduler
+
+[Install]
+WantedBy=multi-user.target

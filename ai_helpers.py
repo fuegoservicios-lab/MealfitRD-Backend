@@ -1501,16 +1501,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         logger.warning(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
         
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            future = executor.submit(
-                _calcular_frecuencias_regex_cpu_bound,
-                history_normalized,
-                filtered_proteins, protein_synonyms,
-                filtered_carbs, carb_synonyms,
-                filtered_veggies, veggie_fat_synonyms,
-                filtered_fruits, fruit_synonyms
-            )
-            protein_freq, carb_freq, veggie_freq, fruit_freq = future.result()
+        protein_freq, carb_freq, veggie_freq, fruit_freq = _calcular_frecuencias_regex_cpu_bound(
+            history_normalized,
+            filtered_proteins, protein_synonyms,
+            filtered_carbs, carb_synonyms,
+            filtered_veggies, veggie_fat_synonyms,
+            filtered_fruits, fruit_synonyms,
+        )
         # [P2-OVERUSE-RAW-FREQ · 2026-08-03] Rama regex (guest / sin `db_freq_map`): no hay
         # fatiga de recencia aplicada aquí (`_calcular_frecuencias_regex_cpu_bound` no la
         # conoce), así que `protein_freq` etc. YA son la frecuencia cruda — el veto usa

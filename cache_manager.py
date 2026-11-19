@@ -19,9 +19,13 @@ try:
     
     REDIS_URL = os.environ.get("REDIS_URL")
     if REDIS_URL:
-        # Usamos decode_responses=True para que devuelva strings en lugar de bytes
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        redis_async_client = redis_async.from_url(REDIS_URL, decode_responses=True)
+        # Usamos decode_responses=True + timeouts cortos para fail-fast a caché local si Redis cuelga.
+        redis_client = redis.from_url(
+            REDIS_URL, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0
+        )
+        redis_async_client = redis_async.from_url(
+            REDIS_URL, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0
+        )
         logger.info("🔗 [CACHE] Conectado a Redis exitosamente (Sync y Async).")
     else:
         redis_client = None
@@ -32,6 +36,7 @@ except ImportError:
     logger.warning("⚠️ [CACHE] Redis no instalado, se usará caché en memoria local.")
 except Exception as e:
     redis_client = None
+    redis_async_client = None
     logger.warning(f"⚠️ [CACHE] Error conectando a Redis, se usará caché local: {e}")
 
 
@@ -63,7 +68,9 @@ def get_redis_async():
     client = getattr(loop, "_mf_redis_async_client", None)
     if client is None:
         try:
-            client = _ra.from_url(_url, decode_responses=True)
+            client = _ra.from_url(
+                _url, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0
+            )
         except Exception as _e:
             logger.warning(f"⚠️ [CACHE] get_redis_async: no se pudo crear cliente per-loop: {_e}")
             return None
@@ -93,63 +100,58 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000, cache_empty=True):
     cuyo `[]`/`{}` vacío sea un resultado legítimo y caro de recomputar.
     """
     def decorator(func):
+        _func_local_cache = OrderedDict()
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             # 1. Crear un Hash de los argumentos
-            # Convertir tuplas a listas para json.dumps
             try:
                 args_repr = json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True)
             except Exception as j_err:
                 logger.warning(f"⚠️ [CACHE] Argumentos no serializables en {func.__name__}, saltando caché: {j_err}")
                 return func(*args, **kwargs)
 
-            # Usar MD5 (es suficientemente rápido para keys de caché cortas)
             args_hash = hashlib.md5(args_repr.encode("utf-8")).hexdigest()
-            cache_key = f"{func.__name__}:{args_hash}"
+            cache_key = f"{func.__name__}:{args_hash}"  # misma clave que antes: no tirar la caché de visión en Redis
             
-            # 2. Intentar buscar en Redis
+            # 2. Intentar buscar en Redis; si falla o no está, caer a caché local
             if redis_client:
                 try:
                     cached_val = redis_client.get(cache_key)
-                    if cached_val:
+                    if cached_val is not None:
                         return json.loads(cached_val)
                 except Exception as e:
                     logger.warning(f"⚠️ [CACHE] Error Leyendo de Redis para {cache_key}: {e}")
             
-            # 3. Intentar buscar en Local Cache (Fallback CON TTL real)
-            else:
-                with _cache_lock:
-                    if cache_key in _local_cache:
-                        stored_time, stored_value = _local_cache[cache_key]
-                        if (_time_mod.time() - stored_time) < ttl_seconds:
-                            _local_cache.move_to_end(cache_key)  # Actualizar como usado recientemente
-                            return stored_value
-                        else:
-                            # TTL expirado → eliminar y tratar como cache miss
-                            _local_cache.pop(cache_key, None)
+            with _cache_lock:
+                if cache_key in _func_local_cache:
+                    stored_time, stored_json = _func_local_cache[cache_key]
+                    if (_time_mod.time() - stored_time) < ttl_seconds:
+                        _func_local_cache.move_to_end(cache_key)
+                        return json.loads(stored_json)
+                    else:
+                        _func_local_cache.pop(cache_key, None)
 
             # 4. Cache Miss: Ejecutar función pesada original
             result = func(*args, **kwargs)
 
-            # [P2-EMBED-NO-CACHE-EMPTY · 2026-05-30] Opt-out: no persistir un
-            # resultado falsy (ej. `[]` de un embedding fallido) bajo el TTL del
-            # caché. Devolver directo → el próximo llamado re-ejecuta.
             if not cache_empty and not result:
                 return result
 
-            # 5. Guardar en Caché
+            # 5. Guardar en Caché (serializar una sola vez para Redis y copia inmutable local)
+            result_json = json.dumps(result)
             if redis_client:
                 try:
-                    redis_client.setex(cache_key, ttl_seconds, json.dumps(result))
+                    redis_client.setex(cache_key, ttl_seconds, result_json)
+                    return result
                 except Exception as e:
                     logger.warning(f"⚠️ [CACHE] Error Escribiendo a Redis para {cache_key}: {e}")
-            else:
-                with _cache_lock:
-                    _local_cache[cache_key] = (_time_mod.time(), result)
-                    _local_cache.move_to_end(cache_key)
-                    # Lógica LRU real: Eliminar el elemento más antiguo si se excede capacidad
-                    while len(_local_cache) > maxsize:
-                        _local_cache.popitem(last=False)
+
+            with _cache_lock:
+                _func_local_cache[cache_key] = (_time_mod.time(), result_json)
+                _func_local_cache.move_to_end(cache_key)
+                while len(_func_local_cache) > maxsize:
+                    _func_local_cache.popitem(last=False)
                         
             return result
         return wrapper

@@ -628,6 +628,12 @@ async def api_diary_upload(
 
         async def _persist_chat_attachment():
             _t_att = time.perf_counter()
+            # [P0-AUDIT-CHAT-ATT-IDOR · 2026-11-18] Verificar ownership de session_id antes de
+            # adjuntar media: impide que usuario A inyecte fotos en la sesión de usuario B.
+            from db_chat import get_session_owner
+            _sess_owner = await asyncio.to_thread(get_session_owner, session_id)
+            if _sess_owner is not None and str(_sess_owner) != str(actual_user_id):
+                raise HTTPException(status_code=403, detail="No autorizado para adjuntar en esta sesión.")
             await asyncio.to_thread(get_or_create_session, session_id, user_id=actual_user_id)
             aid = await asyncio.to_thread(
                 create_chat_attachment,
@@ -804,8 +810,9 @@ async def api_diary_upload(
             # --- EVALUACIÓN DETERMINISTA DE CRONONUTRICIÓN (PYTHON) ---
             if calories > 500:
                 from datetime import datetime, timedelta, timezone
-                # [P3-DEPRECATED-UTCNOW · 2026-05-12] tz-aware: ver memoria.
-                local_time = datetime.now(timezone.utc) - timedelta(minutes=tz_offset_mins)
+                # [P3-DEPRECATED-UTCNOW · 2026-05-12] tz-aware + clamping defensivo [-840, 840].
+                _safe_tz = max(-840, min(840, int(tz_offset_mins or 0)))
+                local_time = datetime.now(timezone.utc) - timedelta(minutes=_safe_tz)
                 chrono_local_hour = local_time.hour
 
                 chrono_schedule_type = "standard"
@@ -1762,7 +1769,7 @@ def api_log_consumed_meal_from_plan(
         # bajaría la Nevera al doble del consumo real.
         already_logged = (logged == "deduped")
         summary = {}
-        if ingredients and not already_logged:
+        if ingredients and not already_logged and nevera_activa(verified_user_id):
             import db_inventory
             summary = db_inventory.deduct_consumed_meal_from_inventory(
                 verified_user_id, ingredients,
@@ -2407,7 +2414,9 @@ def api_log_progress(
     try:
         user_id = payload.user_id
         weight = payload.weight
-        unit = payload.unit
+        unit = str(payload.unit or "lb").strip().lower()
+        if unit not in ("lb", "kg"):
+            raise HTTPException(status_code=400, detail="Unidad inválida (use 'lb' o 'kg').")
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -2463,6 +2472,8 @@ def api_log_progress(
             "message": "Progreso guardado exitosamente.",
             "weight_history": result_box["weight_history"] or [],
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/progress POST: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))

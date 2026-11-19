@@ -13339,9 +13339,9 @@ def api_blocked_reasons(
     from knobs import _env_float as _knob_env_float
     _stuck_lag_hours = _knob_env_float(
         "MEALFIT_BLOCKED_REASONS_STUCK_LAG_HOURS",
-        3.0,
-        validator=lambda v: v > 0,
+        3.0, validator=lambda v: v > 0,
     )
+    if not verified_user_id: raise HTTPException(status_code=401, detail="Authentication required")  # noqa: E701
     try:
         plan = execute_sql_query(
             "SELECT user_id FROM meal_plans WHERE id = %s",
@@ -13350,7 +13350,7 @@ def api_blocked_reasons(
         )
         if not plan:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
-        if verified_user_id and str(plan["user_id"]) != str(verified_user_id):
+        if str(plan["user_id"]) != str(verified_user_id):
             raise HTTPException(status_code=403, detail="No autorizado")
 
         # [P2-HIST-AUDIT-9 · 2026-05-09] Cuando `include_failed=True`,

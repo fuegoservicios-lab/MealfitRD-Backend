@@ -5451,11 +5451,11 @@ def _add_job_jittered(scheduler, *args, **kwargs):
                     _job_id = getattr(args[0], "__name__", "")
                 if _job_id and _interval_s > 0:
                     import hashlib
-                    # cap: no desfasar más que la mitad del periodo (un cron de
-                    # 1 min nunca se desfasa >30s) ni más que el knob.
-                    _cap = min(_SCHEDULER_STAGGER_MAX_S, max(1, _interval_s // 2))
+                    # [P1-PERF-AUDIT-2026-11-18] Sin estampida al arrancar: los de <1 h dentro del knob; los horarios
+                    # o más largos entre 180 s y min(periodo/2, 1800 s).
                     _h = int(hashlib.sha256(str(_job_id).encode("utf-8")).hexdigest()[:8], 16)
-                    _offset_s = _h % (_cap + 1)
+                    _offset_s = ((180 + _h % max(1, min(1800, max(180, _interval_s // 2)) - 179)) if _interval_s >= 3600
+                                 else _h % (min(_SCHEDULER_STAGGER_MAX_S, max(1, _interval_s // 2)) + 1))
                     kwargs["next_run_time"] = datetime.now(timezone.utc) + timedelta(seconds=_offset_s)
     except Exception as _stagger_err:  # pragma: no cover - defensivo
         logger.warning(

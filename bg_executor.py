@@ -179,25 +179,34 @@ def submit_bg_task(
 
     future: Future = _executor.submit(_run_with_ctx)
 
-    def _watch() -> None:
-        try:
-            future.result(timeout=effective_timeout)
-        except FutureTimeoutError:
-            logger.warning(
-                f"[P1-BG-THREAD-TIMEOUT] task `{task_name}` excedió "
-                f"timeout {effective_timeout}s — emitiendo alert + "
-                f"cancel best-effort"
-            )
-            _persist_bg_task_timeout_alert(task_name, effective_timeout)
-            future.cancel()
-        except Exception as e:
+    # [P1-PERF-AUDIT-2026-11-18] Timer cancelable en done_callback en vez de lanzar un
+    # threading.Thread bloqueado en future.result() por cada tarea encolada.
+    def _on_timeout() -> None:
+        if future.done():
+            return
+        logger.warning(
+            f"[P1-BG-THREAD-TIMEOUT] task `{task_name}` excedió "
+            f"timeout {effective_timeout}s — emitiendo alert + "
+            f"cancel best-effort"
+        )
+        _persist_bg_task_timeout_alert(task_name, effective_timeout)
+        future.cancel()
+
+    timer = threading.Timer(effective_timeout, _on_timeout)
+    timer.daemon = True
+    timer.name = f"mealfit-bg-watch-{task_name}"
+
+    def _on_done(fut: Future) -> None:
+        timer.cancel()
+        if fut.cancelled():
+            return
+        exc = fut.exception()
+        if exc is not None:
             logger.error(
-                f"[P1-BG-THREAD-TIMEOUT] task `{task_name}` falló: {e}"
+                f"[P1-BG-THREAD-TIMEOUT] task `{task_name}` falló: {exc}"
             )
 
-    threading.Thread(
-        target=_watch,
-        daemon=True,
-        name=f"mealfit-bg-watch-{task_name}",
-    ).start()
+    future.add_done_callback(_on_done)
+    if not future.done():
+        timer.start()
     return future

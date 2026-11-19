@@ -1,6 +1,8 @@
 import sys as _sys
+import threading as _threading
 import time as _time
 import math as _math
+import uuid as _uuid
 from collections import defaultdict as _defaultdict
 from typing import Optional
 from fastapi import Depends, HTTPException, Request
@@ -33,6 +35,7 @@ class RateLimiter:
         self.max_calls = max_calls
         self.period = period_seconds
         self._hits: dict = _defaultdict(list)  # user_id → [timestamps]
+        self._lock = _threading.Lock()
         # [P1-PLAN-LOTE-945] Identidad del limitador en la clave de Redis (ver `_sitio_de_construccion`).
         self.scope = scope or _sitio_de_construccion()
 
@@ -112,7 +115,7 @@ class RateLimiter:
                 # petición se acepta — simétrico con la rama en memoria. Va aquí,
                 # después del `raise`, para que un rechazo no alargue el castigo.
                 try:
-                    redis_client.zadd(key, {str(now): now})
+                    redis_client.zadd(key, {f"{now}:{_uuid.uuid4().hex[:8]}": now})
                     # [P1-PLAN-LOTE-945] El `expire` del pipeline no alcanza a la clave que nace AQUÍ (en la primera
                     # petición aún no existía): quedaba inmortal. Medido el 30-sep: 953 claves rl:* con TTL -1.
                     redis_client.expire(key, self.period)
@@ -135,35 +138,29 @@ class RateLimiter:
         # Ocasionalmente (1% de tolerancia) limpiar llaves inactivas globales para evitar fugas de RAM
         import random
         if random.random() < 0.01:
-            expired_keys = [
-                k for k, timestamps in self._hits.items()
-                if not timestamps or (now_mono - timestamps[-1]) > self.period
-            ]
-            for k in expired_keys:
-                del self._hits[k]
-
-            # [P2-RATELIMITER-BUCKET-METRICS · 2026-05-15] Emit cardinalidad
-            # + alert sobre saturación de buckets. ANTES, el cleanup no
-            # emitía métricas — si un bug (hash collision en user_id,
-            # botnet generando IPs distintas) inflaba `self._hits` sin
-            # límite, memoria leak silente hasta OOM. Best-effort:
-            # cualquier fallo de DB se silencia para no afectar el
-            # request en curso.
-            try:
+            with self._lock:
+                expired_keys = [
+                    k for k, timestamps in list(self._hits.items())
+                    if not timestamps or (now_mono - timestamps[-1]) > self.period
+                ]
+                for k in expired_keys:
+                    self._hits.pop(k, None)
                 _bucket_count = len(self._hits)
-                _expired_count = len(expired_keys)
+            _expired_count = len(expired_keys)
+
+            # [P1-PERF-AUDIT-2026-11-18] Despachar métricas/alertas DB fuera del hot path HTTP.
+            try:
                 _bucket_limit_warn = _env_int_safe(
                     "MEALFIT_RATE_LIMITER_BUCKET_LIMIT_WARN", 100000
                 )
-                _emit_rl_cleanup_metric(_bucket_count, _expired_count)
-                if _bucket_limit_warn > 0 and _bucket_count > _bucket_limit_warn:
-                    _emit_rl_saturation_alert(_bucket_count, _bucket_limit_warn)
-                else:
-                    # [P1-PROD-AUDIT-2 · 2026-05-30] La cardinalidad volvió bajo el
-                    # umbral → auto-resolver el alert si estaba abierto. Pre-fix
-                    # `rate_limiter_bucket_saturation` no tenía NINGÚN resolver →
-                    # rojo-permanente tras un único spike transitorio.
-                    _resolve_rl_saturation_alert()
+                def _emit_async(_bc=_bucket_count, _ec=_expired_count, _lim=_bucket_limit_warn):
+                    _emit_rl_cleanup_metric(_bc, _ec)
+                    if _lim > 0 and _bc > _lim:
+                        _emit_rl_saturation_alert(_bc, _lim)
+                    else:
+                        _resolve_rl_saturation_alert()
+                from bg_executor import submit_bg_task
+                submit_bg_task(_emit_async, task_name="rl_cleanup_metrics", timeout_s=30)
             except Exception as _metric_err:
                 try:
                     logger.debug(
@@ -172,22 +169,18 @@ class RateLimiter:
                 except Exception:
                     pass
 
-        # Purga timestamps viejos (fuera de la ventana)
-        self._hits[uid] = [t for t in self._hits[uid] if now_mono - t < self.period]
-        if len(self._hits[uid]) >= self.max_calls:
-            # [P1-FORM-5] Retry-After exacto desde el hit más viejo en
-            # monotonic time. Tras la purga arriba, `_hits[uid][0]` es el
-            # hit válido más antiguo (lista preserva orden de inserción
-            # cronológica). max(1, ...) garantiza al menos 1s para evitar
-            # countdown=0 que el cliente interpretaría como "reintentar ya".
-            oldest_mono = self._hits[uid][0]
-            retry_after = max(1, int(_math.ceil((oldest_mono + self.period) - now_mono)))
-            raise HTTPException(
-                status_code=429,
-                detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Reintenta en {retry_after}s.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        self._hits[uid].append(now_mono)
+        # Purga timestamps viejos (fuera de la ventana) bajo lock thread-safe
+        with self._lock:
+            self._hits[uid] = [t for t in self._hits[uid] if now_mono - t < self.period]
+            if len(self._hits[uid]) >= self.max_calls:
+                oldest_mono = self._hits[uid][0]
+                retry_after = max(1, int(_math.ceil((oldest_mono + self.period) - now_mono)))
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Reintenta en {retry_after}s.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            self._hits[uid].append(now_mono)
         return verified_user_id
 
 

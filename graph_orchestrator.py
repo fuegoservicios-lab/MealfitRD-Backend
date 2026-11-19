@@ -43985,7 +43985,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     
                     # Umbral: cero tolerancia, pero excluir nombres genéricos de desayuno
                     generic_ignores = ['huevosrevueltos', 'huevoshervidos', 'avenacocida', 'panezekiel', 'tostada', 'arepa']
-                    filtered_repeated = [rm for rm in repeated_meals if not any(g in rm for g in generic_ignores)]
+                    filtered_repeated = [
+                        rm for rm in repeated_meals
+                        if not any(g in re.sub(r'[^a-z0-9]', '', str(rm).lower()) for g in generic_ignores)
+                    ]
                     filtered_repeated = _anti_repeticion_sin_deterministas(filtered_repeated, days)   # [P1-PLAN-LOTE-46]
                     
                     # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Rechazar SOLO si los

@@ -22,24 +22,31 @@ logger = logging.getLogger(__name__)
 
 _METODOS_QUE_ESCRIBEN = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _PREFIJO_CHAT = "/api/chat/"
+_PREFIJOS_SIN_ESTADO_COACH = (
+    "/api/chat/",
+    "/api/plans/telemetry/",
+    "/api/i18n/",
+    "/api/plans/pending-status/ack",
+)
 
 
-def _vaciar_cache_de_contexto() -> None:
+def _vaciar_cache_de_contexto(user_id: str | None = None) -> None:
     agente = sys.modules.get("agent")   # sin importar agent.py aquí: si no está cargado, no hay caché que vaciar
     if agente is None:
         return
     try:
-        agente.invalidate_chat_user_ctx_cache(None)
+        agente.invalidate_chat_user_ctx_cache(user_id)
     except Exception as exc:  # noqa: BLE001 — nunca romper una respuesta por la caché
         from fail_open import fail_open   # [P1-PLAN-LOTE-1014 · A-04] una caché que no se vacía sirve datos viejos
         fail_open("ctx_cache_invalidate", exc, critico=True)
 
 
 def escribe_fuera_del_chat(scope) -> bool:
+    path = str(scope.get("path") or "")
     return (
         scope.get("type") == "http"
         and str(scope.get("method") or "").upper() in _METODOS_QUE_ESCRIBEN
-        and not str(scope.get("path") or "").startswith(_PREFIJO_CHAT)
+        and not any(path.startswith(p) for p in _PREFIJOS_SIN_ESTADO_COACH)
     )
 
 
@@ -57,7 +64,16 @@ class ContextoDelCoachFrescoMiddleware:
             nonlocal vaciada
             if not vaciada and message.get("type") == "http.response.start":
                 vaciada = True
-                _vaciar_cache_de_contexto()
+                _state = scope.get("state")
+                _uid = _state.get("verified_user_id") if isinstance(_state, dict) else None
+                if _uid:
+                    try:
+                        _vaciar_cache_de_contexto(_uid)
+                    except TypeError:
+                        # Compat con tests que monkeypatchean _vaciar_cache_de_contexto sin args.
+                        _vaciar_cache_de_contexto()
+                else:
+                    _vaciar_cache_de_contexto()
             await send(message)
 
         await self.app(scope, receive, _send)

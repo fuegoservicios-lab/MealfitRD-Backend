@@ -114,6 +114,11 @@ def _fetch_jwks(force: bool = False) -> list:
         return keys
 
 
+# Objeto de clave ya construido, por (kid, x): solo se usa si esa clave SIGUE en el JWKS vigente
+# (una clave retirada del JWKS deja de aceptarse aunque esté aquí).
+_parsed_keys_cache: dict[tuple, Ed25519PublicKey] = {}
+
+
 def _signing_key(token: str, force_refresh: bool = False) -> Ed25519PublicKey:
     kid = jwt.get_unverified_header(token).get("kid")
     if not kid:
@@ -121,9 +126,14 @@ def _signing_key(token: str, force_refresh: bool = False) -> Ed25519PublicKey:
     keys = _fetch_jwks(force=force_refresh)
     for jwk in keys:
         if jwk.get("kid") == kid and jwk.get("kty") == "OKP":
-            return Ed25519PublicKey.from_public_bytes(
-                base64.urlsafe_b64decode(jwk["x"] + "==")
-            )
+            ck = (kid, jwk["x"])
+            pub = _parsed_keys_cache.get(ck)
+            if pub is None:
+                pub = Ed25519PublicKey.from_public_bytes(
+                    base64.urlsafe_b64decode(jwk["x"] + "==")
+                )
+                _parsed_keys_cache[ck] = pub
+            return pub
     # kid no encontrado → posible rotación de claves; refrescar UNA vez.
     if not force_refresh:
         return _signing_key(token, force_refresh=True)
