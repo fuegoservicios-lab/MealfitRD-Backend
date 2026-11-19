@@ -450,8 +450,8 @@ def test_aviso_registrado_en_cron_y_en_ajustes():
         def get_job(self, i): return i in self.ids
     altas = []
     # [P1-PLAN-LOTE-1105] + el aviso del peso, en el mismo registro
-    assert cr.registrar(_Sched(), lambda s, fn, tipo, **kw: altas.append(kw["id"]), 30) == ["progreso_aviso_domingo", "aviso_peso"]
-    assert altas == ["progreso_aviso_domingo", "aviso_peso"] and callable(__import__("aviso_semanal").enviar_avisos_del_domingo)
+    assert cr.registrar(_Sched(), lambda s, fn, tipo, **kw: altas.append(kw["id"]), 30) == ["progreso_aviso_domingo", "aviso_peso", "estancamiento_peso", "aviso_suplemento"]
+    assert altas == ["progreso_aviso_domingo", "aviso_peso", "estancamiento_peso", "aviso_suplemento"] and callable(__import__("aviso_semanal").enviar_avisos_del_domingo)
 
 
 # ═════════════════════════════════ medición (plan 1036.5)

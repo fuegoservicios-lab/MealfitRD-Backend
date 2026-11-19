@@ -13,6 +13,8 @@ JOBS = (
     ("purge_health_reports", 24, "informe_servicio", "purgar_informes_antiguos"),
     ("progreso_aviso_domingo", 1, "aviso_semanal", "enviar_avisos_del_domingo"),
     ("aviso_peso", 1, "aviso_peso", "enviar_avisos_de_peso"),   # [P1-PLAN-LOTE-1105] el peso cada 2 semanas
+    ("estancamiento_peso", 1, "estancamiento_peso", "revisar_estancamientos"),   # [P1-PLAN-LOTE-1107]
+    ("aviso_suplemento", 1, "aviso_suplemento", "enviar_avisos_de_suplemento"),   # [P1-PLAN-LOTE-1106]
 )
 
 

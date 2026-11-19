@@ -123,10 +123,14 @@ def test_las_filas_en_espera_se_juntan_por_tipo(monkeypatch):
     assert len(espera) == 1 and espera[0]["valor"] == "2" and "se retoma si vuelven" in espera[0]["detalle"]
 
 
+def _ya():   # la hora al correr, no al importar: la corrida del gate cruza la medianoche de RD (19-nov)
+    return dt.datetime.now(dt.timezone.utc)
+
+
 def test_lo_resuelto_sale_con_su_fecha(monkeypatch):
     items, _, _ = _atencion(monkeypatch, resueltas=[
         {"alert_key": "chunk_pantry_snapshots_stale", "severity": "warning",
-         "triggered_at": AHORA - dt.timedelta(days=5), "resolved_at": AHORA - dt.timedelta(days=2)}])
+         "triggered_at": _ya() - dt.timedelta(days=5), "resolved_at": _ya() - dt.timedelta(days=2)}])
     f = items[0]
     assert (f["grupo"], f["estado"]) == ("historial", "resuelto")
     assert f["titulo"] == "Nevera desactualizada en la cola"

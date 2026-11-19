@@ -105,6 +105,9 @@ def enviar_avisos_del_domingo(ahora_utc: Optional[datetime] = None) -> int:
                 continue
             if send_push_notification(uid, par[0], par[1], url="/dashboard/progress", tag="progreso-semana"):
                 enviados += 1
+            # [P1-PLAN-LOTE-1108] y el coach lo cuenta en el chat, con una cosa concreta para la semana que empieza
+            __import__("resumen_del_domingo").escribir_en_el_chat(
+                uid, f.get("locale"), off, resolve_user_effective_off_min(uid, None), ahora)
             execute_sql_write(
                 "INSERT INTO app_kv_store (key, value, updated_at) VALUES (%s, %s::jsonb, NOW()) "
                 "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
