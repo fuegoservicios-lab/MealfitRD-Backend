@@ -78,6 +78,9 @@ _ACCION = {
     "billing_old_sub_cancel_failed": "Cancela manualmente la suscripción anterior en PayPal para evitar doble cobro.",
     "hot_table_bloat": "Programa un mantenimiento VACUUM ANALYZE sobre las tablas con más escrituras.",
     "rate_limiter_bucket_saturation": "Comprueba si hay un pico legítimo de tráfico o un cliente haciendo demasiadas peticiones.",
+    "fail_open": "Revisa los logs o Sentry para ver qué protección falló; mientras falle, el flujo sigue pero sin esa guarda.",
+    "llm_daily_spend_high": "Revisa el bloque de Gasto de IA y las cuentas con mayor consumo del día.",
+    "safety_guard_disabled_in_prod": "Revisa las variables de entorno en el VPS y reactiva la protección de seguridad.",
 }
 # Títulos y textos que faltaban en `admin_metricas._ALERTA` (salían como «Aviso técnico: …» con su código).
 _TEXTOS = {
@@ -177,6 +180,22 @@ _TEXTOS = {
                                                "Al actualizar una lista de compras hubo que revertir parte del cambio."),
     "skeleton_short_repair": ("Esqueleto de plan reparado automáticamente",
                               "Un plan nació con menos días de los pedidos y el sistema lo completó."),
+    "fail_open": ("Una protección interna falló y dejó pasar el flujo",
+                  "Un control secundario (fail-open) dio error; el usuario no vio fallo, pero esa protección no actuó en ese turno."),
+    "llm_daily_spend_high": ("Gasto diario de IA por encima del umbral",
+                             "El consumo acumulado de IA de hoy superó el aviso diario configurado."),
+    "safety_guard_disabled_in_prod": ("Protección de seguridad desactivada en producción",
+                                      "Una variable de entorno tiene apagado un control de seguridad que debe estar activo."),
+    "plan_display_i18n_degraded": ("Traducción visual de plan degradada",
+                                   "Algunos textos traducidos del plan no se pudieron generar y salieron en idioma base."),
+    "chunk_insert_failed": ("Error al encolar bloque de plan",
+                            "No se pudo guardar un bloque futuro en la cola de generación."),
+    "chunk_learning_stub_overload": ("Sobrecarga de lecciones de respaldo en bloques",
+                                     "Demasiados bloques consecutivos usaron datos de aprendizaje de respaldo."),
+    "pantry_violation_post_merge": ("Despensa inconsistente tras fusionar bloque",
+                                    "Un bloque recién unido no coincidió con las existencias reservadas en la Nevera."),
+    "corrupted_plan_start_date": ("Fecha de inicio de plan corregida",
+                                  "Un plan tenía una fecha de inicio inválida y el sistema la recuperó automáticamente."),
 }
 # El descarte por diseño tiene su propio título: «abandonado / falló todos sus reintentos» era falso (0 intentos).
 _TEXTO_DESCARTE = ("Bloques descartados al final del plan",
@@ -500,8 +519,9 @@ def marcar_revisados(huellas: list) -> int:
 
 
 def auto_resolver_obsoletas() -> int:
-    """Cierra en BD alertas de planes ya borrados/reemplazados o descartados por diseño (best-effort)."""
+    """Cierra en BD alertas de planes ya borrados/reemplazados, descartes por diseño o ventanas tranquilas (best-effort)."""
     import admin_metricas as am
+    total_cerradas = 0
     try:
         abiertas = am._todos(
             "SELECT alert_key, metadata->>'user_id' AS uid, metadata->>'plan_id' AS pid, "
@@ -525,17 +545,38 @@ def auto_resolver_obsoletas() -> int:
             claves_cerrar.append(clave)
         elif tipo in _TIPOS_DE_PLAN and pid and planes.get(pid) is not True:
             claves_cerrar.append(clave)
-    if not claves_cerrar:
-        return 0
-    try:
-        filas = am.execute_sql_write(
-            "UPDATE public.system_alerts SET resolved_at = now(), "
-            "metadata = COALESCE(metadata, '{}'::jsonb) "
-            "|| jsonb_build_object('auto_resolved_reason', 'plan_replaced_or_obsolete') "
-            "WHERE resolved_at IS NULL AND alert_key = ANY(%s::text[]) RETURNING 1 AS ok",
-            (sorted(set(claves_cerrar)),),
-            returning=True,
-        )
-        return len(filas or [])
-    except Exception:
-        return 0
+    if claves_cerrar:
+        try:
+            filas = am.execute_sql_write(
+                "UPDATE public.system_alerts SET resolved_at = now(), "
+                "metadata = COALESCE(metadata, '{}'::jsonb) "
+                "|| jsonb_build_object('auto_resolved_reason', 'plan_replaced_or_obsolete') "
+                "WHERE resolved_at IS NULL AND alert_key = ANY(%s::text[]) RETURNING 1 AS ok",
+                (sorted(set(claves_cerrar)),),
+                returning=True,
+            )
+            total_cerradas += len(filas or [])
+        except Exception:
+            pass
+
+    # Si `chunk_lesson_synth_ratio_high` lleva >24h abierta con 0 eventos sintetizados recientes, ciérrala al arrancar.
+    if any(r.get("alert_key") == "chunk_lesson_synth_ratio_high" for r in abiertas):
+        try:
+            recientes = am._uno(
+                "SELECT COUNT(*)::int AS n FROM public.chunk_lesson_telemetry "
+                "WHERE event IN ('lesson_synthesized_low_confidence', 'recent_lessons_partial_synthesis') "
+                "AND created_at > now() - interval '24 hours'"
+            )
+            if int((recientes or {}).get("n") or 0) == 0:
+                filas = am.execute_sql_write(
+                    "UPDATE public.system_alerts SET resolved_at = now(), "
+                    "metadata = COALESCE(metadata, '{}'::jsonb) "
+                    "|| jsonb_build_object('auto_resolved_reason', 'quiet_window_zero_synthesized') "
+                    "WHERE alert_key = 'chunk_lesson_synth_ratio_high' AND resolved_at IS NULL "
+                    "AND triggered_at < now() - interval '24 hours' RETURNING 1 AS ok",
+                    returning=True,
+                )
+                total_cerradas += len(filas or [])
+        except Exception:
+            pass
+    return total_cerradas
