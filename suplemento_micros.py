@@ -9,7 +9,7 @@ de C, 50 mcg de D… por porción de 4 cápsulas). `log_consumed_meal` solo leí
 
 `etiqueta_del_pote` traduce `serving_label.supplement_facts` a la etiqueta del contador (`food_label_nutrients.FoodLabel`)
 con las MISMAS reglas estrictas que ya tiene el contador: cantidad absoluta impresa (nunca % VD), tabla legible y por
-porción, la unidad exacta del indicador (sin convertir UI, ni ácido fólico → DFE) y, en minerales, nunca la masa del
+porción, la unidad exacta del indicador (sin convertir UI; el folato en «mcg» cuenta 1:1 como DFE, lote 1113) y, en minerales, nunca la masa del
 compuesto. Lo que no cumple se queda fuera (mejor «sin dato» que un número inventado). tooltip-anchor: P1-PLAN-LOTE-1112
 """
 from __future__ import annotations
@@ -83,7 +83,13 @@ def etiqueta_del_pote(serving_label) -> Optional[dict]:
             # minerales: solo la cantidad del mineral, nunca la masa de la sal (citrato, óxido…)
             if clave in _MINERALES and n.get("basis") == "compound":
                 break
-            if clave in vistos or _unidad(n.get("unit")) != unidad:
+            u = _unidad(n.get("unit"))
+            # [P1-PLAN-LOTE-1113] decisión del dueño: el folato en «mcg» a secas cuenta 1:1 como DFE. Con folato o
+            # metilfolato es lo correcto (las tablas nuevas ya dan el DFE: «680 mcg DFE (408 mcg 5-MTHF)»); con ácido
+            # fólico se queda corto (1 mcg = 1,7 DFE), nunca se pasa.
+            if clave == "folate_mcg" and u == "mcg":
+                u = unidad
+            if clave in vistos or u != unidad:
                 break
             vistos.add(clave)
             nutrientes.append({"key": clave, "amount": float(n["amount"]), "unit": _UNIDAD_SALIDA[unidad]})
