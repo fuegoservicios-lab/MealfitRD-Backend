@@ -70,7 +70,7 @@ def test_frontend_synced():
     backend no honra (o al revés)."""
     _fe = _BACKEND.parent / "frontend" / "src"
     ctx = (_fe / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
-    assert re.search(r"PLAN_LIMIT\s*=\s*4", ctx), (
+    assert re.search(r"PLAN_LIMIT\s*=\s*4;", ctx), (
         "AssessmentContext.PLAN_LIMIT debe ser 4 (paridad con "
         "MEALFIT_TIER_LIMIT_GRATIS default)"
     )

@@ -160,7 +160,7 @@ def test_prompt_grounded():
         "contra el que se ancla el prompt del bot de ayuda."
     )
     planes_src = planes.read_text(encoding="utf-8")
-    for price in ("9.99", "19.99", "49.99"):
+    for price in ("3.99", "6.99", "11.99"):   # [P1-PLAN-LOTE-1116] precios nuevos
         assert price in src, f"Precio {price} ausente del prompt."
         assert price in planes_src, (
             f"Precio {price} ya no está en `config/plans.js` — actualiza "

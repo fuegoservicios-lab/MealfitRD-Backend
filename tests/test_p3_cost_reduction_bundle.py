@@ -105,10 +105,10 @@ def test_tier_limits_default_preserved():
     sentinel interno. Detalle: test_p1_credits_ladder.py."""
     src = _AUTH_PY.read_text(encoding="utf-8")
     expected_defaults = {
-        "GRATIS": 10,
-        "BASIC": 50,
-        "PLUS": 200,
-        "ULTRA": 500,
+        "GRATIS": 4,   # [P1-PLAN-LOTE-1116] precios bajados y generador en Beta: 4/12/30/60
+        "BASIC": 12,
+        "PLUS": 30,
+        "ULTRA": 60,
         "ADMIN": 999999,
     }
     for tier, default_value in expected_defaults.items():
