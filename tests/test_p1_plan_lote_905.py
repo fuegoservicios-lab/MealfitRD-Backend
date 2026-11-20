@@ -93,7 +93,9 @@ def test_crear_sesion_pide_delegacion_al_cliente_y_no_expone_la_clave(habilitado
     assert (live_id, sdp) == ("live_1", "respuesta")
     assert visto["url"] == "https://api.openai.com/v1/live/sessions"
     c = visto["cuerpo"]
-    assert c["session"]["model"] == "gpt-live-1"
+    assert c["session"]["model"] == "gpt-live-1.1"
+    assert c["session"]["idle_timeout_s"] == 30
+    assert c["session"]["wake_policy"] == {"type": "speech"}
     assert c["session"]["delegation"] == {"type": "client"}, "el cerebro es NUESTRO coach"
     assert c["transport"] == {"type": "webrtc", "sdp": "oferta"}
     assert "Delegation policy" in c["session"]["instructions"]
@@ -242,10 +244,38 @@ def test_el_gasto_va_a_llm_usage_events_con_su_precio_por_minuto(monkeypatch):
     monkeypatch.setattr(db, "execute_sql_write", lambda sql, params: visto.update(sql=sql, params=params))
     coach_live.registrar_uso("u", "live_1", 120, "close_requested")
     assert "INSERT INTO llm_usage_events" in visto["sql"]
-    assert visto["params"][1:3] == ("gpt-live-1", "coach_live_voice")
+    assert visto["params"][1:3] == ("gpt-live-1.1", "coach_live_voice")
     assert visto["params"][5] == 100_000, "2 min × US$0,05 = US$0,10"
     src = open(coach_live.__file__, encoding="utf-8").read()
     assert "log_api_usage" not in src, "la voz no quema créditos del plan"
+
+
+def test_gpt_live_1_1_reintenta_sin_standby_si_400_y_calcula_tarifa_espera(habilitado, monkeypatch):
+    llamadas = []
+
+    class _R:
+        def __init__(self, code, payload=None, text=""):
+            self.status_code = code
+            self._payload = payload or {}
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+    def _post(url, headers=None, json=None, timeout=None):
+        llamadas.append(dict(json["session"]))
+        if len(llamadas) == 1:
+            return _R(400, text="unknown parameter idle_timeout_s")
+        return _R(201, {"session": {"id": "live_fb"}, "transport": {"type": "webrtc", "sdp": "ans"}})
+
+    monkeypatch.setattr(coach_live, "_session_http", lambda: type("C", (), {"post": staticmethod(_post)})())
+    monkeypatch.setattr(coach_live.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    live_id, sdp = coach_live.crear_sesion("u1", "oferta", "s1")
+    assert (live_id, sdp) == ("live_fb", "ans")
+    assert len(llamadas) == 2
+    assert "idle_timeout_s" in llamadas[0]
+    assert "idle_timeout_s" not in llamadas[1]
+    assert round(coach_live.costo_usd(60, 60), 4) == 0.07  # 1 min activo ($0.05) + 1 min espera ($0.02)
 
 
 # ── 3. Los endpoints ──────────────────────────────────────────────────────────────────────────────────────────

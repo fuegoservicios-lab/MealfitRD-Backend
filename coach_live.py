@@ -39,9 +39,10 @@ from knobs import _env_float, _env_int, _env_str
 
 logger = logging.getLogger(__name__)
 
-MODELO = "gpt-live-1"
+MODELO = "gpt-live-1.1"
 NODO_USO = "coach_live_voice"
-USD_POR_MINUTO = 0.05          # developers.openai.com/api/docs/models/gpt-live-1 (29-sep-2026)
+USD_POR_MINUTO = 0.05          # developers.openai.com/api/docs/models/gpt-live-1.1 (activo)
+USD_POR_MINUTO_ESPERA = 0.02   # tarifa standby de gpt-live-1.1 durante inactividad/silencio
 _URL_SESIONES = "https://api.openai.com/v1/live/sessions"
 _URL_ATTACH = "wss://api.openai.com/v1/live/sessions/{id}/attach"
 _PAUSA_DESPEDIDA_S = 6.0
@@ -88,6 +89,16 @@ def voz() -> str:
     return _env_str("MEALFIT_COACH_LIVE_VOZ", "marin")
 
 
+def modelo() -> str:
+    """Modelo Live activo (default `gpt-live-1.1`; reversible por knob sin redeploy)."""
+    return _env_str("MEALFIT_COACH_LIVE_MODEL", MODELO)
+
+
+def idle_timeout_s() -> int:
+    """Segundos de silencio antes de pasar a standby ($0.02/min en gpt-live-1.1); 0 desactiva standby."""
+    return _env_int("MEALFIT_COACH_LIVE_IDLE_TIMEOUT_S", 30, validator=lambda v: v == 0 or 5 <= v <= 60)
+
+
 # ── gasto ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def gastado_usd() -> float:
@@ -101,20 +112,25 @@ def gastado_usd() -> float:
     return int((fila or {}).get("micros") or 0) / 1_000_000
 
 
-def costo_usd(segundos: float) -> float:
-    return max(0.0, float(segundos or 0)) * USD_POR_MINUTO / 60.0
+def costo_usd(segundos: float, segundos_espera: float = 0.0) -> float:
+    activos = max(0.0, float(segundos or 0))
+    espera = max(0.0, float(segundos_espera or 0))
+    return (activos * USD_POR_MINUTO + espera * USD_POR_MINUTO_ESPERA) / 60.0
 
 
-def registrar_uso(user_id: Optional[str], live_id: str, segundos: float, motivo: str) -> None:
-    """Fila propia: el precio de GPT-Live-1 es por MINUTO, no por token (la tabla de `compute_llm_cost_micros`)."""
+def registrar_uso(user_id: Optional[str], live_id: str, segundos: float, motivo: str,
+                  segundos_espera: float = 0.0) -> None:
+    """Fila propia: el precio de GPT-Live es por MINUTO (activo y standby), no por token."""
     from db import execute_sql_write
-    micros = int(round(costo_usd(segundos) * 1_000_000))
+    micros = int(round(costo_usd(segundos, segundos_espera) * 1_000_000))
+    meta = {"live_id": live_id, "segundos": round(float(segundos or 0), 1), "motivo": motivo}
+    if segundos_espera > 0:
+        meta["segundos_espera"] = round(float(segundos_espera), 1)
     try:
         execute_sql_write(
             "INSERT INTO llm_usage_events (user_id, model, node, input_tokens, output_tokens, cost_usd_micros, metadata) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)",
-            (user_id, MODELO, NODO_USO, 0, 0, micros,
-             json.dumps({"live_id": live_id, "segundos": round(float(segundos or 0), 1), "motivo": motivo})),
+            (user_id, modelo(), NODO_USO, 0, 0, micros, json.dumps(meta)),
         )
     except Exception as e:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-905] no se pudo registrar el gasto de la sesión {live_id}: {e}")
@@ -183,6 +199,7 @@ class SesionLive:
     gastado_antes_usd: float = 0.0
     creada: float = field(default_factory=time.time)
     segundos: float = 0.0
+    segundos_espera: float = 0.0
     cerrada: bool = False
     novedades: list = field(default_factory=list)   # [{n, ajustes_de_app, diario}] para el teléfono
     _oido: list = field(default_factory=list)
@@ -311,17 +328,29 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
     clave = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not clave:
         raise LiveNoDisponible("sin_clave")
+    modelo_activo = modelo()
+    sesion_cfg = {
+        "model": modelo_activo,
+        "instructions": instrucciones(locale),
+        "audio": {"output": {"voice": voz()}},
+        "delegation": {"type": "client"},
+    }
+    idle_s = idle_timeout_s()
+    con_standby = idle_s > 0 and modelo_activo != "gpt-live-1"
+    if con_standby:
+        sesion_cfg["idle_timeout_s"] = idle_s
+        sesion_cfg["wake_policy"] = {"type": "speech"}
     cuerpo = {
-        "session": {
-            "model": MODELO,
-            "instructions": instrucciones(locale),
-            "audio": {"output": {"voice": voz()}},
-            "delegation": {"type": "client"},
-        },
+        "session": sesion_cfg,
         "transport": {"type": "webrtc", "sdp": sdp},
     }
-    r = _session_http().post(_URL_SESIONES, headers={"Authorization": f"Bearer {clave}", "Content-Type": "application/json"},
-                   json=cuerpo, timeout=20.0)
+    headers = {"Authorization": f"Bearer {clave}", "Content-Type": "application/json"}
+    r = _session_http().post(_URL_SESIONES, headers=headers, json=cuerpo, timeout=20.0)
+    if r.status_code == 400 and con_standby:
+        logger.warning(f"⚠️ [P1-PLAN-LOTE-905] OpenAI devolvió 400 con standby ({r.text[:200]}); reintentando sin idle_timeout_s")
+        sesion_cfg.pop("idle_timeout_s", None)
+        sesion_cfg.pop("wake_policy", None)
+        r = _session_http().post(_URL_SESIONES, headers=headers, json=cuerpo, timeout=20.0)
     if r.status_code >= 400:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-905] OpenAI rechazó la sesión Live: HTTP {r.status_code} {r.text[:300]}")
         raise LiveNoDisponible(f"openai_{r.status_code}")
@@ -394,12 +423,18 @@ def _canal_lateral(s: SesionLive, clave: str) -> None:
                         from ios_free import inherit_context
                         threading.Thread(target=inherit_context(_delegar), args=(ws, s, deleg["id"], dicho), daemon=True).start()
                 elif tipo == "session.usage.updated":
-                    s.segundos = float(((ev.get("usage") or {}).get("seconds")) or s.segundos)
-                    if not s.cerrada and ((tope_sesion > 0 and s.segundos >= tope_sesion)
-                                          or (tope_total > 0 and s.gastado_antes_usd + costo_usd(s.segundos) >= tope_total)):
+                    uso = ev.get("usage") or {}
+                    s.segundos = float(uso.get("active_seconds") or uso.get("seconds") or s.segundos)
+                    if uso.get("standby_seconds") is not None:
+                        s.segundos_espera = float(uso.get("standby_seconds") or 0.0)
+                    if not s.cerrada and ((tope_sesion > 0 and (s.segundos + s.segundos_espera) >= tope_sesion)
+                                          or (tope_total > 0 and s.gastado_antes_usd + costo_usd(s.segundos, s.segundos_espera) >= tope_total)):
                         _cerrar(ws, s, "tope")
                 elif tipo == "session.closed":
-                    s.segundos = float(((ev.get("usage") or {}).get("seconds")) or s.segundos)
+                    uso = ev.get("usage") or {}
+                    s.segundos = float(uso.get("active_seconds") or uso.get("seconds") or s.segundos)
+                    if uso.get("standby_seconds") is not None:
+                        s.segundos_espera = float(uso.get("standby_seconds") or 0.0)
                     motivo = str(ev.get("reason") or "closed")
                     break
                 elif tipo == "error":
@@ -409,12 +444,16 @@ def _canal_lateral(s: SesionLive, clave: str) -> None:
         logger.warning(f"⚠️ [P1-PLAN-LOTE-905] canal lateral de {s.live_id} cayó: {type(e).__name__}: {str(e)[:200]}")
     finally:
         s.finalizar()
-        if not s.segundos:
+        if not s.segundos and not s.segundos_espera:
             elapsed = max(0.0, time.time() - s.creada)
             s.segundos = min(elapsed, tope_sesion + 20) if tope_sesion > 0 else elapsed
-        registrar_uso(s.user_id, s.live_id, s.segundos, motivo)
-        logger.info(f"🎙️ [P1-PLAN-LOTE-905] sesión {s.live_id} cerrada ({motivo}, {s.segundos:.0f} s, "
-                    f"{costo_usd(s.segundos):.3f} USD)")
+        if s.segundos_espera > 0:
+            registrar_uso(s.user_id, s.live_id, s.segundos, motivo, segundos_espera=s.segundos_espera)
+        else:
+            registrar_uso(s.user_id, s.live_id, s.segundos, motivo)
+        logger.info(f"🎙️ [P1-PLAN-LOTE-905] sesión {s.live_id} cerrada ({motivo}, {s.segundos:.0f} s activos"
+                    f"{f', {s.segundos_espera:.0f} s espera' if s.segundos_espera else ''}, "
+                    f"{costo_usd(s.segundos, s.segundos_espera):.3f} USD)")
 
 
 def _cerrar(ws, s: SesionLive, motivo: str) -> None:
