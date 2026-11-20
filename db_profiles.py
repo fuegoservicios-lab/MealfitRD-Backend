@@ -1448,6 +1448,7 @@ _USER_SCOPED_TABLES_ANONYMIZE = ("llm_usage_events",)
 _USER_SCOPED_KV_PREFIXES = (
     "hydration_state:", "avisos_locales:", "plan_invite:", "pending_pipeline:", "pantry_nudge_last:",
     "diary_targets_hist:", "presencia:",   # [P1-PLAN-LOTE-1115] la marca de presencia
+    "probador:",    # [P1-PLAN-LOTE-1117] el rango de probador de Google Play
 )
 
 # [P1-PLAN-LOTE-716 · 2026-09-28] Cachés con el uid DENTRO de la clave, seguido de más texto: el contexto RAG

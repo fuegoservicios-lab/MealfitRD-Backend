@@ -116,6 +116,9 @@ def resumen_creditos(perfil) -> dict:
     tier = perfil.get("plan_tier") or "gratis"
     from ios_free import is_free, GENERATION
     base = GENERATION if is_free() else int(_TIER_LIMITS.get(tier, _TIER_LIMITS["gratis"]))
+    if not is_free():
+        from auth import _con_rango_probador     # [P1-PLAN-LOTE-1117] el tope que aplica el gate, no otro
+        base = int(_con_rango_probador(perfil.get("id"), tier, base, "generacion_mes"))
     regalos = (regalos_vigentes(perfil.get("id"), usage_scope="ios_free") if is_free()
                else [] if tier == "admin" else regalos_vigentes(perfil.get("id")))
     extra = extra_de(regalos, "generacion")

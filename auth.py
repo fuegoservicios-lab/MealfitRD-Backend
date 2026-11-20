@@ -523,6 +523,18 @@ def _creditos_extra(profile, medidor: str) -> int:
         return 0
 
 
+def _con_rango_probador(user_id, plan_tier, limit, clave: str):
+    """[P1-PLAN-LOTE-1117] Probadores de Google Play: el cupo mensual sube al de su rango (`rango_probador`), nunca
+    baja. Fail-open: si algo falla, el cupo normal."""
+    try:
+        import rango_probador, topes_por_nivel
+        if rango_probador.nivel_con_rango(user_id, str(plan_tier or "gratis")) == rango_probador.NIVEL:
+            return max(int(limit), int(topes_por_nivel.limite(rango_probador.NIVEL, clave)))
+    except Exception:  # noqa: BLE001
+        pass
+    return limit
+
+
 def coach_quota_snapshot(user_id: str) -> dict:
     """[P1-COACH-QUOTA-METER · 2026-09-02] SSOT de la cuota mensual del coach: la misma
     aritmética que el gate (`get_monthly_api_usage(kind="coach")` + `_COACH_LIMITS` por tier),
@@ -538,6 +550,8 @@ def coach_quota_snapshot(user_id: str) -> dict:
         extra = _creditos_extra(profile, "coach")
     from ios_free import is_free, COACH
     limit = (COACH if is_free() else int(_COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"]))) + extra
+    if not is_free():
+        limit = _con_rango_probador(user_id, plan_tier, limit - extra, "coach_mes") + extra
     now = datetime.now(timezone.utc)
     resets_at = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1, tzinfo=timezone.utc)
     return {
@@ -563,6 +577,8 @@ def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_us
             extra = _creditos_extra(profile, "coach")
         from ios_free import is_free, COACH
         limit = (COACH if is_free() else _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])) + extra
+        if not is_free():
+            limit = _con_rango_probador(verified_user_id, plan_tier, limit - extra, "coach_mes") + extra
         _freno = None if is_free() else __import__("topes_por_nivel").frenado(verified_user_id, "coach")  # [P1-PLAN-LOTE-1116]
         if _freno:
             raise HTTPException(status_code=402, detail=_freno["mensaje"],
@@ -606,6 +622,8 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
         # `plan_tier` corrupto NO debe quedar con quota ilimitada).
         from ios_free import is_free, GENERATION
         limit = (GENERATION if is_free() else _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"])) + extra  # [P1-PLAN-LOTE-772] + créditos regalados
+        if not is_free():
+            limit = _con_rango_probador(verified_user_id, plan_tier, limit - extra, "generacion_mes") + extra
 
         _freno = None if is_free() else __import__("topes_por_nivel").frenado(verified_user_id, "generacion")  # [P1-PLAN-LOTE-1116]
         if _freno:

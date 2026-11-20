@@ -909,6 +909,12 @@ def guardar_dispositivo(user_id, cuerpo) -> bool:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ [P1-PLAN-LOTE-837] ajustes del dispositivo no guardados ({uid[:8]}, {plataforma}): {e!r}")
         return False
+    if filas:
+        try:
+            import rango_probador          # [P1-PLAN-LOTE-1117] Android entra solo al rango de probador mientras haya cupo
+            rango_probador.inscribir_si_android(uid, plataforma)
+        except Exception:  # noqa: BLE001
+            pass
     return bool(filas)
 
 

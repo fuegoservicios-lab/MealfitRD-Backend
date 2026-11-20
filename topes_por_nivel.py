@@ -38,6 +38,10 @@ TABLA = {
                  usd_dia=0.40, usd_mes=2.80),
     "ultra": dict(generacion_mes=60, coach_mes=2000, coach_dia=250, fotos_dia=40, voz_min_mes=100, voz_min_sesion=20,
                   usd_dia=0.80, usd_mes=5.00),
+    # [P1-PLAN-LOTE-1117] rango especial de los probadores de Google Play (`rango_probador`): no es un plan ni se
+    # vende; se superpone a gratis/Básico/Plus. Peor caso 11 cuentas × US$ 3 = US$ 33 al mes.
+    "probador": dict(generacion_mes=40, coach_mes=1500, coach_dia=200, fotos_dia=30, voz_min_mes=60, voz_min_sesion=15,
+                     usd_dia=0.60, usd_mes=3.00),
 }
 _SIN_TOPE = dict(generacion_mes=999999, coach_mes=999999, coach_dia=999999, fotos_dia=999999, voz_min_mes=99999,
                  voz_min_sesion=60, usd_dia=1000.0, usd_mes=10000.0)
@@ -49,8 +53,8 @@ def activo() -> bool:
 
 def nivel_de(plan_tier) -> str:
     t = str(plan_tier or "gratis").strip().lower()
-    if t == "admin":
-        return "admin"
+    if t in ("admin", "probador"):
+        return t
     return t if t in NIVELES else "gratis"
 
 
@@ -125,9 +129,14 @@ def voz_segundos_mes(user_id: str) -> float:
 def _tier(user_id: str) -> str:
     try:
         from db import get_user_profile
-        return nivel_de((get_user_profile(user_id) or {}).get("plan_tier"))
+        nivel = nivel_de((get_user_profile(user_id) or {}).get("plan_tier"))
     except Exception:                                                  # noqa: BLE001
-        return "gratis"
+        nivel = "gratis"
+    try:
+        from rango_probador import nivel_con_rango     # [P1-PLAN-LOTE-1117]
+        return nivel_con_rango(user_id, nivel)
+    except Exception:                                                  # noqa: BLE001
+        return nivel
 
 
 # ─────────────────────────────────────────────────────────────── decisiones
