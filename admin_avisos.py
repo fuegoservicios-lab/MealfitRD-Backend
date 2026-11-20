@@ -595,3 +595,26 @@ def auto_resolver_obsoletas() -> int:
         except Exception:
             pass
     return total_cerradas
+
+def resolver_synth_ratio_quieto(escribir, sintetizados, horas: int) -> None:
+    """[SYNTH-QUIET-RESOLVE] Ventana entera con 0 lecciones sintetizadas y poco tráfico: la alerta
+    `chunk_lesson_synth_ratio_high` abierta desde antes de la ventana se auto-resuelve (no queda pegada).
+    Vive aquí y no en `cron_tasks.py` (fichero con tope de líneas); `escribir` es su `execute_sql_write`."""
+    if sintetizados:
+        return
+    try:
+        escribir(
+            """
+            UPDATE system_alerts
+            SET resolved_at = NOW(),
+                metadata = COALESCE(metadata, '{}'::jsonb)
+                    || jsonb_build_object('auto_resolved_reason', 'quiet_window_zero_synthesized')
+            WHERE alert_key = 'chunk_lesson_synth_ratio_high'
+              AND resolved_at IS NULL
+              AND triggered_at < NOW() - make_interval(hours => %s)
+            """,
+            (int(horas),),
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"[SYNTH-QUIET-RESOLVE] auto-resolve falló (best-effort): {e}")
