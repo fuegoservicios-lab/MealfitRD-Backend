@@ -77,6 +77,7 @@ def _uid_si_la_identidad_vive(uid: Optional[str], via: str) -> Optional[str]:
             f"(via={via}, sub={uid}): se rechaza en vez de resucitar el perfil"
         )
         return None
+    __import__("pausa_inactividad").marcar_presencia(uid)   # [P1-PLAN-LOTE-1115] usó la app: sus bloques siguen
     return uid
 
 

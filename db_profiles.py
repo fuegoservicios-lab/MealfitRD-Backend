@@ -1447,7 +1447,7 @@ _USER_SCOPED_TABLES_ANONYMIZE = ("llm_usage_events",)
 # del aviso de la Nevera (`pantry_nudge_last:`), las otras dos claves exactas con el uid.
 _USER_SCOPED_KV_PREFIXES = (
     "hydration_state:", "avisos_locales:", "plan_invite:", "pending_pipeline:", "pantry_nudge_last:",
-    "diary_targets_hist:",
+    "diary_targets_hist:", "presencia:",   # [P1-PLAN-LOTE-1115] la marca de presencia
 )
 
 # [P1-PLAN-LOTE-716 · 2026-09-28] Cachés con el uid DENTRO de la clave, seguido de más texto: el contexto RAG

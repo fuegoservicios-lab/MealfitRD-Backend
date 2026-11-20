@@ -22697,7 +22697,7 @@ def _alert_stuck_chunks() -> None:
             GROUP BY q.meal_plan_id, q.user_id
             ORDER BY MIN(q.execute_after) ASC
             LIMIT %s
-            """.replace("__AI_CONSENT_GATE__", __import__("consentimientos").fragmento_sql_permiso("q.user_id")),
+            """.replace("__AI_CONSENT_GATE__", __import__("consentimientos").fragmento_sql_permiso("q.user_id") + __import__("pausa_inactividad").fragmento_sql("q")),  # [P1-PLAN-LOTE-1115] esperar a su dueño no es estar atascado
             (int(_overdue_h), int(_overdue_h), int(_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
@@ -27848,7 +27848,7 @@ __PLAN_MODE_GATE__
     # pasa el gate en el mismo tick. Condicionado al knob del propio freeze: sin
     # feature no hay flag legítimo que leer.
     _freeze_on = _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True)
-    _gates_sql = (_pm_gate_sql.rstrip() if _pm_on else "") + (_FREEZE_GATE_SQL.rstrip() if _freeze_on else "")
+    _gates_sql = (_pm_gate_sql.rstrip() if _pm_on else "") + (_FREEZE_GATE_SQL.rstrip() if _freeze_on else "") + __import__("pausa_inactividad").fragmento_sql("q1")  # [P1-PLAN-LOTE-1115]
     # [P1-PLAN-LOTE-843 · 2026-09-29] Tercera capa, el permiso para la IA de terceros: sin él vigente (knob `block`; en
     # `log`, solo la retirada explícita) no se recoge, encole quien encole. Mismo patrón que la pausa de P1-PLAN-MODE.
     _gates_sql += __import__("consentimientos").fragmento_sql_permiso("q1.user_id")
