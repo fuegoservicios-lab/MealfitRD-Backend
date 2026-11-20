@@ -2299,6 +2299,13 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
     # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
     from food_label_nutrients import snapshot
+    if food_facts is None and not nutrition and _pote:   # [P1-PLAN-LOTE-1112] las vitaminas del pote, a «Micros de hoy»
+        try:
+            food_facts = __import__("suplemento_micros").etiqueta_del_pote(_pote.get("serving_label"))
+            label_servings = (porciones or 1) if food_facts else label_servings
+        except Exception as _vit_err:
+            logger.warning(f"[P1-PLAN-LOTE-1112] vitaminas del pote no leídas: {_vit_err!r}")
+            food_facts = None
     try:
         _nutrition = snapshot(food_facts, label_servings) if food_facts is not None else nutrition
     except (TypeError, ValueError) as error:
@@ -2644,44 +2651,28 @@ def correct_consumed_meal(
     nutrition: Optional[dict] = None,
 ) -> str:
     """
-    Corrige EN SITIO o ELIMINA una comida que YA está en el diario del usuario
-    porque quedó mal registrada (día equivocado, comida equivocada, macros
-    equivocados) o porque el usuario pide borrarla («bórralo», «elimínalo»,
-    «era un ejemplo, no me comí eso»). Es un UPDATE o DELETE sobre la MISMA
-    fila — NUNCA crea una fila nueva, así que NUNCA duplica el conteo calórico.
-    - meal_id: El 'ID_REGISTRO_DIARIO' que recibiste en el ToolMessage (o de
-      una corrección previa), o 'ultimo' si el usuario pide borrar/corregir
-      la última comida registrada. Si delete=True y no tienes el id, pasa
-      meal_id="ultimo" o meal_name con el plato a borrar.
-    - delete: Pasa `delete=True` ÚNICAMENTE cuando el usuario diga que NO se comió ese
-      plato («era un ejemplo», «no me comí eso») o te pida explícitamente
-      borrarlo/eliminarlo/quitarlo del diario. NUNCA pases `delete=True` si el usuario
-      no usó palabras explícitas de borrado (jamás borres por nombres raros o erratas).
-      Con `delete=True` solo necesitas `user_id`, `delete=True` y opcionalmente `meal_name` o `meal_id`.
-    - Pasa SOLO los campos que hay que cambiar (deja el resto en None/sin
-      mencionar) — no hace falta reenviar lo que ya estaba bien. PERO si el
-      usuario aclara ingredientes, preparación o estilo culinario que cambia
-      el aporte nutricional (ej. «tiene cosas como de chofán», «llevaba queso
-      o jamón», «era frito», «con más aceite/salsa»), RECALCULA y pasa SIEMPRE
-      `calories`, `protein`, `carbs`, `healthy_fats` e `ingredients`
-      actualizados junto con `meal_name` (infiriendo los ingredientes típicos
-      de ese estilo/foto sin dejar los macros anteriores intactos ni pedirle
-      al usuario que enumere cada ingrediente).
-    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'.
-      Pásalo SOLO si el usuario está corrigiendo A QUÉ COMIDA fue.
-    - days_ago: 0=hoy, 1=ayer, 2=antier (máx 7). Pásalo SOLO si el usuario
-      está corrigiendo A QUÉ DÍA fue. El día y la comida deben salir de lo
-      que el USUARIO dijo explícitamente — NUNCA de qué estabas preguntando
-      TÚ justo antes; si no está claro, pregunta primero.
-    - Si la corrección o el borrado tiene éxito, dile al usuario en una frase
-      qué quedó corregido o eliminado. Si la herramienta responde ERROR, NO
-      digas que corregiste ni borraste nada — dile la verdad y pregúntale a
-      cuál comida se refiere; usa `log_consumed_meal` solo si de verdad es
-      una comida DISTINTA que aún no está registrada.
-    - Mover la comida a otro día conserva su hora. Otros registros del mismo
-      tipo/día no impiden corregir esta fila; desayuno/almuerzo/cena admiten varias filas.
-    - ingredients: si cambian, la Nevera se ajusta (devuelve lo anterior y
-      descuenta lo nuevo) cuando es seguro; si no, la respuesta te lo dice.
+    Corrige EN SITIO o ELIMINA una comida que YA está en el diario: mal registrada (día, comida o macros
+    equivocados) o el usuario pide borrarla («bórralo», «era un ejemplo, no me comí eso»). Es un UPDATE o
+    DELETE sobre la MISMA fila — NUNCA crea una fila nueva, así que NUNCA duplica el conteo calórico.
+    - meal_id: el 'ID_REGISTRO_DIARIO' del ToolMessage (o de una corrección previa), o 'ultimo' para la última
+      comida registrada; para borrar sin id, meal_id="ultimo" o meal_name con el plato.
+    - delete: `delete=True` ÚNICAMENTE si el usuario dice que NO se comió ese plato o pide explícitamente
+      borrarlo/eliminarlo/quitarlo. NUNCA sin palabras explícitas de borrado (jamás borres por nombres raros o
+      erratas). Con delete=True basta user_id, delete y opcionalmente meal_name o meal_id.
+    - Pasa SOLO los campos que cambian. PERO si aclara ingredientes, preparación o estilo que cambia el aporte
+      («como de chofán», «llevaba queso», «era frito», «con más aceite»), RECALCULA y pasa SIEMPRE calories,
+      protein, carbs, healthy_fats e ingredients junto con meal_name (infiere los ingredientes típicos; no dejes
+      los macros viejos ni le pidas que enumere cada ingrediente).
+    - meal_type ('desayuno'|'almuerzo'|'cena'|'merienda'|'snack') y days_ago (0=hoy, 1=ayer, máx 7): SOLO si
+      corrige A QUÉ COMIDA o A QUÉ DÍA fue. Deben salir de lo que el USUARIO dijo explícitamente — NUNCA de qué
+      estabas preguntando TÚ justo antes; si no está claro, pregunta primero.
+    - Con éxito, dile en una frase qué quedó corregido o eliminado. Si responde ERROR, NO digas que corregiste ni
+      borraste nada: di la verdad y pregunta a cuál comida se refiere; `log_consumed_meal` solo si de verdad es
+      una comida DISTINTA aún no registrada.
+    - Mover a otro día conserva su hora. Otros registros del mismo tipo/día no impiden corregir esta fila;
+      desayuno/almuerzo/cena admiten varias filas.
+    - ingredients: si cambian, la Nevera se ajusta (devuelve lo anterior y descuenta lo nuevo) cuando es seguro;
+      si no, la respuesta te lo dice.
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
