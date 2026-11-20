@@ -109,6 +109,14 @@ def check_user_daily_chat_budget(
     - `>= 100%`: `status='hard_100'`, pausa suavemente el turno sin llamar al LLM.
     """
     limit = chat_user_daily_budget_usd()
+    # [P1-PLAN-LOTE-1116] por nivel (gratis 0,10 · Básico 0,20 · Plus 0,40 · Max 0,80), salvo que el knob global se fije a mano
+    if limit > 0.0 and user_id and user_id != "guest" and not os.environ.get("MEALFIT_CHAT_USER_DAILY_BUDGET_USD"):
+        try:
+            _tpn = __import__("topes_por_nivel")
+            if _tpn.activo():
+                limit = float(_tpn.limite(_tpn._tier(str(user_id)), "usd_dia"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[P1-PLAN-LOTE-1116] tope diario por nivel ilegible: %s", type(exc).__name__)
     if limit <= 0.0 or not user_id or user_id == "guest" or user_exempt_from_chat_budget(user_id):
         return {
             "status": "ok",

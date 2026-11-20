@@ -35,10 +35,10 @@ def _default_of(tier_env: str) -> int:
 
 
 def test_ladder_defaults():
-    assert _default_of("GRATIS") == 10, "gratis bajó de 15 a 10 (P1-CREDITS-LADDER)"
-    assert _default_of("BASIC") == 50, "basic sin cambio"
-    assert _default_of("PLUS") == 200, "plus sin cambio"
-    assert _default_of("ULTRA") == 500, (
+    assert _default_of("GRATIS") == 4, "gratis 15→10 (P1-CREDITS-LADDER) →4 (P1-PLAN-LOTE-1116, precios nuevos)"
+    assert _default_of("BASIC") == 12, "basic 50→12 (P1-PLAN-LOTE-1116)"
+    assert _default_of("PLUS") == 30, "plus 200→30 (P1-PLAN-LOTE-1116)"
+    assert _default_of("ULTRA") == 60, (   # [P1-PLAN-LOTE-1116] 500→60 con el precio nuevo
         "ultra debe estar ACOTADO (era 999999='ilimitado'): cola de costo LLM "
         "no acotada + imán de abuso. Si necesitas subirlo, knob "
         "MEALFIT_TIER_LIMIT_ULTRA sin redeploy — no restaurar el sentinel."
@@ -70,8 +70,8 @@ def test_frontend_synced():
     backend no honra (o al revés)."""
     _fe = _BACKEND.parent / "frontend" / "src"
     ctx = (_fe / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
-    assert re.search(r"PLAN_LIMIT\s*=\s*10", ctx), (
-        "AssessmentContext.PLAN_LIMIT debe ser 10 (paridad con "
+    assert re.search(r"PLAN_LIMIT\s*=\s*4", ctx), (
+        "AssessmentContext.PLAN_LIMIT debe ser 4 (paridad con "
         "MEALFIT_TIER_LIMIT_GRATIS default)"
     )
     upgrade = (_fe / "pages" / "Upgrade.jsx").read_text(encoding="utf-8")

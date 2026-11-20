@@ -60,7 +60,7 @@ def test_el_prompt_web_no_cambia():
     web = help_bot_system_prompt("es-DO")
     assert web == HELP_BOT_SYSTEM_PROMPT == hb._PROMPT_BASE.replace("{regla_idioma}", hb._REGLA_TONO_ES)
     assert web == help_bot_system_prompt("es-DO", hide_commerce=False)
-    for sigue in ("## Planes y precios", "bioboros.com/supermercado", "bioboros.com/medical", "**Max**", "$9.99"):
+    for sigue in ("## Planes y precios", "bioboros.com/supermercado", "bioboros.com/medical", "**Max**", "$3.99"):   # [P1-PLAN-LOTE-1116] precios nuevos
         assert sigue in web
     assert "REGLA ADICIONAL (app nativa)" not in web
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):

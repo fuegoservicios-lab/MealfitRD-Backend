@@ -499,6 +499,10 @@ async def api_diary_upload(
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
+        # [P1-PLAN-LOTE-1116] fotos por día y gasto de IA del mes, por nivel: 402 ANTES de leer la imagen
+        _freno_foto = __import__("topes_por_nivel").frenado(verified_user_id, "foto") if verified_user_id else None
+        if _freno_foto:
+            raise HTTPException(status_code=402, detail=_freno_foto["mensaje"], headers={"X-Tope": _freno_foto["codigo"]})
 
         actual_user_id = user_id if user_id != "guest" else session_id
 

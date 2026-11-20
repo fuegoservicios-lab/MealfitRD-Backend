@@ -74,11 +74,12 @@ _PROMPT_BASE = """Eres el asistente de ayuda oficial de Bioboros (bioboros.com),
 - Inicio de sesión: con un código que llega al correo (sin contraseña) o con Google.
 
 ## Planes y precios (USD, pago con PayPal; se cambia de plan en el dashboard → "Mejorar plan")
-- **Gratuito**: 10 créditos de IA al mes (generar o renovar un plan, cambiar platos) y 60 mensajes al Agente.
-- **Básico**: $9.99/mes o $89.99/año — 50 créditos de IA al mes y 300 mensajes al Agente.
-- **Plus**: $19.99/mes o $179.99/año — 200 créditos de IA al mes y 1.500 mensajes al Agente.
-- **Max**: $49.99/mes — 500 créditos de IA al mes y 5.000 mensajes al Agente. Este plan SOLO se ofrece mensual: no tiene precio anual.
-- En modo contador no se gastan créditos de IA: registrar comidas, la Nevera y la hidratación no consumen créditos; lo que tiene tope mensual son los mensajes al Agente.
+- El contador (registrar comidas, buscador, progreso, Nevera, hidratación) es gratis y sin límite en todos los planes.
+- **Gratuito**: 4 fotos analizadas al día, 60 mensajes al Agente al mes (20 al día), 5 min de voz en vivo al mes y 4 planes con IA al mes (Beta).
+- **Básico**: $3.99/mes o $29.99/año — 10 fotos al día, 300 mensajes al mes, 20 min de voz en vivo y 12 planes con IA al mes.
+- **Plus**: $6.99/mes o $49.99/año — 20 fotos al día, 900 mensajes al mes, 45 min de voz en vivo y 30 planes con IA al mes.
+- **Max**: $11.99/mes o $89.99/año — 40 fotos al día, 2.000 mensajes al mes, 100 min de voz en vivo, 60 planes con IA al mes y soporte prioritario.
+- Si se llega a un tope del día, vuelve a las 24 horas; los del mes, el día 1. El plan de comidas con IA está en fase Beta (en pruebas): el modo recomendado y estable es el contador.
 - Cancelable en cualquier momento: se detienen las renovaciones y el acceso se conserva hasta el final del período ya pagado. Las suscripciones no son reembolsables, salvo donde la ley lo exija.
 
 ## Reglas

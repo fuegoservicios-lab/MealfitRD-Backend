@@ -285,11 +285,13 @@ def session_cookie_iat(value: str) -> Optional[int]:
 #   basic/plus SIN cambio (bajar caps a usuarios que pagan es hostil; subirlos
 #     regala margen sin mover conversión).
 # admin conserva el sentinel alto (cuenta interna, no comercial).
+# [P1-PLAN-LOTE-1116 · 2026-11-20] Precios bajados (3,99 / 6,99 / 11,99) y generador de planes en Beta: la escalera
+# pasa a 4 / 12 / 30 / 60. Los mismos números que `topes_por_nivel.TABLA["…"]["generacion_mes"]` (el test lo ancla).
 _TIER_LIMITS = {
-    "gratis": _env_int("MEALFIT_TIER_LIMIT_GRATIS", 10),
-    "basic": _env_int("MEALFIT_TIER_LIMIT_BASIC", 50),
-    "plus": _env_int("MEALFIT_TIER_LIMIT_PLUS", 200),
-    "ultra": _env_int("MEALFIT_TIER_LIMIT_ULTRA", 500),
+    "gratis": _env_int("MEALFIT_TIER_LIMIT_GRATIS", 4),
+    "basic": _env_int("MEALFIT_TIER_LIMIT_BASIC", 12),
+    "plus": _env_int("MEALFIT_TIER_LIMIT_PLUS", 30),
+    "ultra": _env_int("MEALFIT_TIER_LIMIT_ULTRA", 60),
     "admin": _env_int("MEALFIT_TIER_LIMIT_ADMIN", 999999),
 }
 
@@ -501,10 +503,11 @@ def clear_session_cookie(response: Response) -> None:
 # gratis ≈ $0,16/mes de LLM: un producto usable en el tier gratis que sigue costando
 # el 6% de un plan. Knobs para ajustar sin redeploy.
 _COACH_LIMITS = {
+    # [P1-PLAN-LOTE-1116] = topes_por_nivel.TABLA[…]["coach_mes"] (plus 1500→900, ultra 5000→2000 con los precios nuevos)
     "gratis": int(os.environ.get("MEALFIT_COACH_LIMIT_GRATIS", "60")),
     "basic": int(os.environ.get("MEALFIT_COACH_LIMIT_BASIC", "300")),
-    "plus": int(os.environ.get("MEALFIT_COACH_LIMIT_PLUS", "1500")),
-    "ultra": int(os.environ.get("MEALFIT_COACH_LIMIT_ULTRA", "5000")),
+    "plus": int(os.environ.get("MEALFIT_COACH_LIMIT_PLUS", "900")),
+    "ultra": int(os.environ.get("MEALFIT_COACH_LIMIT_ULTRA", "2000")),
     # [P1-PLAN-LOTE-75 · 2026-09-17] `admin` faltaba y caía a la fila de gratis (60): el dueño, probando,
     # llegó a 57/60. Ilimitado como ya lo es en `_TIER_LIMITS` para los planes.
     "admin": int(os.environ.get("MEALFIT_COACH_LIMIT_ADMIN", "999999")),
@@ -560,6 +563,11 @@ def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_us
             extra = _creditos_extra(profile, "coach")
         from ios_free import is_free, COACH
         limit = (COACH if is_free() else _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])) + extra
+        _freno = None if is_free() else __import__("topes_por_nivel").frenado(verified_user_id, "coach")  # [P1-PLAN-LOTE-1116]
+        if _freno:
+            raise HTTPException(status_code=402, detail=_freno["mensaje"],
+                                headers={"X-Tope": _freno["codigo"], "X-Coach-Quota-Limit": str(limit),
+                                         "X-Coach-Quota-Used": str(used)})
         if used >= limit:
             # [P1-COACH-QUOTA-METER · 2026-09-02] Cabeceras estructuradas para que el cliente
             # pinte «se renueva el …» sin parsear la frase; el detail se conserva tal cual.
@@ -599,6 +607,9 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
         from ios_free import is_free, GENERATION
         limit = (GENERATION if is_free() else _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"])) + extra  # [P1-PLAN-LOTE-772] + créditos regalados
 
+        _freno = None if is_free() else __import__("topes_por_nivel").frenado(verified_user_id, "generacion")  # [P1-PLAN-LOTE-1116]
+        if _freno:
+            raise HTTPException(status_code=402, detail=_freno["mensaje"], headers={"X-Tope": _freno["codigo"]})
         if credits_used >= limit:
             detail = ("Agotaste tus créditos gratuitos. Puedes esperar a la renovación mensual o recibir una recarga gratuita."
                       if is_free() else f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")

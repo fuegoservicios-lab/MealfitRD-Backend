@@ -197,6 +197,7 @@ class SesionLive:
     local_date: Optional[str] = None
     tz_offset: Optional[int] = None
     gastado_antes_usd: float = 0.0
+    tope_s: int = 0        # [P1-PLAN-LOTE-1116] lo que puede durar ESTA sesión (nivel + minutos que le quedan del mes)
     creada: float = field(default_factory=time.time)
     segundos: float = 0.0
     segundos_espera: float = 0.0
@@ -325,6 +326,12 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
     gastado = gastado_usd() if limit > 0 else 0.0
     if limit > 0 and gastado >= limit:
         raise LiveNoDisponible("presupuesto")
+    # [P1-PLAN-LOTE-1116] minutos de voz del mes y gasto de IA del mes, por nivel: el teléfono cae a la voz de siempre
+    _tpn = __import__("topes_por_nivel")
+    _freno = _tpn.frenado(str(user_id), "voz")
+    if _freno:
+        raise LiveNoDisponible(_freno["codigo"])
+    tope_s = _tpn.segundos_de_sesion_voz(str(user_id))
     clave = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not clave:
         raise LiveNoDisponible("sin_clave")
@@ -360,7 +367,7 @@ def crear_sesion(user_id: str, sdp: str, chat_session_id: str, locale: str = "es
     if not live_id or not respuesta_sdp:
         raise LiveNoDisponible("respuesta_incompleta")
     s = SesionLive(live_id=live_id, user_id=str(user_id), chat_session_id=chat_session_id, locale=locale,
-                   local_date=local_date, tz_offset=tz_offset, gastado_antes_usd=gastado)
+                   local_date=local_date, tz_offset=tz_offset, gastado_antes_usd=gastado, tope_s=tope_s)
     _limpiar_viejas()
     with _SESIONES_LOCK:
         SESIONES[live_id] = s
@@ -384,6 +391,8 @@ def _texto_del_evento(ev: dict) -> str:
 def _canal_lateral(s: SesionLive, clave: str) -> None:
     from websockets.sync.client import connect
     tope_sesion = max_segundos_por_sesion()
+    if s.tope_s > 0:   # [P1-PLAN-LOTE-1116] el del nivel manda si es más corto (o si el global no tiene tope)
+        tope_sesion = min(tope_sesion, s.tope_s) if tope_sesion > 0 else s.tope_s
     tope_total = tope_usd()
     motivo = "desconocido"
     try:
