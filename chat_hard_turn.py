@@ -135,6 +135,7 @@ def check_user_daily_chat_budget(
             FROM public.llm_usage_events
             WHERE user_id = %s
               AND (node LIKE 'chat%%' OR node = 'vision_scan')
+              AND COALESCE(metadata->>'respaldo', '') <> 'true'
               AND created_at >= NOW() - INTERVAL '24 hours'
             """,
             (str(user_id),),

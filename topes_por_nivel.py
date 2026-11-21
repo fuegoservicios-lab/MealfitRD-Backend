@@ -125,7 +125,8 @@ def _inicio_de_mes() -> datetime:
 
 
 def gasto_mes_usd(user_id: str) -> float:
-    f = _q("SELECT COALESCE(SUM(cost_usd_micros), 0)::bigint AS m FROM llm_usage_events WHERE user_id = %s AND created_at >= %s",
+    f = _q("SELECT COALESCE(SUM(cost_usd_micros), 0)::bigint AS m FROM llm_usage_events WHERE user_id = %s AND created_at >= %s "
+           "AND COALESCE(metadata->>'respaldo', '') <> 'true'",   # [P1-PLAN-LOTE-1140] el respaldo no cuenta
            (str(user_id), _inicio_de_mes()))
     return int((f or {}).get("m") or 0) / 1e6
 

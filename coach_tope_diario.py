@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 # Lo que cuenta contra el tope: el coach y el escáner de fotos.
 FILTRO_NODOS_SQL = "(node LIKE 'chat%%' OR node = 'vision_scan')"
+# [P1-PLAN-LOTE-1140] Lo que contestó el RESPALDO del coach (el principal falló) no cuenta contra los topes del usuario:
+# la caída es nuestra, no suya. El gasto lo absorbe el dueño, acotado por `coach_respaldo_tope` (US$ 0,50/h).
+SIN_RESPALDO_SQL = "COALESCE(metadata->>'respaldo', '') <> 'true'"
 
 
 def es_cuenta_de_prueba(user_id: Optional[str]) -> bool:
@@ -39,7 +42,7 @@ def libre_desde(user_id: str, limite_usd: float, *, execute_sql_query: Any = Non
             from db_core import execute_sql_query
         rows = execute_sql_query(
             "SELECT cost_usd_micros AS c, created_at AS t FROM public.llm_usage_events "
-            f"WHERE user_id = %s AND {FILTRO_NODOS_SQL} AND created_at >= NOW() - INTERVAL '24 hours' "
+            f"WHERE user_id = %s AND {FILTRO_NODOS_SQL} AND {SIN_RESPALDO_SQL} AND created_at >= NOW() - INTERVAL '24 hours' "
             "ORDER BY created_at",
             (str(user_id),), fetch_all=True,
         ) or []

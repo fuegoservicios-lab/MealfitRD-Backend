@@ -2,7 +2,7 @@
 """[P1-PLAN-LOTE-1045 · A-22 / D6 · 2026-11-16] Tope de gasto del modelo de RESPALDO del coach: US$ 0,50 por hora.
 
 Decisión del dueño (16-nov). Cuando el principal (`gpt-6-luna`) falla, el turno pasa al respaldo
-(`MEALFIT_CHAT_AGENT_FALLBACK_MODEL`, hoy `gemini-4-hydrogen`). Una caída larga del principal podía costar sin límite:
+(`MEALFIT_CHAT_AGENT_FALLBACK_MODEL`, hoy `gemini-3.8-flash` desde el lote 1140; antes `gemini-4-hydrogen`). Una caída larga del principal podía costar sin límite:
 el 13-nov, con Hydrogen como principal, una sola hora costó US$ 1,08. Ahora, si el respaldo ya gastó el tope en los
 últimos 60 minutos, el turno NO usa el respaldo: falla con el error original del principal (el cliente pinta
 «saturado») hasta que la ventana baje del tope, y queda una alerta en `system_alerts` (A-25 se la empuja al dueño).

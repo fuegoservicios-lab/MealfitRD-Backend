@@ -5177,6 +5177,9 @@ def call_model(state: ChatState):
                 llm_messages=llm_messages,
                 active_tools=active_tools,
             )
+            if _primary_exc is not None:
+                # [P1-PLAN-LOTE-1140] turno del RESPALDO: la fila lo dice y no cuenta contra los topes del usuario.
+                _call_extra_meta = {**(_call_extra_meta or {}), "respaldo": True}
             _emit_llm_usage_event_best_effort(
                 llm=chat_llm,
                 result=response,
