@@ -86,22 +86,47 @@ def con_ajuste(descripcion: str, ajuste: dict | None) -> str:
     return descripcion[:m.start()] + nueva + descripcion[m.end():]
 
 
+def _trozos_de_dudas(raw_dudas: str) -> list[tuple[str, str]]:
+    """[P1-PLAN-LOTE-1141] Corta el bloque en (pregunta, opciones) por cada «(opciones: …)», con o sin «¿».
+
+    Antes se partía por «¿»: el escáner del 21-nov escribió «El atún es en agua o en aceite? (opciones: …) Cómo se
+    frieron los maduros? (opciones: …)» sin «¿», salió UNA pregunta y las dos respuestas («En agua / escurrido · Manteca
+    de cerdo») fueron a esa: el atún se reemplazó por «manteca de cerdo» y el coach anotó un «guisado de manteca de
+    cerdo». Los paréntesis de dentro («(supuesto)») se respetan contando la profundidad."""
+    out: list[tuple[str, str]] = []
+    texto = str(raw_dudas or "")
+    marca = "(opciones:"
+    pos = 0
+    while True:
+        i = texto.find(marca, pos)
+        if i < 0:
+            break
+        titulo = texto[pos:i].strip()
+        j, prof = i + 1, 1
+        while j < len(texto) and prof:
+            if texto[j] == "(":
+                prof += 1
+            elif texto[j] == ")":
+                prof -= 1
+            j += 1
+        out.append((titulo, texto[i + len(marca):j - 1 if prof == 0 else j].strip()))
+        pos = j
+    return out
+
+
 def _parse_dudas_y_opciones(raw_dudas: str) -> list[dict]:
     """Parsea las preguntas de DUDAS y devuelve una lista de diccionarios:
     [{ 'titulo': str, 'opciones': [str], 'supuesto': str | None }]
     """
     preguntas = []
-    partes = [p.strip() for p in raw_dudas.split("¿") if p.strip()]
-    for p in partes:
-        q_text = "¿" + p if not p.startswith("¿") else p
-        op_idx = q_text.find("(opciones:")
-        if op_idx == -1:
-            continue
-        titulo = q_text[:op_idx].strip()
-        op_content = q_text[op_idx + len("(opciones:"):].rstrip("). ")
-        raw_ops = [re.sub(r"\s*\([^)]*\)", "", x).strip() for x in re.split(r"[\u00b7\xb7\u2022]", op_content)]
+    for titulo, op_content in _trozos_de_dudas(raw_dudas):
+        titulo = titulo.strip()
+        if titulo and not titulo.startswith("¿"):
+            titulo = "¿" + titulo
+        crudas = re.split(r"[··•]", op_content)
+        raw_ops = [re.sub(r"\s*\([^)]*\)", "", x).strip() for x in crudas]
         supuesto = None
-        for raw_op in re.split(r"[\u00b7\xb7\u2022]", op_content):
+        for raw_op in crudas:
             if "(supuesto)" in raw_op.lower():
                 supuesto = re.sub(r"\s*\([^)]*\)", "", raw_op).strip()
                 break
@@ -111,6 +136,16 @@ def _parse_dudas_y_opciones(raw_dudas: str) -> list[dict]:
             "supuesto": supuesto
         })
     return preguntas
+
+
+def _tema_de(titulo: str) -> str:
+    """«¿El atún es en agua o en aceite?» → «El atún es en agua o en aceite»: para que cada aclaración diga a QUÉ
+    responde (con dos respuestas sueltas el coach las emparejaba al revés). [P1-PLAN-LOTE-1141]"""
+    return str(titulo or "").strip().strip("¿?").strip()[:90]
+
+
+# Una respuesta que es una GRASA o un medio de cocción nunca es una proteína nueva («Manteca de cerdo» no es cerdo).
+_RE_ES_GRASA = re.compile(r"(manteca|aceite|mantequilla|grasa|margarina|air\s*fryer|en\s+agua|escurrid)", re.IGNORECASE)
 
 
 _FAMILIAS_PROTEINA: tuple[tuple[str, str], ...] = (
@@ -140,6 +175,8 @@ def _reemplazar_proteina_por_sujeto(pre: str, titulo: str, supuesto: str, r_item
     """Si la duda preguntaba por una carne/proteína concreta (ej. pollo en sopa) pero su `supuesta` era
     una cantidad («Normal (como 3 oz)») y el usuario escribió otra proteína («Pescado uno pequeño»),
     sustituye la proteína original en `pre` para que no queden ambas sumadas."""
+    if _RE_ES_GRASA.search(r_item or "") or _RE_PREGUNTA_ANADIDO.search(_plano(titulo or "")):
+        return None   # [P1-PLAN-LOTE-1141] la pregunta era por la grasa/el medio, no por la proteína
     dest = _detectar_familia_proteina(r_item)
     src = _detectar_familia_proteina(titulo) or _detectar_familia_proteina(supuesto)
     if not dest or not src or dest[0] == src[0]:
@@ -239,7 +276,7 @@ def aplicar_respuestas_multiples(descripcion: str, respuesta: str) -> tuple[str,
             ):
                 pre = pre.rstrip()
                 sep = " " if pre.endswith((".", ",", ";")) else ". "
-                pre = f"{pre}{sep}(Confirmado: {r_item.lower()}). "
+                pre = f"{pre}{sep}(Confirmado — {_tema_de(q.get('titulo'))}: {r_item.lower()}). "
             continue
 
         # Realizar reemplazo en el texto previo a DUDAS
@@ -292,7 +329,7 @@ def aplicar_respuestas_multiples(descripcion: str, respuesta: str) -> tuple[str,
         # Fallback seguro: si el supuesto no aparecía literal en `pre`, dejar explícita la aclaración del usuario
         pre = pre.rstrip()
         sep = " " if pre.endswith((".", ",", ";")) else ". "
-        pre = f"{pre}{sep}(Aclarado: {r_item.lower()}). "
+        pre = f"{pre}{sep}(Aclarado — {_tema_de(q.get('titulo'))}: {r_item.lower()}). "
         reemplazos.append((supuesto, r_item))
 
     # Ajustes gramaticales comunes de concordancia

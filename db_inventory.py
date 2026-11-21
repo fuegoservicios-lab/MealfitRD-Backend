@@ -2698,7 +2698,12 @@ def deduct_consumed_meal_from_inventory(
                 # casaba, y un «failed» si no. Un condimento al gusto no mueve la Nevera.
                 unquantified_strs.append(str(item))
                 continue
-            qty, unit, name = _parse_quantity(item)
+            try:   # [P1-PLAN-LOTE-1141] «arroz cocido (≈200 g)» → «200 g arroz cocido»: el parser lee la cantidad delante
+                from gramos_del_renglon import al_frente as _al_frente
+                _item_parse = _al_frente(item)
+            except Exception:  # noqa: BLE001
+                _item_parse = item
+            qty, unit, name = _parse_quantity(_item_parse)
             used_inference = False
             if not (name and qty > 0):
                 # [P1-PANTRY-INFER] El parse no extrajo qty parseable pero

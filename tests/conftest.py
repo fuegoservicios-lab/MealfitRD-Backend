@@ -38,6 +38,9 @@ _os_conftest.environ.setdefault("MEALFIT_AI_CONSENT_GATE", "off")
 # (`app.py`). Va ANTES de cualquier import que cargue el entorno: `load_dotenv()` no usa `override`, así que
 # una variable ya presente, aunque esté vacía, gana al fichero.
 _os_conftest.environ["SENTRY_DSN"] = ""
+# [P1-PLAN-LOTE-1141] «De madrugada todavía es ayer» depende del RELOJ: con la suite corriendo entre las 00:00 y las 4:00
+# hora de RD, cada test que anota una cena «de hoy» la vería en el día anterior. Apagada en la suite; sus tests la encienden.
+_os_conftest.environ.setdefault("MEALFIT_MADRUGADA_ES_AYER", "0")
 
 # [P0-5] Eagerly resolve real `langgraph` BEFORE any test module loads. Several
 # test files do `sys.modules.setdefault('langgraph', MagicMock())` to support

@@ -6589,9 +6589,23 @@ def execute_tools(state: ChatState):
                 # [P1-PHOTO-DIARY-FUSION · 2026-10-26] Si el usuario indicó que el alimento fue parte de una
                 # comida ya registrada hoy (ej. 'fue parte del almuerzo', 'agrégalo al almuerzo'), fusionar en
                 # la fila existente sumando calorías, macros, ingredientes y adjuntos de foto.
+                # [P1-PLAN-LOTE-1141] Una toma de suplemento es su propia fila «suplemento»: ni cambia de franja ni se
+                # fusiona en la comida de la misma franja (21-nov: la multivitamina acabó DENTRO de la cena).
+                _es_toma_supl = False
+                if tool_name == "log_consumed_meal":
+                    try:
+                        import toma_de_suplemento as _tds
+                        _es_toma_supl = _tds.es_toma(_trusted_uid, tool_args)
+                    except Exception as _tds_err:  # noqa: BLE001
+                        logger.debug(f"[P1-PLAN-LOTE-1141] no-op: {_tds_err!r}")
+                    if _es_toma_supl and tool_args.get("meal_type") != "suplemento":
+                        logger.info(f"💊 [P1-PLAN-LOTE-1141] '{tool_args.get('meal_name')}' es una toma: "
+                                    f"{tool_args.get('meal_type')!r} → 'suplemento', sin fusión")
+                        tool_args = dict(tool_args)
+                        tool_args["meal_type"] = "suplemento"
                 # [P1-PLAN-LOTE-1024 · J5] «este fue el desayuno y me comí 3 tacos»: la 2.ª comida va a la franja que
                 # falta, ANTES de la fusión por franja (que la metía en el desayuno y los tacos acababan perdidos).
-                if tool_name == "log_consumed_meal":
+                if tool_name == "log_consumed_meal" and not _es_toma_supl:
                     try:
                         from guarda_dos_comidas_un_mensaje import franja_de_la_foto, nueva_franja
                         _txt_dc = _extraer_ultimo_texto_usuario(messages)
@@ -6611,7 +6625,7 @@ def execute_tools(state: ChatState):
                         logger.debug(f"[LOTE-1024] dos comidas no evaluado: {_dc_err!r}")
 
                 _fusion_misma_franja = False   # [P1-PLAN-LOTE-982] la fusión por franja+TTL no la frena el guard de foto
-                if tool_name == "log_consumed_meal":
+                if tool_name == "log_consumed_meal" and not _es_toma_supl:
                     _fused_part_args = _intentar_fusionar_alimento_en_comida_existente(
                         _trusted_uid, tool_args, state.get("messages") or [], state.get("turn_plate_photos") or []
                     )

@@ -2151,6 +2151,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # pierde el registro) pero ya NO en silencio: se le dice al modelo para que lo corrija.
     _mt_reconocido = meal_type is None or _resolver_meal_type(meal_type) is not None
     _meal_type = _normalize_meal_type(meal_type)
+    if suplemento:   # [P1-PLAN-LOTE-1141] una toma de su Alacena es «suplemento», la diga el modelo como la diga
+        _meal_type = "suplemento"
     # A substantial meal can still recover its inferred dinner slot; the slot never limits diary rows.
     # [P1-EXPLICIT-SLOT-RESPECT · 2026-10-27] Si el usuario nombró explícitamente la franja ("Merendé esto",
     # "mi merienda", "un snack", etc.), NUNCA debe sobreescribirse con la cena.
@@ -2218,6 +2220,20 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         _meal_type = "complemento"
         _es_merienda_nocturna = False
         _es_desayuno_tardio_reclasificado = False
+
+    # [P1-PLAN-LOTE-1141] De madrugada (< 4:00) todavía es el día de AYER: va a ayer con su hora representativa.
+    _hora_madrugada = None
+    if _days_ago == 0:
+        try:
+            import dia_biologico as _dbio
+            from db_facts import user_tz_offset_min as _uoff_m
+            _hora_madrugada = _dbio.hora_en_el_dia_de_ayer(_meal_type, datetime.now(_tz.utc), _uoff_m(user_id))
+        except Exception as exc:  # noqa: BLE001
+            __import__("fail_open").fail_open("dia_biologico", exc)
+            _hora_madrugada = None
+        if _hora_madrugada:
+            _days_ago = 1
+            logger.info(f"🌙 [P1-PLAN-LOTE-1141] '{meal_name}' ({_meal_type}) de madrugada → día de ayer")
 
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
 
@@ -2311,7 +2327,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     except (TypeError, ValueError) as error:
         return f"NO REGISTRADO: {error}. Aclara etiqueta y porción antes de registrar."
     has_ingredients = bool(ingredients)
-    _hora_guardada = _consumed_at if _days_ago > 0 else None
+    _hora_guardada = _hora_madrugada or (_consumed_at if _days_ago > 0 else None)
     # [P1-PLAN-LOTE-1075] «Almorcé esto» a las 22:23: la franja que el USUARIO nombró ya pasó → se guarda en su franja
     # (hora representativa, marcada como estimada al no coincidir con created_at). Solo con la franja dicha por él.
     if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna:
@@ -2377,6 +2393,9 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if result is not None:
         _invalidar_caches_aprendizaje_usuario(user_id)
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
+        if _hora_madrugada:   # [P1-PLAN-LOTE-1141]
+            _cuando = (" (en el día de AYER: de madrugada, antes de las 4:00, todavía cuenta como el día anterior — "
+                       "díselo así, y lo que falte es de AYER, no de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
         # [P1-PLAN-LOTE-168 · 2026-09-23] la suma REAL de ese día, ya con este registro (helper; la batería lo comparte)
         msg += _nota_total_del_dia(user_id, _days_ago)
@@ -2619,6 +2638,13 @@ def _verificar_guard_suplemento_correccion(
                 and not any(kw in _norm_orig_name for kw in _SUPPLEMENT_KEYWORDS)
             )
         )
+        if not _intenta_cambiar_a_supl and meal_name is not None:
+            # [P1-PLAN-LOTE-1141] también un pote de SU Alacena por su nombre («DESIGNS FOR SPORT MULTI + PHYTO»)
+            try:
+                import toma_de_suplemento as _tds
+                _intenta_cambiar_a_supl = _tds.nombra_pote_nuevo(user_id, meal_name, _orig_name)
+            except Exception as _tds_err:  # noqa: BLE001
+                logger.debug(f"[P1-PLAN-LOTE-1141] no-op: {_tds_err!r}")
         if _intenta_cambiar_a_supl:
             logger.warning(
                 f"🛡️ [GUARD-SUPLEMENTO] Intento de sobreescribir comida principal {meal_id} ('{_orig_name}', tipo='{_orig_type}') "
