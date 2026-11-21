@@ -45,6 +45,10 @@ def test_el_atun_sigue_y_cada_respuesta_dice_a_que_responde():
 
 
 def test_una_grasa_no_reemplaza_la_proteina():
+    # el patrón de verdad casa (un «\b» que se volvió retroceso 0x08 lo dejó mudo con las pruebas en verde)
+    assert rf._RE_ES_GRASA.search("Manteca de cerdo") and not rf._RE_ES_GRASA.search("Pollo guisado")
+    assert rf._reemplazar_proteina_por_sujeto("atún guisado", "¿Qué tanto atún?", "Normal",
+                                              "Manteca de cerdo") is None
     assert rf._reemplazar_proteina_por_sujeto("atún guisado", "¿Con qué aceite?", "Aceite vegetal",
                                               "Manteca de cerdo") is None
 

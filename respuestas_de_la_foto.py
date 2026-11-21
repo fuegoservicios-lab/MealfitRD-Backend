@@ -145,7 +145,7 @@ def _tema_de(titulo: str) -> str:
 
 
 # Una respuesta que es una GRASA o un medio de cocción nunca es una proteína nueva («Manteca de cerdo» no es cerdo).
-_RE_ES_GRASA = re.compile(r"(manteca|aceite|mantequilla|grasa|margarina|air\s*fryer|en\s+agua|escurrid)", re.IGNORECASE)
+_RE_ES_GRASA = re.compile(r"\b(manteca|aceite|mantequilla|grasa|margarina|air\s*fryer|en\s+agua|escurrid)", re.IGNORECASE)
 
 
 _FAMILIAS_PROTEINA: tuple[tuple[str, str], ...] = (
