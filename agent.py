@@ -8138,13 +8138,14 @@ def _slot_principal_dentro_de_ttl(user_id: str, tool_args: dict, messages: list)
             return None
         from tools import _normalize_meal_type
         slot = _normalize_meal_type((tool_args or {}).get("meal_type"))
-        if slot not in _SLOTS_PRINCIPALES_FUSION:
+        import ventana_de_fusion as _vdf   # [P1-PLAN-LOTE-1141] también merienda/snack (60 min)
+        if slot not in _vdf.CON_TTL:
             return None
         from meal_registration_time import explicit_repeat_consumption
         if explicit_repeat_consumption(messages or []):
             return None
         previa = _buscar_comida_previa_del_slot(user_id, slot)
-        if previa and _comida_dentro_de_ttl_fusion(previa, ttl_min=_FUSION_TTL_MINUTOS):
+        if previa and _comida_dentro_de_ttl_fusion(previa, ttl_min=_vdf.ttl_de(slot)):
             logger.info(f"🔗 [P1-PLAN-LOTE-982] {slot} dentro del TTL de la anterior ({previa.get('id')}): se fusiona")
             return slot
     except Exception as e:
@@ -8155,8 +8156,8 @@ def _slot_principal_dentro_de_ttl(user_id: str, tool_args: dict, messages: list)
 def _buscar_comida_previa_del_slot(user_id: str, slot: str) -> Optional[dict]:
     """[P1-PHOTO-DIARY-FUSION · 2026-10-26] Busca la comida registrada más reciente de hoy en el slot indicado."""
     try:
-        from db_facts import get_consumed_meals_today
-        today_meals = get_consumed_meals_today(user_id) or []
+        import ventana_de_fusion as _vdf   # [P1-PLAN-LOTE-1141] de madrugada, también las de ayer
+        today_meals = _vdf.comidas_recientes(user_id) or []
         candidates = [m for m in today_meals if str(m.get("meal_type") or "").strip().lower() == slot]
         if not candidates:
             return None
@@ -8233,10 +8234,12 @@ def _intentar_fusionar_alimento_en_comida_existente(
             texto_humano = c if isinstance(c, str) else " ".join(p.get("text", "") for p in (c or []) if isinstance(p, dict))
             break
 
+    import ventana_de_fusion as _vdf
+    _ttl_orig = _vdf.ttl_de(str(orig.get("meal_type") or ""))   # [P1-PLAN-LOTE-1141] 60 min si es merienda/snack
     if not _es_anclaje_explicito_de_slot(texto_humano):
-        if not _comida_dentro_de_ttl_fusion(orig, ttl_min=_FUSION_TTL_MINUTOS):
+        if not _comida_dentro_de_ttl_fusion(orig, ttl_min=_ttl_orig):
             logger.info(
-                f"⏳ [P1-FUSION-TTL-GUARD] TTL expirado (> {_FUSION_TTL_MINUTOS} min) para autofusión en comida "
+                f"⏳ [P1-FUSION-TTL-GUARD] TTL expirado (> {_ttl_orig} min) para autofusión en comida "
                 f"{orig.get('id')} ('{orig.get('meal_name')}'). No se autofusiona; se crea registro nuevo."
             )
             return None

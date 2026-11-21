@@ -144,3 +144,26 @@ def test_el_prompt_del_escaner_lleva_las_fotos_previas():
     assert "FOTOS QUE EL USUARIO MANDO ANTES" not in va._prompt_de_escaneo("algo")
     src = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
     assert "_fr.scope(_fotos_previas)" in src and "_fr_anotar.anotar(actual_user_id" in src
+
+
+# ── 6. Merienda partida en tandas = una merienda ────────────────────────────────────────────────────────────────────
+def test_merienda_y_snack_tienen_ventana_de_60_min(monkeypatch):
+    import ventana_de_fusion as vdf
+    assert vdf.ttl_de("merienda") == 60.0 and vdf.ttl_de("snack") == 60.0
+    assert vdf.ttl_de("cena") == 30.0
+    monkeypatch.setenv("MEALFIT_PICOTEO_TTL_FUSION_MIN", "90")
+    assert vdf.ttl_de("merienda") == 90.0
+    assert "suplemento" not in vdf.CON_TTL
+
+
+def test_la_fusion_por_franja_usa_la_ventana():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert "if slot not in _vdf.CON_TTL:" in src
+    assert "_comida_dentro_de_ttl_fusion(previa, ttl_min=_vdf.ttl_de(slot))" in src
+    assert "today_meals = _vdf.comidas_recientes(user_id) or []" in src
+
+
+def test_de_madrugada_busca_tambien_ayer():
+    import ventana_de_fusion as vdf
+    assert vdf.es_madrugada(240, datetime(2026, 11, 21, 4, 50, tzinfo=timezone.utc))      # 00:50 RD
+    assert not vdf.es_madrugada(240, datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc))
