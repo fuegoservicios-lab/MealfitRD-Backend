@@ -32,11 +32,10 @@ def test_la_tarjeta_tiene_un_solo_boton():
 
 
 def test_las_dos_vias_viven_dentro_del_componedor():
+    # [P1-PLAN-LOTE-1147] la foto sigue dentro del componedor, ahora como botón de la caja (sin pestañas)
     lm = _front("src/components/dashboard/LogMealModal.jsx")
-    assert 'className={styles.modes}' in lm and "t('Buscar o escribir')" in lm and "t('Escanear con foto')" in lm
-    assert "t('Foto')" not in lm
-    css = _front("src/components/dashboard/LogMealModal.module.css")
-    assert ".modes {" in css and ".modeActive {" in css and "P1-PLAN-LOTE-85" in css
+    assert "onClick={() => onScan({ mealType, daysAgo })}" in lm and "aria-label={t('Escanear con foto')}" in lm
+    assert "t('Foto')" not in lm and 'className={styles.modes}' not in lm
 
 
 @pytest.mark.parametrize("loc", ["en-US", "pt-BR", "fr-FR", "it-IT"])
@@ -44,7 +43,8 @@ def test_los_catalogos_sin_huerfanas_y_con_las_nuevas(loc):
     d = json.loads(_front(f"src/i18n/locales/{loc}.json"))
     # [P1-PLAN-LOTE-1146] «Foto» volvió con uso propio (la pestaña «Mover» de Compartir, lote 1144): ya no es huérfana
     assert "Escanear comida con la cámara" not in d
-    assert d.get("Buscar o escribir") and d.get("Cómo registrar") and d.get("Escanear con foto")
+    assert d.get("Escanear con foto")
+    assert "Buscar o escribir" not in d and "Cómo registrar" not in d   # [1147] las pestañas se fueron
 
 
 def test_marcador_y_documento():

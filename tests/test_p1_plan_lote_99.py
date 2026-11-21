@@ -57,7 +57,9 @@ def test_campos_a_1rem_y_frecuentes_en_lista():
     for sel in (".search", ".lineQty", ".lineUnit", ".nameInput", ".macroInput"):
         assert "font-size: 1rem;" in _regla(css, sel), sel
     assert "overflow-x: auto" not in css
-    assert "flex-direction: column;" in _regla(css, ".frequentList")
+    # [P1-PLAN-LOTE-1147] fichas en rejilla de dos columnas: sigue sin fila con scroll horizontal
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in _regla(css, ".frequentList")
+    assert "overflow-x: auto" not in css
 
 
 def test_extra_a_secas_y_los_catalogos():
