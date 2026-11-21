@@ -136,7 +136,9 @@ def test_la_nota_larga_se_corta_en_una_palabra(monkeypatch):
 
 def test_el_escaner_avisa_desde_cuando_registra(monkeypatch):
     monkeypatch.setattr(am, "execute_sql_query", _fake620)
-    desde = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)
+    # la fecha se pinta en la hora de RD (`am._ZONA`): entre 00 y 04 UTC el día UTC y el de RD no coinciden
+    from zoneinfo import ZoneInfo
+    desde = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2)).astimezone(ZoneInfo(am._ZONA))
     assert f"Se registra desde el {desde:%d-%m-%Y}." in _bloque(am.metricas(30), "escaner")["nota"]
     # si ya registraba antes del periodo, no hay nada que avisar (lote 637: la nota sigue diciendo «sin tus cuentas»)
     assert "Se registra" not in _bloque(am.metricas(1), "escaner")["nota"]
