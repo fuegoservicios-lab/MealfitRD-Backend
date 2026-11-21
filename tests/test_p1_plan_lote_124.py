@@ -49,7 +49,7 @@ def test_lo_que_mas_registras_nace_con_la_lista_recordada():
 def test_el_escaner_tambien_desde_el_diario_y_en_el_dia_que_se_mira():
     dh = _front("src/components/dashboard/DiaryHistory.jsx")
     assert "onScan={pasarAlEscaner}" in dh
-    assert "<ScanMealModal isOpen onClose={cerrarEscaner} userId={userId || 'guest'} initialDaysAgo={atras} />" in dh
+    assert "<ScanMealModal isOpen onClose={cerrarEscaner} onBack={volverAlComponedor} userId={userId || 'guest'} initialDaysAgo={escaneando?.daysAgo ?? atras} initialMealType={escaneando?.mealType || null} />" in dh   # [1151]
     assert "if (registrando || escaneando) return;" in dh, "con cualquiera de las dos hojas encima, las teclas son suyas"
     sm = _front("src/components/dashboard/ScanMealModal.jsx")
     assert "useState(() => normalizarDiasAtras(initialDaysAgo));" in sm

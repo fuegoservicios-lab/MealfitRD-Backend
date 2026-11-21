@@ -34,7 +34,7 @@ def test_la_hoja_y_el_gesto_son_los_del_componedor():
     assert "const scrollY0 = window.scrollY;" in hook
     sm = _front("src/components/dashboard/ScanMealModal.jsx")
     lm = _front("src/components/dashboard/LogMealModal.jsx")
-    assert "const hoja = useBottomSheet({ containerRef, bodyRef, onClose, disabled: isBusy });" in sm
+    assert "const hoja = useBottomSheet({ containerRef, bodyRef, onClose: salir, disabled: isBusy });" in sm   # [1151] salir = onBack || onClose
     assert "const hoja = useBottomSheet({ containerRef, bodyRef, onClose, disabled: saving });" in lm
     for src in (sm, lm):
         assert "import Chips from './Chips';" in src
