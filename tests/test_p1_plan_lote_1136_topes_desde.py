@@ -43,3 +43,35 @@ def test_el_gasto_y_la_voz_usan_ese_inicio():
     for fn in ("def gasto_mes_usd", "def voz_segundos_mes"):
         cuerpo = src.split(fn, 1)[1].split("\ndef ", 1)[0]
         assert "_inicio_de_mes()" in cuerpo, fn
+
+
+# [P1-PLAN-LOTE-1139] El dueño (admin) recibió «Llegaste al uso de IA incluido en tu plan» en el escáner: una lectura
+# fallida del perfil caía a «gratis» y frenaba con el tope gratis. Ahora: la lista de admins del entorno manda sin
+# tocar la base, y un perfil ilegible NO frena (fail-open, como promete `frenado`).
+def _gasto_alto(monkeypatch):
+    monkeypatch.delenv("MEALFIT_TOPES_POR_NIVEL", raising=False)
+    monkeypatch.setattr(tp, "gasto_mes_usd", lambda uid: 99.0)
+    monkeypatch.setattr(tp, "fotos_24h", lambda uid: 999)
+
+
+def test_admin_por_entorno_nunca_se_frena(monkeypatch):
+    _gasto_alto(monkeypatch)
+    uid = "61a13831-2a70-4437-a084-0d3e09b653e4"
+    monkeypatch.setenv("MEALFIT_ADMIN_USER_IDS", f"otro, {uid}")
+    import db
+    monkeypatch.setattr(db, "get_user_profile", lambda u: (_ for _ in ()).throw(RuntimeError("no debería leerse")))
+    assert tp._tier(uid) == "admin"
+    assert tp.frenado(uid, "foto") is None
+
+
+def test_perfil_ilegible_no_frena(monkeypatch):
+    _gasto_alto(monkeypatch)
+    monkeypatch.delenv("MEALFIT_ADMIN_USER_IDS", raising=False)
+    import db
+    uid = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setattr(db, "get_user_profile", lambda u: (_ for _ in ()).throw(RuntimeError("pool")))
+    assert tp.frenado(uid, "foto") is None
+    monkeypatch.setattr(db, "get_user_profile", lambda u: None)
+    assert tp.frenado(uid, "foto") is None
+    monkeypatch.setattr(db, "get_user_profile", lambda u: {"plan_tier": "gratis"})
+    assert tp.frenado(uid, "foto")["codigo"] == "tope_mes_usd"

@@ -149,12 +149,28 @@ def voz_segundos_mes(user_id: str) -> float:
     return float((f or {}).get("s") or 0)
 
 
-def _tier(user_id: str) -> str:
+def _es_admin_por_entorno(user_id) -> bool:
+    """[P1-PLAN-LOTE-1139] Las cuentas de `MEALFIT_ADMIN_USER_IDS` (la del dueño) son admin SIN tocar la base."""
+    ids = {x.strip() for x in str(os.environ.get("MEALFIT_ADMIN_USER_IDS", "")).split(",") if x.strip()}
+    return str(user_id) in ids
+
+
+def _tier(user_id: str) -> Optional[str]:
+    """El nivel para los topes. None = no se pudo leer el perfil (⇒ los topes NO frenan: fail-open, como dice
+    `frenado`). [P1-PLAN-LOTE-1139] Antes una lectura fallida devolvía «gratis» y frenaba con el tope gratis a
+    cualquiera — al dueño (admin) le salió «Llegaste al uso de IA incluido en tu plan» en el escáner."""
+    if _es_admin_por_entorno(user_id):
+        return "admin"
     try:
         from db import get_user_profile
-        nivel = nivel_de((get_user_profile(user_id) or {}).get("plan_tier"))
-    except Exception:                                                  # noqa: BLE001
-        nivel = "gratis"
+        perfil = get_user_profile(user_id)
+    except Exception as e:                                             # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-1139] nivel ilegible para los topes ({type(e).__name__}: {str(e)[:120]}): no se frena")
+        return None
+    if not isinstance(perfil, dict) or not perfil.get("plan_tier"):
+        logger.warning(f"[P1-PLAN-LOTE-1139] perfil sin plan_tier para los topes ({type(perfil).__name__}): no se frena")
+        return None
+    nivel = nivel_de(perfil.get("plan_tier"))
     try:
         from rango_probador import nivel_con_rango     # [P1-PLAN-LOTE-1117]
         return nivel_con_rango(user_id, nivel)
@@ -169,7 +185,7 @@ def frenado(user_id: Optional[str], que: str) -> Optional[dict]:
     if not activo() or not user_id or user_id == "guest":
         return None
     tier = _tier(user_id)
-    if tier == "admin":
+    if tier is None or tier == "admin":
         return None
     mes = gasto_mes_usd(user_id)
     tope_mes = float(limite(tier, "usd_mes"))
@@ -201,7 +217,7 @@ def frenado(user_id: Optional[str], que: str) -> Optional[dict]:
 def segundos_de_sesion_voz(user_id: str) -> int:
     """Lo que puede durar la próxima sesión en vivo: el máximo por sesión de su nivel, sin pasar de lo que le queda
     del mes (mínimo 30 s para que el corte no llegue a mitad de la primera frase)."""
-    tier = _tier(user_id)
+    tier = _tier(user_id) or "gratis"
     por_sesion = int(float(limite(tier, "voz_min_sesion")) * 60)
     if tier == "admin" or not activo():
         return por_sesion
