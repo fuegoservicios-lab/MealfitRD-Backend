@@ -1400,6 +1400,13 @@ def build_vision_context(vision, nevera_activa: bool = True) -> str:
                 "el texto del usuario no describe alimentos concretos."
                 + (" Responde a su mensaje." if vision.get("has_text") else "")
             )
+        # [P1-PLAN-LOTE-1141] «Cené y merendé esas chucherías» (plato + Lay's + galletas): las papitas acabaron DENTRO
+        # de la cena. Un snack empacado aparte va a la franja del picoteo que el usuario nombró, no al plato servido.
+        instruction += (
+            " Si el usuario reparte las fotos entre dos franjas («cené y merendé esto»), el plato servido va a la "
+            "comida principal y cada snack EMPACADO aparte (papitas, galletas, dulces, chocolates) a la merienda o "
+            "snack: NUNCA metas un snack empacado dentro del registro del plato principal."
+        )
         if unavailable:
             instruction += (
                 f" Indica brevemente que {unavailable} de {len(items)} foto(s) no pudo analizarse; "

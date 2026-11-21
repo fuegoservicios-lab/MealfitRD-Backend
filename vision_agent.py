@@ -264,6 +264,12 @@ _MEAL_VISION_PROMPT = (
     "'etiqueta' si la foto muestra la TABLA NUTRICIONAL (informacion nutricional / nutrition facts) de UN producto "
     "empacado, o el frente de UN solo envase de suplemento o producto de proteina (pote de proteina en polvo, barra, "
     "batida lista) donde se lee la marca - gana sobre 'items' cuando es un solo producto y se lee su etiqueta. "
+    # [P1-PLAN-LOTE-1141] Un paquete de galletas Koko en la mano (21-nov) salio como 'items': «1 paquete de galletas»,
+    # sin marca ni peso (items va SIN marca, para la Nevera) y 0 kcal. Un snack individual listo para comer se LEE.
+    "Tambien es 'etiqueta' UN solo paquete INDIVIDUAL de snack listo para comer (galletas, papitas, chocolate, dulce) "
+    "sostenido en la mano o abierto: 'meal_name' = marca, producto y PESO NETO tal como se leen (ej: 'Galletas Koko "
+    "Cremica 27 g'). El PRECIO impreso en el empaque ('$20', 'RD$20', '20 pesos') NO es el peso: el peso neto se lee "
+    "con su unidad (g, oz, ml); si no se lee, no lo inventes. "
     "SI ES 'etiqueta': NO estimes nada, LEE. is_food=true, items vacio. 'meal_name' = marca y producto tal como se "
     "leen (ej: 'Gold Standard Whey chocolate'). En calories, protein, carbs y healthy_fats pon los valores POR "
     "PORCION que se LEEN en la tabla (healthy_fats = grasa total); lo que no se lea, 0. En 'description' escribe: "
