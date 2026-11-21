@@ -78,7 +78,7 @@ def test_el_diario_de_dias_anteriores_esta_completo():
     # [P1-PLAN-LOTE-124] el montaje ganó `onScan` (el escáner también desde el diario) y `userId`; lo que este test
     # protege no cambia: el componedor nace en el día que se mira.
     # [P1-PLAN-LOTE-1151] al volver del escáner el componedor recupera su comida y su día; sin ellos, el día que se mira
-    assert "<LogMealModal onClose={cerrarComponedor} onScan={pasarAlEscaner} initialMealType={registrando?.mealType || null} initialDaysAgo={registrando?.daysAgo ?? atras} userId={userId} />" in dh
+    assert "<LogMealModal onClose={cerrarComponedor} onScan={pasarAlEscaner} initialMealType={registrando?.mealType || null} initialDaysAgo={registrando?.daysAgo ?? atras} initialBorrador={registrando?.borrador || null} userId={userId} />" in dh
     # más días (tope del endpoint) y la semana
     # [CALENDARIO-SOLO-MES · 2026-11-15, a3befe13] la pestaña «Semana» (y su «Ver 2 semanas más») salió: el calendario
     # abre en el mes y la media es la del mes. Sigue en pie: hasta 90 días (tope del endpoint) y la media de los días.
