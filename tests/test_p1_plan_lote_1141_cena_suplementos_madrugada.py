@@ -171,3 +171,4 @@ def test_de_madrugada_busca_tambien_ayer():
     import ventana_de_fusion as vdf
     assert vdf.es_madrugada(240, datetime(2026, 11, 21, 4, 50, tzinfo=timezone.utc))      # 00:50 RD
     assert not vdf.es_madrugada(240, datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc))
+
