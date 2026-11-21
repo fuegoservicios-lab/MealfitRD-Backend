@@ -264,7 +264,9 @@ def _resolve_chat_local_time(local_date, tz_offset, verified_user_id):
     if resolved_date is None:
         from db_facts import diary_local_date_str
         try:
-            resolved_date = diary_local_date_str(int(resolved_tz))
+            # [P1-PLAN-LOTE-1145] si no ha dormido, su «hoy» sigue siendo el día anterior
+            resolved_date = (__import__("dia_extendido").dia_de_hoy(verified_user_id, int(resolved_tz))
+                             or diary_local_date_str(int(resolved_tz)))
         except (TypeError, ValueError, OverflowError):
             return local_date, tz_offset
 

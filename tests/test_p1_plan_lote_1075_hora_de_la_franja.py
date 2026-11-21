@@ -68,8 +68,9 @@ def test_sin_huso_no_inventa():
 def test_la_herramienta_solo_mueve_la_franja_que_nombro_el_usuario_y_hoy():
     src = (Path(__file__).resolve().parents[1] / "tools.py").read_text(encoding="utf-8")
     i = src.index("[P1-PLAN-LOTE-1075]")
-    bloque = src[i:i + 2400]
-    assert "if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna:" in bloque
+    bloque = src[i:i + 5000]
+    # [P1-PLAN-LOTE-1145] + `not _sigue_en_ayer`: sin dormir, «almorcé» cuenta en el día que sigue viviendo
+    assert "if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna and not _sigue_en_ayer:" in bloque
     assert "consumed_at_override=_hora_guardada" in bloque
     assert "ya_ceno=_ya_ceno" in bloque
 

@@ -342,6 +342,10 @@ _PLAN_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # cero escritura) y desvío declarado («comí otra cosa» / «todavía no»). Exentos de cuota como su
 # hermano: al cap el usuario no podría ni ANOTAR lo que come.
 _PLAN_MEAL_PREVIEW_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+# [P1-PLAN-LOTE-1145] «Tu día termina cuando duermes»: leer el día activo (la app lo pide al abrir/volver) y elegir
+# «Seguir en mi viernes» / «Empezar mi sábado». Cero LLM; exento del paywall como el resto del diario.
+_DIA_ACTIVO_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_DIA_ACTIVO_SET_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _PLAN_MEAL_DEVIATION_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 # [P1-MANUAL-FOOD-LOG · 2026-08-11] Los cuatro writes/reads del registro manual son
@@ -1535,6 +1539,33 @@ def api_log_manual_meal(
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed/manual POST: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+class DiaActivoRequest(BaseModel):
+    accion: str = Field(..., pattern="^(seguir|empezar)$")
+
+
+@router.get("/dia-activo")
+def api_dia_activo(tzOffset: Optional[int] = None, verified_user_id: Optional[str] = Depends(_DIA_ACTIVO_LIMITER)):
+    """[P1-PLAN-LOTE-1145] El día que el usuario está viviendo: el anterior si no ha dormido (o su día termina más
+    tarde). La app lo usa para el contador y el aviso «Sigues en tu viernes»."""
+    import dia_extendido
+    if not verified_user_id or verified_user_id == "guest":
+        return dia_extendido.decidir(__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                                     int(tzOffset) if tzOffset is not None else 240, actividad=[])
+    return dia_extendido.estado(verified_user_id, tz_offset_min=tzOffset)
+
+
+@router.post("/dia-activo")
+def api_fijar_dia_activo(req: DiaActivoRequest, verified_user_id: Optional[str] = Depends(_DIA_ACTIVO_SET_LIMITER)):
+    """[P1-PLAN-LOTE-1145] «Seguir en mi viernes» (`seguir`) o «Empezar mi sábado» (`empezar`)."""
+    if not verified_user_id or verified_user_id == "guest":
+        raise HTTPException(status_code=403, detail="Prohibido.")
+    import dia_extendido
+    try:
+        return dia_extendido.fijar(verified_user_id, req.accion)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/foods/frequent")

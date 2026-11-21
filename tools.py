@@ -2221,9 +2221,23 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         _es_merienda_nocturna = False
         _es_desayuno_tardio_reclasificado = False
 
+    # [P1-PLAN-LOTE-1145] Sigue en el día anterior (no ha dormido / su día termina más tarde): ese día es su «hoy», y
+    # su «ayer» de calendario también es ese día (a las 4:22 del sábado sin dormir, «ayer» = el viernes que vive).
+    # Va con `_days_ago = 0` y sin hora: `db_facts.log_consumed_meal` lo guarda al final de ese día.
+    _sigue_en_ayer = False
+    if _days_ago <= 1:
+        try:
+            _sigue_en_ayer = bool(__import__("dia_extendido").estado(user_id).get("extendido"))
+        except Exception as exc:  # noqa: BLE001
+            __import__("fail_open").fail_open("dia_extendido", exc)
+        if _sigue_en_ayer:
+            if _days_ago:
+                logger.info(f"🌙 [P1-PLAN-LOTE-1145] '{meal_name}': «ayer» = el día que sigue viviendo (no ha dormido)")
+            _days_ago = 0
+
     # [P1-PLAN-LOTE-1141] De madrugada (< 4:00) todavía es el día de AYER: va a ayer con su hora representativa.
     _hora_madrugada = None
-    if _days_ago == 0:
+    if _days_ago == 0 and not _sigue_en_ayer:
         try:
             import dia_biologico as _dbio
             from db_facts import user_tz_offset_min as _uoff_m
@@ -2236,6 +2250,19 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             logger.info(f"🌙 [P1-PLAN-LOTE-1141] '{meal_name}' ({_meal_type}) de madrugada → día de ayer")
 
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
+    # [P1-PLAN-LOTE-1145] «Ayer» sin hora: la hora TÍPICA de su franja en ese día, no la de ahora menos N días (a las
+    # 4:22 el «ayer» quedaba a las 4:22 del día anterior: primera fila, antes del almuerzo, y no se encontraba).
+    _dia_destino = None
+    if _days_ago > 0 and not _hora_madrugada:
+        try:
+            import registro_de_otro_dia as _rod
+            from db_facts import user_tz_offset_min as _uoff_d
+            _off_d = _uoff_d(user_id)
+            _dia_destino = (datetime.fromisoformat(_diary_date_str_for_user(user_id)).date() - _td(days=_days_ago)).isoformat()
+            _consumed_at = _rod.hora_tipica(_meal_type, _dia_destino, _off_d)
+        except Exception as exc:  # noqa: BLE001
+            __import__("fail_open").fail_open("registro_de_otro_dia", exc)
+            _dia_destino = None
 
     # [BB-027 / P1-PROMOTED-COMPLEMENT-GUARD · 2026-11-04]
     # Un alimento o bebida con > 50 kcal NUNCA puede ser 'complemento'.
@@ -2330,7 +2357,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     _hora_guardada = _hora_madrugada or (_consumed_at if _days_ago > 0 else None)
     # [P1-PLAN-LOTE-1075] «Almorcé esto» a las 22:23: la franja que el USUARIO nombró ya pasó → se guarda en su franja
     # (hora representativa, marcada como estimada al no coincidir con created_at). Solo con la franja dicha por él.
-    if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna:
+    if _days_ago == 0 and explicit_slot and not _es_merienda_nocturna and not _sigue_en_ayer:
         try:
             from hora_de_la_franja import consumed_at_de_franja_pasada
             from db_facts import user_tz_offset_min as _uoff
@@ -2344,6 +2371,26 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                                                           ya_ceno=_ya_ceno) or _hora_guardada
         except Exception as exc:  # noqa: BLE001
             __import__("fail_open").fail_open("hora_de_la_franja", exc)
+    # [P1-PLAN-LOTE-1145] «Otra galleta» de un día pasado: si ese día ya tiene merienda/snack, se SUMA a esa fila
+    # (antes quedaba una fila suelta a la hora de ahora menos un día). Sin `force` (otra porción idéntica a propósito).
+    if _dia_destino and not force and not _pote and _meal_type in ("merienda", "snack"):
+        try:
+            import registro_de_otro_dia as _rod2
+            from db_facts import user_tz_offset_min as _uoff_f
+            _fila = _rod2.picoteo_del_dia(user_id, _meal_type, _dia_destino, _uoff_f(user_id))
+            if _fila:
+                _sum = _rod2.sumar(_fila, meal_name=meal_name, calories=calories, protein=protein, carbs=carbs,
+                                   healthy_fats=healthy_fats, ingredients=ingredients)
+                db_update_consumed_meal(user_id, str(_fila["id"]), **_sum)
+                _invalidar_caches_aprendizaje_usuario(user_id)
+                logger.info(f"🍪 [P1-PLAN-LOTE-1145] '{meal_name}' sumado a la {_fila.get('meal_type')} del {_dia_destino} "
+                            f"({_fila.get('id')}): {_sum['calories']} kcal")
+                return (f"REGISTRADO: Sumé '{meal_name}' ({calories} kcal) a la {_fila.get('meal_type')} de ese día "
+                        f"({_dia_destino}); ahora tiene {_sum['calories']} kcal. Díselo así: quedó dentro de esa "
+                        f"{_fila.get('meal_type')}, no como un registro aparte.{_nota_total_del_dia(user_id, _days_ago)} "
+                        f"[ID_REGISTRO_DIARIO: {_fila.get('id')} — uso interno tuyo, NO se lo menciones ni se lo leas al usuario.]")
+        except Exception as exc:  # noqa: BLE001
+            __import__("fail_open").fail_open("registro_de_otro_dia.sumar", exc)
     result = db_log_consumed_meal(
         user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients,
         meal_type=_meal_type,
@@ -2396,6 +2443,9 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         if _hora_madrugada:   # [P1-PLAN-LOTE-1141]
             _cuando = (" (en el día de AYER: de madrugada, antes de las 4:00, todavía cuenta como el día anterior — "
                        "díselo así, y lo que falte es de AYER, no de hoy)")
+        if _sigue_en_ayer:    # [P1-PLAN-LOTE-1145]
+            _cuando = (" (en el día que SIGUE VIVIENDO: aún no ha dormido, así que su día no ha terminado y esto cuenta "
+                       "en él — no digas «ayer» ni «no suma a hoy»: suma a su día de ahora)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
         # [P1-PLAN-LOTE-168 · 2026-09-23] la suma REAL de ese día, ya con este registro (helper; la batería lo comparte)
         msg += _nota_total_del_dia(user_id, _days_ago)
@@ -5634,9 +5684,15 @@ def _tz_offset_para_usuario(user_id: str | None = None) -> int:
 def _diary_date_str_for_user(user_id: str | None = None) -> str:
     """[P1-DIARY-ROLLOVER-4AM · 2026-11-02] Fecha del DÍA BIOLÓGICO del usuario para el diario de comidas.
     Entre las 00:00 y las 03:59:59 local, el usuario sigue en el día biológico anterior.
-    A las 04:00:00 local pasa al día siguiente."""
+    A las 04:00:00 local pasa al día siguiente.
+    [P1-PLAN-LOTE-1145] …salvo que siga en el día anterior (no ha dormido o su día termina más tarde: `dia_extendido`)."""
     from db_facts import diary_local_date_str
-    return diary_local_date_str(_tz_offset_para_usuario(user_id))
+    _off = _tz_offset_para_usuario(user_id)
+    try:
+        _ext = __import__("dia_extendido").dia_de_hoy(user_id, _off)
+    except Exception:  # noqa: BLE001
+        _ext = None
+    return _ext or diary_local_date_str(_off)
 
 
 @tool

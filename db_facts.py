@@ -923,7 +923,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     """
     try:
         from datetime import datetime, timezone
-        now = consumed_at_override or datetime.now(timezone.utc).isoformat()
+        # [P1-PLAN-LOTE-1145] Sin hora pedida y aún en el día anterior (no ha dormido, o su día termina más tarde):
+        # se guarda al final de ESE día, no en el que empezó a las 4:00 (`dia_extendido.py`; fail-open: ahora).
+        _hora_ext = None
+        if not consumed_at_override:
+            try:
+                _hora_ext = __import__("dia_extendido").hora_para_registro(user_id)
+            except Exception:  # noqa: BLE001
+                _hora_ext = None
+        now = consumed_at_override or _hora_ext or datetime.now(timezone.utc).isoformat()
         synced_at = (datetime.now(timezone.utc).isoformat() if mark_inventory_synced else None)
 
         # [P2-CONSUMED-DEDUP · 2026-05-28] Dedup anti doble-tap. log_consumed_meal

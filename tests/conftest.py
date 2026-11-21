@@ -41,6 +41,7 @@ _os_conftest.environ["SENTRY_DSN"] = ""
 # [P1-PLAN-LOTE-1141] «De madrugada todavía es ayer» depende del RELOJ: con la suite corriendo entre las 00:00 y las 4:00
 # hora de RD, cada test que anota una cena «de hoy» la vería en el día anterior. Apagada en la suite; sus tests la encienden.
 _os_conftest.environ.setdefault("MEALFIT_MADRUGADA_ES_AYER", "0")
+_os_conftest.environ.setdefault("MEALFIT_DIA_TERMINA_AL_DORMIR", "0")   # [P1-PLAN-LOTE-1145] sin depender de la hora a la que corre la suite
 
 # [P0-5] Eagerly resolve real `langgraph` BEFORE any test module loads. Several
 # test files do `sys.modules.setdefault('langgraph', MagicMock())` to support
