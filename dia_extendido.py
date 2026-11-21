@@ -149,6 +149,9 @@ def estado(user_id: Optional[str], ahora_utc: Optional[datetime] = None, *, tz_o
            execute_sql_query: Any = None, usar_cache: bool = True) -> dict:
     """La decisión para este usuario ahora. Fail-open: ante cualquier error, el día de siempre."""
     ahora_utc = _aware(ahora_utc) or datetime.now(timezone.utc)
+    if not user_id or user_id == "guest" or not activo():
+        # [1146] sin consultar el huso: apagado (o invitado) no cuesta ni una consulta por registro
+        return decidir(ahora_utc, 240 if tz_offset_min is None else int(tz_offset_min), actividad=[])
     try:
         off = tz_offset_min
         if off is None:
@@ -220,7 +223,7 @@ def desayuno_empieza_el_dia(user_id: Optional[str], meal_type: Any, ahora_utc: O
     es la señal más clara de que el día nuevo empezó (durmió menos de 4 h, o la regla se equivocó): se empieza el día
     nuevo, como si hubiera tocado «Empezar mi sábado». Lo que él eligió («Seguir…», su hora de corte) no se toca.
     True si cerró la extensión."""
-    if not user_id or str(meal_type or "").strip().lower() != "desayuno":
+    if not user_id or not activo() or str(meal_type or "").strip().lower() != "desayuno":
         return False
     try:
         e = estado(user_id, ahora_utc)
@@ -235,6 +238,8 @@ def desayuno_empieza_el_dia(user_id: Optional[str], meal_type: Any, ahora_utc: O
 def hora_para_registro(user_id: Optional[str], ahora_utc: Optional[datetime] = None, meal_type: Any = None) -> Optional[str]:
     """Si sigue en el día anterior: la hora (UTC ISO) con la que se guarda lo que come AHORA — un minuto antes del
     corte, dentro de ese día. Si no, None (la hora de ahora, como siempre). Un desayuno «despierto» empieza el día."""
+    if not user_id or not activo():
+        return None
     try:
         if desayuno_empieza_el_dia(user_id, meal_type, ahora_utc):
             return None

@@ -42,7 +42,8 @@ def test_las_dos_vias_viven_dentro_del_componedor():
 @pytest.mark.parametrize("loc", ["en-US", "pt-BR", "fr-FR", "it-IT"])
 def test_los_catalogos_sin_huerfanas_y_con_las_nuevas(loc):
     d = json.loads(_front(f"src/i18n/locales/{loc}.json"))
-    assert "Foto" not in d and "Escanear comida con la cámara" not in d
+    # [P1-PLAN-LOTE-1146] «Foto» volvió con uso propio (la pestaña «Mover» de Compartir, lote 1144): ya no es huérfana
+    assert "Escanear comida con la cámara" not in d
     assert d.get("Buscar o escribir") and d.get("Cómo registrar") and d.get("Escanear con foto")
 
 
