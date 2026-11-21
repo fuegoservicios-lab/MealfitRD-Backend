@@ -60,7 +60,7 @@ def test_sigue_remitiendo_al_panel_cuando_SI_es_de_hoy(nombre: str):
     caso más común.
     """
     txt = VARIANTES[nombre]
-    assert "Tus macros y micros de hoy" in txt
+    assert "Tus macros y micros" in txt
     bloque = txt.split("P1-CHAT-DIARY-WHERE")[1][:600]
     assert "days_ago=0" in bloque, (
         "el aviso no dice explícitamente que con `days_ago=0` SÍ se remite al "
@@ -73,7 +73,7 @@ def test_las_dos_variantes_llevan_el_mismo_aviso():
     # Acotado al FINAL REAL de la nota, no a una ventana de bytes fija: un
     # tamano fijo se sale del aviso y entra en el texto que si difiere entre
     # variantes, y el test fallaria por su propia regla de corte.
-    FIN = "le remites a 'Tus macros y micros de hoy'."
+    FIN = "le remites a 'Tus macros y micros'."
     trozos = {}
     for n, t in VARIANTES.items():
         cola = t.split("P1-CHAT-DIARY-WHERE")[1]

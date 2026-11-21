@@ -71,4 +71,4 @@ def test_cableado():
     assert "inscribir_si_android(uid, plataforma)" in fuente["ajustes_cuenta.py"]
     assert "_con_rango_probador" in fuente["regalos_cuenta.py"]
     assert '"probador:"' in fuente["db_profiles.py"]
-    assert "P1-PLAN-LOTE-1117" in fuente["app.py"]
+    # el marcador de app.py avanza con cada lote (lo vigilan test_p3_1 y test_p2_hist_audit_14); aquí no se ancla

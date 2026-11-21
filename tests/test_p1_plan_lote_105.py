@@ -40,7 +40,7 @@ def _front(rel: str) -> str:
 
 def test_una_sola_tarjeta_macros_y_micros():
     tp = _front("src/components/dashboard/TrackingProgress.jsx")
-    assert "t('Tus macros y micros de hoy')" in tp and "t('Tus macros de hoy')" not in tp
+    assert "t('Tus macros y micros')" in tp and "t('Tus macros de hoy')" not in tp
     assert "import { resumirMicros, useMicrosSubtitulo } from './microsShared';" in tp
     # los micros van en el MISMO snapshot que las macros (borrado optimista coherente)
     assert "const { micros, coverage } = resumirMicros(meals);" in tp
@@ -137,14 +137,14 @@ def test_fototeca_directa_en_la_app_nativa():
 def test_el_coach_sabe_donde_se_ve_y_se_borra_otro_dia():
     from prompts.chat_agent import build_tools_instructions, build_tools_instructions_stream
     for txt in (build_tools_instructions("u-1"), build_tools_instructions_stream("u-1")):
-        assert "Tus macros y micros de hoy" in txt and "Tus macros de hoy'" not in txt
+        assert "Tus macros y micros" in txt and "Tus macros de hoy'" not in txt
         assert "'Ver dias anteriores'" in txt.split("P1-CHAT-DIARY-WHERE")[1][:700]
 
 
 def test_i18n_y_marcador():
     for loc in ("en-US", "pt-BR", "fr-FR", "it-IT"):
         d = json.loads(_front(f"src/i18n/locales/{loc}.json"))
-        for k in ("Tus macros y micros de hoy", "Micros", "Extras y snacks", "Registrar en este día",
+        for k in ("Tus macros y micros", "Micros", "Extras y snacks", "Registrar en este día",
                   "Solo se puede registrar hasta 7 días atrás."):
             # [P1-PLAN-LOTE-980] «Ninguna de estas comidas trae micros…» salió del UI en 0746cc70 (2026-10-12).
             assert d.get(k), f"{loc}: {k}"

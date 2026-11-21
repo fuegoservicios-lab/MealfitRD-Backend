@@ -92,13 +92,36 @@ def _q(sql: str, params: tuple):
         return None
 
 
-def _inicio_de_mes() -> datetime:
+def _inicio_de_mes_natural() -> datetime:
     try:
         from regalos_cuenta import inicio_de_mes
         return inicio_de_mes()
     except Exception:                                                  # noqa: BLE001
         n = datetime.now(timezone.utc)
         return datetime(n.year, n.month, 1, tzinfo=timezone.utc)
+
+
+# [P1-PLAN-LOTE-1136 · 2026-11-21] Los topes nacieron el 20-nov y contaban el gasto desde el día 1: una cuenta gratis
+# («sara…», iPhone) quedó frenada por US$ 0,43 de UN día anómalo del 13-nov (8 mensajes, antes de que hubiera topes),
+# aunque su uso normal ronda los céntimos. Lo gastado antes de que existiera la regla no cuenta contra ella:
+# el mes de los topes empieza en lo más tardío de (día 1, nacimiento de los topes). Desde diciembre manda el día 1.
+TOPES_CUENTAN_DESDE = "2026-11-20T00:00:00+00:00"
+
+
+def _topes_desde() -> Optional[datetime]:
+    crudo = os.environ.get("MEALFIT_TOPES_CUENTAN_DESDE", TOPES_CUENTAN_DESDE)
+    try:
+        d = datetime.fromisoformat(str(crudo).strip())
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _inicio_de_mes() -> datetime:
+    """Desde cuándo cuenta el mes de los topes (gasto y voz): el día 1, o el nacimiento de los topes si es posterior."""
+    natural = _inicio_de_mes_natural()
+    desde = _topes_desde()
+    return max(natural, desde) if desde else natural
 
 
 def gasto_mes_usd(user_id: str) -> float:

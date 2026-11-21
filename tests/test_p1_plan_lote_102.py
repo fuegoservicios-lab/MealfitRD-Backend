@@ -30,10 +30,10 @@ def _sin_comentarios_py(src: str) -> str:
 
 def test_el_coach_nombra_la_seccion_como_la_ve_el_usuario():
     prompt = _sin_comentarios_py((_BACKEND / "prompts" / "chat_agent.py").read_text(encoding="utf-8"))
-    assert "Tus macros y micros de hoy" in prompt
+    assert "Tus macros y micros" in prompt
     assert "Progreso en Tiempo Real" not in prompt, "el coach mandaría al usuario a una sección que ya no se llama así"
     tp = _front("src/components/dashboard/TrackingProgress.jsx")
-    assert "t('Tus macros y micros de hoy')" in tp and "t('Progreso en Tiempo Real')" not in tp
+    assert "t('Tus macros y micros')" in tp and "t('Progreso en Tiempo Real')" not in tp
 
 
 def test_pestana_progreso_y_un_solo_icono_de_camara():
