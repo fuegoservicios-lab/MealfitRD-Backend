@@ -121,3 +121,26 @@ def test_el_descuento_usa_al_frente():
     src = (_BACKEND / "db_inventory.py").read_text(encoding="utf-8")
     assert "_item_parse = _al_frente(item)" in src
     assert "_parse_quantity(_item_parse)" in src
+
+
+# ── 5. El escáner sabe qué fotos mandó antes («de las que te envié») ────────────────────────────────────────────────
+def test_fotos_recientes_resuelve_la_referencia():
+    import fotos_recientes as fr
+    fr._memoria.clear()
+    fr.anotar("u-fr", "1 paquete de papas fritas Lay's Clásicas")
+    txt = "Me voy a comer 3 papitas de las que te envié con 3 rodajas de queso"
+    assert "Lay's" in fr.contexto("u-fr", txt)
+    assert "Lay's" in fr.contexto("u-fr", "Tú sabes, la que recién envié")
+    assert fr.contexto("u-fr", "Me comí 3 papitas con queso") == ""      # sin referencia, sin contexto
+    assert fr.contexto("otro", txt) == ""
+
+
+def test_el_prompt_del_escaner_lleva_las_fotos_previas():
+    import fotos_recientes as fr
+    import vision_agent as va
+    with fr.scope("«1 paquete de papas fritas Lay's Clásicas»"):
+        p = va._prompt_de_escaneo("3 papitas de las que te envie")
+    assert "FOTOS QUE EL USUARIO MANDO ANTES" in p and "Lay's" in p
+    assert "FOTOS QUE EL USUARIO MANDO ANTES" not in va._prompt_de_escaneo("algo")
+    src = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
+    assert "_fr.scope(_fotos_previas)" in src and "_fr_anotar.anotar(actual_user_id" in src

@@ -671,7 +671,12 @@ async def api_diary_upload(
             _dt_media = {"data": file_bytes, "mime_type": sniffed_ct}
             _dt_res = None
             _t_vis = time.perf_counter()
-            with vision_habitos_scope(_habitos):
+            import fotos_recientes as _fr   # [P1-PLAN-LOTE-1141] «de las que te envié» → lo que se vio en esas fotos
+            try:
+                _fotos_previas = _fr.contexto(actual_user_id, aclaracion or "")
+            except Exception:  # noqa: BLE001
+                _fotos_previas = ""
+            with vision_habitos_scope(_habitos), _fr.scope(_fotos_previas):
                 if _dt_modo == "guard":
                     _t_tr = time.perf_counter()
                     _dt_res = await _dt.run_triage_async(media=_dt_media, user_id=actual_user_id)
@@ -810,6 +815,11 @@ async def api_diary_upload(
 
         if is_food:
             logger.info(f"✅ Descripción generada: '{description}' (Calorías: {calories})")
+            try:   # [P1-PLAN-LOTE-1141] para la próxima foto que diga «de las que te envié»
+                import fotos_recientes as _fr_anotar
+                _fr_anotar.anotar(actual_user_id, str(description or "").split(" DUDAS")[0].split(" (Estimación")[0])
+            except Exception:  # noqa: BLE001
+                pass
 
             # --- EVALUACIÓN DETERMINISTA DE CRONONUTRICIÓN (PYTHON) ---
             if calories > 500:
