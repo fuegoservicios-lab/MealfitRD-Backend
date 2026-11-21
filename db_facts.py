@@ -928,7 +928,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         _hora_ext = None
         if not consumed_at_override:
             try:
-                _hora_ext = __import__("dia_extendido").hora_para_registro(user_id)
+                _hora_ext = __import__("dia_extendido").hora_para_registro(user_id, meal_type=meal_type)
             except Exception:  # noqa: BLE001
                 _hora_ext = None
         now = consumed_at_override or _hora_ext or datetime.now(timezone.utc).isoformat()

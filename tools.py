@@ -2227,6 +2227,9 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     _sigue_en_ayer = False
     if _days_ago <= 1:
         try:
+            # [P1-PLAN-LOTE-1146] «desayuné» de ahora estando «despierto» = el día nuevo empezó (antes de mirar el estado)
+            if _days_ago == 0:
+                __import__("dia_extendido").desayuno_empieza_el_dia(user_id, _meal_type)
             _sigue_en_ayer = bool(__import__("dia_extendido").estado(user_id).get("extendido"))
         except Exception as exc:  # noqa: BLE001
             __import__("fail_open").fail_open("dia_extendido", exc)

@@ -107,7 +107,7 @@ def test_cableado():
     assert "_rod.hora_tipica(_meal_type, _dia_destino" in tools
     assert "_rod2.picoteo_del_dia(" in tools
     assert '__import__("dia_extendido").dia_de_hoy(user_id, _off)' in tools
-    assert 'hora_para_registro(user_id)' in (_BACKEND / "db_facts.py").read_text(encoding="utf-8")
+    assert 'hora_para_registro(user_id, meal_type=meal_type)' in (_BACKEND / "db_facts.py").read_text(encoding="utf-8")
     diary = (_BACKEND / "routers" / "diary.py").read_text(encoding="utf-8")
     assert '@router.get("/dia-activo")' in diary and '@router.post("/dia-activo")' in diary
     assert "dia_extendido" in (_BACKEND / "routers" / "chat.py").read_text(encoding="utf-8")

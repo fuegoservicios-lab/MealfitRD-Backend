@@ -123,12 +123,15 @@ def decidir(ahora_utc: datetime, off_min: int, *, actividad: list, accion: Optio
 
 
 def _leer(user_id: str, ahora_utc: datetime, off_min: int, q: Callable) -> tuple:
+    # [P1-PLAN-LOTE-1146 · 2026-11-21] Solo cuentan ACTOS del usuario (registrar, escribirle al coach), NO la presencia
+    # (`presencia:<uid>`): la marca cualquier petición con sesión, y una pestaña abierta toda la noche sondea sola
+    # (el dueño: «si dejo una pestaña abierta mientras duermo, ¿qué pasa?») — no habría nunca un hueco de sueño y el
+    # día seguiría extendido hasta el mediodía, con el desayuno cayendo en el día de ayer.
     desde = ahora_utc - timedelta(hours=TOPE_H + ANTES_DEL_CORTE_H + 2)
     filas = q(
         "SELECT created_at AS t FROM consumed_meals WHERE user_id = %s::uuid AND created_at >= %s "
-        "UNION ALL SELECT created_at FROM agent_messages WHERE user_id = %s::uuid AND role = 'user' AND created_at >= %s "
-        "UNION ALL SELECT (value->>'at')::timestamptz FROM app_kv_store WHERE key = %s",
-        (user_id, desde.isoformat(), user_id, desde.isoformat(), "presencia:" + user_id), fetch_all=True) or []
+        "UNION ALL SELECT created_at FROM agent_messages WHERE user_id = %s::uuid AND role = 'user' AND created_at >= %s",
+        (user_id, desde.isoformat(), user_id, desde.isoformat()), fetch_all=True) or []
     actividad = [f.get("t") for f in filas if isinstance(f, dict)]
     fila = q("SELECT value FROM app_kv_store WHERE key = %s", (PREFIJO + user_id,), fetch_one=True) or {}
     accion = fila.get("value") if isinstance(fila, dict) else None
@@ -212,10 +215,29 @@ def dia_de_hoy(user_id: Optional[str], tz_offset_min: Optional[int] = None) -> O
         return None
 
 
-def hora_para_registro(user_id: Optional[str], ahora_utc: Optional[datetime] = None) -> Optional[str]:
-    """Si sigue en el día anterior: la hora (UTC ISO) con la que se guarda lo que come AHORA — un minuto antes del
-    corte, dentro de ese día. Si no, None (la hora de ahora, como siempre)."""
+def desayuno_empieza_el_dia(user_id: Optional[str], meal_type: Any, ahora_utc: Optional[datetime] = None) -> bool:
+    """[P1-PLAN-LOTE-1146] Registrar un DESAYUNO de ahora mientras sigue en el día anterior solo por estar «despierto»
+    es la señal más clara de que el día nuevo empezó (durmió menos de 4 h, o la regla se equivocó): se empieza el día
+    nuevo, como si hubiera tocado «Empezar mi sábado». Lo que él eligió («Seguir…», su hora de corte) no se toca.
+    True si cerró la extensión."""
+    if not user_id or str(meal_type or "").strip().lower() != "desayuno":
+        return False
     try:
+        e = estado(user_id, ahora_utc)
+        if e.get("extendido") and e.get("motivo") == "despierto":
+            fijar(str(user_id), "empezar", ahora_utc)
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[P1-PLAN-LOTE-1146] el desayuno no pudo empezar el día: {exc!r}")
+    return False
+
+
+def hora_para_registro(user_id: Optional[str], ahora_utc: Optional[datetime] = None, meal_type: Any = None) -> Optional[str]:
+    """Si sigue en el día anterior: la hora (UTC ISO) con la que se guarda lo que come AHORA — un minuto antes del
+    corte, dentro de ese día. Si no, None (la hora de ahora, como siempre). Un desayuno «despierto» empieza el día."""
+    try:
+        if desayuno_empieza_el_dia(user_id, meal_type, ahora_utc):
+            return None
         e = estado(user_id, ahora_utc)
         if not e.get("extendido") or not e.get("fin"):
             return None
