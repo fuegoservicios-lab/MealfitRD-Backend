@@ -639,8 +639,8 @@ def test_agent_tools_wire_json_compactado_conservando_las_reglas_de_comportamien
     import tools
 
     wire_json = json.dumps([convert_to_openai_tool(t) for t in tools.agent_tools], ensure_ascii=False)
-    assert len(tools.agent_tools) == 21   # [P1-PLAN-LOTE-1034] + generar_informe_para_medico; [1059] + consultar_progreso
-    assert len(wire_json) < 27000, f"Wire JSON tools muy pesado: {len(wire_json)}"   # legacy: 29.9 k; compacto total: 16.3 k
+    assert len(tools.agent_tools) == 22   # [P1-PLAN-LOTE-1034] + generar_informe_para_medico; [1059] + consultar_progreso; [1160] + recuperar_de_la_nevera
+    assert len(wire_json) < 27500, f"Wire JSON tools muy pesado: {len(wire_json)}"   # legacy: 29.9 k; compacto total: 16.3 k; [1160] +500 por la tool 22 (su esquema solo ya pasaba el margen)
     docs = {t.name: (t.description or "") for t in tools.agent_tools}
     for nombre, frase in (
         ("correct_consumed_meal", "NUNCA de qué estabas preguntando"),

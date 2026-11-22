@@ -7090,14 +7090,8 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
 
 @tool
 def recuperar_de_la_nevera(user_id: str, nombres: list[str] = None, todo: bool = False) -> str:
-    """
-    Recupera lo que el usuario BORRÓ de su Nevera o de su Despensa (alimentos y potes de suplementos, con su
-    etiqueta) en los últimos 30 días. Úsala cuando diga «recupera», «borré sin querer», «devuélveme», «vuelve a
-    poner lo que tenía». NO es para el diario de comidas, y NO registres nada como comido.
-    - Sin `nombres` y con todo=false: solo LISTA lo que hay para recuperar (úsalo primero si no sabes qué era).
-    - nombres: lo que pide recuperar («creatina», «multi», «pollo»); casa por nombre aunque no sea exacto.
-    - todo=true: recupera todo lo borrado (solo si lo pide así: «todo», «los 3», «lo que había»).
-    """
+    """Devuelve a la Nevera/Despensa lo que el usuario BORRÓ (30 días; potes con etiqueta). No es el diario ni
+    registra nada como comido. Sin nombres: lista. nombres: lo que pide. todo=true: «todo», «los 3»."""
     # [P1-PLAN-LOTE-1160 · 2026-11-21] tooltip-anchor: P1-PLAN-LOTE-1160-TOOL
     if not user_id or str(user_id).strip().lower().startswith("guest"):
         return "Para recuperar lo borrado necesita iniciar sesión. (Para el asistente: díselo; no digas que lo recuperaste.)"

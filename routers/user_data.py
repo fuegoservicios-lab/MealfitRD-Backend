@@ -395,6 +395,10 @@ async def api_delete_all_inventory(
             "papelera_ids": [r["papelera_id"] for r in rows if r.get("papelera_id") is not None]}
 
 
+# [P1-PLAN-LOTE-1160] restaurar escribe: limitador por usuario (no el paywall: es lo SUYO y no gasta IA)
+_PAPELERA_RESTORE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
+
 class PapeleraRestaurarBody(BaseModel):
     # [P1-PLAN-LOTE-1160] por id de la papelera (lista) o por el id que tenía la fila (el «Deshacer» del aviso)
     papelera_ids: Optional[list[int]] = None
@@ -412,7 +416,7 @@ async def api_list_inventory_trash(verified_user_id: str = Depends(get_verified_
 @router.post("/inventory/papelera/restaurar")
 async def api_restore_inventory_trash(
     body: PapeleraRestaurarBody = Body(...),
-    verified_user_id: str = Depends(get_verified_user_id),
+    verified_user_id: str = Depends(_PAPELERA_RESTORE_LIMITER),
 ):
     """[P1-PLAN-LOTE-1160] Devuelve a la Nevera lo archivado (con etiqueta, marca y tipo). Responde las filas con la
     misma forma que GET /inventory para que la pantalla las pinte sin recargar."""
