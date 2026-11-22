@@ -237,6 +237,7 @@ def hitos_cumplidos(res: dict) -> list[dict]:
         u = cerradas[-1]
         out.append({"clave": f"semana_cerrada:{u['numero']}", "codigo": "semana_cerrada",
                     "datos": {"numero": u["numero"], "estrellas": u["estrellas"], "dias_en_meta": u["dias_en_meta"],
+                              "puntos": u.get("puntos"),
                               "siguiente": u["numero"] + 1}})
     if res["total"]["estrellas"] >= 1:
         out.append({"clave": "primera_estrella", "codigo": "primera_estrella", "datos": {}})

@@ -189,7 +189,7 @@ def test_un_evento_sale_una_sola_vez_y_marcar_visto():
     r = _res([(1, 5), (2, 0)])
     pend, kv = ps.eventos_nuevos(ps.hitos_cumplidos(r), kv0, "2026-11-15")
     assert {e["clave"] for e in pend} == {"semana_cerrada:1", "primera_estrella"}
-    assert pend[0]["datos"] == {"numero": 1, "estrellas": 2, "dias_en_meta": 5, "siguiente": 2}
+    assert pend[0]["datos"] == {"numero": 1, "estrellas": 2, "dias_en_meta": 5, "siguiente": 2, "puntos": None}   # [1161] + puntos
     pend2, kv2 = ps.eventos_nuevos(ps.hitos_cumplidos(r), kv, "2026-11-16")
     assert {e["clave"] for e in pend2} == {"semana_cerrada:1", "primera_estrella"}   # pendientes hasta verlos
     assert kv2["emitidos"]["semana_cerrada:1"] == "2026-11-15"                        # la fecha no cambia
