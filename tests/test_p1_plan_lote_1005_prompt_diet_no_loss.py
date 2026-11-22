@@ -226,5 +226,5 @@ def test_rule_coverage_54_de_54_intacta():
     from scripts.coach_battery.rule_coverage import build_coverage_matrix
 
     rep = build_coverage_matrix()
-    assert rep["covered_rules"] == rep["total_rules"] == 58, rep   # [P1-PLAN-LOTE-1109] + vitaminas al diario; [P1-PLAN-LOTE-1103] + vitaminas de internet; [P1-PLAN-LOTE-1059] + R5 (W1-W4); [P1-PLAN-LOTE-1034] + R6 (I1-I2)
+    assert rep["covered_rules"] == rep["total_rules"] == 59, rep   # [P1-PLAN-LOTE-1160] + recuperar lo borrado; [P1-PLAN-LOTE-1109] + vitaminas al diario; [P1-PLAN-LOTE-1103] + vitaminas de internet; [P1-PLAN-LOTE-1059] + R5 (W1-W4); [P1-PLAN-LOTE-1034] + R6 (I1-I2)
     assert rep["uncovered_rules"] == []

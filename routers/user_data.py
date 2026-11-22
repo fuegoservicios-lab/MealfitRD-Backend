@@ -372,40 +372,78 @@ async def api_delete_inventory_item(
     en RLS (sin .eq(user_id)); aquí el filtro es obligatorio."""
     uid = _require_user(verified_user_id)
 
-    def _del():
-        from db import execute_sql_write
-        return execute_sql_write(
-            # [SUPLEMENTOS-OK: borrado por id que pidió el usuario]
-            "DELETE FROM user_inventory WHERE id = %s AND user_id = %s RETURNING id",
-            (item_id, uid),
-            returning=True,
-        )
-
-    rows = await asyncio.to_thread(_del)
+    # [P1-PLAN-LOTE-1160] el borrado archiva la fila entera en la papelera (30 días): «Deshacer» y el coach la devuelven
+    # con su etiqueta. tooltip-anchor: P1-PLAN-LOTE-1160-ENDPOINTS
+    import papelera_nevera
+    rows = await asyncio.to_thread(papelera_nevera.borrar_y_archivar, uid, ids=[item_id], via="uno")
     if not rows:
         raise HTTPException(status_code=404, detail="Item no encontrado.")
-    return {"deleted": True}
+    return {"deleted": True, "papelera_id": rows[0].get("papelera_id")}
 
 
 @router.delete("/inventory/items")
 async def api_delete_all_inventory(
     verified_user_id: str = Depends(get_verified_user_id),
 ):
-    """Vaciar nevera completa ('Borrar Todos' de Pantry)."""
+    """Vaciar la Nevera ('Borrar todos' de Pantry): los ALIMENTOS. [P1-PLAN-LOTE-1160] Los potes de suplementos se
+    quedan (el aviso dice «todos los alimentos»; el 21-nov se llevó los tres potes del dueño con su etiqueta), y lo
+    borrado va a la papelera: `papelera_ids` permite «Deshacer»."""
     uid = _require_user(verified_user_id)
+    import papelera_nevera
+    rows = await asyncio.to_thread(papelera_nevera.borrar_y_archivar, uid, solo_alimentos=True, via="todos")
+    return {"deleted_count": len(rows),
+            "papelera_ids": [r["papelera_id"] for r in rows if r.get("papelera_id") is not None]}
 
-    def _del_all():
-        from db import execute_sql_write
-        rows = execute_sql_write(
-            # [SUPLEMENTOS-OK: «vaciar la Nevera» vacía también los suplementos]
-            "DELETE FROM user_inventory WHERE user_id = %s RETURNING id",
-            (uid,),
-            returning=True,
-        )
-        return len(rows or [])
 
-    deleted = await asyncio.to_thread(_del_all)
-    return {"deleted_count": deleted}
+class PapeleraRestaurarBody(BaseModel):
+    # [P1-PLAN-LOTE-1160] por id de la papelera (lista) o por el id que tenía la fila (el «Deshacer» del aviso)
+    papelera_ids: Optional[list[int]] = None
+    original_ids: Optional[list[int]] = None
+
+
+@router.get("/inventory/papelera")
+async def api_list_inventory_trash(verified_user_id: str = Depends(get_verified_user_id)):
+    """[P1-PLAN-LOTE-1160] Lo borrado de la Nevera en los últimos 30 días, lo más reciente primero."""
+    uid = _require_user(verified_user_id)
+    import papelera_nevera
+    return {"items": await asyncio.to_thread(papelera_nevera.listar, uid), "dias": papelera_nevera.DIAS_PAPELERA}
+
+
+@router.post("/inventory/papelera/restaurar")
+async def api_restore_inventory_trash(
+    body: PapeleraRestaurarBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-PLAN-LOTE-1160] Devuelve a la Nevera lo archivado (con etiqueta, marca y tipo). Responde las filas con la
+    misma forma que GET /inventory para que la pantalla las pinte sin recargar."""
+    uid = _require_user(verified_user_id)
+    p_ids = [int(i) for i in (body.papelera_ids or [])][:200]
+    o_ids = [int(i) for i in (body.original_ids or [])][:200]
+    if not p_ids and not o_ids:
+        raise HTTPException(status_code=422, detail="Nada que restaurar.")
+    import papelera_nevera
+
+    def _restore():
+        from db import execute_sql_query
+        puestas = papelera_nevera.restaurar(uid, papelera_ids=p_ids, original_ids=o_ids)
+        ids = [int(r["id"]) for r in puestas]
+        if not ids:
+            return puestas, []
+        items = execute_sql_query(
+            # [SUPLEMENTOS-OK: devuelve a la pantalla las filas recién restauradas, alimentos y potes]
+            f"{_INVENTORY_SELECT} WHERE ui.user_id = %s AND ui.id = ANY(%s) ORDER BY ui.ingredient_name ASC",
+            (uid, ids),
+            fetch_all=True,
+        ) or []
+        return puestas, items
+
+    puestas, items = await asyncio.to_thread(_restore)
+    if not puestas:
+        raise HTTPException(status_code=404, detail="Ya no está en la papelera.")
+    por_nombre = {r["ingredient_name"]: r.get("original_id") for r in puestas}
+    for it in items:
+        it["original_id"] = por_nombre.get(it.get("ingredient_name"))
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------

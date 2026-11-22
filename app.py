@@ -1103,7 +1103,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1080 · 2026-11-18] tras registrar, sin «No me mandaste…» de lo ya anotado; +≤10 % de kcal = cerró en su meta.
 # [P1-PLAN-LOTE-1085 · 2026-11-18] los micros de cada comida, recordados (micros_memo): abrir un día ya no los recalcula.
 # [P1-PLAN-LOTE-1087 · 2026-11-18] respuesta sin repetirse (1086); lo comido antes de la foto se suma (1087).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1146 · 2026-11-21"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1160 · 2026-11-21"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -3954,6 +3954,7 @@ _ACCOUNT_EXPORT_TABLES = (
     ("user_profiles", "id", 1),
     ("meal_plans", "user_id", 50),
     ("user_inventory", "user_id", 2000),
+    ("user_inventory_papelera", "user_id", 500),   # [P1-PLAN-LOTE-1160]
     ("user_depleted_items", "user_id", 2000),
     ("consumed_meals", "user_id", 5000),
     ("user_facts", "user_id", 2000),

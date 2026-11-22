@@ -1432,6 +1432,8 @@ _USER_SCOPED_TABLES_USERID = (
     # el FK CASCADE del perfil, pero con `include_profile=False` (el «vaciar» del admin) sobrevivían — y el informe
     # es dato de salud. Medido en el esquema el 16-nov: las tres existen con `user_id` uuid.
     "user_health_reports", "user_week_summaries", "user_journey",
+    # [P1-PLAN-LOTE-1160] la papelera de la Nevera (filas borradas, 30 días): cae con el perfil, y explícita aquí
+    "user_inventory_papelera",
     # `meal_plans` al final: sus children (plan_chunk_queue, etc.) pueden
     # FK-cascade a él; borrarlas antes evita cualquier orden problemático.
     "meal_plans",

@@ -2043,7 +2043,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     - food_facts / label_servings: nutrientes LEÍDOS de la etiqueta o dictados por el usuario, por porción, y número de porciones realmente consumidas. No inventes valores ni conviertas %VD.
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack' | 'suplemento'. Dedúcelo de lo que diga el usuario o de la hora. NUNCA uses 'desayuno', 'almuerzo', 'cena', 'merienda' o 'snack' para una toma de suplemento (creatina, proteínas, vitaminas, pastillas, cápsulas): un suplemento NO es una comida ni una merienda. Para suplementos usa SIEMPRE 'suplemento'.
     - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. Máximo 7 días atrás. ÚSALO cuando el usuario declare que el consumo ocurrió OTRO día (ej. "eso fue ayer" o "ayer almorcé sancocho" → days_ago=1). PROHIBIDO usar days_ago > 0 si el usuario dice "desayuné lo mismo de ayer", "el mismo almuerzo de ayer pero sin X" o frases comparativas: en esos casos comió HOY (days_ago=0) usando como referencia o plantilla la comida de ayer. Máximo 7 días atrás; el diario nunca registra a futuro.
-    - suplemento / porciones: si tomó un suplemento de su Alacena («me tomé 2 scoops de whey»), pasa su nombre y
+    - suplemento / porciones: si tomó un suplemento de su Despensa («me tomé 2 scoops de whey»), pasa su nombre y
       cuántas porciones: las macros salen de la etiqueta guardada del pote y se restan del pote.
     - Varias comidas/alimentos pueden compartir meal_type y día. Un alimento distinto se añade sin pedir permiso.
     - force: permite repetir un registro idéntico reciente SOLO si el usuario confirma que comió otra porción.
@@ -5457,14 +5457,12 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
 
         def _borrar_filas(rows) -> list:
             """DELETE por id con `AND user_id` (I2); devuelve los ids que la base CONFIRMÓ borrados."""
+            # [P1-PLAN-LOTE-1160] por la papelera: lo que el coach borra también se puede recuperar 30 días
+            import papelera_nevera
             borrados = []
             for r in rows:
                 try:
-                    if _sql_write(
-                        # [SUPLEMENTOS-OK: borrado por id de una fila ya elegida]
-                        "DELETE FROM public.user_inventory WHERE id = %s AND user_id = %s RETURNING id",
-                        (r.get("id"), user_id), returning=True,
-                    ):
+                    if papelera_nevera.borrar_y_archivar(user_id, ids=[r.get("id")], via="coach"):
                         borrados.append(r.get("id"))
                 except Exception as _del_err:
                     logger.warning(f"[P1-CHAT-TOOLS-AUDIT] DELETE row id={r.get('id')} falló: {_del_err}")
@@ -7009,7 +7007,7 @@ def analizar_suplemento(user_id: str, nombre: str = None, etiqueta: dict = None,
     """Lee vitaminas/minerales de una etiqueta, sin registrar ni prescribir.
     Úsala para magnesio, multivitaminas y otros suplementos que el usuario muestre o pregunte.
     etiqueta = supplement_facts de la foto, o {supplement_facts: ...} de un pote guardado.
-    Si no envías etiqueta, nombre busca SOLO en la Alacena de este usuario.
+    Si no envías etiqueta, nombre busca SOLO en la Despensa de este usuario.
     unidades_tomadas = cápsulas/tabletas/scoops de LA MISMA unidad de la etiqueta.
     unidad_tomada = la unidad que dijo que tomó, obligatoria para calcular unidades; no la inventes.
     porciones_tomadas = raciones de la etiqueta (alternativa a unidades, nunca ambas).
@@ -7038,7 +7036,7 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
                        etiqueta: dict = None, fuente: str = "estimado", clave: str = None,
                        encender_nevera: bool = False) -> str:
     """
-    Guarda un SUPLEMENTO (proteína en polvo, creatina, multivitamínico, omega 3…) en la Nevera → Alacena del usuario,
+    Guarda un SUPLEMENTO (proteína en polvo, creatina, multivitamínico, omega 3…) en la Despensa (Nevera) del usuario,
     con su etiqueta por porción. Úsala cuando pida guardarlo o cuando mande la foto del pote o de su etiqueta, aunque
     no diga nada: la foto de un pote de varias porciones ES decir que lo tiene [P1-PLAN-LOTE-765]. Funciona aunque su
     Nevera esté apagada: la herramienta decide si la enciende o te pide preguntar.
@@ -7058,7 +7056,7 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
     if not user_id or str(user_id).strip().lower().startswith("guest"):
         # [P1-PLAN-LOTE-300 · detalle M4] invitado: la Alacena es de una cuenta (mismo criterio que
         # `fact_extractor._is_guest_user_id`, más el prefijo `guest-` de las sesiones de invitado)
-        return ("Para guardar suplementos en la Alacena necesitas iniciar sesión. (Para el asistente: díselo en una "
+        return ("Para guardar suplementos en la Despensa necesitas iniciar sesión. (Para el asistente: díselo en una "
                 "frase y ofrécele crear su cuenta; no digas que quedó guardado.)")
     try:
         import suplementos
@@ -7067,7 +7065,7 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
             from nevera_opcional import MENSAJE_NEVERA_PREGUNTAR
             return MENSAJE_NEVERA_PREGUNTAR
         e = r["etiqueta"]
-        txt = f"Guardado en su Alacena: {nombre}" + (f" ({marca})" if marca else "")
+        txt = f"Guardado en su Despensa: {nombre}" + (f" ({marca})" if marca else "")
         if e:
             txt += f" — 1 {unidad}: {int(round(e['kcal']))} kcal, {e['protein_g']:g} g de proteína"
             if e.get('supplement_facts'):
@@ -7088,6 +7086,57 @@ def guardar_suplemento(user_id: str, nombre: str, marca: str = None, porciones: 
     except Exception:
         logger.exception("❌ [P1-PLAN-LOTE-291] guardar_suplemento falló")
         return "No pude guardar el suplemento (error interno). NO digas que quedó guardado."
+
+
+@tool
+def recuperar_de_la_nevera(user_id: str, nombres: list[str] = None, todo: bool = False) -> str:
+    """
+    Recupera lo que el usuario BORRÓ de su Nevera o de su Despensa (alimentos y potes de suplementos, con su
+    etiqueta) en los últimos 30 días. Úsala cuando diga «recupera», «borré sin querer», «devuélveme», «vuelve a
+    poner lo que tenía». NO es para el diario de comidas, y NO registres nada como comido.
+    - Sin `nombres` y con todo=false: solo LISTA lo que hay para recuperar (úsalo primero si no sabes qué era).
+    - nombres: lo que pide recuperar («creatina», «multi», «pollo»); casa por nombre aunque no sea exacto.
+    - todo=true: recupera todo lo borrado (solo si lo pide así: «todo», «los 3», «lo que había»).
+    """
+    # [P1-PLAN-LOTE-1160 · 2026-11-21] tooltip-anchor: P1-PLAN-LOTE-1160-TOOL
+    if not user_id or str(user_id).strip().lower().startswith("guest"):
+        return "Para recuperar lo borrado necesita iniciar sesión. (Para el asistente: díselo; no digas que lo recuperaste.)"
+    try:
+        import papelera_nevera
+
+        def _desc(f):
+            tipo = "suplemento" if f.get("kind") == "supplement" else "alimento"
+            extra = " con etiqueta" if f.get("con_etiqueta") else ""
+            return f"{f['ingredient_name']} ({tipo}{extra})"
+
+        disponibles = papelera_nevera.listar(user_id)
+        if not disponibles:
+            return ("No hay nada borrado en los últimos 30 días que se pueda recuperar. (Para el asistente: díselo así; "
+                    "NO digas que recuperaste nada ni registres nada en su diario. Si era de su diario de comidas, eso "
+                    "no se guarda: ofrécele anotarlo de nuevo.)")
+        if not nombres and not todo:
+            return ("Se puede recuperar: " + "; ".join(_desc(f) for f in disponibles)
+                    + ". (Para el asistente: pregúntale cuáles quiere, o recupéralos si ya lo dijo; nada se ha "
+                    "recuperado todavía.)")
+        if todo:
+            elegidas, faltan = disponibles, []
+        else:
+            elegidas, faltan = papelera_nevera.buscar_por_nombres(user_id, nombres or [])
+        puestas = papelera_nevera.restaurar(user_id, papelera_ids=[f["papelera_id"] for f in elegidas]) if elegidas else []
+        nombres_puestos = {r["ingredient_name"] for r in puestas}
+        txt = ""
+        if puestas:
+            txt = "Recuperado en su Nevera: " + "; ".join(_desc(f) for f in elegidas if f["ingredient_name"] in nombres_puestos) + "."
+        if faltan:
+            txt += (" No encontré entre lo borrado: " + ", ".join(faltan) + ". Lo que sí se puede recuperar: "
+                    + ("; ".join(_desc(f) for f in disponibles if f["ingredient_name"] not in nombres_puestos) or "nada más")
+                    + ".")
+        if not puestas:
+            return (txt.strip() or "No se pudo recuperar nada.") + " (Para el asistente: NO digas que lo recuperaste.)"
+        return txt.strip() + " (Para el asistente: díselo en una frase; no lo anotes en su diario.) [UI_ACTION: REFRESH_INVENTORY]"
+    except Exception:
+        logger.exception("❌ [P1-PLAN-LOTE-1160] recuperar_de_la_nevera falló")
+        return "No pude recuperarlo (error interno). NO digas que quedó recuperado."
 
 
 @tool
@@ -7222,7 +7271,7 @@ def consultar_progreso(user_id: str, semanas: int = 8) -> str:
     return "\n".join(filas + [pie])
 
 
-agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app, generar_informe_para_medico, consultar_progreso]
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan, proponer_comida, analizar_suplemento, guardar_suplemento, recuperar_de_la_nevera, buscar_etiqueta_en_internet, cambiar_ajuste_de_la_app, abrir_pantalla_de_la_app, generar_informe_para_medico, consultar_progreso]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

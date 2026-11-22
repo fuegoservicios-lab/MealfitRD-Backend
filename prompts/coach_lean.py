@@ -120,6 +120,9 @@ _PATRONES_POR_HERRAMIENTA = (
 )
 
 
+_PATRON_REGLA_RECUPERAR = re.compile(r"(?m)^S2\. RECUPERAR LO BORRADO[^\n]*\n?")
+
+
 def dedup_activo() -> bool:
     try:
         from knobs import _env_bool
@@ -142,6 +145,8 @@ def podar_extras_no_ligados(texto: str, ligadas: Optional[Iterable[str]]) -> str
         texto = _linea_de_bullet("proponer_comida").sub("", texto, count=1)
     if not (ligadas_set & {"analizar_suplemento", "guardar_suplemento", "buscar_etiqueta_en_internet"}):
         texto = _PATRON_BLOQUE_SUPLEMENTOS.sub("", texto, count=1)
+    if "recuperar_de_la_nevera" not in ligadas_set:   # [P1-PLAN-LOTE-1160] la regla viaja con su herramienta
+        texto = _PATRON_REGLA_RECUPERAR.sub("", texto, count=1)
     return texto
 
 

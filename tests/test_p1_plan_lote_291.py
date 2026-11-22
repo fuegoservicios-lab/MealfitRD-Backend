@@ -76,7 +76,7 @@ def test_la_tool_esta_registrada_y_documentada():
 def test_la_tool_responde_y_avisa_del_estimado(db):
     import tools
     out = tools.guardar_suplemento.func("u", "Creatina", porciones=60, unidad="g", clave="creatine")
-    assert "Guardado en su Alacena: Creatina" in out and "ESTIMADO" in out and "[UI_ACTION: REFRESH_INVENTORY]" in out
+    assert "Guardado en su Despensa: Creatina" in out and "ESTIMADO" in out and "[UI_ACTION: REFRESH_INVENTORY]" in out
 
 
 # ── Task 8: registrar una toma con la etiqueta del pote ─────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ def test_descontar_nunca_negativo(monkeypatch):
 def test_regla_s_ya_no_pregunta_si_esta_en_la_alacena():
     from prompts import chat_agent
     r = chat_agent._CHAT_RESOLVE_RULES
-    assert "SI ESTÁ EN SU ALACENA CON ETIQUETA" in r and "suplemento=" in r and "guardar_suplemento" in r
+    assert "SI ESTÁ EN SU DESPENSA CON ETIQUETA" in r and "suplemento=" in r and "guardar_suplemento" in r
 
 
 def test_bloque_de_conocimiento_y_potes(monkeypatch):

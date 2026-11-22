@@ -168,6 +168,15 @@ def nevera(monkeypatch):
 
     monkeypatch.setattr(db, "execute_sql_write", _w)
 
+    # [P1-PLAN-LOTE-1160] el coach borra por la papelera (DELETE + archivo en una sentencia): el doble borra igual
+    import papelera_nevera
+
+    def _papelera(uid, ids=None, solo_alimentos=False, via="uno"):
+        return [{"original_id": rid, "papelera_id": i + 1} for i, rid in enumerate(ids or [])
+                if _w("DELETE FROM public.user_inventory WHERE id = %s", (rid, uid), returning=True)]
+
+    monkeypatch.setattr(papelera_nevera, "borrar_y_archivar", _papelera)
+
     def _add(uid, name, qty, unit, mutation_type="manual", source="manual", brand=None):
         st["adds"].append((name, qty, unit, mutation_type))
         if not st["add_ok"]:

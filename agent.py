@@ -4791,15 +4791,28 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
         if not _opc.stable_tool_subset_activo():
             return base_tools
 
-    last_user_text = ""
+    # [P1-PLAN-LOTE-1160 · 2026-11-21] La VENTANA de los últimos mensajes del usuario, no solo el último. Caso vivo del
+    # dueño: «Quise decir los suplementos de la despensa» → «Los 3 habían» → «Agrega esos 3 y ya». Solo el primero traía
+    # palabras clave: en los otros el coach se quedó sin las herramientas de la Despensa, anotó los suplementos como
+    # TOMADOS con la única que tenía (`log_consumed_meal`) y acabó diciendo «no puedo desde aquí». Una respuesta corta
+    # sigue el tema de las anteriores. Knob `MEALFIT_CHAT_TOOL_GATING_VENTANA` (1 = conducta previa).
+    # tooltip-anchor: P1-PLAN-LOTE-1160-VENTANA
+    from knobs import _env_int as _env_int_gating
+    _ventana = max(1, min(8, _env_int_gating("MEALFIT_CHAT_TOOL_GATING_VENTANA", 4)))
+    _textos_usuario: list = []
     for m in reversed(messages):
         t = getattr(m, "type", None) or getattr(m, "role", None)
         if t in ("human", "user"):
             c = getattr(m, "content", "")
             if isinstance(c, list):
                 c = " ".join(str(p.get("text", "") if isinstance(p, dict) else p) for p in c)
-            last_user_text = str(c).lower()
-            break
+            c = str(c)
+            if c.startswith(("[Instrucción del sistema]", "[Contexto operativo del turno]")):
+                continue   # notas del sistema, no lo que dijo el usuario
+            _textos_usuario.append(c.lower())
+            if len(_textos_usuario) >= _ventana:
+                break
+    last_user_text = " | ".join(_textos_usuario)
 
     # [P1-PLAN-LOTE-1016 · A-17] Las palabras clave se comparan SIN acentos en ambos lados: «se me acabó el pollo» no contenía «acabo»
     # (ó ≠ o), el coach no veía las herramientas de la Nevera y la batería lo vio escribir `dislikes=pollo` en el perfil.
@@ -4828,13 +4841,16 @@ def _select_tools_for_turn(base_tools: list, state: ChatState) -> list:
     }
     needed = set(_CORE_NAMES)
 
-    if any(_sin_acentos(k) in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno", "omega", "colageno", "magnesio", "tableta", "gomita")):
+    if any(_sin_acentos(k) in last_user_text for k in ("suplement", "creatina", "proteina en polvo", "multivitamin", "pastilla", "capsula", "scoop", "dosis", "pre-workout", "preentreno", "omega", "colageno", "magnesio", "tableta", "gomita", "alacena", "pote", "gainer", "ganador")):
         # [P1-PLAN-LOTE-1103] y la búsqueda de su tabla: «es mío, me metí dos cápsulas» con la foto del pote no la tenía
         needed.update({"analizar_suplemento", "guardar_suplemento", "buscar_etiqueta_en_internet"})
     if any(_sin_acentos(k) in last_user_text for k in ("comprar", "supermercado", "compra", "lista", "colmado", "bravo", "sirena", "nacional", "precio")):
         needed.update({"check_shopping_list", "mark_shopping_list_purchased"})
     if any(_sin_acentos(k) in last_user_text for k in ("nevera", "despensa", "tengo en casa", "que tengo", "inventario", "descongel", "bota", "bote", "daño", "acabo", "gast", "compre", "quedan", "falta")):
         needed.update({"check_current_pantry", "modify_pantry_inventory"})
+    # [P1-PLAN-LOTE-1160] recuperar lo borrado de la Nevera/Despensa (la papelera de 30 días)
+    if any(_sin_acentos(k) in last_user_text for k in ("recuper", "restaur", "borre", "borrado", "elimine", "devuelv", "deshac", "papelera", "sin querer", "por error", "los tenia", "lo tenia", "habian", "habia")):
+        needed.update({"recuperar_de_la_nevera", "check_current_pantry", "modify_pantry_inventory", "guardar_suplemento"})
     if any(_sin_acentos(k) in last_user_text for k in ("ajuste", "notificac", "recordatorio", "configura", "pantalla", "abrir", "modo oscuro", "idioma", "tema", "activar", "desactivar", "navegar", "ir a", "mostrar")):
         needed.update({"cambiar_ajuste_de_la_app", "abrir_pantalla_de_la_app"})
     if any(_sin_acentos(k) in last_user_text for k in ("nutriente", "hierro", "potasio", "magnesio", "calcio", "zinc", "vitamina")):
@@ -9415,6 +9431,16 @@ def _trim_dangling_title_words(text_val: str) -> str:
     return " ".join(words).rstrip(".,;:·- ").strip()
 
 
+def _limpiar_titulo_de_otros_alfabetos(text_val: str) -> str:
+    """[P1-PLAN-LOTE-1160 · 2026-11-21] El modelo del título a veces suelta letras de otro alfabeto al final («Galleta de
+    koko կրկ», armenio, conversación del dueño del 21-nov). Los cinco idiomas de la app son latinos: una LETRA que no es
+    latina sobra. Cifras, signos y emojis se quedan. tooltip-anchor: P1-PLAN-LOTE-1160-TITULO"""
+    import unicodedata as _ud
+    limpio = "".join(ch for ch in str(text_val or "")
+                     if not ch.isalpha() or "LATIN" in _ud.name(ch, ""))
+    return " ".join(limpio.split())
+
+
 _generating_titles = set()
 
 def generate_chat_title_background(user_id: str, session_id: str, first_message_text: str = None):
@@ -9611,8 +9637,8 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         content = response.content
         if isinstance(content, list):
             content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
-        title = str(content).replace('"', '').replace("'", "").strip()
-        
+        title = _limpiar_titulo_de_otros_alfabetos(str(content).replace('"', '').replace("'", "").strip())
+
         # Strip prefijos indeseados si el LLM los generó
         lower_t = title.lower()
         if lower_t.startswith("título:"):

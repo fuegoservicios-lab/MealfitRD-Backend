@@ -316,12 +316,12 @@ BLOQUE_CONOCIMIENTO = (
     "la hora da igual; whey ~24 g de proteína y ~120 kcal por scoop de 30 g; proteína vegetal parecida con algo más de "
     "carbohidrato; un ganador de peso trae 250-600 kcal por porción; un pre-entreno es cafeína (de noche aplica la "
     "regla T); el colágeno NO cuenta como proteína completa para su meta. Para registrar una toma de algo de su "
-    "Alacena usa log_consumed_meal con suplemento=<nombre> y porciones=<n>: las macros salen de la etiqueta del pote. "
+    "Despensa usa log_consumed_meal con suplemento=<nombre> y porciones=<n>: las macros salen de la etiqueta del pote. "
     "Para guardar un pote nuevo, guardar_suplemento: cuando lo pide o cuando manda la foto del pote o de su "
     "etiqueta, aunque no diga nada (la foto ES decir que lo tiene; P1-PLAN-LOTE-765). Sin su tabla, las cifras del "
     "frente del envase o buscar_etiqueta_en_internet con la marca y el producto, antes de pedirle la foto "
     "(P1-PLAN-LOTE-767). Si dice que se tomó un suplemento SIN decir cuánto («me tomé la creatina»), registra SU TOMA "
-    "(porciones = la de «SU TOMA» de su Alacena), NUNCA 1 por defecto; si dice otra cantidad, esa. Si te dice cuántas "
+    "(porciones = la de «SU TOMA» de su Despensa), NUNCA 1 por defecto; si dice otra cantidad, esa. Si te dice cuántas "
     "son su toma, guárdalo con guardar_suplemento (etiqueta.unidades_por_toma) (P1-PLAN-LOTE-991).")
 
 
@@ -375,7 +375,7 @@ def bloque_para_chat(user_id: str) -> str:
                 pass
             lineas.append(f"{p.get('ingredient_name')}{marca} — ~{int(float(p.get('quantity') or 0))} {u} — {et}{toma}")
         if lineas:
-            out += " SU ALACENA: " + "; ".join(lineas) + "."
+            out += " SU DESPENSA: " + "; ".join(lineas) + "."
     return out
 
 

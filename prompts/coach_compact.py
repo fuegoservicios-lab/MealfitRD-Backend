@@ -61,7 +61,8 @@ ACCIÓN VS DUDA VS PREGUNTA INFORMATIVA:
 FOTOS, ENVASADOS Y SUPLEMENTOS:
 - Foto de plato completo [BB-028/P1-PLAN-LOTE-950]: identifica componentes y gramos; para grasa de cocción (aceite/mantequilla en sartén), estima solo la porción proporcional absorbida [P1-PROPORTIONAL-COOKING-FAT-SCALE]. Si solo pregunta opinión/macros («¿qué opinas?»), NO lo registres hasta que confirme consumo. Si un plato mixto/casero no detalla ingredientes críticos y falta foto, puedes pedirla o estimar con transparencia; ante duda menor en foto mixta, registra con tu mejor estimación e indícala en 1 frase.
 - Envasados: distingue pieza vs paquete vs porción de etiqueta; si ya dio tamaño o refiere registro previo («dos paquetes como los de ayer») [P1-PLAN-LOTE-987], no repreguntes. Si hay tabla nutricional legible, conserva `food_facts` y `label_servings` solo con nutrientes declarados (jamás inventes `%VD` ni digas que «no tiene micros»).
-- Suplementos: si está en `SU ALACENA` con etiqueta, calcula directo sin preguntar. Si muestra pote multiporción entero sin decir que acaba de tomarlo -> guárdalo con `guardar_suplemento` (un ganador de peso no lleva `clave` predefinida fija); si falta la tabla nutricional, llama `buscar_etiqueta_en_internet` UNA vez antes de pedir foto trasera (`fuente='web'` si la encuentra). Para vitaminas/minerales evalúa con `analizar_suplemento`; si ya tomó la dosis -> anota en diario (`log_consumed_meal`)."""
+- Suplementos: si está en `SU DESPENSA` con etiqueta, calcula directo sin preguntar. Si muestra pote multiporción entero sin decir que acaba de tomarlo -> guárdalo con `guardar_suplemento` (un ganador de peso no lleva `clave` predefinida fija); si falta la tabla nutricional, llama `buscar_etiqueta_en_internet` UNA vez antes de pedir foto trasera (`fuente='web'` si la encuentra). Para vitaminas/minerales evalúa con `analizar_suplemento`; si ya tomó la dosis -> anota en diario (`log_consumed_meal`).
+- RECUPERAR LO BORRADO [P1-PLAN-LOTE-1160]: si pide recuperar, devolver o volver a poner algo que BORRÓ de su Nevera o su Despensa (alimentos o potes de suplementos) -> `recuperar_de_la_nevera`: sin nombres primero LISTA lo que hay; luego recupera lo que pida («los 3», «todo», «lo que había» -> todo=true). JAMÁS uses `log_consumed_meal` para eso: recuperar un pote NO es habérselo tomado. Si no está claro si habla de la Nevera/Despensa o del diario de comidas, pregunta cuál en UNA frase antes de tocar nada; lo borrado del diario no se recupera (ofrece anotarlo de nuevo). Nunca digas «recuperé» ni «no puedo desde aquí» sin haber llamado la herramienta en este turno."""
 
 
 def compact_plan_tools_block(
@@ -90,13 +91,14 @@ def compact_plan_tools_block(
 - `check_hydration_today` / `log_water_glass`: consulta o suma vasos de agua (NUNCA confundas anotar vasos con «activa la hidratación»).
 - `suggest_foods_for_nutrient` / `check_clinical_profile` / `search_deep_memory`: recomendaciones por micronutriente, laboratorios clínicos (solo bajo demanda) o recuerdos históricos (respeta si memoria está pausada).
 - `update_form_field` / `cambiar_ajuste_de_la_app` / `abrir_pantalla_de_la_app`: cambios de perfil permanentes, interruptores de la app (`hidratacion`, `nevera`, `memoria`, `generador_de_planes`, `tema`, `idioma`) y navegación entre pantallas.
-- `analizar_suplemento` / `guardar_suplemento` / `buscar_etiqueta_en_internet`: análisis de etiqueta, guardado de pote en Alacena y búsqueda web única de tabla faltante.
+- `analizar_suplemento` / `guardar_suplemento` / `buscar_etiqueta_en_internet`: análisis de etiqueta, guardado de pote en la Despensa y búsqueda web única de tabla faltante.
+- `recuperar_de_la_nevera`: devuelve a la Nevera/Despensa lo que borró en los últimos 30 días (con su etiqueta).
 {day_bullet}
 {prop_bullet}
 
 DISPARADORES UI SILENTES (emite la etiqueta exacta al final solo cuando ejecutes la mutación correspondiente):
 {ui_plan}
-- Tras `log_consumed_meal`, `modify_pantry_inventory`, `mark_shopping_list_purchased` o `guardar_suplemento`: incluye `[UI_ACTION: REFRESH_INVENTORY]`.
+- Tras `log_consumed_meal`, `modify_pantry_inventory`, `mark_shopping_list_purchased`, `guardar_suplemento` o `recuperar_de_la_nevera`: incluye `[UI_ACTION: REFRESH_INVENTORY]`.
 - Tras `log_water_glass`: incluye `[UI_ACTION: REFRESH_HYDRATION]`."""
 
 

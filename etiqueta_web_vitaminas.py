@@ -340,7 +340,7 @@ def texto_para_el_coach(r: dict, nombre: str) -> str:
                       "una frase que la tabla salió de internet y que, si su pote dice otra cosa, te mande su foto.)")
     if estado == "buscando":
         return (f"Busco su tabla en internet en segundo plano (tarda alrededor de un minuto) y la completo sola en el "
-                f"pote «{nombre}» de su Alacena. (Para el asistente: guárdalo YA con guardar_suplemento con ESE MISMO "
+                f"pote «{nombre}» de su Despensa. (Para el asistente: guárdalo YA con guardar_suplemento con ESE MISMO "
                 "nombre, SIN etiqueta y sin pedirle foto; dile en una frase que lo guardaste y que estás buscando su "
                 "tabla en internet, y que en un momento te puede preguntar qué le aportó lo que tomó. No inventes "
                 "nutrientes ni dosis mientras tanto.)")

@@ -37,7 +37,7 @@ def test_la_foto_del_pote_se_guarda_en_la_alacena_sin_preguntar():
 def test_con_la_nevera_apagada_la_regla_vale_igual_y_no_la_nombra():
     apagada = ca.build_vision_context(_POTE, nevera_activa=False)
     assert "nevera" not in apagada.lower() and "modify_pantry_inventory" not in apagada
-    assert "su Alacena" in apagada   # `guardar_suplemento` decide sola si la enciende o pregunta
+    assert "su Despensa" in apagada   # [P1-PLAN-LOTE-1160] la Alacena ahora se llama Despensa   # `guardar_suplemento` decide sola si la enciende o pregunta
 
 
 def test_encendida_la_prohibicion_de_ofrecer_la_nevera_es_solo_para_alimentos():

@@ -184,12 +184,12 @@ _SUPLEMENTO_MENCION_RE = re.compile(
     r"\b(?:suplement\w*|creatina|whey|proteina en polvo|proteina\b|caseina|"
     r"colageno|magnesio|omega\s*3?|bcaa|glutamina|pre-?entreno|preworkout|"
     r"ganador(?:es)? de peso|mass gainer|multivitam\w*|vitamin\w*|pote\w*|"
-    r"scoop\w*|pastilla\w*|capsula\w*|gomita\w*|polvo|batido\w*|alacena|etiqueta\w*|"
+    r"scoop\w*|pastilla\w*|capsula\w*|gomita\w*|polvo|batido\w*|alacena|despensa|etiqueta\w*|"
     r"zinc|hierro|calcio|electrolito\w*|melatonina)\b"
 )
 
 _SUPLEMENTOS_DIET_RESUMEN = (
-    "\n\n💊 SUPLEMENTOS (sabes esto): sin potes en Alacena ni suplementos en plan. "
+    "\n\n💊 SUPLEMENTOS (sabes esto): sin potes en la Despensa ni suplementos en plan. "
     "Usa `guardar_suplemento` o `log_consumed_meal(suplemento=...)` solo si menciona o envía foto de un pote."
 )
 
@@ -223,7 +223,7 @@ def adelgazar_suplementos_en_prompt(
     """Reemplaza el bloque fijo de suplementos cuando el turno no los usa ni hay potes/foto."""
     if not system_prompt or not diet_suplementos_activo() or con_foto:
         return system_prompt
-    if "SU ALACENA:" in system_prompt or prompt_menciona_suplemento(prompt):
+    if "SU DESPENSA:" in system_prompt or "SU ALACENA:" in system_prompt or prompt_menciona_suplemento(prompt):
         return system_prompt
     try:
         from suplementos import BLOQUE_CONOCIMIENTO, suplementos_activos

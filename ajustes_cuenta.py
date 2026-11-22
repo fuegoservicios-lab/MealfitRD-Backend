@@ -252,7 +252,7 @@ REGISTRO: tuple = (
     Ajuste("hidratacion_apagada_sola", "Hidratación apagada por el sistema", "Capacidades", ("kv", _PREFIJO_HIDRATACION),
            "apagado_solo"),
     Ajuste("nevera_enabled", "Nevera", "Capacidades", ("columna", "nevera_enabled"), "tri"),
-    Ajuste("suplementos", "Suplementos en la Alacena", "Capacidades", ("tabla", "user_inventory"), "conteo"),
+    Ajuste("suplementos", "Suplementos en la Despensa", "Capacidades", ("tabla", "user_inventory"), "conteo"),
     # ── Privacidad
     Ajuste("ai_consent", "Permiso para la IA de terceros", "Privacidad", ("columna", "ai_consent_version"),
            "consentimiento_ia"),
