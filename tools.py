@@ -7243,7 +7243,7 @@ def generar_informe_para_medico(user_id: str, dias: int = 30) -> str:
 # servidor (`progreso_semanas`). El bloque 🏆 del turno ya trae la semana en curso: esto es para semanas anteriores.
 @tool
 def consultar_progreso(user_id: str, semanas: int = 8) -> str:
-    """Sus semanas de Progreso (estrellas). Solo lectura. semanas: 1-26"""
+    """Sus semanas de Progreso (puntos y estrellas). Solo lectura. semanas: 1-26"""
     if not user_id or str(user_id) == "guest":
         return "El progreso por semanas necesita una cuenta con registros."
     try:
@@ -7255,13 +7255,16 @@ def consultar_progreso(user_id: str, semanas: int = 8) -> str:
         return "No pude leer su progreso ahora."
     if not res:
         return "Aún no tiene registros: su Semana 1 empieza el día que anote su primera comida."
-    filas = [f"S{s['numero']} ({s['empieza']}): {s['dias_en_meta']}/7 en meta, {s['dias_registrados']} con registro, "
-             f"{s['estrellas']}★{'' if s['cerrada'] else ' (en curso)'}" for s in res["semanas"][-n:]]
-    mb, tot = res.get("mejor_semana"), res["total"]
-    pie = (f"Total: {tot['estrellas']}★ en {tot['semanas']} semanas; racha {res['racha']} (mejor {res['mejor_racha']}); "
-           f"rango {res['rango']['clave']}.")
+    # [P1-PLAN-LOTE-1161] puntos por semana; racha = días registrando; rango con división.
+    filas = [f"S{s['numero']} ({s['empieza']}): {s.get('puntos', 0)} pts, {s['estrellas']}★, "
+             f"{s['dias_registrados']} con registro, {s['dias_en_meta']}/7 en meta{'' if s['cerrada'] else ' (en curso)'}"
+             for s in res["semanas"][-n:]]
+    mb, tot, rg = res.get("mejor_semana"), res["total"], res["rango"]
+    pie = (f"Total: {tot.get('puntos', 0)} pts, {tot['estrellas']}★ en {tot['semanas']} semanas; racha {res['racha']} "
+           f"días registrando (mejor {res['mejor_racha']}); escudos {res.get('escudos', 0)}; "
+           f"rango {rg['clave']} {rg.get('division', '')}".rstrip() + ".")
     if mb:
-        pie += f" Mejor semana: S{mb['numero']} ({mb['dias_en_meta']}/7, {mb['estrellas']}★)."
+        pie += f" Mejor semana: S{mb['numero']} ({mb.get('puntos', 0)} pts, {mb['estrellas']}★)."
     return "\n".join(filas + [pie])
 
 

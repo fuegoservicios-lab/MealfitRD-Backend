@@ -21,6 +21,19 @@ logger = logging.getLogger(__name__)
 _MES = ("", "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 _RANGO = {"bronce": "Bronce", "plata": "Plata", "oro": "Oro", "platino": "Platino", "diamante": "Diamante"}
 _ORD = {1: "1.ª", 2: "2.ª", 3: "3.ª"}
+_ROMANO = {1: "I", 2: "II", 3: "III"}
+
+
+def _rango_txt(clave, division=None) -> str:
+    """[P1-PLAN-LOTE-1161] «Plata II» (o solo «Plata» si no hay división)."""
+    if isinstance(clave, dict):
+        clave, division = clave.get("clave"), clave.get("division")
+    base = _RANGO.get(clave, clave)
+    return f"{base} {_ROMANO[division]}" if division in _ROMANO else str(base)
+
+
+def _mult(m) -> str:
+    return ("×" + (f"{float(m):g}").replace(".", ",")) if m else "×1"
 
 
 def _fecha(iso: str) -> str:
@@ -45,7 +58,16 @@ def _linea_de_hoy(claves: list[str], res: dict) -> str:
         elif tipo == "primera_semana_perfecta":
             partes.append("1.ª semana perfecta")
         elif tipo == "racha":
-            partes.append(f"racha de {valor} días en meta")
+            partes.append(f"racha de {valor} días registrando (multiplicador {_mult(__import__('juego_puntos').tramo_de_racha(int(valor) if valor.isdigit() else 0)['mult'])})")
+        elif tipo == "division":
+            clave, _, div = valor.partition(":")
+            partes.append(f"subió a {_rango_txt(clave, int(div) if div.isdigit() else None)}")
+        elif tipo == "escudo":
+            partes.append("ganó un escudo de racha")
+        elif tipo == "salvo":
+            partes.append("un escudo salvó su racha")
+        elif tipo == "record":
+            partes.append(f"récord de puntos en un día ({(res.get('hoy_puntos') or {}).get('puntos', 0)} pts)")
         elif tipo == "semanas_seguidas_con_estrella":
             partes.append(f"{valor} semanas seguidas con estrella")
         elif tipo == "rango":
@@ -61,24 +83,36 @@ def texto_del_bloque(res: dict) -> str:
         return ""
     s = res["semana"]
     est = s["estrellas"]
+    # [P1-PLAN-LOTE-1161] juego por PUNTOS: registrar 10, día completo +5, calorías en banda +15, proteína +10,
+    # agua +5; la racha de días registrando multiplica; estrellas de la semana y rango (con división) por puntos.
     if est >= 3:
         falta = "semana perfecta"
+    elif "faltan_puntos_para_otra_estrella" in s:
+        falta = f"faltan {s['faltan_puntos_para_otra_estrella']} pts para la {_ORD[est + 1]} estrella"
     else:
         falta = f"faltan {s['faltan_para_otra_estrella']} días en meta para la {_ORD[est + 1]} estrella"
-    t = (f"\n\n🏆 PROGRESO (cifras del servidor): Semana {s['numero']} ({_fecha(s['empieza'])}–{_fecha(s['termina'])}), "
-         f"día {s['dia']} de 7. Esta semana: {s['dias_en_meta']} de 7 días en meta, {_estrellas(est)}; {falta}. "
-         f"Racha: {res['racha']} días (mejor: {res['mejor_racha']}).")
+    hp = res.get("hoy_puntos") or {}
+    t = (f"\n\n🏆 PROGRESO (cifras del servidor, juego por puntos): Semana {s['numero']} "
+         f"({_fecha(s['empieza'])}–{_fecha(s['termina'])}), día {s['dia']} de 7. ")
+    if hp:
+        t += f"Hoy: {hp.get('puntos', 0)} pts ({_mult(hp.get('mult'))}). "
+    if "puntos" in s:
+        t += f"Esta semana: {s['puntos']} pts, {_estrellas(est)}; {falta}. "
+    else:
+        t += f"Esta semana: {s['dias_en_meta']} de 7 días en meta, {_estrellas(est)}; {falta}. "
+    tramo = res.get("racha_tramo") or {}
+    t += f"Racha: {res['racha']} días registrando ({_mult(tramo.get('mult'))}; mejor: {res['mejor_racha']})"
+    if "escudos" in res:
+        t += f"; escudos {res['escudos']}/{res.get('escudos_max', 2)}"
+    t += "."
     sp = res.get("semana_pasada")
     if sp:
-        t += f" Semana pasada (S{sp['numero']}): {sp['dias_en_meta']} de 7 en meta, {_estrellas(sp['estrellas'])}."
+        t += f" Semana pasada (S{sp['numero']}): {sp.get('puntos', 0)} pts, {_estrellas(sp['estrellas'])}."
     tot, rg = res["total"], res["rango"]
-    t += f" Total: {_estrellas(tot['estrellas'])} en {tot['semanas']} semanas · rango {_RANGO.get(rg['clave'], rg['clave'])}"
-    if rg.get("siguiente"):
-        t += f" (faltan {rg['estrellas_para_el_siguiente']}★ para {_RANGO.get(rg['siguiente'], rg['siguiente'])})"
+    t += f" Total: {tot.get('puntos', 0)} pts · rango {_rango_txt(rg)}"
+    if rg.get("siguiente") and rg.get("puntos_para_la_siguiente") is not None:
+        t += f" (faltan {rg['puntos_para_la_siguiente']} pts para {_rango_txt(rg['siguiente'])})"
     t += "."
-    mb = res.get("mejor_semana")
-    if mb:
-        t += f" Mejor semana: S{mb['numero']}, {mb['dias_en_meta']} de 7."
     t += _linea_de_hoy(res.get("eventos_de_hoy") or [], res)
     return t
 
@@ -137,13 +171,21 @@ def _antes_de(user_id: str) -> dict:
 def nota_de_estrella(antes: dict, despues: dict) -> str:
     """Puro: si entre `antes` y `despues` (misma semana) subió una estrella, la nota para el asistente; si no, ''."""
     a, d = (antes or {}).get("semana") or {}, (despues or {}).get("semana") or {}
-    if not a or not d or a.get("numero") != d.get("numero") or d.get("estrellas", 0) <= a.get("estrellas", 0):
+    logros = []
+    if a and d and a.get("numero") == d.get("numero") and d.get("estrellas", 0) > a.get("estrellas", 0):
+        if d["estrellas"] >= 3:
+            logros.append(f"completó la Semana {d['numero']} perfecta: 3★ ({d.get('puntos', 0)} pts)")
+        else:
+            logros.append(f"ganó la {_ORD[d['estrellas']]} estrella de la Semana {d['numero']} ({d.get('puntos', 0)} pts)")
+    # [P1-PLAN-LOTE-1161] subir de división también se dice al confirmar.
+    ra, rd = (antes or {}).get("rango") or {}, (despues or {}).get("rango") or {}
+    if "division" in ra and "division" in rd:
+        import juego_puntos as jp
+        if jp.nivel_indice(rd["clave"], rd["division"]) > jp.nivel_indice(ra["clave"], ra["division"]):
+            logros.append(f"subió a {_rango_txt(rd)}")
+    if not logros:
         return ""
-    if d["estrellas"] >= 3:
-        logro = f"completó la Semana {d['numero']} perfecta (7 de 7 días en meta, 3★)"
-    else:
-        logro = (f"ganó la {_ORD[d['estrellas']]} estrella de la Semana {d['numero']} "
-                 f"({d['dias_en_meta']} de 7 días en meta)")
+    logro = " y ".join(logros)
     return f"\n\n🏆 Aviso para el asistente: con este registro {logro}. Menciónalo en UNA frase al confirmar."
 
 

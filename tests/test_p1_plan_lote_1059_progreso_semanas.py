@@ -298,10 +298,12 @@ def test_bloque_cifras_del_resumen_y_corto():
     import coach_progreso as cp
     r = _res_coach()
     t = cp.texto_del_bloque(r)
-    assert t.startswith("\n\n🏆 PROGRESO (cifras del servidor): Semana 10 (15 nov–21 nov), día 2 de 7.")
-    assert "Esta semana: 1 de 7 días en meta, 0★; faltan 2 días en meta para la 1.ª estrella." in t
-    assert "Semana pasada (S9): 1 de 7 en meta, 0★." in t
-    assert "rango Bronce (faltan 10★ para Plata)" in t
+    # [P1-PLAN-LOTE-1161] el bloque habla de puntos, racha registrando con multiplicador, escudos y división.
+    assert t.startswith("\n\n🏆 PROGRESO (cifras del servidor, juego por puntos): Semana 10 (15 nov–21 nov), día 2 de 7.")
+    assert "Esta semana: 45 pts, 0★; faltan 35 pts para la 1.ª estrella." in t
+    assert "Racha: 8 días registrando (×1,5; mejor: 8); escudos 1/2." in t
+    assert "Semana pasada (S9): 140 pts, 1★." in t
+    assert "rango Bronce I (faltan 15 pts para Bronce II)" in t
     assert len(t.split()) <= 75                                    # ~70 tokens
     assert cp.texto_del_bloque({}) == ""
 
@@ -310,7 +312,7 @@ def test_bloque_hoy_celebra_una_vez():
     import coach_progreso as cp
     r = dict(_res_coach(), eventos_de_hoy=["semana_cerrada:9", "racha:3"])
     t = cp.texto_del_bloque(r)
-    assert "HOY: cerró la S9 con 0★; racha de 3 días en meta (celébralo una vez)." in t
+    assert "HOY: cerró la S9 con 1★; racha de 3 días registrando (multiplicador ×1,2) (celébralo una vez)." in t
 
 
 def test_bloque_invitado_canario_y_fallo(monkeypatch):
@@ -331,9 +333,12 @@ def test_bloque_invitado_canario_y_fallo(monkeypatch):
 
 def test_nota_tras_registrar_solo_si_sube_una_estrella(monkeypatch):
     import coach_progreso as cp
-    antes = {"semana": {"numero": 10, "estrellas": 0, "dias_en_meta": 2}}
-    despues = {"semana": {"numero": 10, "estrellas": 1, "dias_en_meta": 3}}
-    assert "ganó la 1.ª estrella de la Semana 10 (3 de 7 días en meta)" in cp.nota_de_estrella(antes, despues)
+    antes = {"semana": {"numero": 10, "estrellas": 0, "dias_en_meta": 2, "puntos": 70}}
+    despues = {"semana": {"numero": 10, "estrellas": 1, "dias_en_meta": 3, "puntos": 95}}
+    assert "ganó la 1.ª estrella de la Semana 10 (95 pts)" in cp.nota_de_estrella(antes, despues)
+    # [P1-PLAN-LOTE-1161] subir de división también se avisa
+    a2 = dict(antes, rango={"clave": "bronce", "division": 3}); d2 = dict(antes, rango={"clave": "plata", "division": 1})
+    assert "subió a Plata I" in cp.nota_de_estrella(a2, d2)
     assert cp.nota_de_estrella(antes, antes) == ""
     assert cp.nota_de_estrella(antes, {"semana": {"numero": 11, "estrellas": 1}}) == ""
     assert "perfecta" in cp.nota_de_estrella({"semana": {"numero": 3, "estrellas": 2}},
@@ -379,7 +384,7 @@ def test_herramienta_lee_y_corta(monkeypatch):
     r = dict(_res_coach())
     monkeypatch.setattr(ps, "resumen", lambda *a, **k: r)
     out = tools.consultar_progreso.func(user_id=YO, semanas=2)
-    assert out.splitlines()[0].startswith("S9 (2026-11-08): 1/7 en meta, 7 con registro, 0★")
+    assert out.splitlines()[0].startswith("S9 (2026-11-08): 140 pts, 1★, 7 con registro, 1/7 en meta")
     assert "(en curso)" in out.splitlines()[1]
     assert tools.consultar_progreso.func(user_id="guest").startswith("El progreso por semanas necesita")
 

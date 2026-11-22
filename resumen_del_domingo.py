@@ -25,7 +25,8 @@ _T = {
     "es-DO": {
         "cierre": "Tu Semana {p} cerró con {d} de 7 días en meta{e}.",
         "desglose": " {b} por debajo, {s} por encima y {x} sin registrar.",
-        "racha": " Llevas {r} días seguidos en meta.",
+        "racha": " Llevas {r} días seguidos registrando.",
+        "puntos": " Sumaste {pts} pts.",
         "para": " Para la Semana {n}:",
         "registro": " registra al menos 5 días, aunque sea solo lo principal: sin registro no hay cómo ajustar tu plan.",
         "proteina": " sube la proteína: te faltaron unos {g} g al día (un huevo y un yogur extra lo cubren).",
@@ -36,7 +37,8 @@ _T = {
     "en-US": {
         "cierre": "Your Week {p} closed with {d} of 7 days on goal{e}.",
         "desglose": " {b} under, {s} over and {x} not logged.",
-        "racha": " You're on a {r}-day streak on goal.",
+        "racha": " You're on a {r}-day logging streak.",
+        "puntos": " You earned {pts} pts.",
         "para": " For Week {n}:",
         "registro": " log at least 5 days, even just the main things: without logs there's nothing to adjust.",
         "proteina": " raise your protein: you were about {g} g short per day (an extra egg and a yogurt cover it).",
@@ -47,7 +49,8 @@ _T = {
     "pt-BR": {
         "cierre": "Sua Semana {p} fechou com {d} de 7 dias na meta{e}.",
         "desglose": " {b} abaixo, {s} acima e {x} sem registro.",
-        "racha": " Você está há {r} dias seguidos na meta.",
+        "racha": " Você está há {r} dias seguidos registrando.",
+        "puntos": " Você somou {pts} pts.",
         "para": " Para a Semana {n}:",
         "registro": " registre pelo menos 5 dias, mesmo que só o principal: sem registro não há como ajustar.",
         "proteina": " aumente a proteína: faltaram uns {g} g por dia (um ovo e um iogurte a mais resolvem).",
@@ -58,7 +61,8 @@ _T = {
     "fr-FR": {
         "cierre": "Votre semaine {p} s’est terminée avec {d} jours sur 7 dans l’objectif{e}.",
         "desglose": " {b} en dessous, {s} au-dessus et {x} sans saisie.",
-        "racha": " Vous enchaînez {r} jours dans l’objectif.",
+        "racha": " Vous enchaînez {r} jours de saisie.",
+        "puntos": " Vous avez gagné {pts} pts.",
         "para": " Pour la semaine {n} :",
         "registro": " notez au moins 5 jours, même l’essentiel seulement : sans saisie, rien à ajuster.",
         "proteina": " augmentez les protéines : il vous en manquait environ {g} g par jour (un œuf et un yaourt de "
@@ -70,7 +74,8 @@ _T = {
     "it-IT": {
         "cierre": "La tua settimana {p} si è chiusa con {d} giorni su 7 in obiettivo{e}.",
         "desglose": " {b} sotto, {s} sopra e {x} senza registrazione.",
-        "racha": " Sei a {r} giorni di fila in obiettivo.",
+        "racha": " Sei a {r} giorni di fila di registrazione.",
+        "puntos": " Hai totalizzato {pts} pts.",
         "para": " Per la settimana {n}:",
         "registro": " registra almeno 5 giorni, anche solo il principale: senza registrazioni non c’è nulla da regolare.",
         "proteina": " aumenta le proteine: te ne mancavano circa {g} g al giorno (un uovo e uno yogurt in più bastano).",
@@ -108,6 +113,8 @@ def mensaje(locale: Optional[str], semana: Optional[dict], racha: int = 0,
     txt = t["cierre"].format(p=semana["numero"], d=d, e=(" " + "★" * e) if e else "")
     txt += t["desglose"].format(b=int(semana.get("dias_bajo") or 0), s=int(semana.get("dias_sobre") or 0),
                                 x=max(0, 7 - reg))
+    if semana.get("puntos"):
+        txt += t["puntos"].format(pts=int(semana["puntos"]))
     if racha >= 2:
         txt += t["racha"].format(r=racha)
     clave, datos = consejo(semana, meta_proteina)

@@ -34,7 +34,9 @@ def texto_del_aviso(locale: Optional[str], numero: int, pasada: Optional[dict]) 
     titulo, con_estrellas, sin_estrellas = _TEXTOS.get(str(locale or ""), _TEXTOS["es-DO"])
     e = int(pasada.get("estrellas") or 0)
     if e > 0:
-        cuerpo = con_estrellas.format(n=numero, p=pasada["numero"], e="★" * e)
+        # [P1-PLAN-LOTE-1161] con los puntos de esa semana: «La 9 cerró con ★★ · 140 pts».
+        pts = int(pasada.get("puntos") or 0)
+        cuerpo = con_estrellas.format(n=numero, p=pasada["numero"], e=("★" * e) + (f" · {pts} pts" if pts else ""))
     else:
         cuerpo = sin_estrellas.format(n=numero, p=pasada["numero"], d=int(pasada.get("dias_en_meta") or 0))
     return titulo, cuerpo

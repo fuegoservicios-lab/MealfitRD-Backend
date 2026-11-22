@@ -159,7 +159,7 @@ def nivel_indice(clave: str, division: int) -> int:
 
 def hoy_puntos(logros: dict, racha_con_hoy: int) -> dict:
     base = puntos_base(logros)
-    mult = tramo_de_racha(racha_con_hoy)["mult"] if base else 1.0
+    mult = tramo_de_racha(racha_con_hoy)["mult"]   # el que tendría hoy (para «registra y ganas ×1,5»)
     return {"puntos": redondear(base * mult), "base": base, "mult": mult, "logros": logros}
 
 
