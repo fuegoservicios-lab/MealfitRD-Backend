@@ -27,7 +27,7 @@ TRAMOS_RACHA = ((30, 2.0, "leyenda"), (14, 1.75, "imparable"), (7, 1.5, "en_llam
                 (0, 1.0, None))
 ESCUDO_CADA = 7
 ESCUDOS_MAX = 2
-ESTRELLAS_SEMANA = (120, 200, 280)
+ESTRELLAS_SEMANA = (80, 160, 260)  # calibrado con replay 22-nov (8 cuentas reales)
 RANGOS_PUNTOS = (("bronce", 0), ("plata", 600), ("oro", 1800), ("platino", 4500), ("diamante", 9000))
 DIVISIONES = 3
 DIAMANTE_PASO = 3000

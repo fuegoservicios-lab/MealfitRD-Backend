@@ -1,1 +1,577 @@
-{"recorrer":[],"rango":[],"base":[]}
+{
+ "recorrer": [
+  {
+   "nombre": "hoy_vacio",
+   "hoy": "2026-03-05",
+   "dias": [
+    {
+     "iso": "2026-03-01",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-02",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-03",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-04",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-05",
+     "registrado": false,
+     "base": 0
+    }
+   ],
+   "espera": {
+    "racha": 4,
+    "mejor_racha": 4,
+    "escudos": 0,
+    "escudos_usados": [],
+    "total": 44
+   }
+  },
+  {
+   "nombre": "escudo",
+   "hoy": "2026-03-09",
+   "dias": [
+    {
+     "iso": "2026-03-01",
+     "registrado": true,
+     "base": 45
+    },
+    {
+     "iso": "2026-03-02",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-03",
+     "registrado": true,
+     "base": 45
+    },
+    {
+     "iso": "2026-03-04",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-05",
+     "registrado": true,
+     "base": 45
+    },
+    {
+     "iso": "2026-03-06",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-07",
+     "registrado": true,
+     "base": 45
+    },
+    {
+     "iso": "2026-03-08",
+     "registrado": false,
+     "base": 0
+    },
+    {
+     "iso": "2026-03-09",
+     "registrado": true,
+     "base": 45
+    }
+   ],
+   "espera": {
+    "racha": 8,
+    "mejor_racha": 8,
+    "escudos": 0,
+    "escudos_usados": [
+     "2026-03-08"
+    ],
+    "total": 340
+   }
+  },
+  {
+   "nombre": "dos_huecos",
+   "hoy": "2026-03-10",
+   "dias": [
+    {
+     "iso": "2026-03-01",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-02",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-03",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-04",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-05",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-06",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-07",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-08",
+     "registrado": false,
+     "base": 0
+    },
+    {
+     "iso": "2026-03-09",
+     "registrado": false,
+     "base": 0
+    },
+    {
+     "iso": "2026-03-10",
+     "registrado": true,
+     "base": 25
+    }
+   ],
+   "espera": {
+    "racha": 1,
+    "mejor_racha": 7,
+    "escudos": 0,
+    "escudos_usados": [
+     "2026-03-08"
+    ],
+    "total": 233
+   }
+  },
+  {
+   "nombre": "larga",
+   "hoy": "2026-03-35",
+   "dias": [
+    {
+     "iso": "2026-03-01",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-02",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-03",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-04",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-05",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-06",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-07",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-08",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-09",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-10",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-11",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-12",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-13",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-14",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-15",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-16",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-17",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-18",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-19",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-20",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-21",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-22",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-23",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-24",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-25",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-26",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-27",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-28",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-29",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-30",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-31",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-32",
+     "registrado": true,
+     "base": 25
+    },
+    {
+     "iso": "2026-03-33",
+     "registrado": true,
+     "base": 10
+    },
+    {
+     "iso": "2026-03-34",
+     "registrado": true,
+     "base": 40
+    },
+    {
+     "iso": "2026-03-35",
+     "registrado": true,
+     "base": 25
+    }
+   ],
+   "espera": {
+    "racha": 35,
+    "mejor_racha": 35,
+    "escudos": 2,
+    "escudos_usados": [],
+    "total": 1457
+   }
+  },
+  {
+   "nombre": "mitades",
+   "hoy": "2026-03-07",
+   "dias": [
+    {
+     "iso": "2026-03-01",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-02",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-03",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-04",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-05",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-06",
+     "registrado": true,
+     "base": 15
+    },
+    {
+     "iso": "2026-03-07",
+     "registrado": true,
+     "base": 15
+    }
+   ],
+   "espera": {
+    "racha": 7,
+    "mejor_racha": 7,
+    "escudos": 1,
+    "escudos_usados": [],
+    "total": 125
+   }
+  },
+  {
+   "nombre": "rota",
+   "hoy": "2026-03-07",
+   "dias": [
+    {
+     "iso": "2026-03-01",
+     "registrado": true,
+     "base": 35
+    },
+    {
+     "iso": "2026-03-02",
+     "registrado": true,
+     "base": 35
+    },
+    {
+     "iso": "2026-03-03",
+     "registrado": false,
+     "base": 0
+    },
+    {
+     "iso": "2026-03-04",
+     "registrado": true,
+     "base": 35
+    },
+    {
+     "iso": "2026-03-05",
+     "registrado": true,
+     "base": 35
+    },
+    {
+     "iso": "2026-03-06",
+     "registrado": true,
+     "base": 35
+    },
+    {
+     "iso": "2026-03-07",
+     "registrado": false,
+     "base": 0
+    }
+   ],
+   "espera": {
+    "racha": 3,
+    "mejor_racha": 3,
+    "escudos": 0,
+    "escudos_usados": [],
+    "total": 182
+   }
+  }
+ ],
+ "rango": [
+  {
+   "puntos": 0,
+   "clave": "bronce",
+   "division": 1,
+   "faltan": 200
+  },
+  {
+   "puntos": 199,
+   "clave": "bronce",
+   "division": 1,
+   "faltan": 1
+  },
+  {
+   "puntos": 200,
+   "clave": "bronce",
+   "division": 2,
+   "faltan": 200
+  },
+  {
+   "puntos": 599,
+   "clave": "bronce",
+   "division": 3,
+   "faltan": 1
+  },
+  {
+   "puntos": 600,
+   "clave": "plata",
+   "division": 1,
+   "faltan": 400
+  },
+  {
+   "puntos": 1000,
+   "clave": "plata",
+   "division": 2,
+   "faltan": 400
+  },
+  {
+   "puntos": 1799,
+   "clave": "plata",
+   "division": 3,
+   "faltan": 1
+  },
+  {
+   "puntos": 1800,
+   "clave": "oro",
+   "division": 1,
+   "faltan": 900
+  },
+  {
+   "puntos": 4499,
+   "clave": "oro",
+   "division": 3,
+   "faltan": 1
+  },
+  {
+   "puntos": 4500,
+   "clave": "platino",
+   "division": 1,
+   "faltan": 1500
+  },
+  {
+   "puntos": 8999,
+   "clave": "platino",
+   "division": 3,
+   "faltan": 1
+  },
+  {
+   "puntos": 9000,
+   "clave": "diamante",
+   "division": 1,
+   "faltan": 3000
+  },
+  {
+   "puntos": 12000,
+   "clave": "diamante",
+   "division": 2,
+   "faltan": 3000
+  },
+  {
+   "puntos": 15000,
+   "clave": "diamante",
+   "division": 3,
+   "faltan": null
+  },
+  {
+   "puntos": 99999,
+   "clave": "diamante",
+   "division": 3,
+   "faltan": null
+  }
+ ],
+ "base": [
+  {
+   "logros": {
+    "registro": false
+   },
+   "puntos": 0
+  },
+  {
+   "logros": {
+    "registro": true
+   },
+   "puntos": 10
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "proteina": false,
+    "agua": null
+   },
+   "puntos": 30
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "proteina": true,
+    "agua": true
+   },
+   "puntos": 45
+  }
+ ]
+}
