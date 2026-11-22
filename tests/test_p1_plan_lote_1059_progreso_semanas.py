@@ -11,6 +11,7 @@ from datetime import date, timedelta
 
 import pytest
 
+import juego_puntos as jp
 import progreso_semanas as ps
 
 D = date.fromisoformat
@@ -70,12 +71,14 @@ def test_resumen_dos_semanas():
     r = ps.armar_resumen(hoy=D("2026-11-09"), dia_1=D("2026-11-03"), dias=dias, metas_por_dia={},
                          meta_de_hoy={"calories": 2000}, objetivo_del_perfil="maintain")
     assert r["semana_1_empieza"] == "2026-11-01"
-    assert r["semana"] == {"numero": 2, "empieza": "2026-11-08", "termina": "2026-11-14", "dia": 2, "dias_en_meta": 1,
-                           "dias_registrados": 2, "estrellas": 0, "faltan_para_otra_estrella": 2}
-    assert r["racha"] == 6 and r["mejor_racha"] == 6               # hoy (600) en curso no la rompe
-    assert r["semana_pasada"] == {"numero": 1, "dias_en_meta": 5, "estrellas": 2}
-    assert r["mejor_semana"] == {"numero": 1, "dias_en_meta": 5, "estrellas": 2}
-    assert r["total"] == {"semanas": 2, "estrellas": 2, "semanas_perfectas": 0, "dias_en_meta": 6}
+    # [P1-PLAN-LOTE-1161] estrellas por PUNTOS y racha de días REGISTRADOS (7: del 3 al 9, hoy incluido).
+    sem = {k: v for k, v in r["semana"].items() if k not in ("puntos", "faltan_puntos_para_otra_estrella", "dias", "estrellas")}
+    assert sem == {"numero": 2, "empieza": "2026-11-08", "termina": "2026-11-14", "dia": 2, "dias_en_meta": 1,
+                   "dias_registrados": 2, "faltan_para_otra_estrella": 2}
+    assert r["racha"] == 7 and r["mejor_racha"] == 7
+    assert r["semana_pasada"]["numero"] == 1 and r["semana_pasada"]["dias_en_meta"] == 5
+    assert r["semana_pasada"]["estrellas"] == jp.estrellas_por_puntos(r["semana_pasada"]["puntos"])
+    assert r["total"]["semanas"] == 2 and r["total"]["dias_en_meta"] == 6
     assert r["semanas"][0]["cerrada"] and not r["semanas"][1]["cerrada"]
     assert r["semanas"][0]["dias_bajo"] == 0 and r["semanas"][0]["dias_registrados"] == 5
 
@@ -182,7 +185,7 @@ def test_primera_vez_se_siembra_y_no_inunda():
 
 
 def test_un_evento_sale_una_sola_vez_y_marcar_visto():
-    kv0 = {"emitidos": {}, "vistos": []}
+    kv0 = {"emitidos": {}, "vistos": [], "version": ps.EVENTOS_VERSION}
     r = _res([(1, 5), (2, 0)])
     pend, kv = ps.eventos_nuevos(ps.hitos_cumplidos(r), kv0, "2026-11-15")
     assert {e["clave"] for e in pend} == {"semana_cerrada:1", "primera_estrella"}
@@ -197,7 +200,7 @@ def test_un_evento_sale_una_sola_vez_y_marcar_visto():
 
 
 def test_dos_semanas_cerradas_de_golpe_solo_la_ultima():
-    kv0 = {"emitidos": {}, "vistos": []}
+    kv0 = {"emitidos": {}, "vistos": [], "version": ps.EVENTOS_VERSION}
     pend, _ = ps.eventos_nuevos(ps.hitos_cumplidos(_res([(1, 0), (2, 1), (3, 2), (4, 0)])), kv0, "2026-11-29")
     assert [e["clave"] for e in pend if e["codigo"] == "semana_cerrada"] == ["semana_cerrada:3"]
     assert any(e["clave"] == "semana_numero:4" for e in pend)

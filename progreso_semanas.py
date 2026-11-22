@@ -24,6 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 from informe_medico import estado_del_dia
+import juego_puntos as jp  # [P1-PLAN-LOTE-1161] puntos, racha que multiplica, escudos y divisiones
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,11 @@ HITOS_RACHA = (3, 7, 14, 30)
 HITOS_SEMANA = (4, 12, 26, 52)
 SEMANAS_SEGUIDAS_CON_ESTRELLA = 4
 EVENTOS_MAX_GUARDADOS = 200
+#: [P1-PLAN-LOTE-1161] versión de los eventos: un KV de otra versión siembra todo lo cumplido como visto (sin avalancha
+#: de divisiones/escudos/rachas viejas el día del despliegue).
+EVENTOS_VERSION = 2
+RECORD_MIN_PUNTOS = 30
+SEMBRADO = "0000-00-00"
 
 
 # ═══════════════════════════════════════════════════════════════════ puras
@@ -117,7 +123,7 @@ def _media(xs: list[float]) -> Optional[int]:
 
 
 def armar_resumen(*, hoy: date, dia_1: Optional[date], dias: dict[str, dict], metas_por_dia: dict[str, dict],
-                  meta_de_hoy: Optional[dict], objetivo_del_perfil: Any = None) -> dict:
+                  meta_de_hoy: Optional[dict], objetivo_del_perfil: Any = None, meta_vasos: Any = None) -> dict:
     """Todo el juego a partir de datos YA leídos. `dias`: {iso: {calories, protein, meals_count}} (solo con registro).
 
     Devuelve el `resumen` del plan (§1029.6) + `semanas` (todas, con su detalle) para quien lo necesite.
@@ -127,6 +133,7 @@ def armar_resumen(*, hoy: date, dia_1: Optional[date], dias: dict[str, dict], me
     w1 = domingo_de(dia_1)
     actual = numero_de_semana(w1, hoy)
     estados: list[str] = []          # desde w1 hasta hoy, en orden
+    juego_dias: list[dict] = []      # [P1-PLAN-LOTE-1161] lo mismo para el motor de puntos
     por_semana: dict[int, dict] = {}
     d = w1
     while d <= hoy:
@@ -137,6 +144,12 @@ def armar_resumen(*, hoy: date, dia_1: Optional[date], dias: dict[str, dict], me
         objetivo = (objetivo_del_perfil if es_hoy else (m.get("main_goal") or objetivo_del_perfil)) or ""
         e = estado(int(r.get("calories") or 0), r.get("meals_count"), m.get("calories"), objetivo)
         estados.append(e)
+        # [P1-PLAN-LOTE-1161] logros y puntos base del día (la racha/multiplicador los pone `jp.recorrer` abajo).
+        lg = jp.logros_del_dia(calories=r.get("calories"), protein=r.get("protein"), meals_count=r.get("meals_count"),
+                               meta_kcal=m.get("calories"), meta_proteina=jp.meta_proteina_de(m), objetivo=objetivo,
+                               vasos=r.get("vasos"), meta_vasos=meta_vasos)
+        juego_dias.append({"iso": iso, "registrado": bool(lg["registro"]), "base": jp.puntos_base(lg), "_lg": lg,
+                           "_estado": e})
         n = numero_de_semana(w1, d)
         s = por_semana.setdefault(n, {"numero": n, "empieza": (w1 + timedelta(days=(n - 1) * 7)).isoformat(),
                                       "dias_registrados": 0, "dias_en_meta": 0, "dias_bajo": 0, "dias_sobre": 0,
@@ -148,35 +161,65 @@ def armar_resumen(*, hoy: date, dia_1: Optional[date], dias: dict[str, dict], me
             s[{"meta": "dias_en_meta", "bajo": "dias_bajo", "pasado": "dias_sobre"}[e]] += 1
         d += timedelta(days=1)
 
+    juego = jp.recorrer(juego_dias, hoy.isoformat())
+    pts_dia = {iso: v["puntos"] for iso, v in juego["por_dia"].items()}
     semanas = []
     for n in sorted(por_semana):
         s = por_semana[n]
+        empieza = date.fromisoformat(s["empieza"])
+        pts_semana = sum(pts_dia.get((empieza + timedelta(days=i)).isoformat(), 0) for i in range(DIAS_DE_LA_SEMANA))
         semanas.append({
             "numero": n, "empieza": s["empieza"],
             "termina": (date.fromisoformat(s["empieza"]) + timedelta(days=6)).isoformat(),
             "dias_registrados": s["dias_registrados"], "dias_en_meta": s["dias_en_meta"],
             "dias_bajo": s["dias_bajo"], "dias_sobre": s["dias_sobre"],
-            "estrellas": estrellas(s["dias_en_meta"]),
+            "estrellas": jp.estrellas_por_puntos(pts_semana), "puntos": pts_semana,
             "kcal_media": _media(s["_kcal"]), "proteina_media": _media(s["_prot"]),
             "cerrada": n < actual,
         })
     cur = semanas[-1]
     cerradas = [s for s in semanas if s["cerrada"]]
     total_estrellas = sum(s["estrellas"] for s in semanas)
-    mejor = max(cerradas + [cur], key=lambda s: (s["dias_en_meta"], s["numero"]))
+    mejor = max(cerradas + [cur], key=lambda s: (s["puntos"], s["numero"]))
+    hoy_iso = hoy.isoformat()
+    lg_hoy = juego_dias[-1]["_lg"] if juego_dias else jp.logros_del_dia(
+        calories=0, protein=0, meals_count=0, meta_kcal=0, meta_proteina=None, objetivo="", meta_vasos=meta_vasos)
+    racha_hasta_ayer = juego["racha"] - (1 if lg_hoy.get("registro") else 0)
+    hp = jp.hoy_puntos(lg_hoy, racha_hasta_ayer + 1)
+    previos = [v for iso, v in pts_dia.items() if iso != hoy_iso]
+    empieza_cur = date.fromisoformat(cur["empieza"])
+    por_iso = {d["iso"]: d for d in juego_dias}
+    dias_cur = []
+    for i in range(DIAS_DE_LA_SEMANA):
+        iso = (empieza_cur + timedelta(days=i)).isoformat()
+        jd = por_iso.get(iso)
+        dias_cur.append({"iso": iso, "puntos": pts_dia.get(iso) if jd else None,
+                         "estado": jd["_estado"] if jd else None,
+                         "escudo": iso in juego["escudos_usados"]})
     out = {
         "dia_1": dia_1.isoformat(), "semana_1_empieza": w1.isoformat(), "hoy": hoy.isoformat(),
         "semana": {"numero": actual, "empieza": cur["empieza"], "termina": cur["termina"],
                    "dia": (hoy - date.fromisoformat(cur["empieza"])).days + 1,
                    "dias_en_meta": cur["dias_en_meta"], "dias_registrados": cur["dias_registrados"],
-                   "estrellas": cur["estrellas"], "faltan_para_otra_estrella": faltan_para_otra_estrella(cur["dias_en_meta"])},
-        "racha": racha(estados), "mejor_racha": mejor_racha(estados),
-        "total": {"semanas": actual, "estrellas": total_estrellas,
+                   "estrellas": cur["estrellas"], "faltan_para_otra_estrella": faltan_para_otra_estrella(cur["dias_en_meta"]),
+                   "puntos": cur["puntos"], "faltan_puntos_para_otra_estrella": jp.faltan_para_otra_estrella_pts(cur["puntos"]),
+                   "dias": dias_cur},
+        # [P1-PLAN-LOTE-1161] la racha es de días REGISTRANDO (con escudos) y multiplica los puntos.
+        "racha": juego["racha"], "mejor_racha": juego["mejor_racha"], "racha_hasta_ayer": racha_hasta_ayer,
+        "racha_tramo": jp.tramo_de_racha(juego["racha"]),
+        "escudos": juego["escudos"], "escudos_max": jp.ESCUDOS_MAX,
+        "escudos_usados_semana": [i for i in juego["escudos_usados"] if i >= cur["empieza"]],
+        "ultimo_escudo_ganado": juego["escudos_ganados"][-1] if juego["escudos_ganados"] else None,
+        "ultimo_escudo_usado": juego["escudos_usados"][-1] if juego["escudos_usados"] else None,
+        "hoy_puntos": {"puntos": hp["puntos"] if lg_hoy.get("registro") else 0, "base": hp["base"], "mult": hp["mult"],
+                       "logros": lg_hoy, "record_hoy": bool(previos) and pts_dia.get(hoy_iso, 0) > max(previos)},
+        "puntos": {"total": juego["total"], "semana": cur["puntos"], "record_dia": max(list(pts_dia.values()) or [0])},
+        "total": {"semanas": actual, "estrellas": total_estrellas, "puntos": juego["total"],
                   "semanas_perfectas": sum(1 for s in semanas if s["estrellas"] == 3),
                   "dias_en_meta": sum(s["dias_en_meta"] for s in semanas)},
-        "rango": rango(total_estrellas),
-        "semana_pasada": ({k: cerradas[-1][k] for k in ("numero", "dias_en_meta", "estrellas")} if cerradas else None),
-        "mejor_semana": ({k: mejor[k] for k in ("numero", "dias_en_meta", "estrellas")} if mejor["dias_en_meta"] else None),
+        "rango": dict(jp.rango_por_puntos(juego["total"]), estrellas_para_el_siguiente=None),
+        "semana_pasada": ({k: cerradas[-1][k] for k in ("numero", "dias_en_meta", "estrellas", "puntos")} if cerradas else None),
+        "mejor_semana": ({k: mejor[k] for k in ("numero", "dias_en_meta", "estrellas", "puntos")} if mejor["puntos"] else None),
         "semanas": semanas,
     }
     return out
@@ -203,7 +246,8 @@ def hitos_cumplidos(res: dict) -> list[dict]:
                     "datos": {"numero": perfectas[0]["numero"]}})
     for x in HITOS_RACHA:
         if res["racha"] >= x:
-            out.append({"clave": f"racha:{x}", "codigo": "racha", "datos": {"dias": x}})
+            out.append({"clave": f"racha:{x}", "codigo": "racha",
+                        "datos": {"dias": x, "mult": jp.tramo_de_racha(x)["mult"]}})
     seguidas = 0
     for s in cerradas:
         seguidas = seguidas + 1 if s["estrellas"] >= 1 else 0
@@ -211,9 +255,23 @@ def hitos_cumplidos(res: dict) -> list[dict]:
             out.append({"clave": "semanas_seguidas_con_estrella:4", "codigo": "semanas_seguidas_con_estrella",
                         "datos": {"semanas": SEMANAS_SEGUIDAS_CON_ESTRELLA}})
             break
-    rg = res["rango"]["clave"]
-    if rg != RANGOS[0][0]:
-        out.append({"clave": f"rango:{rg}", "codigo": "rango", "datos": {"clave": rg}})
+    rg = res["rango"]
+    if "division" in rg:
+        # [P1-PLAN-LOTE-1161] subir de división/rango (por puntos). Bronce I no es un logro.
+        if (rg["clave"], rg["division"]) != (jp.RANGOS_PUNTOS[0][0], 1):
+            out.append({"clave": f"division:{rg['clave']}:{rg['division']}", "codigo": "division",
+                        "datos": {"clave": rg["clave"], "division": rg["division"]}})
+    elif rg["clave"] != RANGOS[0][0]:
+        out.append({"clave": f"rango:{rg['clave']}", "codigo": "rango", "datos": {"clave": rg["clave"]}})
+    if res.get("ultimo_escudo_ganado"):
+        out.append({"clave": f"escudo:{res['ultimo_escudo_ganado']}", "codigo": "escudo_ganado",
+                    "datos": {"escudos": res.get("escudos", 0)}})
+    if res.get("ultimo_escudo_usado"):
+        out.append({"clave": f"salvo:{res['ultimo_escudo_usado']}", "codigo": "escudo_salvo",
+                    "datos": {"racha": res.get("racha", 0), "escudos": res.get("escudos", 0)}})
+    hp = res.get("hoy_puntos") or {}
+    if hp.get("record_hoy") and hp.get("puntos", 0) >= RECORD_MIN_PUNTOS:
+        out.append({"clave": f"record:{res.get('hoy')}", "codigo": "record_dia", "datos": {"puntos": hp["puntos"]}})
     for x in HITOS_SEMANA:
         if res["semana"]["numero"] >= x:
             out.append({"clave": f"semana_numero:{x}", "codigo": "semana_numero", "datos": {"numero": x}})
@@ -226,10 +284,11 @@ def eventos_nuevos(cumplidos: list[dict], estado_kv: dict, hoy_iso: str) -> tupl
     (`hitos_cumplidos` solo propone la última)."""
     emitidos = dict((estado_kv or {}).get("emitidos") or {})
     vistos = set((estado_kv or {}).get("vistos") or [])
-    primera = not estado_kv
+    primera = not estado_kv or (estado_kv or {}).get("version") != EVENTOS_VERSION
     for ev in cumplidos:
         if ev["clave"] not in emitidos:
-            emitidos[ev["clave"]] = hoy_iso
+            # [P1-PLAN-LOTE-1161] lo sembrado no es «de hoy»: el coach no debe celebrar el historial entero.
+            emitidos[ev["clave"]] = SEMBRADO if primera else hoy_iso
             if primera:
                 vistos.add(ev["clave"])
     pendientes = [dict(ev, emitido=emitidos[ev["clave"]]) for ev in cumplidos
@@ -239,7 +298,7 @@ def eventos_nuevos(cumplidos: list[dict], estado_kv: dict, hoy_iso: str) -> tupl
         for k in viejas:
             emitidos.pop(k, None)
             vistos.discard(k)
-    return pendientes, {"emitidos": emitidos, "vistos": sorted(vistos)}
+    return pendientes, {"emitidos": emitidos, "vistos": sorted(vistos), "version": EVENTOS_VERSION}
 
 
 def eventos_de_hoy(estado_kv: dict, hoy_iso: str) -> list[str]:
@@ -362,6 +421,24 @@ def _leer(user_id: str, tz_offset: Optional[int]) -> dict:
     ) or []
     dias = {str(r.get("dia")): {"calories": int(r.get("calories") or 0), "protein": int(r.get("protein") or 0),
                                 "meals_count": int(r.get("meals_count") or 0)} for r in filas}
+    # [P1-PLAN-LOTE-1161] el agua puntúa solo con el contador encendido (meta = la del contador, `_compute_water_goal`).
+    meta_vasos = None
+    try:
+        from db import get_water_tracker_enabled
+        if get_water_tracker_enabled(user_id):
+            try:
+                from routers.plans import _compute_water_goal
+                meta_vasos = int((_compute_water_goal(user_id) or {}).get("goal") or 8)
+            except Exception:  # noqa: BLE001
+                meta_vasos = 8
+            for f in execute_sql_query(
+                    "SELECT log_date, glasses FROM water_intake_log WHERE user_id = %s AND log_date >= %s",
+                    (user_id, w1), fetch_all=True) or []:
+                iso = str(f.get("log_date"))[:10]
+                dias.setdefault(iso, {"calories": 0, "protein": 0, "meals_count": 0})["vasos"] = float(f.get("glasses") or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[LOTE-1161] agua no leída: {type(exc).__name__}")
+        meta_vasos = None
     metas: dict = {}
     try:
         metas = resolve_targets_by_day(user_id, list(dias) + [hoy.isoformat()], eff) or {}
@@ -375,7 +452,8 @@ def _leer(user_id: str, tz_offset: Optional[int]) -> dict:
         except Exception:  # noqa: BLE001
             hp = {}
     return armar_resumen(hoy=hoy, dia_1=min(dia_1, hoy), dias=dias, metas_por_dia=metas,
-                         meta_de_hoy=metas.get(hoy.isoformat()), objetivo_del_perfil=(hp or {}).get("mainGoal"))
+                         meta_de_hoy=metas.get(hoy.isoformat()), objetivo_del_perfil=(hp or {}).get("mainGoal"),
+                         meta_vasos=meta_vasos)
 
 
 def _sincronizar_semanas(user_id: str, semanas: list[dict]) -> int:
@@ -499,4 +577,4 @@ def semanas(user_id: str, tz_offset: Optional[int] = None, desde: Optional[int] 
         lista = [s for s in lista if s["numero"] <= int(hasta)]
     lista = lista[-SEMANAS_MAX_POR_PETICION:]
     return [{k: s[k] for k in ("numero", "empieza", "termina", "dias_en_meta", "dias_registrados", "estrellas",
-                                "kcal_media", "cerrada")} for s in lista]
+                                "puntos", "kcal_media", "cerrada")} for s in lista]
