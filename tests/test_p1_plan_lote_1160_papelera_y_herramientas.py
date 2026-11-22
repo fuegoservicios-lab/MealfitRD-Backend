@@ -257,3 +257,47 @@ def test_el_bloque_de_suplementos_se_llama_despensa():
 def test_el_titulo_pierde_las_letras_de_otros_alfabetos(crudo, limpio):
     from agent import _limpiar_titulo_de_otros_alfabetos
     assert _limpiar_titulo_de_otros_alfabetos(crudo) == limpio
+
+
+# ── 6. recuperar no es tomar (lo encontró la batería real R1160) ─────────────────────────────────────────────────────
+
+def _hilo_de_la_bateria(ultimo):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    return [
+        HumanMessage(content="Quise decir los suplementos de la despensa"),
+        AIMessage(content="", tool_calls=[{"name": "recuperar_de_la_nevera", "args": {"todo": True}, "id": "t1"}]),
+        ToolMessage(content="Recuperado en su Nevera: …", tool_call_id="t1", name="recuperar_de_la_nevera"),
+        AIMessage(content="Recuperé los tres suplementos en tu despensa."),
+        HumanMessage(content=ultimo),
+    ]
+
+
+_ANOTA_GAINER = {"meal_name": "Atlas Gainer Advanced Mass Vanilla", "meal_type": "suplemento",
+                 "suplemento": "Atlas Gainer Advanced Mass Vanilla", "calories": 190}
+
+
+def test_agrega_esos_3_tras_recuperar_no_se_anota_como_tomado():
+    from recuperar_no_es_tomar import rechazar_toma_tras_recuperar
+    out = rechazar_toma_tras_recuperar(_hilo_de_la_bateria("Agrega esos 3 y ya"), _ANOTA_GAINER)
+    assert out and out.startswith("NO REGISTRADO") and "recuperar un pote NO es habérselo tomado" in out
+
+
+@pytest.mark.parametrize("dice", ["me tomé el gainer", "Me lo tomé ahorita", "ya bebí el batido del gainer", "comí y me metí 2 cápsulas"])
+def test_si_dice_que_se_lo_tomo_se_anota(dice):
+    from recuperar_no_es_tomar import rechazar_toma_tras_recuperar
+    assert rechazar_toma_tras_recuperar(_hilo_de_la_bateria(dice), _ANOTA_GAINER) is None
+
+
+def test_sin_recuperacion_o_si_es_comida_la_guarda_no_estorba():
+    from langchain_core.messages import HumanMessage
+    from recuperar_no_es_tomar import rechazar_toma_tras_recuperar
+    assert rechazar_toma_tras_recuperar([HumanMessage(content="creatina 5 g")], _ANOTA_GAINER) is None
+    assert rechazar_toma_tras_recuperar(_hilo_de_la_bateria("agrega 2 huevos"), {"meal_name": "Huevos", "meal_type": "desayuno"}) is None
+    # «como» (comparación) no cuenta como «comí»
+    assert rechazar_toma_tras_recuperar(_hilo_de_la_bateria("ponlos como estaban"), _ANOTA_GAINER)
+
+
+def test_la_guarda_esta_cableada_en_execute_tools():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    i = src.index("_r_disp = _rechazar_autolog_disponibilidad(messages")
+    assert "rechazar_toma_tras_recuperar(messages, tool_args)" in src[i:i + 900]

@@ -6998,6 +6998,14 @@ def execute_tools(state: ChatState):
                     if _r_disp:
                         tool_messages.append(ToolMessage(content=_r_disp, tool_call_id=tool_id))
                         continue
+                    # [P1-PLAN-LOTE-1160] recuperar un pote de la Despensa NO es habérselo tomado (batería real R1160)
+                    from recuperar_no_es_tomar import rechazar_toma_tras_recuperar
+                    _r_recup = rechazar_toma_tras_recuperar(messages, tool_args)
+                    if _r_recup:
+                        logger.warning(f"🛡️ [P1-PLAN-LOTE-1160] log_consumed_meal de suplemento tras recuperar, sin toma "
+                                       f"dicha: no se registra (user={str(state.get('user_id'))[:8]}).")
+                        tool_messages.append(ToolMessage(content=_r_recup, tool_call_id=tool_id))
+                        continue
                     _diario_guard = []
                     try:
                         from db_facts import get_consumed_meals_today as _gcmt_g
