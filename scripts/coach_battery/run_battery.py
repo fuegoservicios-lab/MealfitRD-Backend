@@ -556,6 +556,34 @@ def _stub_guardar_suplemento(**kw):
         suplementos._upsert, nevera_opcional.encender_por_uso = reales
 
 
+# [P1-PLAN-LOTE-1160] `"despensa_vacia": true` = la noche del 21-nov: «Borrar todos» se llevó los tres potes del dueño
+# (su Despensa real ya los tiene de vuelta) y están en la papelera. El bloque 💊 no ve potes y la papelera los tiene.
+DESPENSA = {"vacia": False}
+import suplementos as _sup_bat
+_orig_potes_bat = _sup_bat._potes
+_sup_bat._potes = lambda uid: [] if DESPENSA["vacia"] else _orig_potes_bat(uid)
+_PAPELERA_SIM = [
+    {"papelera_id": 1, "ingredient_name": "Atlas Gainer Advanced Mass Vanilla", "kind": "supplement", "con_etiqueta": False},
+    {"papelera_id": 2, "ingredient_name": "Creatine 5000 Creatine Monohydrate Capsules", "kind": "supplement", "con_etiqueta": True},
+    {"papelera_id": 3, "ingredient_name": "DESIGNS FOR SPORT MULTI + PHYTO", "kind": "supplement", "con_etiqueta": True},
+]
+_RECUPERAR_REAL = tools.recuperar_de_la_nevera.func
+
+
+def _stub_recuperar_de_la_nevera(**kw):
+    """[P1-PLAN-LOTE-1160] La tool REAL (búsqueda por nombre, textos) sobre una papelera simulada; no escribe."""
+    import papelera_nevera as _pn
+    reales = (_pn.listar, _pn.restaurar)
+    _pn.listar = lambda uid, limite=60: [dict(f) for f in (_PAPELERA_SIM if DESPENSA["vacia"] else [])]
+    _pn.restaurar = lambda uid, papelera_ids=None, original_ids=None: [
+        {"id": 900 + i, "ingredient_name": f["ingredient_name"]} for i, f in enumerate(_PAPELERA_SIM)
+        if f["papelera_id"] in (papelera_ids or [])]
+    try:
+        return _RECUPERAR_REAL(user_id=CTX["uid"], **{k: v for k, v in kw.items() if k != "user_id"})
+    finally:
+        _pn.listar, _pn.restaurar = reales
+
+
 # la función REAL de la tool, antes de que el bucle de abajo la envuelva (el stub la llama con la búsqueda simulada)
 _BUSCAR_ETIQUETA_REAL = tools.buscar_etiqueta_en_internet.func
 _GUARDAR_SUPLEMENTO_REAL = tools.guardar_suplemento.func
@@ -616,6 +644,7 @@ _STUBS = {
     "cambiar_ajuste_de_la_app": _stub_cambiar_ajuste,   # [P1-PLAN-LOTE-1013]
     "generar_informe_para_medico": _stub_generar_informe_para_medico,   # [P1-PLAN-LOTE-1034]
     "consultar_progreso": _stub_consultar_progreso,   # [P1-PLAN-LOTE-1059]
+    "recuperar_de_la_nevera": _stub_recuperar_de_la_nevera,   # [P1-PLAN-LOTE-1160] papelera simulada
 }
 
 
@@ -846,6 +875,7 @@ def main() -> int:
         except Exception:
             pass
         PROGRESO["caso"], PROGRESO["registrado"] = case.get("progreso"), False   # [P1-PLAN-LOTE-1059]
+        DESPENSA["vacia"] = bool(case.get("despensa_vacia"))   # [P1-PLAN-LOTE-1160]
         _ps.invalidar(str(CTX["uid"]))
         __import__("coach_progreso")._ANTES.clear()
         sid = str(uuid.uuid4())  # la columna es uuid; la sesión no existe en la base (lectura vacía)
