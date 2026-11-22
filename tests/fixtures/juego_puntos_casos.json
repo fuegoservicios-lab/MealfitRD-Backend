@@ -95,7 +95,7 @@
     "escudos_usados": [
      "2026-03-08"
     ],
-    "total": 340
+    "total": 316
    }
   },
   {
@@ -160,7 +160,7 @@
     "escudos_usados": [
      "2026-03-08"
     ],
-    "total": 233
+    "total": 224
    }
   },
   {
@@ -348,7 +348,7 @@
     "mejor_racha": 35,
     "escudos": 2,
     "escudos_usados": [],
-    "total": 1457
+    "total": 1233
    }
   },
   {
@@ -396,7 +396,7 @@
     "mejor_racha": 7,
     "escudos": 1,
     "escudos_usados": [],
-    "total": 125
+    "total": 118
    }
   },
   {
@@ -444,7 +444,7 @@
     "mejor_racha": 3,
     "escudos": 0,
     "escudos_usados": [],
-    "total": 182
+    "total": 180
    }
   }
  ],
@@ -453,90 +453,140 @@
    "puntos": 0,
    "clave": "bronce",
    "division": 1,
-   "faltan": 200
+   "romano": "IV",
+   "faltan": 135
   },
   {
-   "puntos": 199,
+   "puntos": 134,
    "clave": "bronce",
    "division": 1,
+   "romano": "IV",
    "faltan": 1
   },
   {
-   "puntos": 200,
+   "puntos": 135,
    "clave": "bronce",
    "division": 2,
-   "faltan": 200
+   "romano": "III",
+   "faltan": 135
   },
   {
-   "puntos": 599,
+   "puntos": 539,
    "clave": "bronce",
-   "division": 3,
+   "division": 4,
+   "romano": "I",
    "faltan": 1
   },
   {
-   "puntos": 600,
+   "puntos": 540,
    "clave": "plata",
    "division": 1,
-   "faltan": 400
+   "romano": "IV",
+   "faltan": 270
   },
   {
-   "puntos": 1000,
+   "puntos": 1079,
    "clave": "plata",
    "division": 2,
-   "faltan": 400
-  },
-  {
-   "puntos": 1799,
-   "clave": "plata",
-   "division": 3,
+   "romano": "III",
    "faltan": 1
   },
   {
-   "puntos": 1800,
+   "puntos": 1080,
+   "clave": "plata",
+   "division": 3,
+   "romano": "II",
+   "faltan": 270
+  },
+  {
+   "puntos": 1233,
+   "clave": "plata",
+   "division": 3,
+   "romano": "II",
+   "faltan": 117
+  },
+  {
+   "puntos": 1350,
+   "clave": "plata",
+   "division": 4,
+   "romano": "I",
+   "faltan": 270
+  },
+  {
+   "puntos": 1620,
    "clave": "oro",
    "division": 1,
-   "faltan": 900
+   "romano": "IV",
+   "faltan": 608
   },
   {
-   "puntos": 4499,
+   "puntos": 4049,
    "clave": "oro",
-   "division": 3,
+   "division": 4,
+   "romano": "I",
    "faltan": 1
   },
   {
-   "puntos": 4500,
+   "puntos": 4050,
    "clave": "platino",
    "division": 1,
-   "faltan": 1500
+   "romano": "IV",
+   "faltan": 1013
   },
   {
-   "puntos": 8999,
+   "puntos": 8099,
    "clave": "platino",
-   "division": 3,
+   "division": 4,
+   "romano": "I",
    "faltan": 1
   },
   {
-   "puntos": 9000,
+   "puntos": 8100,
    "clave": "diamante",
    "division": 1,
-   "faltan": 3000
+   "romano": "IV",
+   "faltan": 2700
   },
   {
-   "puntos": 12000,
-   "clave": "diamante",
-   "division": 2,
-   "faltan": 3000
-  },
-  {
-   "puntos": 15000,
+   "puntos": 13500,
    "clave": "diamante",
    "division": 3,
+   "romano": "II",
+   "faltan": 2700
+  },
+  {
+   "puntos": 16199,
+   "clave": "diamante",
+   "division": 3,
+   "romano": "II",
+   "faltan": 1
+  },
+  {
+   "puntos": 16200,
+   "clave": "diamante",
+   "division": 4,
+   "romano": "I",
+   "faltan": null
+  },
+  {
+   "puntos": 18899,
+   "clave": "diamante",
+   "division": 4,
+   "romano": "I",
+   "faltan": null
+  },
+  {
+   "puntos": 18900,
+   "clave": "diamante",
+   "division": 4,
+   "romano": "I",
    "faltan": null
   },
   {
    "puntos": 99999,
    "clave": "diamante",
-   "division": 3,
+   "division": 4,
+   "romano": "I",
    "faltan": null
   }
  ],
@@ -556,9 +606,32 @@
   {
    "logros": {
     "registro": true,
+    "completo": false,
+    "banda": false,
+    "proteina": false,
+    "proteina_parcial": true,
+    "agua": null
+   },
+   "puntos": 15
+  },
+  {
+   "logros": {
+    "registro": true,
     "completo": true,
     "banda": true,
     "proteina": false,
+    "proteina_parcial": true,
+    "agua": null
+   },
+   "puntos": 35
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "proteina": false,
+    "proteina_parcial": false,
     "agua": null
    },
    "puntos": 30
@@ -569,9 +642,108 @@
     "completo": true,
     "banda": true,
     "proteina": true,
+    "proteina_parcial": false,
     "agua": true
    },
    "puntos": 45
+  }
+ ],
+ "jugador": [
+  {
+   "puntos": 1233,
+   "semanas_perfectas": 1,
+   "mejor_racha": 33,
+   "piso": 0,
+   "clave": "plata",
+   "division": 3,
+   "romano": "II",
+   "siguiente": "plata",
+   "faltan": 117,
+   "cumplidos": 0
+  },
+  {
+   "puntos": 17000,
+   "semanas_perfectas": 8,
+   "mejor_racha": 100,
+   "piso": 0,
+   "clave": "diamante",
+   "division": 4,
+   "romano": "I",
+   "siguiente": "maestro",
+   "faltan": 1900,
+   "cumplidos": 2
+  },
+  {
+   "puntos": 18900,
+   "semanas_perfectas": 7,
+   "mejor_racha": 120,
+   "piso": 0,
+   "clave": "diamante",
+   "division": 4,
+   "romano": "I",
+   "siguiente": "maestro",
+   "faltan": 0,
+   "cumplidos": 2
+  },
+  {
+   "puntos": 18900,
+   "semanas_perfectas": 8,
+   "mejor_racha": 99,
+   "piso": 0,
+   "clave": "diamante",
+   "division": 4,
+   "romano": "I",
+   "siguiente": "maestro",
+   "faltan": 0,
+   "cumplidos": 2
+  },
+  {
+   "puntos": 18900,
+   "semanas_perfectas": 8,
+   "mejor_racha": 100,
+   "piso": 0,
+   "clave": "maestro",
+   "division": null,
+   "romano": null,
+   "siguiente": null,
+   "faltan": null,
+   "cumplidos": 3
+  },
+  {
+   "puntos": 25000,
+   "semanas_perfectas": 12,
+   "mejor_racha": 140,
+   "piso": 0,
+   "clave": "maestro",
+   "division": null,
+   "romano": null,
+   "siguiente": null,
+   "faltan": null,
+   "cumplidos": 3
+  },
+  {
+   "puntos": 500,
+   "semanas_perfectas": 0,
+   "mejor_racha": 2,
+   "piso": 0,
+   "clave": "bronce",
+   "division": 4,
+   "romano": "I",
+   "siguiente": "plata",
+   "faltan": 40,
+   "cumplidos": 0
+  },
+  {
+   "puntos": 500,
+   "semanas_perfectas": 0,
+   "mejor_racha": 2,
+   "piso": 5,
+   "clave": "plata",
+   "division": 2,
+   "romano": "III",
+   "siguiente": "plata",
+   "faltan": 580,
+   "cumplidos": 0
   }
  ]
 }

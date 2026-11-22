@@ -19,17 +19,20 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _MES = ("", "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
-_RANGO = {"bronce": "Bronce", "plata": "Plata", "oro": "Oro", "platino": "Platino", "diamante": "Diamante"}
+_RANGO = {"bronce": "Bronce", "plata": "Plata", "oro": "Oro", "platino": "Platino", "diamante": "Diamante",
+          "maestro": "Maestro"}
 _ORD = {1: "1.ª", 2: "2.ª", 3: "3.ª"}
-_ROMANO = {1: "I", 2: "II", 3: "III"}
 
 
 def _rango_txt(clave, division=None) -> str:
-    """[P1-PLAN-LOTE-1161] «Plata II» (o solo «Plata» si no hay división)."""
+    """[P1-PLAN-LOTE-1161] «Plata II» (o solo «Plata» si no hay división). [1163] Divisiones IV→I: la `division`
+    interna asciende (1 = entrada) y se ve en romano al revés (Plata IV es la entrada, Plata I la cima)."""
+    import juego_puntos as jp
     if isinstance(clave, dict):
         clave, division = clave.get("clave"), clave.get("division")
     base = _RANGO.get(clave, clave)
-    return f"{base} {_ROMANO[division]}" if division in _ROMANO else str(base)
+    romano = jp.division_romana(division)
+    return f"{base} {romano}" if romano else str(base)
 
 
 def _mult(m) -> str:
@@ -62,6 +65,8 @@ def _linea_de_hoy(claves: list[str], res: dict) -> str:
         elif tipo == "division":
             clave, _, div = valor.partition(":")
             partes.append(f"subió a {_rango_txt(clave, int(div) if div.isdigit() else None)}")
+        elif tipo == "maestro":
+            partes.append("¡llegó a MAESTRO, el rango más difícil de la app (18.900 pts, 8 semanas perfectas y racha de 100 días)!")
         elif tipo == "escudo":
             partes.append("ganó un escudo de racha")
         elif tipo == "salvo":
@@ -112,6 +117,12 @@ def texto_del_bloque(res: dict) -> str:
     t += f" Total: {tot.get('puntos', 0)} pts · rango {_rango_txt(rg)}"
     if rg.get("siguiente") and rg.get("puntos_para_la_siguiente") is not None:
         t += f" (faltan {rg['puntos_para_la_siguiente']} pts para {_rango_txt(rg['siguiente'])})"
+    m = res.get("maestro") or {}
+    if m and not m.get("conseguido") and rg.get("clave") in ("platino", "diamante"):
+        req = {r["clave"]: r for r in m.get("requisitos") or []}
+        t += (f"; Maestro pide 18.900 pts + {req.get('semanas_perfectas', {}).get('meta', 8)} semanas perfectas "
+              f"(lleva {req.get('semanas_perfectas', {}).get('actual', 0)}) + racha de 100 días "
+              f"(mejor {req.get('racha', {}).get('actual', 0)})")
     t += "."
     t += _linea_de_hoy(res.get("eventos_de_hoy") or [], res)
     return t
@@ -181,7 +192,7 @@ def nota_de_estrella(antes: dict, despues: dict) -> str:
     ra, rd = (antes or {}).get("rango") or {}, (despues or {}).get("rango") or {}
     if "division" in ra and "division" in rd:
         import juego_puntos as jp
-        if jp.nivel_indice(rd["clave"], rd["division"]) > jp.nivel_indice(ra["clave"], ra["division"]):
+        if jp.nivel_indice(rd["clave"], rd["division"] or 0) > jp.nivel_indice(ra["clave"], ra["division"] or 0):
             logros.append(f"subió a {_rango_txt(rd)}")
     if not logros:
         return ""

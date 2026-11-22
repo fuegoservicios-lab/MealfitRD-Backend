@@ -27,8 +27,9 @@ def test_bloque_puntos_racha_escudos_y_division():
     assert "Hoy: 42 pts (×1,5)." in t
     assert "Esta semana: 120 pts, 1★; faltan 40 pts para la 2.ª estrella." in t
     assert "Racha: 9 días registrando (×1,5; mejor: 12); escudos 2/2." in t
-    assert "rango Plata II (faltan 400 pts para Plata III)" in t
-    assert "subió a Plata II" in t and "ganó un escudo de racha" in t and "un escudo salvó su racha" in t
+    # [1163] divisiones IV→I: la 2.ª interna de Plata se ve «Plata III» y la 3.ª «Plata II».
+    assert "rango Plata III (faltan 400 pts para Plata II)" in t
+    assert "subió a Plata III" in t and "ganó un escudo de racha" in t and "un escudo salvó su racha" in t
     assert "récord de puntos en un día (42 pts)" in t
     assert len(t.split()) <= 110
 

@@ -37,13 +37,13 @@ SEMANAS_MAX_COACH = 26
 RANGOS = (("bronce", 0), ("plata", 10), ("oro", 25), ("platino", 50), ("diamante", 100))
 
 #: Hitos (lote 1035). Cada uno se emite UNA vez por persona.
-HITOS_RACHA = (3, 7, 14, 30)
+HITOS_RACHA = jp.HITOS_RACHA_LARGOS
 HITOS_SEMANA = (4, 12, 26, 52)
 SEMANAS_SEGUIDAS_CON_ESTRELLA = 4
 EVENTOS_MAX_GUARDADOS = 200
 #: [P1-PLAN-LOTE-1161] versión de los eventos: un KV de otra versión siembra todo lo cumplido como visto (sin avalancha
 #: de divisiones/escudos/rachas viejas el día del despliegue).
-EVENTOS_VERSION = 2
+EVENTOS_VERSION = 3   # [P1-PLAN-LOTE-1163] divisiones IV→I: lo cumplido al desplegar se siembra visto
 RECORD_MIN_PUNTOS = 30
 SEMBRADO = "0000-00-00"
 
@@ -174,11 +174,16 @@ def armar_resumen(*, hoy: date, dia_1: Optional[date], dias: dict[str, dict], me
             "dias_registrados": s["dias_registrados"], "dias_en_meta": s["dias_en_meta"],
             "dias_bajo": s["dias_bajo"], "dias_sobre": s["dias_sobre"],
             "estrellas": jp.estrellas_por_puntos(pts_semana), "puntos": pts_semana,
+            "bono": jp.BONO_SEMANA_PERFECTA if jp.estrellas_por_puntos(pts_semana) == 3 else 0,
             "kcal_media": _media(s["_kcal"]), "proteina_media": _media(s["_prot"]),
             "cerrada": n < actual,
         })
     cur = semanas[-1]
     cerradas = [s for s in semanas if s["cerrada"]]
+    # [P1-PLAN-LOTE-1163] semana perfecta = +30 al total (las estrellas siguen contando solo los puntos de los días).
+    perfectas = sum(1 for s in semanas if s["estrellas"] == 3)
+    bono_semanas = sum(s["bono"] for s in semanas)
+    total_pts = juego["total"] + bono_semanas
     total_estrellas = sum(s["estrellas"] for s in semanas)
     mejor = max(cerradas + [cur], key=lambda s: (s["puntos"], s["numero"]))
     hoy_iso = hoy.isoformat()
@@ -203,21 +208,27 @@ def armar_resumen(*, hoy: date, dia_1: Optional[date], dias: dict[str, dict], me
                    "dias_en_meta": cur["dias_en_meta"], "dias_registrados": cur["dias_registrados"],
                    "estrellas": cur["estrellas"], "faltan_para_otra_estrella": faltan_para_otra_estrella(cur["dias_en_meta"]),
                    "puntos": cur["puntos"], "faltan_puntos_para_otra_estrella": jp.faltan_para_otra_estrella_pts(cur["puntos"]),
+                   "bono": cur["bono"],
                    "dias": dias_cur},
         # [P1-PLAN-LOTE-1161] la racha es de días REGISTRANDO (con escudos) y multiplica los puntos.
         "racha": juego["racha"], "mejor_racha": juego["mejor_racha"], "racha_hasta_ayer": racha_hasta_ayer,
         "racha_tramo": jp.tramo_de_racha(juego["racha"]),
         "escudos": juego["escudos"], "escudos_max": jp.ESCUDOS_MAX,
+        "escudos_usados": list(juego["escudos_usados"]),
         "escudos_usados_semana": [i for i in juego["escudos_usados"] if i >= cur["empieza"]],
+        "proximo_hito_racha": jp.proximo_hito_racha(juego["racha"]),
+        "dias_para_escudo": jp.dias_para_escudo(juego["racha"], juego["escudos"]),
         "ultimo_escudo_ganado": juego["escudos_ganados"][-1] if juego["escudos_ganados"] else None,
         "ultimo_escudo_usado": juego["escudos_usados"][-1] if juego["escudos_usados"] else None,
         "hoy_puntos": {"puntos": hp["puntos"] if lg_hoy.get("registro") else 0, "base": hp["base"], "mult": hp["mult"],
                        "logros": lg_hoy, "record_hoy": bool(previos) and pts_dia.get(hoy_iso, 0) > max(previos)},
-        "puntos": {"total": juego["total"], "semana": cur["puntos"], "record_dia": max(list(pts_dia.values()) or [0])},
-        "total": {"semanas": actual, "estrellas": total_estrellas, "puntos": juego["total"],
-                  "semanas_perfectas": sum(1 for s in semanas if s["estrellas"] == 3),
+        "puntos": {"total": total_pts, "semana": cur["puntos"], "record_dia": max(list(pts_dia.values()) or [0]),
+                   "bono_semanas": bono_semanas, "bono_semana_perfecta": jp.BONO_SEMANA_PERFECTA},
+        "total": {"semanas": actual, "estrellas": total_estrellas, "puntos": total_pts,
+                  "semanas_perfectas": perfectas,
                   "dias_en_meta": sum(s["dias_en_meta"] for s in semanas)},
-        "rango": dict(jp.rango_por_puntos(juego["total"]), estrellas_para_el_siguiente=None),
+        "rango": dict(jp.rango_del_jugador(total_pts, perfectas, juego["mejor_racha"]), estrellas_para_el_siguiente=None),
+        "maestro": jp.maestro_progreso(total_pts, perfectas, juego["mejor_racha"]),
         "semana_pasada": ({k: cerradas[-1][k] for k in ("numero", "dias_en_meta", "estrellas", "puntos")} if cerradas else None),
         "mejor_semana": ({k: mejor[k] for k in ("numero", "dias_en_meta", "estrellas", "puntos")} if mejor["puntos"] else None),
         "semanas": semanas,
@@ -257,11 +268,14 @@ def hitos_cumplidos(res: dict) -> list[dict]:
                         "datos": {"semanas": SEMANAS_SEGUIDAS_CON_ESTRELLA}})
             break
     rg = res["rango"]
-    if "division" in rg:
+    if rg.get("clave") == jp.MAESTRO:
+        # [P1-PLAN-LOTE-1163] el rango especial: se celebra una vez y nunca se pierde.
+        out.append({"clave": "maestro", "codigo": "maestro", "datos": {"clave": jp.MAESTRO}})
+    elif "division" in rg:
         # [P1-PLAN-LOTE-1161] subir de división/rango (por puntos). Bronce I no es un logro.
         if (rg["clave"], rg["division"]) != (jp.RANGOS_PUNTOS[0][0], 1):
             out.append({"clave": f"division:{rg['clave']}:{rg['division']}", "codigo": "division",
-                        "datos": {"clave": rg["clave"], "division": rg["division"]}})
+                        "datos": {"clave": rg["clave"], "division": rg["division"], "romano": rg.get("romano")}})
     elif rg["clave"] != RANGOS[0][0]:
         out.append({"clave": f"rango:{rg['clave']}", "codigo": "rango", "datos": {"clave": rg["clave"]}})
     if res.get("ultimo_escudo_ganado"):
@@ -491,6 +505,25 @@ def _sincronizar_semanas(user_id: str, semanas: list[dict]) -> int:
     return n
 
 
+def _piso_rango_de_kv(estado_kv: dict) -> int:
+    emitidos = (estado_kv or {}).get("emitidos") or {}
+    piso = 0
+    for k in emitidos:
+        if not isinstance(k, str):
+            continue
+        if k == "maestro":
+            piso = max(piso, jp.indice_maestro())
+        elif k.startswith("division:"):
+            _, _, resto = k.partition(":")
+            clave, _, div = resto.partition(":")
+            if div.isdigit():
+                piso = max(piso, jp.nivel_indice(clave, int(div)))
+        elif k.startswith("rango:"):
+            _, _, clave = k.partition(":")
+            piso = max(piso, jp.nivel_indice(clave, 1))
+    return piso
+
+
 def _estado_kv(user_id: str) -> dict:
     from db_core import execute_sql_query
     f = execute_sql_query("SELECT value FROM app_kv_store WHERE key = %s", (_kv_clave(user_id),), fetch_one=True)
@@ -534,6 +567,10 @@ def resumen(user_id: str, tz_offset: Optional[int] = None, *, con_semanas: bool 
             res["_clave"] = clave
             try:
                 kv = _estado_kv(user_id)
+                piso = _piso_rango_de_kv(kv)
+                if piso > 0:
+                    res["rango"] = dict(jp.rango_del_jugador(res["puntos"]["total"], res["total"].get("semanas_perfectas", 0),
+                                                             res.get("mejor_racha", 0), piso), estrellas_para_el_siguiente=None)
                 pendientes, nuevo = eventos_nuevos(hitos_cumplidos(res), kv, res["hoy"])
                 if nuevo != kv:
                     _guardar_kv(user_id, nuevo)

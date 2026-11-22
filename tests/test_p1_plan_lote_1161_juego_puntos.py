@@ -38,8 +38,24 @@ def test_agua_apagada_es_none_y_max_40():
 
 def test_base_maxima_45():
     lg = _logros(protein=120, vasos=8, meta_vasos=8)
-    assert lg == {"registro": True, "completo": True, "banda": True, "proteina": True, "agua": True}
+    assert lg == {
+        "registro": True, "completo": True, "banda": True, "proteina": True, "proteina_parcial": False, "agua": True,
+    }
     assert jp.puntos_base(lg) == 45
+
+
+def test_ayuno_2_comidas_y_proteina_parcial():
+    lg_ayuno = _logros(calories=1600, protein=88, meals_count=2, meta_kcal=2000, meta_proteina=120)
+    assert lg_ayuno["completo"] is True      # 2 comidas ≥ 70 % kcal
+    assert lg_ayuno["banda"] is False        # 80 % < 90 %
+    assert lg_ayuno["proteina"] is False
+    assert lg_ayuno["proteina_parcial"] is True   # 88/120 ≥ 70 %
+    assert jp.puntos_base(lg_ayuno) == 20    # 10 registro + 5 completo + 5 proteína parcial
+
+    lg_corto = _logros(calories=1000, protein=60, meals_count=2, meta_kcal=2000, meta_proteina=120)
+    assert lg_corto["completo"] is False     # 2 comidas < 70 % kcal
+    assert lg_corto["proteina_parcial"] is False
+    assert jp.puntos_base(lg_corto) == 10
 
 
 def test_dia_vacio_no_da_nada():
@@ -47,15 +63,32 @@ def test_dia_vacio_no_da_nada():
     assert jp.puntos_base(lg) == 0
 
 
-@pytest.mark.parametrize("racha,mult", [(0, 1.0), (2, 1.0), (3, 1.2), (6, 1.2), (7, 1.5), (14, 1.75), (29, 1.75), (30, 2.0), (90, 2.0)])
+@pytest.mark.parametrize("racha,mult", [(0, 1.0), (2, 1.0), (3, 1.15), (6, 1.15), (7, 1.3), (14, 1.45), (29, 1.45), (30, 1.6), (90, 1.6)])
 def test_tramos(racha, mult):
     assert jp.tramo_de_racha(racha)["mult"] == mult
 
 
 def test_tramo_dice_el_siguiente():
     t = jp.tramo_de_racha(9)
-    assert t["clave"] == "en_llamas" and t["siguiente_en"] == 14 and t["siguiente_mult"] == 1.75
+    assert t["clave"] == "en_llamas" and t["siguiente_en"] == 14 and t["siguiente_mult"] == 1.45
     assert jp.tramo_de_racha(30)["siguiente_en"] is None
+
+
+def test_proximo_hito_y_dias_para_escudo():
+    assert jp.proximo_hito_racha(0) == 3
+    assert jp.proximo_hito_racha(33) == 50
+    assert jp.proximo_hito_racha(365) is None
+    assert jp.dias_para_escudo(0, 0) == 7
+    assert jp.dias_para_escudo(9, 1) == 5
+    assert jp.dias_para_escudo(9, 2) is None
+
+
+def test_rango_con_piso_nunca_baja():
+    # [1163] 4 divisiones: Plata (540-1620) = 540 / 810 / 1080 / 1350; la 4.ª interna es «Plata I».
+    piso_plata_i = jp.nivel_indice("plata", 4)
+    bajada = jp.rango_con_piso(1200, piso_plata_i)
+    assert bajada["clave"] == "plata" and bajada["division"] == 4 and bajada["romano"] == "I"
+    assert bajada["avance"] == 0 and bajada["puntos_para_la_siguiente"] == 420
 
 
 def test_hoy_vacio_no_rompe():
@@ -104,17 +137,18 @@ def test_estrellas_por_puntos():
 
 def test_rango_divisiones():
     r0 = jp.rango_por_puntos(0)
-    assert r0["clave"] == "bronce" and r0["division"] == 1 and r0["siguiente"] == {"clave": "bronce", "division": 2}
+    assert r0["clave"] == "bronce" and r0["division"] == 1 and r0["romano"] == "IV"
+    assert r0["siguiente"] == {"clave": "bronce", "division": 2, "romano": "III"}
     plata = dict(jp.RANGOS_PUNTOS)["plata"]
     rp = jp.rango_por_puntos(plata)
-    assert rp["clave"] == "plata" and rp["division"] == 1
+    assert rp["clave"] == "plata" and rp["division"] == 1 and rp["romano"] == "IV"
     cima = jp.rango_por_puntos(10 ** 7)
-    assert cima["clave"] == "diamante" and cima["division"] == 3 and cima["siguiente"] is None
+    assert cima["clave"] == "diamante" and cima["division"] == 4 and cima["romano"] == "I" and cima["siguiente"] is None
     assert cima["puntos_para_la_siguiente"] is None and cima["avance"] == 1
 
 
 def test_rango_nunca_retrocede_al_subir_puntos():
-    orden = [(k, d) for k, _ in jp.RANGOS_PUNTOS for d in (1, 2, 3)]
+    orden = [(k, d) for k, _ in jp.RANGOS_PUNTOS for d in (1, 2, 3, 4)]
     previo = -1
     for pts in range(0, 20000, 37):
         r = jp.rango_por_puntos(pts)
@@ -130,6 +164,12 @@ def test_casos_compartidos():
             assert r[k] == v, (c["nombre"], k)
     for c in CASOS["rango"]:
         r = jp.rango_por_puntos(c["puntos"])
-        assert (r["clave"], r["division"], r["puntos_para_la_siguiente"]) == (c["clave"], c["division"], c["faltan"]), c
+        assert (r["clave"], r["division"], r["romano"], r["puntos_para_la_siguiente"]) == (
+            c["clave"], c["division"], c["romano"], c["faltan"]), c
+    for c in CASOS["jugador"]:
+        r = jp.rango_del_jugador(c["puntos"], c["semanas_perfectas"], c["mejor_racha"], c["piso"])
+        m = jp.maestro_progreso(c["puntos"], c["semanas_perfectas"], c["mejor_racha"])
+        assert (r["clave"], r["division"], r["romano"], (r["siguiente"] or {}).get("clave"), r["puntos_para_la_siguiente"],
+                m["cumplidos"]) == (c["clave"], c["division"], c["romano"], c["siguiente"], c["faltan"], c["cumplidos"]), c
     for c in CASOS["base"]:
         assert jp.puntos_base(c["logros"]) == c["puntos"]

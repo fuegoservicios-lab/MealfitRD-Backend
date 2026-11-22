@@ -7262,7 +7262,7 @@ def consultar_progreso(user_id: str, semanas: int = 8) -> str:
     mb, tot, rg = res.get("mejor_semana"), res["total"], res["rango"]
     pie = (f"Total: {tot.get('puntos', 0)} pts, {tot['estrellas']}★ en {tot['semanas']} semanas; racha {res['racha']} "
            f"días registrando (mejor {res['mejor_racha']}); escudos {res.get('escudos', 0)}; "
-           f"rango {rg['clave']} {rg.get('division', '')}".rstrip() + ".")
+           f"rango {__import__('coach_progreso')._rango_txt(rg)}.")
     if mb:
         pie += f" Mejor semana: S{mb['numero']} ({mb.get('puntos', 0)} pts, {mb['estrellas']}★)."
     return "\n".join(filas + [pie])

@@ -26,8 +26,9 @@ def test_resumen_trae_puntos_de_hoy():
     r = _res([2000] * 7, prot=120)
     hp = r["hoy_puntos"]
     assert hp["base"] == 40 and hp["logros"]["agua"] is None
-    assert hp["mult"] == 1.5 and hp["puntos"] == 60          # 7.º día seguido → ×1,5
+    assert hp["mult"] == 1.3 and hp["puntos"] == 52          # 7.º día seguido → ×1,3
     assert r["racha"] == 7 and r["racha_hasta_ayer"] == 6 and r["escudos"] == 1
+    assert r["escudos_usados"] == [] and r["proximo_hito_racha"] == 14 and r["dias_para_escudo"] == 7
     assert r["rango"]["clave"] == "bronce" and "division" in r["rango"]
     assert r["puntos"]["total"] == r["total"]["puntos"] > 0
 
@@ -90,5 +91,18 @@ def test_hito_division():
 def test_hito_escudo_ganado_y_salvo():
     r = _res([2000] * 7 + [0] + [2000], hoy="2026-11-11")
     assert r["escudos"] == 0 and r["escudos_usados_semana"] == ["2026-11-10"]
+    assert r["escudos_usados"] == ["2026-11-10"]
     codigos = {e["codigo"] for e in ps.hitos_cumplidos(r)}
     assert {"escudo_ganado", "escudo_salvo"} <= codigos
+
+
+def test_resumen_respeta_piso_de_rango_si_ya_subio(monkeypatch):
+    r_base = _res([2000] * 7, prot=120)
+    ps.invalidar("u-piso")
+    monkeypatch.setattr(ps, "_leer", lambda uid, tz: dict(r_base))
+    monkeypatch.setattr(ps, "_sincronizar_semanas", lambda uid, sem: 0)
+    monkeypatch.setattr(ps, "_estado_kv", lambda uid: {"version": 2, "emitidos": {"division:plata:2": "2026-11-08"}, "vistos": []})
+    monkeypatch.setattr(ps, "_guardar_kv", lambda uid, v: None)
+    out = ps.resumen("u-piso")
+    assert (out["rango"]["clave"], out["rango"]["division"]) == ("plata", 2)
+    ps.invalidar("u-piso")
