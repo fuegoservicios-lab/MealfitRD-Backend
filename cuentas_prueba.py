@@ -219,6 +219,25 @@ def quitar(admin_id, user_id, motivo) -> dict:
     return {"id": marca["id"], "user_id": uid}
 
 
+def quitar_varias(admin_id, user_ids, motivo) -> list[dict]:
+    """[P1-PLAN-LOTE-1166] `quitar` para cada id, en su orden: `quitada | sin_marca`. Mismo tope que `marcar_varias`."""
+    ids = list(user_ids or [])
+    if len(ids) > MAX_LOTE:
+        raise ErrorPrueba(422, "demasiadas")
+    motivo = _motivo(motivo)
+    resultados = []
+    for uid in ids:
+        try:
+            quitar(admin_id, uid, motivo)
+            resultado = "quitada"
+        except ErrorPrueba as e:
+            if e.detalle != "sin_marca":
+                raise
+            resultado = "sin_marca"
+        resultados.append({"user_id": str(uid), "resultado": resultado})
+    return resultados
+
+
 def salir(user_id) -> bool:
     """La propia persona sale del modo de prueba. Funciona SIEMPRE (también con el interruptor apagado) y es
     idempotente: sin marca viva devuelve False. `quitada_por` es ella misma; no hay fila de admin_access_log (no la

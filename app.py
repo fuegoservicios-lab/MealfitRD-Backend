@@ -1103,7 +1103,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 # [P1-PLAN-LOTE-1080 · 2026-11-18] tras registrar, sin «No me mandaste…» de lo ya anotado; +≤10 % de kcal = cerró en su meta.
 # [P1-PLAN-LOTE-1085 · 2026-11-18] los micros de cada comida, recordados (micros_memo): abrir un día ya no los recalcula.
 # [P1-PLAN-LOTE-1087 · 2026-11-18] respuesta sin repetirse (1086); lo comido antes de la foto se suma (1087).
-_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1163 · 2026-11-22"
+_LAST_KNOWN_PFIX = "P1-PLAN-LOTE-1166 · 2026-11-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2815,6 +2815,8 @@ from routers.supermarket import router as supermarket_router
 app.include_router(supermarket_router)
 from routers.admin import router as admin_router  # [P1-PLAN-LOTE-577] panel de administración (capa 1)
 app.include_router(admin_router)
+from routers.verificadores import router as verificadores_router
+app.include_router(verificadores_router)
 # [P2-HELP-CHATBOT · 2026-07-04] Chatbot de ayuda del menú "Obtener ayuda":
 # Q&A de producto sin acceso a datos del usuario (cero tools/DB), fail-cheap
 # (flash), quota-exempt (RateLimiter, NO verify_api_quota/log_api_usage).

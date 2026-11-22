@@ -46,10 +46,10 @@ H = {"X-Admin-Accion": "1"}
 T0 = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
 MOTIVO = "tester del beta cerrado"
 
-_CLAVES_FILA = {"user_id", "email", "nombre", "alta", "plan_pagado", "plan_efectivo", "es_admin", "prueba",
-                "actividad", "modo", "idioma", "pais"}
+_CLAVES_FILA = {"user_id", "email", "nombre", "alta", "plan_pagado", "plan_efectivo", "es_admin",
+                "verificador_android", "prueba", "actividad", "modo", "idioma", "pais"}
 _CLAVES_ACTIVIDAD = {"ultima", "comidas_total", "comidas_30d", "planes", "mensajes_coach", "escaneos",
-                     "gasto_ia_30d_usd", "dias_activos_30d"}
+                     "gasto_ia_30d_usd", "dias_activos_30d", "dias_continuos"}
 _CLAVES_ACTIVIDAD_FICHA = _CLAVES_ACTIVIDAD | {"comidas_por_dia_activo", "dias_con_agua_30d", "registros_peso",
                                                "bloques_fallidos_30d", "pulgares_abajo", "plataformas",
                                                "avisos_abiertos", "embudo", "modo", "idioma", "pais"}
@@ -60,11 +60,11 @@ def _fila(uid=UID, **k) -> dict:
     """Una fila tal como la devuelve la consulta de la lista (las columnas de `filas` + `total`)."""
     base = {"user_id": uid, "email": "ana@correo.com", "nombre": "Ana", "alta": T0 - timedelta(days=20),
             "plan_pagado": "gratis", "plan_mode": "plan", "locale": "es-DO", "pais": "DO",
-            "prueba_desde": None, "prueba_aviso_visto_at": None,
+            "prueba_desde": None, "prueba_aviso_visto_at": None, "probador_hasta": None,
             "comidas_total": 0, "comidas_30d": 0, "comidas_ultima": None, "planes": 0,
             "mensajes_coach": 0, "mensajes_ultima": None, "escaneos": 0, "micros_30d": 0, "escaneo_ultima": None,
             "peso_ultima": None, "agua_ultima": None,
-            "dias_activos_30d": 0, "ultima": None, "total": 1}
+            "dias_activos_30d": 0, "dias_continuos": 0, "ultima": None, "total": 1}
     base.update(k)
     return base
 
@@ -169,6 +169,7 @@ _FILTROS = {
     "inactivas_14d": "FROM filas WHERE COALESCE(ultima, alta) < now() - interval '14 days' ORDER BY",
     "con_plan": "FROM filas WHERE planes > 0 ORDER BY",
     "seguimiento": "FROM filas WHERE plan_mode = 'tracking' ORDER BY",
+    "verificadores_android": "FROM filas WHERE probador_hasta IS NOT NULL ORDER BY",
 }
 _ORDENES = {
     "actividad": "ORDER BY ultima DESC NULLS LAST, alta DESC, user_id LIMIT %s OFFSET %s",
@@ -244,6 +245,7 @@ def test_las_definiciones_de_la_actividad_son_las_del_spec(bd):
     assert "count(*) FILTER (WHERE e.node = 'vision_scan') AS escaneos" in q
     assert "sum(e.cost_usd_micros) FILTER (WHERE e.created_at >= now() - interval '30 days')" in q
     assert "(c.consumed_at AT TIME ZONE 'UTC')::date" in q and "(m.created_at AT TIME ZONE 'UTC')::date" in q
+    assert "dias_continuos" in q and "row_number() OVER (ORDER BY dt)" in q
     assert "GREATEST(comidas_ultima, mensajes_ultima, escaneo_ultima, peso_ultima, agua_ultima) AS ultima" in q
     assert "FROM public.cuentas_de_prueba t WHERE t.user_id = p.id AND t.quitada_at IS NULL" in q
     for contenido in ("meal_name", "ingredients", "content", "health_profile ->> 'weight'", "attachments"):
@@ -295,12 +297,13 @@ def test_la_ultima_actividad_sale_tal_cual_de_la_consulta(bd):
 # ═════════════════════════════════════════════ 3. la fila (FilaCuenta)
 def test_la_fila_cumple_el_contrato(bd):
     bd.filas = [_fila(comidas_total=57, comidas_30d=12, planes=2, mensajes_coach=9, escaneos=3, micros_30d=1234567,
-                      dias_activos_30d=6, ultima=T0, prueba_desde=T0 - timedelta(days=1))]
+                      dias_activos_30d=6, dias_continuos=4, ultima=T0, prueba_desde=T0 - timedelta(days=1))]
     r = acl.listar("", "actividad", "todas", 1)
     f = r["cuentas"][0]
     assert set(f) == _CLAVES_FILA and set(f["actividad"]) == _CLAVES_ACTIVIDAD
     assert f["actividad"] == {"ultima": T0.isoformat(), "comidas_total": 57, "comidas_30d": 12, "planes": 2,
-                              "mensajes_coach": 9, "escaneos": 3, "gasto_ia_30d_usd": 1.23, "dias_activos_30d": 6}
+                              "mensajes_coach": 9, "escaneos": 3, "gasto_ia_30d_usd": 1.23, "dias_activos_30d": 6,
+                              "dias_continuos": 4}
     assert f["prueba"] == {"estado": "aviso_pendiente", "desde": (T0 - timedelta(days=1)).isoformat()}
     assert (f["user_id"], f["email"], f["nombre"], f["alta"]) == (UID, "ana@correo.com", "Ana",
                                                                   (T0 - timedelta(days=20)).isoformat())
@@ -399,7 +402,7 @@ def test_las_columnas_del_csv_son_la_fila_aplanada_sin_contenido():
         "user_id", "email", "nombre", "alta", "plan_pagado", "plan_efectivo", "es_admin", "prueba.estado",
         "prueba.desde", "actividad.ultima", "actividad.comidas_total", "actividad.comidas_30d", "actividad.planes",
         "actividad.mensajes_coach", "actividad.escaneos", "actividad.gasto_ia_30d_usd", "actividad.dias_activos_30d",
-        "modo", "idioma", "pais")
+        "actividad.dias_continuos", "modo", "idioma", "pais")
     columnas = [c.lower() for c in (*acl.COLUMNAS_FILA, *ajustes_cuenta.columnas_csv())]
     for contenido in ("plato", "meal", "ingred", "texto", "content", "health", "alerg", "dieta", "condicion",
                       "medica", "foto", "attachment", "motivo"):

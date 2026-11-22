@@ -39,6 +39,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -72,16 +73,18 @@ FILTROS = {
     "inactivas_14d": "COALESCE(ultima, alta) < now() - interval '14 days'",
     "con_plan": "planes > 0",
     "seguimiento": "plan_mode = 'tracking'",
+    "verificadores_android": "probador_hasta IS NOT NULL",
 }
 
 _ACTIVIDAD = ("ultima", "comidas_total", "comidas_30d", "planes", "mensajes_coach", "escaneos", "gasto_ia_30d_usd",
-              "dias_activos_30d")
+              "dias_activos_30d", "dias_continuos")
 # El CSV: la fila del contrato aplanada, en su orden (después van las columnas de `ajustes_cuenta.columnas_csv`).
 COLUMNAS_FILA = ("user_id", "email", "nombre", "alta", "plan_pagado", "plan_efectivo", "es_admin", "prueba.estado",
                  "prueba.desde", *(f"actividad.{k}" for k in _ACTIVIDAD), "modo", "idioma", "pais")
 _INICIO_DE_FORMULA = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 _TREINTA_DIAS = "now() - interval '30 days'"
+_NOVENTA_DIAS = "now() - interval '90 days'"
 # Los hilos de la fila `p` (lista y ficha): el SSOT con `p.id` en sus tres parámetros.
 _EN_SUS_HILOS = f"(m.user_id = p.id OR m.session_id::text IN ({USER_CHAT_THREAD_IDS_SQL.replace('%s', 'p.id')}))"
 # Los de UNA cuenta con parámetros (extras de la ficha): cada `%s` es el uid.
@@ -157,20 +160,20 @@ def _sql_filas(donde: str) -> str:
         "COALESCE(p.plan_tier, 'gratis') AS plan_pagado, p.plan_mode, p.locale, "
         "CASE WHEN jsonb_typeof(p.health_profile) = 'object' THEN p.health_profile ->> 'country' END AS pais, "
         "pr.marcada_at AS prueba_desde, pr.aviso_visto_at AS prueba_aviso_visto_at, "
+        "pb.hasta AS probador_hasta, "
         "cm.total AS comidas_total, cm.d30 AS comidas_30d, cm.ultima AS comidas_ultima, "
         "mp.total AS planes, "
         "msg.total AS mensajes_coach, msg.ultima AS mensajes_ultima, "
         "ia.escaneos, ia.micros_30d, ia.escaneo_ultima, "
         "pw.ultima AS peso_ultima, ag.ultima AS agua_ultima, "
-        "(SELECT count(*) FROM ("
-        "SELECT (c.consumed_at AT TIME ZONE 'UTC')::date FROM public.consumed_meals c "
-        f"WHERE c.user_id = p.id AND c.consumed_at >= {_TREINTA_DIAS} "
-        "UNION SELECT (m.created_at AT TIME ZONE 'UTC')::date FROM public.agent_messages m "
-        f"WHERE m.role = 'user' AND {_EN_SUS_HILOS} AND m.created_at >= {_TREINTA_DIAS}"
-        ") AS dias) AS dias_activos_30d "
+        "da.dias_activos_30d, da.dias_continuos "
         "FROM public.user_profiles p "
         "LEFT JOIN LATERAL (SELECT t.marcada_at, t.aviso_visto_at FROM public.cuentas_de_prueba t "
         "WHERE t.user_id = p.id AND t.quitada_at IS NULL LIMIT 1) pr ON true "
+        "LEFT JOIN LATERAL (SELECT kv.value ->> 'hasta' AS hasta FROM public.app_kv_store kv "
+        "WHERE kv.key = 'probador:' || p.id::text AND jsonb_typeof(kv.value) = 'object' "
+        "AND (kv.value ->> 'hasta') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' "
+        "AND (kv.value ->> 'hasta')::timestamptz > now() LIMIT 1) pb ON true "
         "LEFT JOIN LATERAL (SELECT count(*) AS total, "
         f"count(*) FILTER (WHERE c.consumed_at >= {_TREINTA_DIAS}) AS d30, max(c.consumed_at) AS ultima "
         "FROM public.consumed_meals c WHERE c.user_id = p.id) cm ON true "
@@ -187,6 +190,20 @@ def _sql_filas(donde: str) -> str:
         # `updated_at` es NOT NULL: el último vaso anotado (o quitado) del día más reciente.
         "LEFT JOIN LATERAL (SELECT max(a.updated_at) AS ultima "
         "FROM public.water_intake_log a WHERE a.user_id = p.id) ag ON true "
+        "LEFT JOIN LATERAL ("
+        "WITH d AS ("
+        "SELECT (c.consumed_at AT TIME ZONE 'UTC')::date AS dt FROM public.consumed_meals c "
+        f"WHERE c.user_id = p.id AND c.consumed_at >= {_NOVENTA_DIAS} "
+        "UNION SELECT (m.created_at AT TIME ZONE 'UTC')::date AS dt FROM public.agent_messages m "
+        f"WHERE m.role = 'user' AND {_EN_SUS_HILOS} AND m.created_at >= {_NOVENTA_DIAS}"
+        "), ult AS (SELECT max(dt) AS max_dt FROM d), "
+        "grp AS (SELECT dt, dt - (row_number() OVER (ORDER BY dt))::int AS isla FROM d) "
+        "SELECT "
+        f"(SELECT count(*) FROM d WHERE dt >= (({_TREINTA_DIAS}) AT TIME ZONE 'UTC')::date) AS dias_activos_30d, "
+        "COALESCE((SELECT count(*) FROM grp, ult "
+        "WHERE ult.max_dt >= (now() AT TIME ZONE 'UTC')::date - 1 "
+        "AND grp.isla = (SELECT g2.isla FROM grp g2 WHERE g2.dt = ult.max_dt LIMIT 1)), 0) AS dias_continuos"
+        ") da ON true "
         f"WHERE {donde}), "
         "filas AS (SELECT base.*, GREATEST(comidas_ultima, mensajes_ultima, escaneo_ultima, peso_ultima, agua_ultima) "
         "AS ultima FROM base) "
@@ -261,7 +278,8 @@ def _actividad(r: dict) -> dict:
     return {"ultima": rc.iso(r.get("ultima")), "comidas_total": _n(r.get("comidas_total")),
             "comidas_30d": _n(r.get("comidas_30d")), "planes": _n(r.get("planes")),
             "mensajes_coach": _n(r.get("mensajes_coach")), "escaneos": _n(r.get("escaneos")),
-            "gasto_ia_30d_usd": _usd(r.get("micros_30d")), "dias_activos_30d": _n(r.get("dias_activos_30d"))}
+            "gasto_ia_30d_usd": _usd(r.get("micros_30d")), "dias_activos_30d": _n(r.get("dias_activos_30d")),
+            "dias_continuos": _n(r.get("dias_continuos"))}
 
 
 def _es_admin(pagado, uid, admins) -> bool:
@@ -280,6 +298,7 @@ def _fila_cuenta(r: dict, cortesias: dict, admins) -> dict:
         "user_id": uid, "email": r.get("email"), "nombre": r.get("nombre"), "alta": rc.iso(r.get("alta")),
         "plan_pagado": pagado, "plan_efectivo": rc.plan_efectivo(pagado, cortesia) or "gratis",
         "es_admin": _es_admin(pagado, uid, admins),
+        "verificador_android": bool(r.get("probador_hasta")),
         "prueba": ({"estado": cuentas_prueba.estado_de(marca), "desde": rc.iso(marca["marcada_at"])}
                    if marca else None),
         "actividad": _actividad(r),
@@ -367,6 +386,9 @@ def _plataformas(extras: dict) -> list:
     return [p for p in PLATAFORMAS if p in vistas]
 
 
+_TL_PROBADOR = threading.local()
+
+
 def actividad_de(user_id) -> Optional[dict]:
     """La actividad de la ficha (contrato 3): la de la fila de la lista —la MISMA consulta, filtrada por su id— más
     los números que solo enseña la ficha y el embudo. None si la cuenta no existe. LANZA si la base falla en la consulta
@@ -379,6 +401,7 @@ def actividad_de(user_id) -> Optional[dict]:
     if not filas:
         return None
     r = filas[0]
+    _TL_PROBADOR.ultimo = (uid, bool(r.get("probador_hasta")))
     try:
         extras = execute_sql_query(_SQL_EXTRAS, (uid,) * _SQL_EXTRAS.count("%s"), fetch_one=True) or {}
     except Exception as e:  # noqa: BLE001
@@ -465,11 +488,15 @@ def ampliar_ficha(ficha: Optional[dict]) -> Optional[dict]:
     uid = ficha.get("user_id")
     salida = dict(ficha)
     salida["es_admin"] = _es_admin(ficha.get("plan_pagado"), uid, admin_ids())
+    _TL_PROBADOR.ultimo = None
     try:
         salida["actividad"] = actividad_de(uid)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ [P1-PLAN-LOTE-831] actividad ilegible para {str(uid)[:8]} ({e!r}): la ficha sale sin ella")
         salida["actividad"] = None
+    ultimo = getattr(_TL_PROBADOR, "ultimo", None)
+    _TL_PROBADOR.ultimo = None
+    salida["verificador_android"] = bool(ultimo and ultimo[0] == str(uid) and ultimo[1])
     try:
         ajustes = ajustes_cuenta.ajustes_de(uid)
         salida["ajustes"], salida["ajustes_dispositivo"] = ajustes["ajustes"], ajustes["ajustes_dispositivo"]

@@ -33,29 +33,40 @@ def test_logros_sin_meta_de_proteina_no_puntua():
 def test_agua_apagada_es_none_y_max_40():
     lg = _logros(protein=120, vasos=None, meta_vasos=None)
     assert lg["agua"] is None
-    assert jp.puntos_base(lg) == 40
+    assert jp.puntos_base(lg) == 45
 
 
 def test_base_maxima_45():
     lg = _logros(protein=120, vasos=8, meta_vasos=8)
     assert lg == {
-        "registro": True, "completo": True, "banda": True, "proteina": True, "proteina_parcial": False, "agua": True,
+        "registro": True, "completo": True, "banda": True, "calorias_cerca": False, "calorias_pasado": False,
+        "proteina": True, "proteina_parcial": False, "agua": True, "dia_perfecto": True,
     }
-    assert jp.puntos_base(lg) == 45
+    assert jp.puntos_base(lg) == 50
 
 
 def test_ayuno_2_comidas_y_proteina_parcial():
     lg_ayuno = _logros(calories=1600, protein=88, meals_count=2, meta_kcal=2000, meta_proteina=120)
-    assert lg_ayuno["completo"] is True      # 2 comidas ≥ 70 % kcal
-    assert lg_ayuno["banda"] is False        # 80 % < 90 %
+    assert lg_ayuno["completo"] is True           # 2 comidas ≥ 70 % kcal
+    assert lg_ayuno["banda"] is False             # 80 % < 90 %
+    assert lg_ayuno["calorias_cerca"] is True     # ±20 % de la meta → +8
     assert lg_ayuno["proteina"] is False
-    assert lg_ayuno["proteina_parcial"] is True   # 88/120 ≥ 70 %
-    assert jp.puntos_base(lg_ayuno) == 20    # 10 registro + 5 completo + 5 proteína parcial
+    assert lg_ayuno["proteina_parcial"] is True   # 88/120 ≥ 70 % → +5
+    assert jp.puntos_base(lg_ayuno) == 18         # 0 registro + 5 completo + 8 cerca + 5 proteína parcial
 
     lg_corto = _logros(calories=1000, protein=60, meals_count=2, meta_kcal=2000, meta_proteina=120)
-    assert lg_corto["completo"] is False     # 2 comidas < 70 % kcal
+    assert lg_corto["completo"] is False          # 2 comidas < 70 % kcal
+    assert lg_corto["calorias_cerca"] is False
     assert lg_corto["proteina_parcial"] is False
-    assert jp.puntos_base(lg_corto) == 10
+    assert jp.puntos_base(lg_corto) == 0          # sin logros en el día ⇒ 0 pts (solo racha)
+
+    lg_pasado_lejos = _logros(calories=2800, protein=60, meals_count=1, meta_kcal=2000, meta_proteina=120)
+    assert lg_pasado_lejos["calorias_pasado"] is True
+    assert jp.puntos_base(lg_pasado_lejos) == 3
+
+    lg_pasado_cerca = _logros(calories=2300, protein=120, meals_count=3, meta_kcal=2000, meta_proteina=120)
+    assert lg_pasado_cerca["calorias_cerca"] is True and lg_pasado_cerca["dia_perfecto"] is False
+    assert jp.puntos_base(lg_pasado_cerca) == 23  # 5 completo + 8 cerca + 10 proteína (sin bono perfecto)
 
 
 def test_dia_vacio_no_da_nada():
@@ -84,11 +95,11 @@ def test_proximo_hito_y_dias_para_escudo():
 
 
 def test_rango_con_piso_nunca_baja():
-    # [1163] 4 divisiones: Plata (540-1620) = 540 / 810 / 1080 / 1350; la 4.ª interna es «Plata I».
+    # [1164] 4 divisiones escaladas: Plata (700..2200) = 700 / 1000 / 1350 / 1750; la 4.ª interna es «Plata I».
     piso_plata_i = jp.nivel_indice("plata", 4)
     bajada = jp.rango_con_piso(1200, piso_plata_i)
     assert bajada["clave"] == "plata" and bajada["division"] == 4 and bajada["romano"] == "I"
-    assert bajada["avance"] == 0 and bajada["puntos_para_la_siguiente"] == 420
+    assert bajada["avance"] == 0 and bajada["puntos_para_la_siguiente"] == 1000
 
 
 def test_hoy_vacio_no_rompe():

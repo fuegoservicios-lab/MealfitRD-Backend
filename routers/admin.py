@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import admin_cuentas as ac
 import admin_cuentas_lista as acl
+import admin_eliminar_cuentas as aec
 import admin_prueba_detalle as apd
 import ajustes_cuenta
 import cuentas_prueba as cp
@@ -199,7 +200,10 @@ def api_admin_revocar_regalo(grant_id: uuid.UUID, body: _Revocar, admin_id: str 
 # ellos): con ese par el panel y el chat del dueño se comerían el cupo el uno al otro.
 _CUENTAS_LISTA_LIMITER = RateLimiter(max_calls=45, period_seconds=60)
 _Orden = Literal["actividad", "alta", "comidas", "gasto"]
-_Filtro = Literal["todas", "prueba", "sin_marcar", "activas_7d", "inactivas_14d", "con_plan", "seguimiento"]
+_Filtro = Literal[
+    "todas", "prueba", "sin_marcar", "activas_7d", "inactivas_14d",
+    "con_plan", "seguimiento", "verificadores_android",
+]
 
 
 def _exigir_knob_pruebas() -> None:
@@ -320,6 +324,56 @@ def api_admin_marcar_pruebas_en_lote(body: _LotePrueba, admin_id: str = Depends(
         raise HTTPException(status_code=e.status, detail=e.detalle)
     except Exception as e:  # noqa: BLE001
         raise _sin_completar("marcar en lote", e) from e
+    return {"ok": True, "resultados": resultados}
+
+
+@router.post("/pruebas/lote/quitar", dependencies=[
+    Depends(_exigir_knob_pruebas), Depends(_exigir_cabecera), Depends(_CUENTAS_ESCRITURA_LIMITER)])
+def api_admin_quitar_pruebas_en_lote(body: _LotePrueba, admin_id: str = Depends(require_admin)):
+    """[P1-PLAN-LOTE-1166] Quitar la marca de prueba a varias cuentas de la selección."""
+    try:
+        resultados = cp.quitar_varias(admin_id, body.user_ids, body.motivo)
+    except cp.ErrorPrueba as e:
+        raise HTTPException(status_code=e.status, detail=e.detalle)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_completar("quitar en lote", e) from e
+    return {"ok": True, "resultados": resultados}
+
+
+# [P1-PLAN-LOTE-1166 · 2026-11-22] Eliminar cuentas en lote, en DOS pasos (revisar → eliminar). Frenos en
+# `admin_eliminar_cuentas`: tope 25, «ELIMINAR <n>», nunca admins ni suscripciones vivas, y las activas (14 d) solo con
+# su casilla marcada a mano. Cupo propio y estricto.
+_ELIMINAR_LIMITER = RateLimiter(max_calls=6, period_seconds=60)
+
+
+class _LoteIds(BaseModel):
+    user_ids: List[str] = Field(default_factory=list, max_length=200)
+
+
+class _LoteEliminar(BaseModel):
+    user_ids: List[str] = Field(default_factory=list, max_length=200)
+    confirmacion: str = Field(max_length=40)
+    confirmar_activas: List[str] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/cuentas/eliminar/revisar", dependencies=[Depends(_exigir_cabecera), Depends(_CUENTAS_LECTURA_LIMITER)])
+def api_admin_revisar_eliminar(body: _LoteIds, admin_id: str = Depends(require_admin)):
+    try:
+        return {"cuentas": aec.revisar(body.user_ids), "max": aec.MAX_LOTE, "dias_activa": aec.DIAS_ACTIVA}
+    except aec.ErrorEliminar as e:
+        raise HTTPException(status_code=e.status, detail=e.detalle)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_datos("la revisión del borrado", e) from e
+
+
+@router.post("/cuentas/eliminar", dependencies=[Depends(_exigir_cabecera), Depends(_ELIMINAR_LIMITER)])
+def api_admin_eliminar_en_lote(body: _LoteEliminar, admin_id: str = Depends(require_admin)):
+    try:
+        resultados = aec.eliminar(admin_id, body.user_ids, body.confirmacion, body.confirmar_activas)
+    except aec.ErrorEliminar as e:
+        raise HTTPException(status_code=e.status, detail=e.detalle)
+    except Exception as e:  # noqa: BLE001
+        raise _sin_completar("eliminar en lote", e) from e
     return {"ok": True, "resultados": resultados}
 
 

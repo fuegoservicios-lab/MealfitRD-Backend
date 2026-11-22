@@ -120,14 +120,11 @@ def test_el_drawer_existe_y_lo_abre_la_card_de_hoy():
     assert "DiaryHistoryTrigger" in tp and "<DiaryHistory" in tp, (
         "la card de hoy no monta el drawer de días pasados"
     )
-    # El disparador va DESPUÉS del ternario vacío/no-vacío: si quedara dentro
-    # de la rama con comidas, desaparecería justo en el caso reportado.
-    # [P1-PLAN-LOTE-980] Desde el rediseño el disparador va ARRIBA de la lista, junto a «Registrar
-    # comida»: vale igual mientras quede FUERA del ternario vacío/no-vacío.
-    i_ternario = tp.index("Aún no registras comidas hoy")
+    # El disparador va fuera de la rama con comidas: si quedara dentro, desaparecería con el día en cero.
+    # [P1-PLAN-LOTE-980] Desde el rediseño el disparador va junto a la semana, antes del bloque de comidas.
+    i_comidas = tp.index("isLoggedIn && !loading && _todaysMeals.length > 0")
     i_trigger = tp.index("<DiaryHistoryTrigger")
-    i_inicio_ternario = tp.index("_todaysMeals.length === 0 ?")
-    assert i_trigger > i_ternario or i_trigger < i_inicio_ternario, (
+    assert i_trigger < i_comidas, (
         "el disparador quedó dentro de la rama con comidas: con el día en cero "
         "—el caso que originó esto— no habría forma de abrir el historial"
     )

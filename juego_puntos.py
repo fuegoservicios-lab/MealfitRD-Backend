@@ -4,14 +4,14 @@
 Funciones PURAS (sin BD): `progreso_semanas.armar_resumen` las aplica sobre los días ya leídos. Espejo en la app:
 `frontend/src/utils/juegoPuntos.js` (paridad con `tests/fixtures/juego_puntos_casos.json`).
 
-- Puntos del día (base): registrar 10 · día completo (≥3 comidas) +5 · calorías en la banda +15 · proteína ≥90 % +10 ·
+- Puntos del día (base, [1164] por calidad): registrar 0 (mantiene la racha) · día completo +5 · calorías en la banda +20 (cerca +8, pasado +3) · proteína ≥90 % +10 · día perfecto +10 ·
   agua en meta +5 (solo con el contador de agua encendido).
 - Racha = días seguidos REGISTRANDO (no «en meta»); multiplica los puntos de ese día. Hoy sin registrar no la rompe.
 - Escudos: cada 7 días de racha, 1 (máx. 2). Un día pasado sin registrar con racha viva gasta uno y la racha sigue.
 - Estrellas de la semana por puntos; rangos por puntos totales con 3 divisiones. Nunca se resta ni se baja.
 - [P1-PLAN-LOTE-1163] Divisiones como en los videojuegos: 4 por rango y se cuentan HACIA ABAJO (Plata IV es la
   entrada, Plata I la cima). Internamente `division` sigue ascendiendo (1 = la entrada); `romano` es lo que se ve.
-  Semana perfecta (3★) = +30 pts de bono. Encima de Diamante, MAESTRO: 18.900 pts + 8 semanas perfectas + una racha
+  Semana perfecta (3★) = +30 pts de bono. Encima de Diamante, MAESTRO: 14.500 pts [1164] + 8 semanas perfectas + una racha
   de 100 días (las tres). Muy difícil a propósito: con un día excelente y racha larga (~60 pts) es casi un año.
 
 Spec: docs/superpowers/specs/2026-11-22-juego-puntos-rachas-design.md (repo raíz).
@@ -23,8 +23,16 @@ from typing import Any, Optional
 
 from informe_medico import estado_del_dia
 
-PUNTOS = {"registro": 10, "completo": 5, "banda": 15, "proteina": 10, "agua": 5}
+# [P1-PLAN-LOTE-1164] El dueño: «si no logro nada deben ser la mínima cantidad de puntos o nula; si sobrepaso el
+# objetivo se le dan sus puntos, pero si lo logro perfecto sin pasarse se le suman más». Registrar SOLO mantiene la
+# racha (0 pts); las calorías van por precisión: en la banda 20 · cerca (±20 %) 8 · pasado de largo 3 · muy por
+# debajo 0; y el día perfecto (banda + proteína + día completo + agua si la cuentas) suma +10.
+PUNTOS = {"registro": 0, "completo": 5, "banda": 20, "proteina": 10, "agua": 5}
 PUNTOS_PROTEINA_PARCIAL = 5
+PUNTOS_CALORIAS_CERCA = 8
+PUNTOS_CALORIAS_PASADO = 3
+PUNTOS_DIA_PERFECTO = 10
+CALORIAS_CERCA_FRACCION = 0.2
 COMIDAS_DIA_COMPLETO = 3
 COMIDAS_AYUNO_COMPLETO = 2
 CALORIAS_AYUNO_FRACCION = 0.7
@@ -35,15 +43,22 @@ TRAMOS_RACHA = ((30, 1.6, "leyenda"), (14, 1.45, "imparable"), (7, 1.3, "en_llam
                 (0, 1.0, None))
 ESCUDO_CADA = 7
 ESCUDOS_MAX = 2
-ESTRELLAS_SEMANA = (85, 170, 265)  # calibrado con replay 22-nov (8 cuentas reales)
-RANGOS_PUNTOS = (("bronce", 0), ("plata", 540), ("oro", 1620), ("platino", 4050), ("diamante", 8100))
+# [P1-PLAN-LOTE-1164] recalibrado con replay (7 cuentas reales, puntos por calidad): semanas con puntos p50 41 · p75 86
+# · p90 168; la mejor de la app 267. 1★ = una semana decente, 3★ = 4-5 días excelentes.
+ESTRELLAS_SEMANA = (60, 130, 220)
+RANGOS_PUNTOS = (("bronce", 0), ("plata", 700), ("oro", 2200), ("platino", 4700), ("diamante", 8500))
 DIVISIONES = 4
+#: [P1-PLAN-LOTE-1164] «no tan fácil de subir división en división»: cada división cuesta más que la anterior. Para
+#: alguien constante (~150 pts/semana): Bronce III en ~5 días, Plata en ~5 semanas, Oro ~4 meses, Platino ~8 meses,
+#: Diamante ~1 año y 2 meses. Entrada de IV, III, II y I de cada rango.
+UMBRALES_DIVISIONES = (("bronce", (0, 100, 250, 450)), ("plata", (700, 1000, 1350, 1750)),
+                       ("oro", (2200, 2750, 3350, 4000)), ("platino", (4700, 5500, 6400, 7400)),
+                       ("diamante", (8500, 9800, 11200, 12700)))
 ROMANOS = ("I", "II", "III", "IV")
-DIAMANTE_PASO = 2700
 HITOS_RACHA_LARGOS = (3, 7, 14, 30, 50, 75, 100, 150, 200, 365)
 BONO_SEMANA_PERFECTA = 30
 MAESTRO = "maestro"
-MAESTRO_PUNTOS = RANGOS_PUNTOS[-1][1] + DIAMANTE_PASO * DIVISIONES   # 18.900: Diamante I completo
+MAESTRO_PUNTOS = 14500   # Diamante I completo
 MAESTRO_SEMANAS_PERFECTAS = 8
 MAESTRO_RACHA = 100
 
@@ -73,13 +88,21 @@ def logros_del_dia(*, calories: Any, protein: Any, meals_count: Any, meta_kcal: 
     )
     proteina = registro and mp > 0 and _num(protein) >= mp * PROTEINA_FRACCION
     proteina_parcial = registro and (not proteina) and mp > 0 and _num(protein) >= mp * PROTEINA_PARCIAL_FRACCION
+    banda = registro and mk > 0 and estado_del_dia(kcal, mk, objetivo) == "en_meta"
+    ratio = kcal / mk if mk > 0 else 0.0
+    cerca = registro and mk > 0 and not banda and abs(ratio - 1) <= CALORIAS_CERCA_FRACCION
+    pasado = registro and mk > 0 and not banda and not cerca and ratio > 1
+    agua = (registro and _num(vasos) >= mv) if mv > 0 else None
     return {
         "registro": registro,
         "completo": completo,
-        "banda": registro and mk > 0 and estado_del_dia(kcal, mk, objetivo) == "en_meta",
+        "banda": banda,
+        "calorias_cerca": cerca,
+        "calorias_pasado": pasado,
         "proteina": proteina,
         "proteina_parcial": proteina_parcial,
-        "agua": (registro and _num(vasos) >= mv) if mv > 0 else None,
+        "agua": agua,
+        "dia_perfecto": bool(banda and proteina and completo and agua is not False),
     }
 
 
@@ -89,6 +112,13 @@ def puntos_base(logros: dict) -> int:
     total = sum(PUNTOS[k] for k in PUNTOS if logros.get(k) is True)
     if logros.get("proteina") is not True and logros.get("proteina_parcial") is True:
         total += PUNTOS_PROTEINA_PARCIAL
+    if logros.get("banda") is not True:
+        if logros.get("calorias_cerca") is True:
+            total += PUNTOS_CALORIAS_CERCA
+        elif logros.get("calorias_pasado") is True:
+            total += PUNTOS_CALORIAS_PASADO
+    if logros.get("dia_perfecto") is True:
+        total += PUNTOS_DIA_PERFECTO
     return total
 
 
@@ -145,16 +175,7 @@ def faltan_para_otra_estrella_pts(pts: int) -> int:
 
 def escalera() -> list[tuple[str, int, int]]:
     """Todos los peldaños (clave, división, desde) en orden."""
-    out: list[tuple[str, int, int]] = []
-    for i, (clave, desde) in enumerate(RANGOS_PUNTOS):
-        if i + 1 < len(RANGOS_PUNTOS):
-            hasta = RANGOS_PUNTOS[i + 1][1]
-            for dv in range(DIVISIONES):
-                out.append((clave, dv + 1, desde + redondear((hasta - desde) * dv / DIVISIONES)))
-        else:
-            for dv in range(DIVISIONES):
-                out.append((clave, dv + 1, desde + DIAMANTE_PASO * dv))
-    return out
+    return [(clave, dv + 1, desde) for clave, umbrales in UMBRALES_DIVISIONES for dv, desde in enumerate(umbrales)]
 
 
 def division_romana(division: Any) -> Optional[str]:

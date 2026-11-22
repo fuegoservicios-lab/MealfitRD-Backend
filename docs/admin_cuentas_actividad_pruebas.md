@@ -52,6 +52,9 @@ escrita ANTES de responder (o de escribir): si no se puede anotar, 503 sin datos
 | `POST /cuentas/{user_id}/prueba` | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `marcar_prueba` (y `marcar_prueba_fallo` si el INSERT falla) |
 | `POST /cuentas/{user_id}/prueba/quitar` | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `quitar_prueba` (y `quitar_prueba_fallo`) |
 | `POST /pruebas/lote` (≤ 100 ids) | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `marcar_prueba`, una fila por cuenta marcada |
+| `POST /pruebas/lote/quitar` (≤ 100 ids) [1166] | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `quitar_prueba`, una fila por cuenta |
+| `POST /cuentas/eliminar/revisar` (≤ 25 ids) [1166] | `_CUENTAS_LECTURA_LIMITER` (30/60) | — (solo lectura: actividad y bloqueos) |
+| `POST /cuentas/eliminar` (≤ 25 ids, «ELIMINAR <n>») [1166] | `_ELIMINAR_LIMITER` (6/60) | `eliminar_cuenta` ANTES de borrar cada una; `eliminar_cuenta_fallo` si queda a medias |
 | `POST /cuentas/{user_id}/ios-gratis/recargar` (paquete fijo del iPhone gratis, 14 días, idempotente por `request_id`) | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `recargar_ios_gratis` `{request_id, grant_ids, generacion, coach, motivo, hasta}` |
 | `GET /cuentas/{user_id}/ajustes/historial` (≤ 500 cambios) | `_CUENTAS_LECTURA_LIMITER` (30/60) | `ver_ajustes` `{dias, n}` |
 | `GET /ajustes/resumen` | `_CUENTAS_LECTURA_LIMITER` (30/60) | ninguno: es un agregado, sin cuentas admin |
@@ -190,3 +193,11 @@ python scripts/marcar_cuentas_prueba.py --correos ana@x.com,beto@y.com --motivo 
 - Abre el pool de Neon como pide el SOP de SQL forense y solo imprime ASCII.
 
 tooltip-anchor: cuentas_de_prueba, ajustes_cambios, ajustes_dispositivo, marcar_cuentas_prueba (test_p1_plan_lote_838.py)
+
+## Eliminar en lote [P1-PLAN-LOTE-1166 · 2026-11-22]
+
+`admin_eliminar_cuentas.py`. Dos pasos: `revisar` (sin efectos) y `eliminar`. Frenos: tope 25; confirmación escrita
+`ELIMINAR <n>`; nunca una cuenta admin ni una con suscripción de pago viva; una cuenta con actividad en los últimos 14 días
+solo si su id viene en `confirmar_activas` (casilla por cuenta en el diálogo); sin fila en `admin_access_log` no se borra.
+El borrado es el MISMO motor que «Eliminar mi cuenta» (`db_profiles.delete_account_data` + revocar Apple). Test
+`test_p1_plan_lote_1166_eliminar_lote.py`.

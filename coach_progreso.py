@@ -66,7 +66,7 @@ def _linea_de_hoy(claves: list[str], res: dict) -> str:
             clave, _, div = valor.partition(":")
             partes.append(f"subió a {_rango_txt(clave, int(div) if div.isdigit() else None)}")
         elif tipo == "maestro":
-            partes.append("¡llegó a MAESTRO, el rango más difícil de la app (18.900 pts, 8 semanas perfectas y racha de 100 días)!")
+            partes.append("¡llegó a MAESTRO, el rango más difícil de la app (14.500 pts, 8 semanas perfectas y racha de 100 días)!")
         elif tipo == "escudo":
             partes.append("ganó un escudo de racha")
         elif tipo == "salvo":
@@ -88,7 +88,7 @@ def texto_del_bloque(res: dict) -> str:
         return ""
     s = res["semana"]
     est = s["estrellas"]
-    # [P1-PLAN-LOTE-1161] juego por PUNTOS: registrar 10, día completo +5, calorías en banda +15, proteína +10,
+    # [P1-PLAN-LOTE-1161→1164] juego por PUNTOS de calidad: registrar 0 (solo racha), día completo +5, calorías en banda +20 (cerca +8, pasado +3), proteína +10, día perfecto +10,
     # agua +5; la racha de días registrando multiplica; estrellas de la semana y rango (con división) por puntos.
     if est >= 3:
         falta = "semana perfecta"
@@ -120,7 +120,7 @@ def texto_del_bloque(res: dict) -> str:
     m = res.get("maestro") or {}
     if m and not m.get("conseguido") and rg.get("clave") in ("platino", "diamante"):
         req = {r["clave"]: r for r in m.get("requisitos") or []}
-        t += (f"; Maestro pide 18.900 pts + {req.get('semanas_perfectas', {}).get('meta', 8)} semanas perfectas "
+        t += (f"; Maestro pide 14.500 pts + {req.get('semanas_perfectas', {}).get('meta', 8)} semanas perfectas "
               f"(lleva {req.get('semanas_perfectas', {}).get('actual', 0)}) + racha de 100 días "
               f"(mejor {req.get('racha', {}).get('actual', 0)})")
     t += "."

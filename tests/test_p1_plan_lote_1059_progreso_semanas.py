@@ -300,10 +300,10 @@ def test_bloque_cifras_del_resumen_y_corto():
     t = cp.texto_del_bloque(r)
     # [P1-PLAN-LOTE-1161] el bloque habla de puntos, racha registrando con multiplicador, escudos y división.
     assert t.startswith("\n\n🏆 PROGRESO (cifras del servidor, juego por puntos): Semana 10 (15 nov–21 nov), día 2 de 7.")
-    assert "Esta semana: 39 pts, 0★; faltan 46 pts para la 1.ª estrella." in t
+    assert "Esta semana: 33 pts, 0★; faltan 27 pts para la 1.ª estrella." in t
     assert "Racha: 8 días registrando (×1,3; mejor: 8); escudos 1/2." in t
-    assert "Semana pasada (S9): 133 pts, 1★." in t
-    assert "rango Bronce III (faltan 98 pts para Bronce II)" in t      # [1163] 4 divisiones, IV→I
+    assert "Semana pasada (S9): 115 pts, 1★." in t
+    assert "rango Bronce III (faltan 102 pts para Bronce II)" in t      # [1164] 4 divisiones escaladas, IV→I
     assert len(t.split()) <= 75                                    # ~70 tokens
     assert cp.texto_del_bloque({}) == ""
 
@@ -384,7 +384,7 @@ def test_herramienta_lee_y_corta(monkeypatch):
     r = dict(_res_coach())
     monkeypatch.setattr(ps, "resumen", lambda *a, **k: r)
     out = tools.consultar_progreso.func(user_id=YO, semanas=2)
-    assert out.splitlines()[0].startswith("S9 (2026-11-08): 133 pts, 1★, 7 con registro, 1/7 en meta")
+    assert out.splitlines()[0].startswith("S9 (2026-11-08): 115 pts, 1★, 7 con registro, 1/7 en meta")
     assert "(en curso)" in out.splitlines()[1]
     assert tools.consultar_progreso.func(user_id="guest").startswith("El progreso por semanas necesita")
 

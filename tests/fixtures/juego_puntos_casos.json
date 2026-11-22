@@ -454,129 +454,129 @@
    "clave": "bronce",
    "division": 1,
    "romano": "IV",
-   "faltan": 135
+   "faltan": 100
   },
   {
-   "puntos": 134,
+   "puntos": 99,
    "clave": "bronce",
    "division": 1,
    "romano": "IV",
    "faltan": 1
   },
   {
-   "puntos": 135,
+   "puntos": 100,
    "clave": "bronce",
    "division": 2,
    "romano": "III",
-   "faltan": 135
+   "faltan": 150
   },
   {
-   "puntos": 539,
+   "puntos": 449,
+   "clave": "bronce",
+   "division": 3,
+   "romano": "II",
+   "faltan": 1
+  },
+  {
+   "puntos": 450,
+   "clave": "bronce",
+   "division": 4,
+   "romano": "I",
+   "faltan": 250
+  },
+  {
+   "puntos": 699,
    "clave": "bronce",
    "division": 4,
    "romano": "I",
    "faltan": 1
   },
   {
-   "puntos": 540,
+   "puntos": 700,
    "clave": "plata",
    "division": 1,
    "romano": "IV",
-   "faltan": 270
+   "faltan": 300
   },
   {
-   "puntos": 1079,
+   "puntos": 1257,
    "clave": "plata",
    "division": 2,
    "romano": "III",
-   "faltan": 1
-  },
-  {
-   "puntos": 1080,
-   "clave": "plata",
-   "division": 3,
-   "romano": "II",
-   "faltan": 270
-  },
-  {
-   "puntos": 1233,
-   "clave": "plata",
-   "division": 3,
-   "romano": "II",
-   "faltan": 117
+   "faltan": 93
   },
   {
    "puntos": 1350,
    "clave": "plata",
-   "division": 4,
-   "romano": "I",
-   "faltan": 270
-  },
-  {
-   "puntos": 1620,
-   "clave": "oro",
-   "division": 1,
-   "romano": "IV",
-   "faltan": 608
-  },
-  {
-   "puntos": 4049,
-   "clave": "oro",
-   "division": 4,
-   "romano": "I",
-   "faltan": 1
-  },
-  {
-   "puntos": 4050,
-   "clave": "platino",
-   "division": 1,
-   "romano": "IV",
-   "faltan": 1013
-  },
-  {
-   "puntos": 8099,
-   "clave": "platino",
-   "division": 4,
-   "romano": "I",
-   "faltan": 1
-  },
-  {
-   "puntos": 8100,
-   "clave": "diamante",
-   "division": 1,
-   "romano": "IV",
-   "faltan": 2700
-  },
-  {
-   "puntos": 13500,
-   "clave": "diamante",
    "division": 3,
    "romano": "II",
-   "faltan": 2700
+   "faltan": 400
   },
   {
-   "puntos": 16199,
-   "clave": "diamante",
+   "puntos": 1750,
+   "clave": "plata",
+   "division": 4,
+   "romano": "I",
+   "faltan": 450
+  },
+  {
+   "puntos": 2200,
+   "clave": "oro",
+   "division": 1,
+   "romano": "IV",
+   "faltan": 550
+  },
+  {
+   "puntos": 3999,
+   "clave": "oro",
    "division": 3,
    "romano": "II",
    "faltan": 1
   },
   {
-   "puntos": 16200,
+   "puntos": 4000,
+   "clave": "oro",
+   "division": 4,
+   "romano": "I",
+   "faltan": 700
+  },
+  {
+   "puntos": 4700,
+   "clave": "platino",
+   "division": 1,
+   "romano": "IV",
+   "faltan": 800
+  },
+  {
+   "puntos": 8499,
+   "clave": "platino",
+   "division": 4,
+   "romano": "I",
+   "faltan": 1
+  },
+  {
+   "puntos": 8500,
+   "clave": "diamante",
+   "division": 1,
+   "romano": "IV",
+   "faltan": 1300
+  },
+  {
+   "puntos": 12699,
+   "clave": "diamante",
+   "division": 3,
+   "romano": "II",
+   "faltan": 1
+  },
+  {
+   "puntos": 12700,
    "clave": "diamante",
    "division": 4,
    "romano": "I",
    "faltan": null
   },
   {
-   "puntos": 18899,
-   "clave": "diamante",
-   "division": 4,
-   "romano": "I",
-   "faltan": null
-  },
-  {
-   "puntos": 18900,
+   "puntos": 14500,
    "clave": "diamante",
    "division": 4,
    "romano": "I",
@@ -593,35 +593,71 @@
  "base": [
   {
    "logros": {
-    "registro": false
+    "registro": false,
+    "completo": false,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
    },
    "puntos": 0
-  },
-  {
-   "logros": {
-    "registro": true
-   },
-   "puntos": 10
   },
   {
    "logros": {
     "registro": true,
     "completo": false,
     "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
     "proteina": false,
-    "proteina_parcial": true,
-    "agua": null
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
    },
-   "puntos": 15
+   "puntos": 0
   },
   {
    "logros": {
     "registro": true,
     "completo": true,
     "banda": true,
-    "proteina": false,
-    "proteina_parcial": true,
-    "agua": null
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": true
+   },
+   "puntos": 45
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": true,
+    "dia_perfecto": true
+   },
+   "puntos": 50
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": false,
+    "dia_perfecto": false
    },
    "puntos": 35
   },
@@ -629,40 +665,88 @@
    "logros": {
     "registro": true,
     "completo": true,
-    "banda": true,
+    "banda": false,
+    "calorias_cerca": true,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": true,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 18
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": true,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 18
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
     "proteina": false,
     "proteina_parcial": false,
-    "agua": null
+    "agua": null,
+    "dia_perfecto": false
    },
-   "puntos": 30
+   "puntos": 5
+  },
+  {
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": true,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": true,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 18
   },
   {
    "logros": {
     "registro": true,
     "completo": true,
     "banda": true,
-    "proteina": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": false,
     "proteina_parcial": false,
-    "agua": true
+    "agua": null,
+    "dia_perfecto": false
    },
-   "puntos": 45
+   "puntos": 25
   }
  ],
  "jugador": [
   {
-   "puntos": 1233,
+   "puntos": 1257,
    "semanas_perfectas": 1,
    "mejor_racha": 33,
    "piso": 0,
    "clave": "plata",
-   "division": 3,
-   "romano": "II",
+   "division": 2,
+   "romano": "III",
    "siguiente": "plata",
-   "faltan": 117,
+   "faltan": 93,
    "cumplidos": 0
   },
   {
-   "puntos": 17000,
+   "puntos": 13000,
    "semanas_perfectas": 8,
    "mejor_racha": 100,
    "piso": 0,
@@ -670,11 +754,11 @@
    "division": 4,
    "romano": "I",
    "siguiente": "maestro",
-   "faltan": 1900,
+   "faltan": 1500,
    "cumplidos": 2
   },
   {
-   "puntos": 18900,
+   "puntos": 14500,
    "semanas_perfectas": 7,
    "mejor_racha": 120,
    "piso": 0,
@@ -686,7 +770,7 @@
    "cumplidos": 2
   },
   {
-   "puntos": 18900,
+   "puntos": 14500,
    "semanas_perfectas": 8,
    "mejor_racha": 99,
    "piso": 0,
@@ -698,7 +782,7 @@
    "cumplidos": 2
   },
   {
-   "puntos": 18900,
+   "puntos": 14500,
    "semanas_perfectas": 8,
    "mejor_racha": 100,
    "piso": 0,
@@ -730,20 +814,246 @@
    "division": 4,
    "romano": "I",
    "siguiente": "plata",
-   "faltan": 40,
+   "faltan": 200,
    "cumplidos": 0
   },
   {
    "puntos": 500,
    "semanas_perfectas": 0,
    "mejor_racha": 2,
-   "piso": 5,
+   "piso": 6,
    "clave": "plata",
-   "division": 2,
-   "romano": "III",
+   "division": 3,
+   "romano": "II",
    "siguiente": "plata",
-   "faltan": 580,
+   "faltan": 1250,
    "cumplidos": 0
+  }
+ ],
+ "dias": [
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 0,
+    "protein": 0,
+    "meals_count": 0
+   },
+   "logros": {
+    "registro": false,
+    "completo": false,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 0
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 400,
+    "protein": 20,
+    "meals_count": 1
+   },
+   "logros": {
+    "registro": true,
+    "completo": false,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 0
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 2000,
+    "protein": 110,
+    "meals_count": 3
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": true
+   },
+   "puntos": 45
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 2000,
+    "protein": 110,
+    "meals_count": 3,
+    "vasos": 8,
+    "meta_vasos": 8
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": true,
+    "dia_perfecto": true
+   },
+   "puntos": 50
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 2000,
+    "protein": 110,
+    "meals_count": 3,
+    "vasos": 3,
+    "meta_vasos": 8
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": false,
+    "dia_perfecto": false
+   },
+   "puntos": 35
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 2300,
+    "protein": 90,
+    "meals_count": 3
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": true,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": true,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 18
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 3000,
+    "protein": 130,
+    "meals_count": 4
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": true,
+    "proteina": true,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 18
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 1500,
+    "protein": 60,
+    "meals_count": 2
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 5
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 1700,
+    "protein": 88,
+    "meals_count": 2
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": false,
+    "calorias_cerca": true,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": true,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 18
+  },
+  {
+   "entrada": {
+    "meta_kcal": 2000,
+    "meta_proteina": 120,
+    "objetivo": "maintenance",
+    "calories": 1950,
+    "protein": 50,
+    "meals_count": 3
+   },
+   "logros": {
+    "registro": true,
+    "completo": true,
+    "banda": true,
+    "calorias_cerca": false,
+    "calorias_pasado": false,
+    "proteina": false,
+    "proteina_parcial": false,
+    "agua": null,
+    "dia_perfecto": false
+   },
+   "puntos": 25
   }
  ]
 }

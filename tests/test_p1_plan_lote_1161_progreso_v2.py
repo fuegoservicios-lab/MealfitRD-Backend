@@ -25,8 +25,8 @@ def _res(kcal, hoy="2026-11-09", desde="2026-11-03", **kw):
 def test_resumen_trae_puntos_de_hoy():
     r = _res([2000] * 7, prot=120)
     hp = r["hoy_puntos"]
-    assert hp["base"] == 40 and hp["logros"]["agua"] is None
-    assert hp["mult"] == 1.3 and hp["puntos"] == 52          # 7.º día seguido → ×1,3
+    assert hp["base"] == 45 and hp["logros"]["agua"] is None
+    assert hp["mult"] == 1.3 and hp["puntos"] == 59          # 45 × 1,3 = 58,5 → 59 (7.º día seguido)
     assert r["racha"] == 7 and r["racha_hasta_ayer"] == 6 and r["escudos"] == 1
     assert r["escudos_usados"] == [] and r["proximo_hito_racha"] == 14 and r["dias_para_escudo"] == 7
     assert r["rango"]["clave"] == "bronce" and "division" in r["rango"]
@@ -57,7 +57,7 @@ def test_agua_encendida_puntua():
         v["vasos"] = 8
     r = ps.armar_resumen(hoy=D("2026-11-04"), dia_1=D("2026-11-03"), dias=dias, metas_por_dia={i: META for i in dias},
                          meta_de_hoy=META, objetivo_del_perfil="maintenance", meta_vasos=8)
-    assert r["hoy_puntos"]["logros"]["agua"] is True and r["hoy_puntos"]["base"] == 35
+    assert r["hoy_puntos"]["logros"]["agua"] is True and r["hoy_puntos"]["base"] == 30
 
 
 def test_semana_en_curso_trae_7_dias_con_puntos():

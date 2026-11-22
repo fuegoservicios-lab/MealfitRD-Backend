@@ -43,7 +43,7 @@ SEMANAS_SEGUIDAS_CON_ESTRELLA = 4
 EVENTOS_MAX_GUARDADOS = 200
 #: [P1-PLAN-LOTE-1161] versión de los eventos: un KV de otra versión siembra todo lo cumplido como visto (sin avalancha
 #: de divisiones/escudos/rachas viejas el día del despliegue).
-EVENTOS_VERSION = 3   # [P1-PLAN-LOTE-1163] divisiones IV→I: lo cumplido al desplegar se siembra visto
+EVENTOS_VERSION = 4   # [P1-PLAN-LOTE-1164] puntos por calidad y nueva escalera: lo cumplido al desplegar se siembra visto
 RECORD_MIN_PUNTOS = 30
 SEMBRADO = "0000-00-00"
 
@@ -599,7 +599,8 @@ def marcar_vistos(user_id: str, claves: Iterable[str]) -> int:
     vistos = set((kv or {}).get("vistos") or [])
     nuevos = {c for c in claves if c in emitidos} - vistos
     if nuevos:
-        _guardar_kv(user_id, {"emitidos": emitidos, "vistos": sorted(vistos | nuevos)})
+        _guardar_kv(user_id, {"emitidos": emitidos, "vistos": sorted(vistos | nuevos),
+                              "version": kv.get("version", EVENTOS_VERSION)})
         invalidar(user_id)
     return len(nuevos)
 

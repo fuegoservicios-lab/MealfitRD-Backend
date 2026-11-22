@@ -25,25 +25,25 @@ def _res(kcal, hoy, desde, prot=120):
 def test_divisiones_se_ven_de_iv_a_i():
     assert [jp.division_romana(d) for d in (1, 2, 3, 4)] == ["IV", "III", "II", "I"]
     assert jp.division_romana(None) is None and jp.division_romana(5) is None
-    vistos = [jp.rango_por_puntos(p)["romano"] for p in (540, 810, 1080, 1350)]
+    vistos = [jp.rango_por_puntos(p)["romano"] for p in (700, 1000, 1350, 1750)]
     assert vistos == ["IV", "III", "II", "I"]
     assert cp._rango_txt({"clave": "plata", "division": 1}) == "Plata IV"
     assert cp._rango_txt({"clave": "maestro", "division": None}) == "Maestro"
 
 
 def test_maestro_pide_los_tres_requisitos():
-    assert jp.MAESTRO_PUNTOS == 18900
-    for pts, perf, racha in ((18900, 7, 100), (18900, 8, 99), (18899, 8, 100)):
+    assert jp.MAESTRO_PUNTOS == 14500
+    for pts, perf, racha in ((14500, 7, 100), (14500, 8, 99), (14499, 8, 100)):
         r = jp.rango_del_jugador(pts, perf, racha)
         assert r["clave"] == "diamante" and r["romano"] == "I" and r["siguiente"]["clave"] == "maestro"
         assert jp.maestro_progreso(pts, perf, racha)["cumplidos"] == 2
-    m = jp.rango_del_jugador(18900, 8, 100)
+    m = jp.rango_del_jugador(14500, 8, 100)
     assert m["clave"] == "maestro" and m["siguiente"] is None and m["avance"] == 1
 
 
 def test_diamante_i_apunta_a_maestro_con_los_puntos_que_faltan():
-    r = jp.rango_del_jugador(17550, 3, 40)
-    assert (r["clave"], r["romano"], r["hasta"], r["puntos_para_la_siguiente"]) == ("diamante", "I", 18900, 1350)
+    r = jp.rango_del_jugador(13600, 3, 40)
+    assert (r["clave"], r["romano"], r["hasta"], r["puntos_para_la_siguiente"]) == ("diamante", "I", 14500, 900)
     assert r["avance"] == 0.5
 
 
@@ -53,14 +53,14 @@ def test_maestro_nunca_se_pierde_por_el_piso():
 
 
 def test_piso_viejo_de_3_divisiones_no_infla_el_rango():
-    """Las claves viejas `division:<rango>:<d>` (3 divisiones) apuntan a un peldaño nuevo que empieza ANTES o igual:
-    nadie sube de división por el cambio, solo se mantiene."""
-    viejo = {"bronce": (0, 540), "plata": (540, 1620), "oro": (1620, 4050), "platino": (4050, 8100)}
-    for clave, (desde, hasta) in viejo.items():
-        for d in (1, 2, 3):
-            inicio_viejo = desde + jp.redondear((hasta - desde) * (d - 1) / 3)
-            nuevo = jp.escalera()[jp.nivel_indice(clave, d)]
-            assert nuevo[2] <= inicio_viejo, (clave, d)
+    """[1164] Cada división cuesta más que la anterior y el piso guardado nunca deja bajar."""
+    for i, (clave, umbrales) in enumerate(jp.UMBRALES_DIVISIONES):
+        siguiente = jp.UMBRALES_DIVISIONES[i + 1][1][0] if i + 1 < len(jp.UMBRALES_DIVISIONES) else jp.MAESTRO_PUNTOS
+        pasos = [umbrales[j + 1] - umbrales[j] for j in range(3)] + [siguiente - umbrales[3]]
+        assert pasos == sorted(pasos) and len(set(pasos)) == 4, (clave, pasos)
+    piso = jp.nivel_indice("plata", 2)
+    r = jp.rango_del_jugador(880, 0, 10, piso)
+    assert (r["clave"], r["division"], r["romano"]) == ("plata", 2, "III")
 
 
 def test_semana_perfecta_da_30_de_bono_y_no_toca_las_estrellas():
@@ -86,8 +86,8 @@ def test_hito_maestro_y_piso_desde_el_kv():
 
 
 def test_eventos_v3_siembran_lo_cumplido_al_desplegar():
-    assert ps.EVENTOS_VERSION == 3
+    assert ps.EVENTOS_VERSION == 4
     cumplidos = [{"clave": "division:plata:3", "codigo": "division", "datos": {}}]
-    pend, nuevo = ps.eventos_nuevos(cumplidos, {"version": 2, "emitidos": {"division:plata:2": "2026-11-20"},
+    pend, nuevo = ps.eventos_nuevos(cumplidos, {"version": 3, "emitidos": {"division:plata:2": "2026-11-20"},
                                                 "vistos": ["division:plata:2"]}, "2026-11-22")
-    assert pend == [] and nuevo["version"] == 3 and "division:plata:3" in nuevo["vistos"]
+    assert pend == [] and nuevo["version"] == 4 and "division:plata:3" in nuevo["vistos"]
