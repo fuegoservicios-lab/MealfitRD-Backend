@@ -343,7 +343,7 @@ def api_admin_quitar_pruebas_en_lote(body: _LotePrueba, admin_id: str = Depends(
 # [P1-PLAN-LOTE-1166 · 2026-11-22] Eliminar cuentas en lote, en DOS pasos (revisar → eliminar). Frenos en
 # `admin_eliminar_cuentas`: tope 25, «ELIMINAR <n>», nunca admins ni suscripciones vivas, y las activas (14 d) solo con
 # su casilla marcada a mano. Cupo propio y estricto.
-_ELIMINAR_LIMITER = RateLimiter(max_calls=6, period_seconds=60)
+_ELIMINAR_LIMITER = RateLimiter(max_calls=7, period_seconds=60)   # [1171] par propio: (6, 60) es de ajustes del dispositivo
 
 
 class _LoteIds(BaseModel):

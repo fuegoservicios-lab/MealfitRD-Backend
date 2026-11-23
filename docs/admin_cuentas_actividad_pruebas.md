@@ -54,7 +54,7 @@ escrita ANTES de responder (o de escribir): si no se puede anotar, 503 sin datos
 | `POST /pruebas/lote` (≤ 100 ids) | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `marcar_prueba`, una fila por cuenta marcada |
 | `POST /pruebas/lote/quitar` (≤ 100 ids) [1166] | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `quitar_prueba`, una fila por cuenta |
 | `POST /cuentas/eliminar/revisar` (≤ 25 ids) [1166] | `_CUENTAS_LECTURA_LIMITER` (30/60) | — (solo lectura: actividad y bloqueos) |
-| `POST /cuentas/eliminar` (≤ 25 ids, «ELIMINAR <n>») [1166] | `_ELIMINAR_LIMITER` (6/60) | `eliminar_cuenta` ANTES de borrar cada una; `eliminar_cuenta_fallo` si queda a medias |
+| `POST /cuentas/eliminar` (≤ 25 ids, «ELIMINAR <n>») [1166] | `_ELIMINAR_LIMITER` (7/60) | `eliminar_cuenta` ANTES de borrar cada una; `eliminar_cuenta_fallo` si queda a medias |
 | `POST /cuentas/{user_id}/ios-gratis/recargar` (paquete fijo del iPhone gratis, 14 días, idempotente por `request_id`) | `_CUENTAS_ESCRITURA_LIMITER` (20/60) | `recargar_ios_gratis` `{request_id, grant_ids, generacion, coach, motivo, hasta}` |
 | `GET /cuentas/{user_id}/ajustes/historial` (≤ 500 cambios) | `_CUENTAS_LECTURA_LIMITER` (30/60) | `ver_ajustes` `{dias, n}` |
 | `GET /ajustes/resumen` | `_CUENTAS_LECTURA_LIMITER` (30/60) | ninguno: es un agregado, sin cuentas admin |

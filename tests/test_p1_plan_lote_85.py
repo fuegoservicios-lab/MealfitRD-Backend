@@ -34,7 +34,7 @@ def test_la_tarjeta_tiene_un_solo_boton():
 def test_las_dos_vias_viven_dentro_del_componedor():
     # [P1-PLAN-LOTE-1147] la foto sigue dentro del componedor, ahora como botón de la caja (sin pestañas)
     lm = _front("src/components/dashboard/LogMealModal.jsx")
-    assert "onClick={() => onScan({ mealType, daysAgo, borrador: borradorActual() })}" in lm and "aria-label={t('Escanear con foto')}" in lm
+    assert "onClick={() => onScan({ mealType: faltaElegirComida ? undefined : mealType, daysAgo, borrador: borradorActual() })}" in lm and "aria-label={t('Escanear con foto')}" in lm
     assert "t('Foto')" not in lm and 'className={styles.modes}' not in lm
 
 

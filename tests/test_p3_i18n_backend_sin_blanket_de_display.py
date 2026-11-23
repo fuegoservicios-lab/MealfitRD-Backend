@@ -263,4 +263,5 @@ def test_no_se_escanea_ningun_venv():
         "el blanket vuelve a entrar en un venv u oculto")
     # [P1-PLAN-LOTE-1041 · 2026-11-16] 400 → 450: el backend propio llegó a 400 módulos (retencion_fotos_chat.py);
     # un árbol de terceros (venv, site-packages) son miles, así que el margen sigue cazándolo.
-    assert len(rutas) < 450, f"{len(rutas)} ficheros: ¿volvió a entrar algún árbol de terceros?"
+    # [P1-PLAN-LOTE-1171 · 2026-11-23] 450 → 600: el backend propio llegó a 450 (idioma_del_turno.py); terceros son miles.
+    assert len(rutas) < 600, f"{len(rutas)} ficheros: ¿volvió a entrar algún árbol de terceros?"
