@@ -2048,9 +2048,14 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
             from diary_micros import micros_de_ingredientes, micros_plausibles, resumen_micros
             from nutrition_db import IngredientNutritionDB
             _ndb = IngredientNutritionDB()
+            from partes_de_comida import nombres_de_partes
             for m in meals:
                 nutrition = m.pop("nutrition", None)
                 ingredients = m.pop("ingredients", None)
+                # [P1-PLAN-LOTE-1170] una comida fusionada lleva los nombres de sus partes (la fila no las pega)
+                _partes = nombres_de_partes(nutrition)
+                if _partes:
+                    m["partes"] = _partes
                 # [P1-PLAN-LOTE-1085] recordados por la huella de los ingredientes: 0,4-3,4 s por día → milisegundos
                 m["micros"] = micros_from_snapshot(nutrition) or __import__("micros_memo").micros_de_ingredientes_memo(ingredients, _ndb)
                 # [P1-DIARY-MICROS-PLAUSIBLE · 2026-09-23] renglones que pesan más energía que la comida ⇒ sin micros
@@ -2186,7 +2191,7 @@ def api_get_consumed_meal_detail(
                  "ingredients")
         _sql = "SELECT {cols} FROM consumed_meals WHERE id = %s AND user_id = %s"
         try:
-            row = execute_sql_query(_sql.format(cols=_base + ", source, plan_ref"),
+            row = execute_sql_query(_sql.format(cols=_base + ", source, plan_ref, nutrition"),
                                     (meal_id, verified_user_id), fetch_one=True)
         except Exception as _col_err:
             # sin la migración del lote todavía: la ficha sale igual, sin decir de dónde vino

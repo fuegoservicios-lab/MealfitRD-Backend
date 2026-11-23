@@ -18,6 +18,7 @@ La foto NO pasa por aquí: vive solo en el dispositivo (la Política de Privacid
 from __future__ import annotations
 
 import logging
+from partes_de_comida import partes_de_comida
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -151,4 +152,6 @@ def ficha_de_comida(row: dict, db: Any = None) -> dict:
         "source": origen_de_comida(row.get("source")),
         "plan_ref": plan_ref_limpio(row.get("plan_ref")),
         "ingredientes": desglose_de_ingredientes(row.get("ingredients"), kcal, db),
+        # [P1-PLAN-LOTE-1170] lo que se registró junto, cada parte con su kcal y P/C/G ([] si es una comida sola)
+        "partes": partes_de_comida(row.get("nutrition")),
     }
