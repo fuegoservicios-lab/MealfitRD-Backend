@@ -4681,6 +4681,15 @@ def _llm_messages_from_state(messages: list, sys_prompt: str, forzar_split: bool
         if isinstance(m, HumanMessage):
             ultimo_humano = idx
     _compact_prior = _env_bool("MEALFIT_CHAT_COMPACT_PRIOR_TOOL_MSGS", True)
+    # [P1-PLAN-LOTE-1171] el idioma de ESTE mensaje, junto al mensaje (el historial en otro idioma pesaba más que la regla F)
+    if ultimo_humano >= 0:
+        try:
+            from idioma_del_turno import nota_de_idioma
+            _nota_idioma = nota_de_idioma(messages[ultimo_humano])
+        except Exception:
+            _nota_idioma = None
+        if _nota_idioma:
+            volatile_sys = f"{volatile_sys}\n{_nota_idioma}".strip()
     historial = []
     for idx, m in enumerate(messages):
         if isinstance(m, SystemMessage):

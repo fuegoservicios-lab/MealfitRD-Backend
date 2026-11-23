@@ -114,6 +114,35 @@ def _extraer_texto_humano_reciente(messages: List[Any]) -> str:
     return ""
 
 
+# [P1-PLAN-LOTE-1171] otras formas de nombrar un día que no es el de hoy (además de ayer/antier/días de la semana)
+_RE_OTRO_DIA = re.compile(
+    r"\b(?:yesterday|last night|hace\s+\d+\s+d[ií]as?|semana pasada|\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|"
+    r"mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))(?!\w)", re.IGNORECASE)
+
+
+def _coach_pregunto_por_otro_dia(messages: List[Any]) -> bool:
+    """[P1-PLAN-LOTE-1171] ¿El último mensaje del coach ANTES del último del usuario hablaba de otro día? Entonces un
+    «sí» del usuario sí lo nombra, y no se toca."""
+    visto_humano = False
+    for msg in reversed(messages or []):
+        role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
+        if role in ("human", "user") or msg.__class__.__name__ == "HumanMessage":
+            if visto_humano:
+                return False
+            visto_humano = True
+            continue
+        if visto_humano and (role in ("ai", "assistant", "model") or msg.__class__.__name__ == "AIMessage"):
+            c = getattr(msg, "content", "") if not isinstance(msg, dict) else msg.get("content", "")
+            if isinstance(c, list):
+                c = " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+            texto = str(c or "")
+            if not texto.strip():
+                continue   # un AIMessage solo con tool_calls
+            return bool(_RE_AYER.search(texto) or _RE_ANTEAYER.search(texto) or _RE_DIAS_SEMANA.search(texto)
+                        or _RE_OTRO_DIA.search(texto))
+    return False
+
+
 def corregir_days_ago_madrugada(
     messages: List[Any],
     days_ago_actual: Optional[int],
@@ -191,4 +220,9 @@ def corregir_days_ago_madrugada(
             return 0
         return 1
 
+    # [P1-PLAN-LOTE-1171 · 2026-11-23] Nadie nombró otro día. A las 00:29 un usuario mandó la foto de su bistec y el
+    # coach la anotó como «almuerzo de ayer» (el almuerzo «aún no había llegado» por el calendario): en la madrugada la
+    # jornada sigue abierta, así que sin un día dicho por él ni preguntado por el coach, es la de hoy.
+    if days_ago_actual and not _RE_OTRO_DIA.search(texto) and not _coach_pregunto_por_otro_dia(messages):
+        return 0
     return days_ago_actual
