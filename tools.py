@@ -3038,6 +3038,10 @@ def correct_consumed_meal(
         _nutrition = snapshot(food_facts, label_servings) if food_facts is not None else nutrition
     except (TypeError, ValueError) as error:
         return f"NO CORREGIDO: {error}."
+    if _nutrition is None:
+        # [P1-PLAN-LOTE-1171] «súmale el yogur»: lo sumado queda como parte, no pegado al nombre sin poder separarse
+        from partes_de_comida import nutrition_con_parte_sumada
+        _nutrition = nutrition_con_parte_sumada(_fila, meal_name, calories, protein, carbs, healthy_fats)
     updated_id = db_update_consumed_meal(
         user_id,
         _mid,

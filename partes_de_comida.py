@@ -49,3 +49,45 @@ def partes_de_comida(nutrition: Any) -> list[dict]:
 
 def nombres_de_partes(nutrition: Any) -> list[str]:
     return [p["meal_name"] for p in partes_de_comida(nutrition)]
+
+
+def nutrition_con_parte_sumada(fila: Any, meal_name: Any, calories: Any, protein: Any, carbs: Any,
+                               healthy_fats: Any) -> dict | None:
+    """[P1-PLAN-LOTE-1171 · 2026-11-23] Cuando el coach SUMA algo a una comida ya registrada.
+
+    «Add it on yesterday»: el coach corrigió la pechuga de ayer a «Pechuga de pollo a la parrilla + Yogur Ratio
+    Protein…» con el total nuevo, y la corrección borraba `nutrition` — la ficha no podía separar el yogur. Si el nombre
+    nuevo es el viejo + « + algo» y las cifras solo suben, esto guarda la fila vieja como base (o conserva sus partes) y
+    lo sumado como una parte más, con la diferencia de cada macro. Si no es una suma clara, None (conducta previa)."""
+    if not isinstance(fila, dict) or not isinstance(meal_name, str):
+        return None
+    viejo = str(fila.get("meal_name") or "").strip()
+    nuevo = meal_name.strip()
+    if not viejo or not nuevo.lower().startswith(viejo.lower()):
+        return None
+    resto = nuevo[len(viejo):]
+    if not resto.startswith(" + ") or not resto[3:].strip():
+        return None
+    claves = (("calories", calories), ("protein", protein), ("carbs", carbs), ("healthy_fats", healthy_fats))
+    if calories is None:
+        return None
+    deltas = {}
+    for k, v in claves:
+        antes = _num(fila.get(k))
+        despues = antes if v is None else _num(v)
+        if despues < antes:
+            return None
+        deltas[k] = despues - antes
+    if deltas["calories"] <= 0:
+        return None
+    previa = fila.get("nutrition") if isinstance(fila.get("nutrition"), dict) else {}
+    base = previa.get("base_meal") if partes_de_comida(previa) else None
+    addons = list(previa.get("addons") or []) if base else []
+    if not base:
+        ings = fila.get("ingredients")
+        base = {"meal_name": viejo, **{k: _num(fila.get(k)) for k, _ in claves},
+                "ingredients": ings if isinstance(ings, list) else []}
+    addons.append({"meal_name": resto[3:].strip(), **deltas, "ingredients": []})
+    out = {k: v for k, v in previa.items() if k == "attachment_ids"}
+    out.update({"base_meal": base, "addons": addons})
+    return out

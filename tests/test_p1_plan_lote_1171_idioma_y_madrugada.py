@@ -59,3 +59,47 @@ def test_sin_mensajes_humanos_no_rompe():
 def agent_ok(msgs):
     import agent
     return isinstance(agent._llm_messages_from_state(msgs, "S"), list)
+
+
+def test_el_escaner_usa_el_idioma_del_perfil_y_la_pantalla_solo_sin_eleccion(monkeypatch):
+    """Perfil es-DO + pantalla en-US (la app aún no había aplicado el perfil) => «Grilled chicken breast» en su diario."""
+    import asyncio
+    from routers import diary
+    monkeypatch.setattr(diary, "get_user_profile", lambda uid: {"locale": "es-DO"})
+    assert asyncio.run(diary._locale_del_escaner("en-US", "u1")) == "es-DO"
+    monkeypatch.setattr(diary, "get_user_profile", lambda uid: {"locale": None})
+    assert asyncio.run(diary._locale_del_escaner("en-US", "u1")) == "en-US"
+    assert asyncio.run(diary._locale_del_escaner(None, None)) == "es-DO"
+
+
+def test_sumar_a_una_comida_registrada_la_deja_como_parte():
+    """La pechuga de ayer + el yogur que pidió «Add it on yesterday»: la ficha («Cada una») los separa."""
+    from partes_de_comida import nutrition_con_parte_sumada, partes_de_comida
+    fila = {"meal_name": "Pechuga de pollo a la parrilla", "calories": 248, "protein": 46, "carbs": 0,
+            "healthy_fats": 5, "ingredients": ["pechuga"], "nutrition": {"attachment_ids": ["a1"]}}
+    n = nutrition_con_parte_sumada(fila, "Pechuga de pollo a la parrilla + Yogur Ratio Protein strawberry cheesecake",
+                                   418, 71, 15, 7)
+    p = partes_de_comida(n)
+    assert [x["meal_name"] for x in p] == ["Pechuga de pollo a la parrilla", "Yogur Ratio Protein strawberry cheesecake"]
+    assert p[1] == {"meal_name": "Yogur Ratio Protein strawberry cheesecake", "calories": 170, "protein": 25,
+                    "carbs": 15, "healthy_fats": 2}
+    assert n["attachment_ids"] == ["a1"]
+    # una segunda suma conserva las partes previas
+    fila2 = {**fila, "meal_name": "Pechuga de pollo a la parrilla + Yogur Ratio Protein strawberry cheesecake",
+             "calories": 418, "protein": 71, "carbs": 15, "healthy_fats": 7, "nutrition": n}
+    n2 = nutrition_con_parte_sumada(fila2, fila2["meal_name"] + " + Guineo", 523, 72, 42, 7)
+    assert [x["meal_name"] for x in partes_de_comida(n2)][-1] == "Guineo" and len(partes_de_comida(n2)) == 3
+
+
+def test_una_correccion_que_no_es_suma_no_inventa_partes():
+    from partes_de_comida import nutrition_con_parte_sumada
+    fila = {"meal_name": "Arroz con pollo", "calories": 600, "protein": 30, "carbs": 80, "healthy_fats": 10}
+    assert nutrition_con_parte_sumada(fila, "Arroz con pollo", 500, None, None, None) is None      # baja
+    assert nutrition_con_parte_sumada(fila, "Moro con pollo", 700, None, None, None) is None       # otro nombre
+    assert nutrition_con_parte_sumada(fila, "Arroz con pollo + Aguacate", 650, 29, 85, 20) is None  # una baja
+    assert nutrition_con_parte_sumada(fila, "Arroz con pollo + Aguacate", None, None, None, None) is None
+
+
+def test_la_correccion_la_usa():
+    import inspect, tools
+    assert "nutrition_con_parte_sumada(_fila, meal_name" in inspect.getsource(tools)

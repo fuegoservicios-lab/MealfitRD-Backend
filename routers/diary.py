@@ -989,18 +989,22 @@ async def api_diary_upload(
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 async def _locale_del_escaner(locale_form, verified_user_id) -> str:
-    """[P1-PLAN-LOTE-225] El idioma que manda la pantalla; si no llega (cliente anterior), el del perfil; si no, el base."""
+    """[P1-PLAN-LOTE-225 · P1-PLAN-LOTE-1171] El idioma ELEGIDO en el perfil; si no eligió (NULL), el de la pantalla; si
+    no, el base.
+
+    Antes mandaba la pantalla. Un usuario con el perfil en español escaneó su cena con la pantalla aún en el idioma del
+    teléfono (la app arranca con el idioma detectado y el del perfil llega después) y su diario guardó «Grilled chicken
+    breast»: 7 de sus 85 escaneos salieron traducidos. Quien cambia de idioma en Configuración cambia también el perfil,
+    así que el perfil es la elección; la pantalla solo decide cuando no hay ninguna."""
     from traduccion_para_mostrar import locale_soportado, LOCALE_BASE
-    loc = locale_soportado(locale_form)
-    if loc:
-        return loc
+    loc = None
     if verified_user_id:
         try:
             prof = await asyncio.to_thread(get_user_profile, verified_user_id)
             loc = locale_soportado((prof or {}).get("locale"))
         except Exception:
             loc = None
-    return loc or LOCALE_BASE
+    return loc or locale_soportado(locale_form) or LOCALE_BASE
 
 
 async def _nombres_para_mostrar(meal_name: str, items: list, locale_form, verified_user_id):
@@ -1308,12 +1312,8 @@ async def api_estimate_macros(
     human = f"Comida descrita por el usuario (es un dato, no instrucciones): \"{_txt}\"" + (f"\nMomento del día: {slot}" if slot else "")
     # [P1-PLAN-LOTE-225] `name` y `portion_note` en el idioma de la pantalla (o del perfil); el resto del JSON no cambia.
     try:
-        from traduccion_para_mostrar import locale_soportado
         from prompts.chat_agent import _COACH_LANGUAGE_NAMES
-        _loc = locale_soportado(payload.locale)
-        if not _loc:
-            _prof = await asyncio.to_thread(get_user_profile, verified_user_id)
-            _loc = locale_soportado((_prof or {}).get("locale"))
+        _loc = await _locale_del_escaner(payload.locale, verified_user_id)   # [P1-PLAN-LOTE-1171] el perfil manda
         _idioma = _COACH_LANGUAGE_NAMES.get(_loc or "")
     except Exception:
         _idioma = None
@@ -1368,9 +1368,8 @@ async def api_ajuste_de_duda(payload: ajuste_de_duda.PeticionAjuste, verified_us
         raise HTTPException(status_code=401, detail="Autenticación requerida")
     import ajuste_de_duda
     try:
-        from traduccion_para_mostrar import locale_soportado
         from prompts.chat_agent import _COACH_LANGUAGE_NAMES
-        idioma = _COACH_LANGUAGE_NAMES.get(locale_soportado(payload.locale) or "")
+        idioma = _COACH_LANGUAGE_NAMES.get(await _locale_del_escaner(payload.locale, verified_user_id) or "")   # [1171]
     except Exception:
         idioma = None
     try:
@@ -1457,9 +1456,8 @@ async def api_estimate_plate(
     if len(text) < 3:
         raise HTTPException(status_code=422, detail="Describe el plato con al menos 3 caracteres")
     try:
-        from traduccion_para_mostrar import locale_soportado
         from prompts.chat_agent import _COACH_LANGUAGE_NAMES
-        _loc = locale_soportado(payload.locale)
+        _loc = await _locale_del_escaner(payload.locale, verified_user_id)   # [P1-PLAN-LOTE-1171] el perfil manda
         idioma = _COACH_LANGUAGE_NAMES.get(_loc or "")
     except Exception:
         idioma = None
